@@ -1,0 +1,121 @@
+"use client";
+
+import { useState } from "react";
+import { DM_Sans } from "next/font/google";
+import "@/styles/globals.css";
+import splashImage from "@/assets/tools-log-in-splash.jpg";
+import Image from "next/image";
+import Logo from "@/assets/uniasia-high-resolution-logo.png";
+import MenuIcon from "@/assets/menu.svg";
+
+const dmSans = DM_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "700"],
+  variable: "--font-dm-sans",
+});
+
+export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    console.log("Logging in with:", email, password);
+    // Add routing logic here if needed
+  };
+
+  return (
+    <div
+      className={`h-screen overflow-hidden flex flex-col ${dmSans.className}`}
+    >
+      {/* Header */}
+      <header className="sticky top-0 backdrop-blur-sm z-20 shrink-0">
+        <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
+          <div className="inline-flex gap-1 items-center">
+            <p>UNIASIA - Reliable Hardware Supplier in the Philippines</p>
+          </div>
+        </div>
+
+        <div className="py-5">
+          <div className="container px-6 mx-auto">
+            <div className="flex items-center justify-between">
+              {/* Logo section */}
+              <Image src={Logo} alt="UniAsia Logo" height={50} width={50} />
+
+              {/* Mobile menu icon */}
+              <MenuIcon className="h-5 w-5 md:hidden" />
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Login Section */}
+      <section className="flex-grow flex items-center justify-center bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)]">
+        <div className="flex shadow-2xl">
+          {/* Form Box */}
+          <div className="flex flex-col items-center justify-center text-center p-20 gap-8 bg-white rounded-2xl xl:rounded-tr-none xl:rounded-br-none">
+            <h1 className="section-title text-5xl font-bold">Welcome</h1>
+
+            <form
+              onSubmit={handleSubmit}
+              className="flex flex-col gap-6 w-full max-w-sm"
+            >
+              <div className="flex flex-col text-left">
+                <label className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50"
+                />
+              </div>
+
+              <div className="flex flex-col text-left">
+                <label className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50"
+                />
+              </div>
+
+              <div className="flex gap-1 items-center">
+                <input type="checkbox" />
+                <span className="text-base">Remember Password</span>
+              </div>
+
+              <button
+                type="submit"
+                className="px-10 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
+              >
+                Login
+              </button>
+            </form>
+
+            {/* <p className="font-semibold">
+              Don't have an account?{" "}
+              <a
+                href="#"
+                className="hover:text-[#ffba20] hover:underline transition-colors duration-300"
+              >
+                Register
+              </a>
+            </p> */}
+          </div>
+
+          {/* Splash Image */}
+          <Image
+            src={splashImage}
+            alt="Splash Image"
+            className="w-[450px] object-cover lg:rounded-tr-2xl lg:rounded-br-2xl lg:block hidden"
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
