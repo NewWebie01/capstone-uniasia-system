@@ -11,20 +11,23 @@ import Setting from "@/assets/Setting.png";
 import LogoutIcon from "@/assets/power-button.png";
 
 import Image from "next/image";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export const Sidebar = () => {
   const [open, setOpen] = useState(true);
+  const pathname = usePathname();
 
   const Menus = [
-    { title: "Dashboard", src: ChartFill },
-    { title: "Inventory", src: Calendar },
-    { title: "Logistics", src: Logistics },
-    { title: "Sales", src: Sales },
-    { title: "Sales Report", src: Chart },
-    { title: "Activity Log", src: Folder },
-    { title: "Setting", src: Setting, gap: true },
+    { title: "Dashboard", src: ChartFill, href: "/dashboard" },
+    { title: "Inventory", src: Calendar, href: "/inventory" },
+    { title: "Logistics", src: Logistics, href: "/logistics" },
+    { title: "Sales", src: Sales, href: "/sales" },
+    { title: "Sales Report", src: Chart, href: "/sales-report" },
+    { title: "Activity Log", src: Folder, href: "/activity-log" },
+    { title: "Setting", src: Setting, gap: true, href: "/settings" },
   ];
 
   return (
@@ -80,32 +83,44 @@ export const Sidebar = () => {
       {/* Scrollable menu */}
       <div className="flex-1 overflow-y-auto px-5">
         <ul className="flex flex-col gap-y-4">
-          {Menus.map((menu, index) => (
-            <motion.li
-              key={index}
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: index * 0.05 }}
-              className={`text-black text-sm flex items-center gap-x-4 cursor-pointer p-2 hover:bg-gray-400 rounded-md ${
-                menu.gap ? "mt-9" : "mt-2"
-              } ${index === 0 && "bg-gray-100"}`}
-            >
-              <Image src={menu.src} alt={menu.title} width={20} height={20} />
-              <AnimatePresence>
-                {open && (
-                  <motion.span
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -10 }}
-                    transition={{ duration: 0.15 }}
-                    className="origin-left duration-200"
-                  >
-                    {menu.title}
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </motion.li>
-          ))}
+          {Menus.map((menu, index) => {
+            const isActive = pathname === menu.href;
+
+            const menuItem = (
+              <motion.li
+                key={index}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: index * 0.05 }}
+                className={`text-black text-sm flex items-center gap-x-4 cursor-pointer p-2 rounded-md hover:bg-gray-200 transition-colors ${
+                  menu.gap ? "mt-9" : "mt-2"
+                } ${isActive ? "bg-gray-100 font-semibold" : ""}`}
+              >
+                <Image src={menu.src} alt={menu.title} width={20} height={20} />
+                <AnimatePresence>
+                  {open && (
+                    <motion.span
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -10 }}
+                      transition={{ duration: 0.15 }}
+                      className="origin-left duration-200"
+                    >
+                      {menu.title}
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </motion.li>
+            );
+
+            return menu.href ? (
+              <Link href={menu.href} key={index}>
+                {menuItem}
+              </Link>
+            ) : (
+              <div key={index}>{menuItem}</div>
+            );
+          })}
         </ul>
       </div>
 
