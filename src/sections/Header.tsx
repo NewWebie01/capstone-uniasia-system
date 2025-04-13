@@ -4,9 +4,12 @@ import Logo from "../assets/uniasia-high-resolution-logo.png"; // Importing UniA
 import Image from "next/image"; // Importing Image component from Next.js
 import MenuIcon from "../assets/menu.svg"; // Importing menu icon for mobile navigation
 import { useState, useEffect } from "react"; // Importing useState and useEffect
+import { useRouter } from "next/navigation"; // Importing useRouter for navigation
+import { motion } from "framer-motion"; // Importing motion for animations
 
 export const Header = () => {
   const [activeLink, setActiveLink] = useState<string>(""); // State to store the clicked navigation link
+  const router = useRouter(); // Initialize the router
 
   // Function to handle navigation link clicks for smooth scrolling
   const handleClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
@@ -20,6 +23,11 @@ export const Header = () => {
         targetSection.scrollIntoView({ behavior: "smooth" }); // Smooth scroll to target section
       }
     }
+  };
+
+  // Function to navigate to login page
+  const handleLoginClick = () => {
+    router.push("/login"); // Navigate to login page
   };
 
   // Update activeLink based on scroll position
@@ -101,9 +109,13 @@ export const Header = () => {
               </a>
 
               {/* Log-in button */}
-              <button className="bg-[#181918] text-white px-4 py-2 rounded-lg font-medium hover:text-[#ffba20] transition-colors duration-300">
+              <motion.button
+                onClick={handleLoginClick} // Navigate to Login page
+                whileTap={{ scale: 1.1 }}
+                className="bg-[#181918] text-white px-4 py-2 rounded-lg font-medium hover:text-[#ffba20]"
+              >
                 Log-In
-              </button>
+              </motion.button>
             </nav>
           </div>
         </div>

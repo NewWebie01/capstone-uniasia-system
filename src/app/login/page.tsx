@@ -7,6 +7,7 @@ import splashImage from "@/assets/tools-log-in-splash.jpg";
 import Image from "next/image";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
+import { motion } from "framer-motion";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -29,7 +30,7 @@ export default function LoginPage() {
       className={`h-screen overflow-hidden flex flex-col ${dmSans.className}`}
     >
       {/* Header */}
-      <header className="sticky top-0 backdrop-blur-sm z-20 shrink-0">
+      <header className="sticky top-0 backdrop-blur-sm z-20">
         <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
           <div className="inline-flex gap-1 items-center">
             <p>UNIASIA - Reliable Hardware Supplier in the Philippines</p>
@@ -37,7 +38,7 @@ export default function LoginPage() {
         </div>
 
         <div className="py-5">
-          <div className="container px-6 mx-auto">
+          <div className="container">
             <div className="flex items-center justify-between">
               {/* Logo section */}
               <Image src={Logo} alt="UniAsia Logo" height={50} width={50} />
@@ -50,7 +51,12 @@ export default function LoginPage() {
       </header>
 
       {/* Login Section */}
-      <section className="flex-grow flex items-center justify-center bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)]">
+      <motion.section
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6, ease: "easeOut" }}
+        className="flex-grow flex items-center justify-center bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)]"
+      >
         <div className="flex shadow-2xl">
           {/* Form Box */}
           <div className="flex flex-col items-center justify-center text-center p-20 gap-8 bg-white rounded-2xl xl:rounded-tr-none xl:rounded-br-none">
@@ -115,7 +121,7 @@ export default function LoginPage() {
             className="w-[450px] object-cover lg:rounded-tr-2xl lg:rounded-br-2xl lg:block hidden"
           />
         </div>
-      </section>
+      </motion.section>
     </div>
   );
 }
