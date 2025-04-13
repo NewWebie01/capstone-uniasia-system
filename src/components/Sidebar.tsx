@@ -92,7 +92,7 @@ export const Sidebar = () => {
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
-                className={`text-black text-sm flex items-center gap-x-4 cursor-pointer p-2 rounded-md hover:bg-gray-200 transition-colors ${
+                className={`text-black text-sm flex items-center gap-x-4 cursor-pointer p-2 rounded-md hover:bg-gray-400 transition-colors ${
                   menu.gap ? "mt-9" : "mt-2"
                 } ${isActive ? "bg-gray-100 font-semibold" : ""}`}
               >
