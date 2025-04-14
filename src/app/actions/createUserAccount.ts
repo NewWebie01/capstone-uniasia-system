@@ -1,23 +1,28 @@
 "use server";
 
-import { createClient } from "@/utils/supabase/server";
-import { hash } from "bcrypt"; // You'll need to install bcrypt
+import supabase from "@/config/supabaseClient";
+import { hash } from "bcrypt";
 
 export async function createUserAccount(formData: FormData) {
-  const supabase = await createClient();
-
-  // Extract data from FormData
   const name = formData.get("name") as string;
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
 
   try {
-    // Check if email already exists
-    const { data: existingUser } = await supabase
-      .from("users")
+    // ✅ Check if the email already exists in createUserAccount table
+    const { data: existingUser, error: existingUserError } = await supabase
+      .from("createUserAccount")
       .select("email")
       .eq("email", email)
       .maybeSingle();
+
+    if (existingUserError) {
+      console.error("Error checking existing user:", existingUserError);
+      return {
+        success: false,
+        message: "Error checking existing user",
+      };
+    }
 
     if (existingUser) {
       return {
@@ -26,11 +31,11 @@ export async function createUserAccount(formData: FormData) {
       };
     }
 
-    // Hash password for security
+    // ✅ Hash the password
     const hashedPassword = await hash(password, 10);
 
-    // Insert user into the database
-    const { error } = await supabase.from("users").insert({
+    // ✅ Insert the user into createUserAccount table
+    const { error } = await supabase.from("createUserAccount").insert({
       name,
       email,
       password: hashedPassword,
@@ -38,7 +43,7 @@ export async function createUserAccount(formData: FormData) {
     });
 
     if (error) {
-      console.error("Error creating user account:", error);
+      console.error("Error inserting user:", error);
       return {
         success: false,
         message: error.message || "Failed to create account",
@@ -49,8 +54,8 @@ export async function createUserAccount(formData: FormData) {
       success: true,
       message: "Account created successfully",
     };
-  } catch (error) {
-    console.error("Unexpected error during account creation:", error);
+  } catch (err) {
+    console.error("Unexpected error:", err);
     return {
       success: false,
       message: "An unexpected error occurred",
