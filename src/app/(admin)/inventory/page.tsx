@@ -256,52 +256,116 @@ export default function InventoryPage() {
       </motion.div>
 
       {/* Add Item Form */}
-      <div className="mt-8 p-4 bg-gray-100 rounded-lg">
+      <motion.div
+        className="mt-8 p-4 bg-gray-100 rounded-lg"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+      >
         <h2 className="text-2xl font-bold mb-4">Add Item</h2>
-        <input
-          type="text"
-          placeholder="SKU"
-          value={newItem.sku}
-          onChange={(e) => setNewItem({ ...newItem, sku: e.target.value })}
-          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
-        />
-        <input
-          type="text"
-          placeholder="Name"
-          value={newItem.name}
-          onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
-          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
-        />
-        <input
-          type="text"
-          placeholder="Category"
-          value={newItem.category}
-          onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
-          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
-        />
-        <input
-          type="number"
-          placeholder="Quantity"
-          value={newItem.quantity}
-          onChange={(e) =>
-            setNewItem({ ...newItem, quantity: +e.target.value })
-          }
-          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
-        />
-        <input
-          type="text"
-          placeholder="Unit"
-          value={newItem.unit}
-          onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
-          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
-        />
-        <button
-          onClick={handleAddItem}
-          className="mt-4 px-6 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
+        <motion.div
+          className="space-y-2"
+          initial="hidden"
+          animate="visible"
+          variants={{
+            hidden: { opacity: 0 },
+            visible: {
+              opacity: 1,
+              transition: {
+                staggerChildren: 0.1,
+              },
+            },
+          }}
         >
-          Add Item
-        </button>
-      </div>
+          <motion.div
+            variants={{
+              hidden: { opacity: 0, y: 10 },
+              visible: { opacity: 1, y: 0 },
+            }}
+          >
+            <input
+              type="text"
+              placeholder="SKU"
+              value={newItem.sku}
+              onChange={(e) => setNewItem({ ...newItem, sku: e.target.value })}
+              className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+            />
+          </motion.div>
+
+          <motion.div
+            variants={{
+              hidden: { opacity: 0, y: 10 },
+              visible: { opacity: 1, y: 0 },
+            }}
+          >
+            <input
+              type="text"
+              placeholder="Name"
+              value={newItem.name}
+              onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+              className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+            />
+          </motion.div>
+
+          <motion.div
+            variants={{
+              hidden: { opacity: 0, y: 10 },
+              visible: { opacity: 1, y: 0 },
+            }}
+          >
+            <input
+              type="text"
+              placeholder="Category"
+              value={newItem.category}
+              onChange={(e) =>
+                setNewItem({ ...newItem, category: e.target.value })
+              }
+              className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+            />
+          </motion.div>
+
+          <motion.div
+            variants={{
+              hidden: { opacity: 0, y: 10 },
+              visible: { opacity: 1, y: 0 },
+            }}
+          >
+            <input
+              type="number"
+              placeholder="Quantity"
+              value={newItem.quantity}
+              onChange={(e) =>
+                setNewItem({ ...newItem, quantity: +e.target.value })
+              }
+              className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+            />
+          </motion.div>
+
+          <motion.div
+            variants={{
+              hidden: { opacity: 0, y: 10 },
+              visible: { opacity: 1, y: 0 },
+            }}
+          >
+            <input
+              type="text"
+              placeholder="Unit"
+              value={newItem.unit}
+              onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
+              className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+            />
+          </motion.div>
+
+          <motion.button
+            onClick={handleAddItem}
+            className="mt-4 px-6 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.97 }}
+          >
+            Add Item
+          </motion.button>
+        </motion.div>
+      </motion.div>
     </div>
   );
 }
