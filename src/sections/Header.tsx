@@ -99,14 +99,14 @@ export const Header = () => {
               >
                 Contact
               </a>
-              <a
+              {/* <a
                 href="#help"
                 id="help"
                 onClick={handleClick}
                 className="hover:text-[#ffba20] transition-colors duration-300"
               >
                 Help
-              </a>
+              </a> */}
 
               {/* Log-in button */}
               <motion.button

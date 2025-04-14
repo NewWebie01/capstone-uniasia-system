@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import Cards from "@/components/Cards";
 import Graphs from "@/components/Graphs";
 import BottomCards from "@/components/BottomCards";
+import Bargraph from "@/components/Bargraph";
 
 const DashboardPage = () => {
   return (
@@ -31,7 +32,7 @@ const DashboardPage = () => {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
       >
-        <Graphs />
+        <Bargraph />
       </motion.div>
 
       <motion.div
