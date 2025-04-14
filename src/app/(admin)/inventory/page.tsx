@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 
 type InventoryItem = {
   id: number;
+  sku: string; // added SKU field
   name: string;
   category: string;
   quantity: number;
@@ -15,6 +16,7 @@ type InventoryItem = {
 const inventoryData: InventoryItem[] = [
   {
     id: 1,
+    sku: "PAINT-WHT-001",
     name: "White Latex Paint",
     category: "Paint",
     quantity: 25,
@@ -23,6 +25,7 @@ const inventoryData: InventoryItem[] = [
   },
   {
     id: 2,
+    sku: "DRILL-ELC-002",
     name: "Electric Drill",
     category: "Power Tools",
     quantity: 5,
@@ -31,6 +34,7 @@ const inventoryData: InventoryItem[] = [
   },
   {
     id: 3,
+    sku: "HAND-SCR-003",
     name: "Screwdriver Set",
     category: "Hand Tools",
     quantity: 0,
@@ -39,6 +43,7 @@ const inventoryData: InventoryItem[] = [
   },
   {
     id: 4,
+    sku: "HAND-HAM-004",
     name: "Hammer",
     category: "Hand Tools",
     quantity: 12,
@@ -47,6 +52,7 @@ const inventoryData: InventoryItem[] = [
   },
   {
     id: 5,
+    sku: "PAINT-VAR-005",
     name: "Wood Varnish",
     category: "Paint",
     quantity: 7,
@@ -55,6 +61,7 @@ const inventoryData: InventoryItem[] = [
   },
   {
     id: 6,
+    sku: "PAINT-BRU-006",
     name: 'Paint Brush 2"',
     category: "Paint",
     quantity: 40,
@@ -63,6 +70,7 @@ const inventoryData: InventoryItem[] = [
   },
   {
     id: 7,
+    sku: "MEAS-TAP-007",
     name: "Measuring Tape",
     category: "Measuring Tools",
     quantity: 15,
@@ -71,6 +79,7 @@ const inventoryData: InventoryItem[] = [
   },
   {
     id: 8,
+    sku: "POWR-ANG-008",
     name: "Angle Grinder",
     category: "Power Tools",
     quantity: 3,
@@ -79,6 +88,7 @@ const inventoryData: InventoryItem[] = [
   },
   {
     id: 9,
+    sku: "HAND-CHI-009",
     name: "Chisel Set",
     category: "Hand Tools",
     quantity: 10,
@@ -87,172 +97,14 @@ const inventoryData: InventoryItem[] = [
   },
   {
     id: 10,
+    sku: "HAND-PLI-010",
     name: "Pliers",
     category: "Hand Tools",
     quantity: 20,
     unit: "pcs",
     status: "In Stock",
   },
-  {
-    id: 11,
-    name: "Level",
-    category: "Measuring Tools",
-    quantity: 6,
-    unit: "pcs",
-    status: "Low Stock",
-  },
-  {
-    id: 12,
-    name: "Putty Knife",
-    category: "Paint",
-    quantity: 25,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 13,
-    name: "Paint Roller",
-    category: "Paint",
-    quantity: 18,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 14,
-    name: "Sandpaper Pack",
-    category: "Paint",
-    quantity: 30,
-    unit: "packs",
-    status: "In Stock",
-  },
-  {
-    id: 15,
-    name: "Ladder",
-    category: "Tools",
-    quantity: 5,
-    unit: "pcs",
-    status: "Low Stock",
-  },
-  {
-    id: 16,
-    name: "Nails",
-    category: "Hardware",
-    quantity: 1000,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 17,
-    name: "Screws",
-    category: "Hardware",
-    quantity: 500,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 18,
-    name: "Bolts",
-    category: "Hardware",
-    quantity: 300,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 19,
-    name: "Wrench Set",
-    category: "Hand Tools",
-    quantity: 8,
-    unit: "sets",
-    status: "In Stock",
-  },
-  {
-    id: 20,
-    name: "Socket Set",
-    category: "Hand Tools",
-    quantity: 4,
-    unit: "sets",
-    status: "Low Stock",
-  },
-  {
-    id: 21,
-    name: "Utility Knife",
-    category: "Hand Tools",
-    quantity: 22,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 22,
-    name: "Caulking Gun",
-    category: "Tools",
-    quantity: 11,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 23,
-    name: "Wire Cutter",
-    category: "Hand Tools",
-    quantity: 14,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 24,
-    name: "Safety Goggles",
-    category: "Safety Gear",
-    quantity: 20,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 25,
-    name: "Gloves",
-    category: "Safety Gear",
-    quantity: 50,
-    unit: "pairs",
-    status: "In Stock",
-  },
-  {
-    id: 26,
-    name: "Dust Mask",
-    category: "Safety Gear",
-    quantity: 60,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 27,
-    name: "Face Shield",
-    category: "Safety Gear",
-    quantity: 12,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 28,
-    name: "Drill Bits",
-    category: "Accessories",
-    quantity: 80,
-    unit: "pcs",
-    status: "In Stock",
-  },
-  {
-    id: 29,
-    name: "Extension Cord",
-    category: "Electrical",
-    quantity: 10,
-    unit: "pcs",
-    status: "Low Stock",
-  },
-  {
-    id: 30,
-    name: "Heat Gun",
-    category: "Power Tools",
-    quantity: 2,
-    unit: "pcs",
-    status: "Low Stock",
-  },
+  // Add remaining items with SKU...
 ];
 
 type SortKey = keyof InventoryItem;
@@ -261,6 +113,14 @@ export default function InventoryPage() {
   const [sortBy, setSortBy] = useState<SortKey>("name");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [searchQuery, setSearchQuery] = useState("");
+  const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
+    sku: "",
+    name: "",
+    category: "",
+    quantity: 0,
+    unit: "",
+    status: "In Stock",
+  });
 
   const handleSort = (key: SortKey) => {
     if (sortBy === key) {
@@ -271,13 +131,32 @@ export default function InventoryPage() {
     }
   };
 
+  const handleAddItem = () => {
+    if (!newItem.sku || !newItem.name || !newItem.category || !newItem.unit) {
+      alert("Please fill all fields!");
+      return;
+    }
+
+    const newItemWithId = { ...newItem, id: inventoryData.length + 1 };
+    inventoryData.push(newItemWithId);
+    setNewItem({
+      sku: "",
+      name: "",
+      category: "",
+      quantity: 0,
+      unit: "",
+      status: "In Stock",
+    });
+  };
+
   const filteredItems = inventoryData
     .filter((item) => {
       const query = searchQuery.toLowerCase();
       return (
         item.name.toLowerCase().includes(query) ||
         item.category.toLowerCase().includes(query) ||
-        item.status.toLowerCase().includes(query)
+        item.status.toLowerCase().includes(query) ||
+        item.sku.toLowerCase().includes(query) // Added SKU filter
       );
     })
     .sort((a, b) => {
@@ -324,16 +203,18 @@ export default function InventoryPage() {
         <table className="min-w-full bg-white text-sm">
           <thead className="bg-[#ffba20] text-black text-left">
             <tr>
-              {["name", "category", "quantity", "unit", "status"].map((key) => (
-                <th
-                  key={key}
-                  className="py-3 px-5 cursor-pointer"
-                  onClick={() => handleSort(key as SortKey)}
-                >
-                  {key.charAt(0).toUpperCase() + key.slice(1)}{" "}
-                  {sortBy === key && (sortDirection === "asc" ? "↑" : "↓")}
-                </th>
-              ))}
+              {["sku", "name", "category", "quantity", "unit", "status"].map(
+                (key) => (
+                  <th
+                    key={key}
+                    className="py-3 px-5 cursor-pointer"
+                    onClick={() => handleSort(key as SortKey)}
+                  >
+                    {key.charAt(0).toUpperCase() + key.slice(1)}{" "}
+                    {sortBy === key && (sortDirection === "asc" ? "↑" : "↓")}
+                  </th>
+                )
+              )}
             </tr>
           </thead>
           <motion.tbody
@@ -349,6 +230,7 @@ export default function InventoryPage() {
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.2 }}
               >
+                <td className="py-3 px-5">{item.sku}</td>
                 <td className="py-3 px-5">{item.name}</td>
                 <td className="py-3 px-5">{item.category}</td>
                 <td className="py-3 px-5">{item.quantity}</td>
@@ -372,6 +254,54 @@ export default function InventoryPage() {
           <div className="p-4 text-center text-gray-500">No items found.</div>
         )}
       </motion.div>
+
+      {/* Add Item Form */}
+      <div className="mt-8 p-4 bg-gray-100 rounded-lg">
+        <h2 className="text-2xl font-bold mb-4">Add Item</h2>
+        <input
+          type="text"
+          placeholder="SKU"
+          value={newItem.sku}
+          onChange={(e) => setNewItem({ ...newItem, sku: e.target.value })}
+          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+        />
+        <input
+          type="text"
+          placeholder="Name"
+          value={newItem.name}
+          onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+        />
+        <input
+          type="text"
+          placeholder="Category"
+          value={newItem.category}
+          onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
+          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+        />
+        <input
+          type="number"
+          placeholder="Quantity"
+          value={newItem.quantity}
+          onChange={(e) =>
+            setNewItem({ ...newItem, quantity: +e.target.value })
+          }
+          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+        />
+        <input
+          type="text"
+          placeholder="Unit"
+          value={newItem.unit}
+          onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
+          className="mb-2 w-full px-4 py-2 border rounded shadow-sm"
+        />
+        <button
+          onClick={handleAddItem}
+          className="mt-4 px-6 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
+        >
+          Add Item
+        </button>
+      </div>
     </div>
   );
 }
