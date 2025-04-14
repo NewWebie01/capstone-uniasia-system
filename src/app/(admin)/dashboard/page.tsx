@@ -6,6 +6,8 @@ import Cards from "@/components/Cards";
 import Graphs from "@/components/Graphs";
 import BottomCards from "@/components/BottomCards";
 import Bargraph from "@/components/Bargraph";
+import { useRouter } from "next/navigation";
+import supabase from "@/config/supabaseClient";
 
 const DashboardPage = () => {
   return (

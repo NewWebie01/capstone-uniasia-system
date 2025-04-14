@@ -9,6 +9,8 @@ import Chart from "@/assets/Chart.png";
 import Folder from "@/assets/Folder.png";
 import Setting from "@/assets/Setting.png";
 import LogoutIcon from "@/assets/power-button.png";
+import supabase from "@/config/supabaseClient";
+import { useRouter } from "next/navigation";
 
 import Image from "next/image";
 import Link from "next/link";
@@ -19,7 +21,16 @@ import { motion, AnimatePresence } from "framer-motion";
 export const Sidebar = () => {
   const [open, setOpen] = useState(true);
   const pathname = usePathname();
+  const router = useRouter();
 
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error("Logout failed:", error.message);
+    } else {
+      router.push("/");
+    }
+  };
   const Menus = [
     { title: "Dashboard", src: ChartFill, href: "/dashboard" },
     { title: "Inventory", src: Calendar, href: "/inventory" },
@@ -128,7 +139,7 @@ export const Sidebar = () => {
       <div className="p-5">
         {open ? (
           <motion.button
-            onClick={() => console.log("Logging out...")}
+            onClick={handleLogout}
             className="w-full px-4 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -150,8 +161,8 @@ export const Sidebar = () => {
               alt="Log out"
               width={24}
               height={24}
-              onClick={() => console.log("Logging out...")}
               className="hover:text-[#ffba20] transition-colors duration-300"
+              onClick={handleLogout}
             />
           </motion.div>
         )}
