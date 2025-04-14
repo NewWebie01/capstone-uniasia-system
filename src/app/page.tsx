@@ -15,7 +15,7 @@ export default function Home() {
       <Hero /> {/* Render Hero component */}
       <LogoTicker /> {/* Render LogoTicker component */}
       <AboutUs /> {/* Render ProductShowcase component */}
-      <Testimonials /> {/* Render Testimonials component */}
+      {/* <Testimonials /> Render Testimonials component */}
       <ContactUs /> {/* Render Pricing component */}
       <Footer /> {/* Render Footer component */}
     </>

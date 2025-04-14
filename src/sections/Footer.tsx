@@ -16,18 +16,18 @@ export const Footer = () => {
         <div className="inline-flex relative before:content-[''] before:top-3 before:bottom-3 before:w-full ">
           <Image src={logo} height={70} alt="Saas Logo " className="relative" />
         </div>
-        <nav className="flex flex-col md:flex-row md:justify-center gap-6 mt-6">
+        {/* <nav className="flex flex-col md:flex-row md:justify-center gap-6 mt-6">
           <a href="#">About</a>
           <a href="#">Contact</a>
           <a href="#">Help</a>
-        </nav>
-        <div className="flex justify-center gap-6 mt-6">
+        </nav> */}
+        {/* <div className="flex justify-center gap-6 mt-6">
           <SocialX />
           <SocialInsta />
           <SocialLinkedIn />
           <SocialPin />
           <SocialYoutube />
-        </div>
+        </div> */}
         <p className="mt-6 ">&copy; 2025 UNIASIA, Inc. All rights reserved.</p>
       </div>
     </footer>
