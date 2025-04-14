@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { DM_Sans } from "next/font/google";
 import "@/styles/globals.css";
@@ -8,6 +9,8 @@ import Image from "next/image";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
 import { motion } from "framer-motion";
+import supabase from "@/config/supabaseClient";
+import bcrypt from "bcryptjs";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -19,12 +22,32 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    console.log("Logging in with:", email, password);
-    // Add routing logic here if needed
-  };
+  const router = useRouter();
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const { data, error } = await supabase
+      .from("createUserAccount")
+      .select("email, password")
+      .eq("email", email)
+      .single();
+
+    if (error || !data) {
+      alert("Account not found.");
+      return;
+    }
+
+    const passwordMatch = await bcrypt.compare(password, data.password);
+
+    if (!passwordMatch) {
+      alert("Incorrect password.");
+      return;
+    }
+
+    // Redirect to dashboard
+    router.push("/dashboard");
+  };
   return (
     <div
       className={`h-screen overflow-hidden flex flex-col ${dmSans.className}`}
