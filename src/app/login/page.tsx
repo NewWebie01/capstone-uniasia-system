@@ -71,10 +71,12 @@ export default function LoginPage() {
                   Username
                 </label>
                 <input
+                  id="username"
                   type="text"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50"
+                  required
                 />
               </div>
 
@@ -83,10 +85,12 @@ export default function LoginPage() {
                   Password
                 </label>
                 <input
+                  id="password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50"
+                  required
                 />
               </div>
 
