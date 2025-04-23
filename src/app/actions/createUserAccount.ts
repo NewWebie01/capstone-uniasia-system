@@ -1,48 +1,40 @@
+// app/actions/createUserAccount.ts
 "use server";
 
-import supabase from "@/config/supabaseClient";
-import { compare } from "bcrypt";
+import { createServerActionClient } from "@supabase/auth-helpers-nextjs";
+import { cookies } from "next/headers";
 
 export async function createUserAccount(formData: FormData) {
+  const name = formData.get("name") as string;
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
 
-  try {
-    // 🧠 Get user by email
-    const { data: user, error } = await supabase
-      .from("createUserAccount")
-      .select("email, password")
-      .eq("email", email)
-      .maybeSingle();
+  const supabase = createServerActionClient({ cookies });
 
-    if (error || !user) {
-      return {
-        success: false,
-        message: "Invalid credentials",
-      };
-    }
+  // Step 1: Create user in Supabase Auth
+  const { data: authData, error: authError } =
+    await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true, // auto-confirm email
+    });
 
-    // 🔐 Compare password
-    const passwordMatch = await compare(password, user.password);
-
-    if (!passwordMatch) {
-      return {
-        success: false,
-        message: "Invalid credentials",
-      };
-    }
-
-    // ✅ Login successful (you can add session handling here)
-    return {
-      success: true,
-      message: "Login successful",
-      user,
-    };
-  } catch (err) {
-    console.error("Login error:", err);
-    return {
-      success: false,
-      message: "An unexpected error occurred",
-    };
+  if (authError) {
+    console.error("Supabase Auth error:", authError);
+    return { success: false, message: authError.message };
   }
+
+  const userId = authData.user?.id;
+
+  // Step 2: Add additional info to your custom user table
+  const { error: insertError } = await supabase
+    .from("createUserAccount")
+    .insert([{ id: userId, name, email }]);
+
+  if (insertError) {
+    console.error("Insert custom user info error:", insertError);
+    return { success: false, message: insertError.message };
+  }
+
+  return { success: true };
 }

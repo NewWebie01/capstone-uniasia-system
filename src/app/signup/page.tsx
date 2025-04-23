@@ -1,3 +1,4 @@
+// app/pages/signup/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -77,7 +78,7 @@ export default function SignUpPage() {
     setIsLoading(true);
 
     try {
-      const response = await createUserAccount(submitData); // Uncomment when wired
+      const response = await createUserAccount(submitData); // Server action call
 
       if (response.success) {
         alert("Account created successfully! You can now login.");
@@ -87,7 +88,7 @@ export default function SignUpPage() {
       }
 
       // Temp success feedback
-      alert("Account created successfully! (Mocked)");
+      // alert("Account created successfully! (Mocked)");
     } catch (error) {
       console.error("Error creating account:", error);
       alert("An unexpected error occurred. Please try again later.");

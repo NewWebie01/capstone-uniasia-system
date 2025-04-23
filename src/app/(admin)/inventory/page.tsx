@@ -10,9 +10,9 @@ type InventoryItem = {
   category: string;
   quantity: number;
   unit: string;
-  created_at: string;
   price: number;
   max_quantity: number;
+  date_created: string;
 };
 
 type SortKey = keyof InventoryItem;
@@ -24,15 +24,20 @@ export default function InventoryPage() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [searchQuery, setSearchQuery] = useState("");
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
   const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
     sku: "",
     name: "",
     category: "",
     quantity: 0,
     unit: "",
-    created_at: new Date().toISOString().split("T")[0],
     price: 0,
     max_quantity: 100,
+    date_created: new Date().toLocaleString("en-PH", {
+      dateStyle: "long",
+      timeStyle: "short",
+      hour12: true,
+    }),
   });
 
   async function generateIncrementalSku(): Promise<string> {
@@ -56,6 +61,7 @@ export default function InventoryPage() {
   }
 
   const fetchItems = async () => {
+    setLoading(true);
     const { data, error } = await supabase.from("inventory").select();
     if (error) {
       setFetchError("Could not fetch the data");
@@ -64,6 +70,7 @@ export default function InventoryPage() {
       setItems(data);
       setFetchError(null);
     }
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -89,10 +96,12 @@ export default function InventoryPage() {
       !newItem.name ||
       !newItem.category ||
       !newItem.unit ||
-      !newItem.created_at ||
-      newItem.price <= 0
+      !newItem.date_created ||
+      newItem.price <= 0 ||
+      newItem.quantity < 0 ||
+      newItem.max_quantity <= 0
     ) {
-      alert("Please fill all fields and enter a valid price!");
+      alert("Please fill all fields and make sure values are valid!");
       return;
     }
 
@@ -121,28 +130,19 @@ export default function InventoryPage() {
         category: "",
         quantity: 0,
         unit: "",
-        created_at: new Date().toISOString().split("T")[0],
         price: 0,
         max_quantity: 100,
+        date_created: new Date().toLocaleString("en-PH", {
+          dateStyle: "long",
+          timeStyle: "short",
+          hour12: true,
+        }),
       });
       setEditingItemId(null);
     } catch (error: any) {
       console.error("Error saving item:", error);
       alert(`An error occurred: ${error.message}`);
     }
-  };
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const options: Intl.DateTimeFormatOptions = {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    };
-    return date.toLocaleString("en-US", options);
   };
 
   const filteredItems = items
@@ -179,81 +179,91 @@ export default function InventoryPage() {
       />
 
       <motion.div className="overflow-x-auto rounded-lg shadow">
-        <table className="min-w-full bg-white text-sm">
-          <thead className="bg-[#ffba20] text-black text-left">
-            <tr>
-              {[
-                "name",
-                "quantity",
-                "unit",
-                "created_at",
-                "sku",
-                "category",
-                "price",
-              ].map((key) => (
-                <th
-                  key={key}
-                  className="py-3 px-5 cursor-pointer"
-                  onClick={() => handleSort(key as SortKey)}
-                >
-                  {key.charAt(0).toUpperCase() + key.slice(1)}{" "}
-                  {sortBy === key && (sortDirection === "asc" ? "↑" : "↓")}
-                </th>
-              ))}
-              <th>Status</th>
-              <th>Edit</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredItems.map((item) => {
-              const stockPercent = (item.quantity / item.max_quantity) * 100;
-              const statusColor =
-                stockPercent >= 80
-                  ? "text-green-600"
-                  : stockPercent >= 40
-                  ? "text-yellow-500"
-                  : "text-red-500";
-
-              return (
-                <tr
-                  key={item.id}
-                  className="border-b hover:bg-gray-100 transition duration-150"
-                >
-                  <td className="py-3 px-5">{item.name}</td>
-                  <td className="py-3 px-5">{item.quantity}</td>
-                  <td className="py-3 px-5">{item.unit}</td>
-                  <td className="py-3 px-5">{formatDate(item.created_at)}</td>
-                  <td className="py-3 px-5">{item.sku}</td>
-                  <td className="py-3 px-5">{item.category}</td>
-                  <td className="py-3 px-5">₱ {item.price.toFixed(2)}</td>
-                  <td className={`py-3 px-5 font-semibold ${statusColor}`}>
-                    {stockPercent >= 80
-                      ? "In Stock"
-                      : stockPercent >= 40
-                      ? "Moderate Stock"
-                      : "Critical Stock"}
-                  </td>
-                  <td className="py-3 px-5">
-                    <button
-                      onClick={() => {
-                        setNewItem({
-                          ...item,
-                          created_at: item.created_at.split("T")[0],
-                        });
-                        setEditingItemId(item.id);
-                      }}
-                      className="text-blue-500 underline"
+        {loading ? (
+          <div className="p-4 text-center text-gray-500">Loading...</div>
+        ) : (
+          <>
+            <table className="min-w-full bg-white text-sm">
+              <thead className="bg-[#ffba20] text-black text-left">
+                <tr>
+                  {[
+                    "name",
+                    "quantity",
+                    "unit",
+                    "SKU",
+                    "category",
+                    "price",
+                    "date_created", // ✅ Added to header
+                  ].map((key) => (
+                    <th
+                      key={key}
+                      className="py-3 px-5 cursor-pointer"
+                      onClick={() => handleSort(key as SortKey)}
                     >
-                      Edit
-                    </button>
-                  </td>
+                      {key.charAt(0).toUpperCase() + key.slice(1)}{" "}
+                      {sortBy === key && (sortDirection === "asc" ? "↑" : "↓")}
+                    </th>
+                  ))}
+                  <th>Status</th>
+                  <th>Edit</th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {filteredItems.length === 0 && (
-          <div className="p-4 text-center text-gray-500">No items found.</div>
+              </thead>
+              <tbody>
+                {filteredItems.map((item) => {
+                  const stockPercent =
+                    item.max_quantity > 0
+                      ? (item.quantity / item.max_quantity) * 100
+                      : 0;
+
+                  const statusColor =
+                    stockPercent >= 80
+                      ? "text-green-600"
+                      : stockPercent >= 40
+                      ? "text-yellow-500"
+                      : "text-red-500";
+
+                  return (
+                    <tr
+                      key={item.id}
+                      className="border-b hover:bg-gray-100 transition duration-150"
+                    >
+                      <td className="py-3 px-5">{item.name}</td>
+                      <td className="py-3 px-5">{item.quantity}</td>
+                      <td className="py-3 px-5">{item.unit}</td>
+                      <td className="py-3 px-5">{item.sku}</td>
+                      <td className="py-3 px-5">{item.category}</td>
+                      <td className="py-3 px-5">₱ {item.price.toFixed(2)}</td>
+                      <td className="py-3 px-5">{item.date_created}</td>{" "}
+                      {/* ✅ Display here */}
+                      <td className={`py-3 px-5 font-semibold ${statusColor}`}>
+                        {stockPercent >= 80
+                          ? "In Stock"
+                          : stockPercent >= 40
+                          ? "Moderate Stock"
+                          : "Critical Stock"}
+                      </td>
+                      <td className="py-3 px-5">
+                        <button
+                          onClick={() => {
+                            setNewItem({ ...item });
+                            setEditingItemId(item.id);
+                          }}
+                          className="text-blue-500 underline"
+                        >
+                          Edit
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {filteredItems.length === 0 && (
+              <div className="p-4 text-center text-gray-500">
+                No items found.
+              </div>
+            )}
+          </>
         )}
       </motion.div>
 
@@ -262,7 +272,7 @@ export default function InventoryPage() {
           {editingItemId !== null ? "Edit Item" : "Add Item"}
         </h2>
         <div className="space-y-4">
-          {/* Form Fields */}
+          {/* Form fields (no date_created shown here) */}
           <div>
             <label className="block font-medium mb-1">SKU</label>
             <input
@@ -353,15 +363,19 @@ export default function InventoryPage() {
                     category: "",
                     quantity: 0,
                     unit: "",
-                    created_at: new Date().toISOString().split("T")[0],
                     price: 0,
                     max_quantity: 100,
+                    date_created: new Date().toLocaleString("en-PH", {
+                      dateStyle: "long",
+                      timeStyle: "short",
+                      hour12: true,
+                    }),
                   });
                   setEditingItemId(null);
                 }}
-                className="mt-4 px-6 py-2 bg-gray-300 text-black rounded hover:bg-red-300 transition-colors"
+                className="mt-4 px-6 py-2 bg-red-500 text-white rounded hover:bg-red-600"
               >
-                Cancel Edit
+                Cancel
               </button>
             )}
           </div>
