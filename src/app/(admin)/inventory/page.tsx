@@ -1,18 +1,20 @@
-"use client";
+"use client"; // This tells Next.js to treat this file as a Client Component
+
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import supabase from "@/config/supabaseClient";
 
+// Type Definitions for Inventory Items
 type InventoryItem = {
   id: number;
   sku: string;
-  name: string;
+  product_name: string;
   category: string;
   quantity: number;
   unit: string;
-  created_at: string;
-  price: number;
+  amount: number;
   max_quantity: number;
+  date_created: string;
 };
 
 type SortKey = keyof InventoryItem;
@@ -20,42 +22,43 @@ type SortKey = keyof InventoryItem;
 export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<SortKey>("name");
+  const [sortBy, setSortBy] = useState<SortKey>("product_name");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [searchQuery, setSearchQuery] = useState("");
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
   const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
-    sku: "",
-    name: "",
+    product_name: "",
     category: "",
     quantity: 0,
     unit: "",
-    created_at: new Date().toISOString().split("T")[0],
-    price: 0,
+    amount: 0,
     max_quantity: 100,
+    date_created: new Date().toLocaleString("en-PH", {
+      dateStyle: "long",
+      timeStyle: "short",
+      hour12: true,
+    }),
+    sku: "",
   });
 
-  async function generateIncrementalSku(): Promise<string> {
-    const { data, error } = await supabase
-      .from("inventory")
-      .select("sku")
-      .order("id", { ascending: false })
-      .limit(1);
+  const [categories, setCategories] = useState<string[]>([
+    "Wood",
+    "Metal",
+    "Paint",
+    "Plastic",
+    "Tool",
+    "Building",
+  ]);
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
-    if (error) {
-      console.error("Failed to fetch latest SKU", error);
-      return "SKU-0001";
-    }
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
 
-    const latestSku = data?.[0]?.sku;
-    if (!latestSku) return "SKU-0001";
-
-    const match = latestSku.match(/SKU-(\d+)/);
-    const number = match ? parseInt(match[1], 10) + 1 : 1;
-    return `SKU-${number.toString().padStart(4, "0")}`;
-  }
-
+  // Fetch all items from the inventory
   const fetchItems = async () => {
+    setLoading(true);
     const { data, error } = await supabase.from("inventory").select();
     if (error) {
       setFetchError("Could not fetch the data");
@@ -64,17 +67,15 @@ export default function InventoryPage() {
       setItems(data);
       setFetchError(null);
     }
+    setLoading(false);
   };
 
+  // Fetch items on mount
   useEffect(() => {
-    const setInitialSku = async () => {
-      const sku = await generateIncrementalSku();
-      setNewItem((prev) => ({ ...prev, sku }));
-    };
     fetchItems();
-    setInitialSku();
   }, []);
 
+  // Handle sorting of inventory items
   const handleSort = (key: SortKey) => {
     if (sortBy === key) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
@@ -84,28 +85,66 @@ export default function InventoryPage() {
     }
   };
 
+  // Generate SKU based on category, sequential number, and timestamp
+  const generateUniqueSku = async (category: string) => {
+    const categoryPrefix = category.slice(0, 3).toUpperCase(); // First three letters of the category
+
+    // Generate sequential ID based on the existing items in the same category
+    const { data: existingItems, error } = await supabase
+      .from("inventory")
+      .select("sku")
+      .like("sku", `${categoryPrefix}%`);
+
+    if (error) {
+      console.error("Error fetching items for SKU generation:", error);
+      throw new Error("Failed to fetch existing items for SKU generation.");
+    }
+
+    // Sequential ID padded to 3 digits
+    const sequentialId = String(existingItems.length + 1).padStart(3, "0");
+
+    // Timestamp in milliseconds and random string for uniqueness
+    const timestamp = Date.now();
+    const randomSuffix = Math.random()
+      .toString(36)
+      .substring(2, 8)
+      .toUpperCase();
+
+    return `${categoryPrefix}-${sequentialId}-${timestamp}-${randomSuffix}`;
+  };
+
+  // Handle item form submission (add or update item)
   const handleSubmitItem = async () => {
+    // Ensure all required fields are filled
     if (
-      !newItem.name ||
+      !newItem.product_name ||
       !newItem.category ||
       !newItem.unit ||
-      !newItem.created_at ||
-      newItem.price <= 0
+      !newItem.date_created ||
+      newItem.amount <= 0 ||
+      newItem.quantity <= 0 ||
+      newItem.max_quantity <= 0
     ) {
-      alert("Please fill all fields and enter a valid price!");
+      alert("Please fill all fields and make sure values are valid!");
       return;
     }
 
     try {
       if (editingItemId !== null) {
+        newItem.sku = await generateUniqueSku(newItem.category); // Regenerate SKU if category is changed
+      }
+
+      if (editingItemId !== null) {
         const { error } = await supabase
           .from("inventory")
-          .update(newItem)
+          .update({ ...newItem })
           .eq("id", editingItemId);
         if (error) throw error;
       } else {
-        const sku = await generateIncrementalSku();
-        const itemToInsert = { ...newItem, sku };
+        // Generate SKU for new item before inserting
+        newItem.sku = await generateUniqueSku(newItem.category);
+
+        const itemToInsert = { ...newItem };
         const { error } = await supabase
           .from("inventory")
           .insert([itemToInsert]);
@@ -114,44 +153,41 @@ export default function InventoryPage() {
 
       await fetchItems();
 
-      const nextSku = await generateIncrementalSku();
+      // Reset the form for a new item
       setNewItem({
-        sku: nextSku,
-        name: "",
+        product_name: "",
         category: "",
         quantity: 0,
         unit: "",
-        created_at: new Date().toISOString().split("T")[0],
-        price: 0,
+        amount: 0,
         max_quantity: 100,
+        date_created: new Date().toLocaleString("en-PH", {
+          dateStyle: "long",
+          timeStyle: "short",
+          hour12: true,
+        }),
+        sku: "",
       });
       setEditingItemId(null);
+      setFeedbackMessage("Item successfully added/updated!");
     } catch (error: any) {
       console.error("Error saving item:", error);
-      alert(`An error occurred: ${error.message}`);
+      setFeedbackMessage(`An error occurred: ${error.message}`);
     }
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const options: Intl.DateTimeFormatOptions = {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    };
-    return date.toLocaleString("en-US", options);
+  // Handle category change with auto-suggestions
+  const handleCategoryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewItem({ ...newItem, category: e.target.value });
   };
 
+  // Filter and sort items based on search query and selected sorting
   const filteredItems = items
     .filter((item) => {
       const query = searchQuery.toLowerCase();
       return (
-        item.name.toLowerCase().includes(query) ||
-        item.category.toLowerCase().includes(query) ||
-        item.sku.toLowerCase().includes(query)
+        item.product_name.toLowerCase().includes(query) ||
+        item.category.toLowerCase().includes(query)
       );
     })
     .sort((a, b) => {
@@ -164,207 +200,267 @@ export default function InventoryPage() {
           ? String(aValue).localeCompare(String(bValue))
           : String(bValue).localeCompare(String(aValue));
       }
-    });
+    })
+    .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  const totalPages = Math.ceil(items.length / itemsPerPage);
 
   return (
     <div className="pt-2 p-4">
-      <motion.h1 className="text-3xl font-bold mb-4">Inventory</motion.h1>
+      <motion.h1
+        className="text-3xl font-bold mb-4"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.3 }}
+      >
+        Inventory
+      </motion.h1>
 
+      {/* Search Bar */}
       <motion.input
         type="text"
         placeholder="Search items..."
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
         className="mb-4 w-full md:w-1/3 px-4 py-2 border rounded shadow-sm"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.3 }}
       />
 
-      <motion.div className="overflow-x-auto rounded-lg shadow">
-        <table className="min-w-full bg-white text-sm">
-          <thead className="bg-[#ffba20] text-black text-left">
-            <tr>
-              {[
-                "name",
-                "quantity",
-                "unit",
-                "created_at",
-                "sku",
-                "category",
-                "price",
-              ].map((key) => (
-                <th
-                  key={key}
-                  className="py-3 px-5 cursor-pointer"
-                  onClick={() => handleSort(key as SortKey)}
-                >
-                  {key.charAt(0).toUpperCase() + key.slice(1)}{" "}
-                  {sortBy === key && (sortDirection === "asc" ? "↑" : "↓")}
-                </th>
-              ))}
-              <th>Status</th>
-              <th>Edit</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredItems.map((item) => {
-              const stockPercent = (item.quantity / item.max_quantity) * 100;
-              const statusColor =
-                stockPercent >= 80
-                  ? "text-green-600"
-                  : stockPercent >= 40
-                  ? "text-yellow-500"
-                  : "text-red-500";
+      {/* Feedback Message */}
+      {feedbackMessage && (
+        <motion.div
+          className="mb-4 text-green-600"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.3 }}
+        >
+          {feedbackMessage}
+        </motion.div>
+      )}
 
-              return (
-                <tr
-                  key={item.id}
-                  className="border-b hover:bg-gray-100 transition duration-150"
-                >
-                  <td className="py-3 px-5">{item.name}</td>
-                  <td className="py-3 px-5">{item.quantity}</td>
-                  <td className="py-3 px-5">{item.unit}</td>
-                  <td className="py-3 px-5">{formatDate(item.created_at)}</td>
-                  <td className="py-3 px-5">{item.sku}</td>
-                  <td className="py-3 px-5">{item.category}</td>
-                  <td className="py-3 px-5">₱ {item.price.toFixed(2)}</td>
-                  <td className={`py-3 px-5 font-semibold ${statusColor}`}>
-                    {stockPercent >= 80
-                      ? "In Stock"
-                      : stockPercent >= 40
-                      ? "Moderate Stock"
-                      : "Critical Stock"}
-                  </td>
-                  <td className="py-3 px-5">
-                    <button
-                      onClick={() => {
-                        setNewItem({
-                          ...item,
-                          created_at: item.created_at.split("T")[0],
-                        });
-                        setEditingItemId(item.id);
-                      }}
-                      className="text-blue-500 underline"
+      {/* Inventory Table */}
+      <motion.div className="overflow-x-auto rounded-lg shadow">
+        {loading ? (
+          <motion.div
+            className="p-4 text-center text-gray-500"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.3 }}
+          >
+            Loading...
+          </motion.div>
+        ) : (
+          <>
+            <motion.table
+              className="min-w-full bg-white text-sm"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.3 }}
+            >
+              <thead className="bg-[#ffba20] text-black text-left">
+                <tr>
+                  {[
+                    "product_name",
+                    "quantity",
+                    "unit",
+                    "category",
+                    "amount",
+                    "date_created",
+                    "sku",
+                  ].map((key) => (
+                    <th
+                      key={key}
+                      className="py-3 px-5 cursor-pointer"
+                      onClick={() => handleSort(key as SortKey)}
                     >
-                      Edit
-                    </button>
-                  </td>
+                      {key
+                        .split("_")
+                        .map(
+                          (word) => word.charAt(0).toUpperCase() + word.slice(1)
+                        )
+                        .join(" ")}{" "}
+                      {sortBy === key && (sortDirection === "asc" ? "↑" : "↓")}
+                    </th>
+                  ))}
+                  <th className="py-3 px-5">Status</th>
+                  <th className="py-3 px-5">Edit</th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {filteredItems.length === 0 && (
-          <div className="p-4 text-center text-gray-500">No items found.</div>
+              </thead>
+
+              <tbody>
+                {filteredItems.map((item) => {
+                  const stockPercent =
+                    item.max_quantity > 0
+                      ? (item.quantity / item.max_quantity) * 100
+                      : 0;
+
+                  const statusColor =
+                    stockPercent >= 80
+                      ? "text-green-600"
+                      : stockPercent >= 40
+                      ? "text-yellow-500"
+                      : "text-red-500";
+
+                  return (
+                    <motion.tr
+                      key={item.id}
+                      className="border-b hover:bg-gray-100 transition duration-150"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <td className="py-3 px-5">{item.product_name}</td>
+                      <td className="py-3 px-5">{item.quantity}</td>
+                      <td className="py-3 px-5">{item.unit}</td>
+                      <td className="py-3 px-5">
+                        {editingItemId === item.id ? (
+                          <input
+                            type="text"
+                            value={newItem.category}
+                            onChange={handleCategoryChange}
+                            className="w-full px-4 py-2 border rounded"
+                          />
+                        ) : (
+                          item.category
+                        )}
+                      </td>
+                      <td className="py-3 px-5">{item.amount}</td>
+                      <td className="py-3 px-5">{item.date_created}</td>
+                      <td className="py-3 px-5">{item.sku}</td>
+                      <td className={`py-3 px-5 ${statusColor}`}>
+                        {stockPercent >= 80
+                          ? "In Stock"
+                          : stockPercent >= 40
+                          ? "Low Stock"
+                          : "Out of Stock"}
+                      </td>
+                      <td className="py-3 px-5">
+                        <button
+                          onClick={() => {
+                            setEditingItemId(item.id);
+                            setNewItem({
+                              product_name: item.product_name,
+                              category: item.category,
+                              quantity: item.quantity,
+                              unit: item.unit,
+                              amount: item.amount,
+                              max_quantity: item.max_quantity,
+                              date_created: item.date_created,
+                              sku: item.sku,
+                            });
+                          }}
+                          className="bg-blue-500 text-white px-3 py-1 rounded hover:text-[#ffba20] transition-colors duration-300"
+                        >
+                          Edit
+                        </button>
+                      </td>
+                    </motion.tr>
+                  );
+                })}
+              </tbody>
+            </motion.table>
+
+            {/* Pagination Controls */}
+            <div className="flex justify-between items-center mt-4">
+              <button
+                onClick={() => setCurrentPage(currentPage - 1)}
+                disabled={currentPage === 1}
+                className="px-5 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
+              >
+                Previous
+              </button>
+
+              <div>
+                Page {currentPage} of {totalPages}
+              </div>
+
+              <button
+                onClick={() => setCurrentPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+                className="px-5 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
+              >
+                Next
+              </button>
+            </div>
+          </>
         )}
       </motion.div>
 
-      <motion.div className="mt-8 p-4 bg-gray-100 rounded-lg">
+      {/* Add Item Form Below */}
+      <motion.div
+        className="mt-8 p-6 bg-gray-100 rounded shadow-md"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.3 }}
+      >
         <h2 className="text-2xl font-bold mb-4">
-          {editingItemId !== null ? "Edit Item" : "Add Item"}
+          {editingItemId ? "Edit Item" : "Add New Item"}
         </h2>
-        <div className="space-y-4">
-          {/* Form Fields */}
-          <div>
-            <label className="block font-medium mb-1">SKU</label>
-            <input
-              type="text"
-              value={newItem.sku}
-              readOnly
-              className="w-full px-4 py-2 border rounded bg-gray-100 cursor-not-allowed"
-            />
-          </div>
-          <div>
-            <label className="block font-medium mb-1">Item Name</label>
-            <input
-              type="text"
-              value={newItem.name}
-              onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
-              className="w-full px-4 py-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block font-medium mb-1">Quantity</label>
-            <input
-              type="number"
-              value={newItem.quantity}
-              onChange={(e) =>
-                setNewItem({ ...newItem, quantity: +e.target.value })
-              }
-              className="w-full px-4 py-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block font-medium mb-1">Max Quantity</label>
-            <input
-              type="number"
-              value={newItem.max_quantity}
-              onChange={(e) =>
-                setNewItem({ ...newItem, max_quantity: +e.target.value })
-              }
-              className="w-full px-4 py-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block font-medium mb-1">Unit</label>
-            <input
-              type="text"
-              value={newItem.unit}
-              onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
-              className="w-full px-4 py-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block font-medium mb-1">Category</label>
-            <input
-              type="text"
-              value={newItem.category}
-              onChange={(e) =>
-                setNewItem({ ...newItem, category: e.target.value })
-              }
-              className="w-full px-4 py-2 border rounded"
-            />
-          </div>
-          <div>
-            <label className="block font-medium mb-1">Price (₱)</label>
-            <input
-              type="number"
-              value={newItem.price}
-              onChange={(e) =>
-                setNewItem({ ...newItem, price: +e.target.value })
-              }
-              className="w-full px-4 py-2 border rounded"
-            />
-          </div>
+        <div>
+          <label className="block mb-2">Product Name</label>
+          <input
+            type="text"
+            value={newItem.product_name}
+            onChange={(e) =>
+              setNewItem({ ...newItem, product_name: e.target.value })
+            }
+            className="w-full mb-4 px-4 py-2 border rounded"
+          />
 
-          <div className="flex gap-4">
-            <button
-              onClick={handleSubmitItem}
-              className="mt-4 px-6 py-2 bg-black text-white rounded hover:bg-[#ffba20] hover:text-black transition-colors"
-            >
-              {editingItemId !== null ? "Update Item" : "Add Item"}
-            </button>
+          <label className="block mb-2">Category</label>
+          <input
+            type="text"
+            value={newItem.category}
+            onChange={handleCategoryChange}
+            className="w-full mb-4 px-4 py-2 border rounded"
+          />
 
-            {editingItemId !== null && (
-              <button
-                onClick={async () => {
-                  const nextSku = await generateIncrementalSku();
-                  setNewItem({
-                    sku: nextSku,
-                    name: "",
-                    category: "",
-                    quantity: 0,
-                    unit: "",
-                    created_at: new Date().toISOString().split("T")[0],
-                    price: 0,
-                    max_quantity: 100,
-                  });
-                  setEditingItemId(null);
-                }}
-                className="mt-4 px-6 py-2 bg-gray-300 text-black rounded hover:bg-red-300 transition-colors"
-              >
-                Cancel Edit
-              </button>
-            )}
-          </div>
+          <label className="block mb-2">Quantity</label>
+          <input
+            type="number"
+            value={newItem.quantity}
+            onChange={(e) =>
+              setNewItem({ ...newItem, quantity: Number(e.target.value) })
+            }
+            className="w-full mb-4 px-4 py-2 border rounded"
+          />
+
+          <label className="block mb-2">Unit</label>
+          <input
+            type="text"
+            value={newItem.unit}
+            onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
+            className="w-full mb-4 px-4 py-2 border rounded"
+          />
+
+          <label className="block mb-2">Amount</label>
+          <input
+            type="number"
+            value={newItem.amount}
+            onChange={(e) =>
+              setNewItem({ ...newItem, amount: Number(e.target.value) })
+            }
+            className="w-full mb-4 px-4 py-2 border rounded"
+          />
+
+          <label className="block mb-2">Max Quantity</label>
+          <input
+            type="number"
+            value={newItem.max_quantity}
+            onChange={(e) =>
+              setNewItem({ ...newItem, max_quantity: Number(e.target.value) })
+            }
+            className="w-full mb-4 px-4 py-2 border rounded"
+          />
+
+          <button
+            onClick={handleSubmitItem}
+            className="bg-blue-500 text-white py-2 px-4 rounded hover:text-[#ffba20] transition-colors duration-300"
+          >
+            {editingItemId ? "Update Item" : "Add Item"}
+          </button>
         </div>
       </motion.div>
     </div>

@@ -26,9 +26,9 @@ export const Hero = () => {
               supply network.
             </p>
             <div className="flex gap-1 items-center mt-[30px]">
-              <button className="btn btn-primary hover:text-[#ffba20] transition-colors duration-300">
+              {/* <button className="btn btn-primary hover:text-[#ffba20] transition-colors duration-300">
                 Learn more
-              </button>
+              </button> */}
               {/* <button className="btn btn-text gap-1">
                 <span>Learn more</span>
                 <ArrowIcon className="h-5 w-5" />
