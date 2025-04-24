@@ -28,7 +28,8 @@ export const Sidebar = () => {
     if (error) {
       console.error("Logout failed:", error.message);
     } else {
-      router.push("/");
+      //router.push("/");
+      window.location.href = "/login";
     }
   };
   const Menus = [

@@ -37,7 +37,6 @@ export default function LoginPage() {
       setErrorMessage("Login failed: " + error.message);
       return;
     }
-
     // On success, data.session now exists
     router.push("/dashboard");
   };
