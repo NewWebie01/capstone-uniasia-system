@@ -51,13 +51,14 @@ export default function SalesPage() {
     item.product_name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleAddToOrder = () => {
-    if (
-      !selectedItem ||
-      orderQuantity <= 0 ||
-      orderQuantity > selectedItem.quantity
-    ) {
+  const handleAddToOrder = async () => {
+    if (!selectedItem || orderQuantity <= 0) {
       alert("Please select a valid item and enter a valid quantity.");
+      return;
+    }
+
+    if (orderQuantity > selectedItem.quantity) {
+      alert(`Not enough stock. Only ${selectedItem.quantity} left in stock.`);
       return;
     }
 
@@ -76,9 +77,22 @@ export default function SalesPage() {
       orderQuantity,
     };
 
+    // Update inventory quantity
+    const updatedQty = selectedItem.quantity - orderQuantity;
+    const { error: updateInventoryError } = await supabase
+      .from("inventory")
+      .update({ quantity: updatedQty })
+      .eq("id", selectedItem.id);
+
+    if (updateInventoryError) {
+      console.error(updateInventoryError);
+      alert("Error updating inventory.");
+      return;
+    }
+
     setOrderList([...orderList, newOrderItem]);
     setOrderQuantity(0);
-    setSelectedItem(null);
+    setSelectedItem(null); // Reset the selected item after adding to order
   };
 
   const handleRemoveFromOrder = (itemId: number) => {
@@ -101,11 +115,10 @@ export default function SalesPage() {
     for (let orderItem of orderList) {
       const { error: saleError } = await supabase.from("sales").insert([
         {
-          item_id: orderItem.item.id,
-          product_name: orderItem.item.product_name,
-          quantity: orderItem.orderQuantity,
-          total_amount: orderItem.item.amount * orderItem.orderQuantity,
-          date_sold: dateSold,
+          inventory_id: orderItem.item.id,
+          quantity_sold: orderItem.orderQuantity,
+          amount: orderItem.item.amount * orderItem.orderQuantity,
+          date: dateSold,
         },
       ]);
 
@@ -114,24 +127,11 @@ export default function SalesPage() {
         alert("Error logging the sale.");
         return;
       }
-
-      // Update inventory quantity
-      const updatedQty = orderItem.item.quantity - orderItem.orderQuantity;
-      const { error: updateError } = await supabase
-        .from("inventory")
-        .update({ quantity: updatedQty })
-        .eq("id", orderItem.item.id);
-
-      if (updateError) {
-        console.error(updateError);
-        alert("Error updating inventory.");
-        return;
-      }
     }
 
     setFeedbackMessage("Order placed successfully!");
     setOrderList([]); // Clear the order list
-    await fetchItems();
+    await fetchItems(); // Refresh the inventory list
   };
 
   return (
@@ -140,6 +140,7 @@ export default function SalesPage() {
         Sales Processing
       </motion.h1>
 
+      {/* Search input */}
       <input
         type="text"
         placeholder="Search products..."
@@ -178,7 +179,7 @@ export default function SalesPage() {
                   <td className="py-2 px-4">
                     <button
                       className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
-                      onClick={() => setSelectedItem(item)}
+                      onClick={() => setSelectedItem(item)} // Select item when clicked
                     >
                       Add to Order
                     </button>
@@ -190,6 +191,7 @@ export default function SalesPage() {
         </div>
       )}
 
+      {/* Add to Order Form */}
       {selectedItem && (
         <motion.div
           className="p-6 bg-gray-100 rounded shadow-md"
@@ -210,10 +212,10 @@ export default function SalesPage() {
             onChange={(e) => setOrderQuantity(Number(e.target.value))}
             className="w-full mb-4 px-4 py-2 border rounded"
             min={1}
-            max={selectedItem.quantity}
+            max={selectedItem.quantity} // Limit quantity to stock available
           />
           <button
-            onClick={handleAddToOrder}
+            onClick={handleAddToOrder} // Add to order when clicked
             className="bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600"
           >
             Add to Order
@@ -221,6 +223,7 @@ export default function SalesPage() {
         </motion.div>
       )}
 
+      {/* Order Review */}
       {orderList.length > 0 && (
         <div className="mt-6 p-6 bg-gray-100 rounded shadow-md">
           <h2 className="text-xl font-bold mb-4">Order Review</h2>
@@ -253,7 +256,7 @@ export default function SalesPage() {
                   </td>
                   <td className="py-2 px-4">
                     <button
-                      onClick={() => handleRemoveFromOrder(orderItem.item.id)}
+                      onClick={() => handleRemoveFromOrder(orderItem.item.id)} // Remove item from order
                       className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
                     >
                       Remove
@@ -274,7 +277,7 @@ export default function SalesPage() {
               .toFixed(2)}
           </div>
           <button
-            onClick={handleSubmitOrder}
+            onClick={handleSubmitOrder} // Submit the order
             className="bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 mt-4"
           >
             Submit Order

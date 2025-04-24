@@ -78,6 +78,54 @@ export default function InventoryPage() {
     "Carton",
   ];
 
+  // Predefined categories for dropdown
+  const categoryOptions = [
+    "Nails",
+    "Screws",
+    "Bolts",
+    "Nuts",
+    "Washers",
+    "Hammers",
+    "Wrenches",
+    "Screwdrivers",
+    "Pliers",
+    "Drills",
+    "Saw Blades",
+    "Paint Brushes",
+    "Paint",
+    "Sandpaper",
+    "Tape Measure",
+    "Utility Knives",
+    "Extension Cords",
+    "Light Bulbs",
+    "Ladders",
+    "Electrical Tape",
+    "Pipe Fittings",
+    "Plumbing Tools",
+    "Adhesives",
+    "Caulking",
+    "Safety Gear",
+    "Power Tools",
+    "Hand Tools",
+    "Batteries",
+    "Welding Equipment",
+    "PVC Pipes",
+    "Insulation Materials",
+    "Wood",
+    "Concrete Mix",
+    "Mortar",
+    "Fertilizers",
+    "Garden Tools",
+    "Soil",
+    "Lawn Mowers",
+    "Shovels",
+    "Rakes",
+  ];
+
+  // Sort settings
+  const [sortBy, setSortBy] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+
   // Fetch all items from the inventory
   const fetchItems = async () => {
     setLoading(true);
@@ -225,7 +273,15 @@ export default function InventoryPage() {
     }
   };
 
-  // Filter and sort items based on search query and date_created
+  // Sorting logic
+  const handleSort = (column: string) => {
+    const direction =
+      sortBy === column && sortDirection === "asc" ? "desc" : "asc";
+    setSortBy(column);
+    setSortDirection(direction);
+  };
+
+  // Filter and sort items based on search query and sorting
   const filteredItems = items
     .filter((item) => {
       const query = searchQuery.toLowerCase();
@@ -235,10 +291,16 @@ export default function InventoryPage() {
       );
     })
     .sort((a, b) => {
-      // Sort based on the `date_created` field to ensure the newest items are at the top
-      return (
-        new Date(b.date_created).getTime() - new Date(a.date_created).getTime()
-      );
+      if (!sortBy) return 0;
+      const aValue = a[sortBy as keyof InventoryItem];
+      const bValue = b[sortBy as keyof InventoryItem];
+      if (typeof aValue === "number" && typeof bValue === "number") {
+        return sortDirection === "asc" ? aValue - bValue : bValue - aValue;
+      } else {
+        return sortDirection === "asc"
+          ? String(aValue).localeCompare(String(bValue))
+          : String(bValue).localeCompare(String(aValue));
+      }
     })
     .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -319,26 +381,50 @@ export default function InventoryPage() {
             >
               <thead className="bg-[#ffba20] text-black text-left">
                 <tr>
-                  {[
-                    "product_name",
-                    "quantity",
-                    "unit",
-                    "category",
-                    "amount",
-                    "date_created",
-                    "sku",
-                  ].map((key) => (
-                    <th key={key} className="py-3 px-5">
-                      {key
-                        .split("_")
-                        .map(
-                          (word) => word.charAt(0).toUpperCase() + word.slice(1)
-                        )
-                        .join(" ")}
-                    </th>
-                  ))}
-                  <th className="py-3 px-5">Status</th>
-                  <th className="py-3 px-5">Edit</th>
+                  <th
+                    className="py-3 px-5 cursor-pointer"
+                    onClick={() => handleSort("product_name")}
+                  >
+                    PRODUCT NAME
+                  </th>
+                  <th
+                    className="py-3 px-5 cursor-pointer"
+                    onClick={() => handleSort("quantity")}
+                  >
+                    QUANTITY
+                  </th>
+                  <th
+                    className="py-3 px-5 cursor-pointer"
+                    onClick={() => handleSort("unit")}
+                  >
+                    UNIT
+                  </th>
+                  <th
+                    className="py-3 px-5 cursor-pointer"
+                    onClick={() => handleSort("category")}
+                  >
+                    CATEGORY
+                  </th>
+                  <th
+                    className="py-3 px-5 cursor-pointer"
+                    onClick={() => handleSort("amount")}
+                  >
+                    AMOUNT
+                  </th>
+                  <th
+                    className="py-3 px-5 cursor-pointer"
+                    onClick={() => handleSort("date_created")}
+                  >
+                    DATE CREATED
+                  </th>
+                  <th
+                    className="py-3 px-5 cursor-pointer"
+                    onClick={() => handleSort("sku")}
+                  >
+                    SKU
+                  </th>
+                  <th className="py-3 px-5">STATUS</th>
+                  <th className="py-3 px-5">EDIT</th>
                 </tr>
               </thead>
 
@@ -456,7 +542,7 @@ export default function InventoryPage() {
             <option value="" disabled>
               Select a Category
             </option>
-            {[...unitOptions].map((category) => (
+            {categoryOptions.map((category) => (
               <option key={category} value={category}>
                 {category}
               </option>
