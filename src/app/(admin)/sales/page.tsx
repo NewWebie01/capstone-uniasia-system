@@ -1,149 +1,286 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
+import supabase from "@/config/supabaseClient";
 
-type SaleRecord = {
+// Inventory type definition
+type InventoryItem = {
   id: number;
-  product: string;
+  product_name: string;
   category: string;
+  quantity: number;
+  unit: string;
   amount: number;
-  date: string;
+  sku: string;
 };
 
-const salesData: SaleRecord[] = [
-  {
-    id: 1,
-    product: "Electric Drill",
-    category: "Power Tools",
-    amount: 3500,
-    date: "2025-04-12",
-  },
-  {
-    id: 2,
-    product: "White Latex Paint",
-    category: "Paint",
-    amount: 1800,
-    date: "2025-04-11",
-  },
-  {
-    id: 3,
-    product: "Screwdriver Set",
-    category: "Hand Tools",
-    amount: 950,
-    date: "2025-04-10",
-  },
-  {
-    id: 4,
-    product: "Hammer",
-    category: "Hand Tools",
-    amount: 700,
-    date: "2025-04-10",
-  },
-  {
-    id: 5,
-    product: "Putty Knife",
-    category: "Paint",
-    amount: 1200,
-    date: "2025-04-09",
-  },
-];
+type OrderItem = {
+  item: InventoryItem;
+  orderQuantity: number;
+};
 
 export default function SalesPage() {
+  const [items, setItems] = useState<InventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [orderQuantity, setOrderQuantity] = useState<number>(0);
+  const [orderList, setOrderList] = useState<OrderItem[]>([]); // Track added items
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
-  const filteredSales = salesData.filter((sale) =>
-    sale.product.toLowerCase().includes(searchQuery.toLowerCase())
+  // Fetch inventory
+  const fetchItems = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from("inventory").select();
+    if (error) {
+      setFetchError("Error fetching inventory");
+      console.error(error);
+    } else {
+      setItems(data);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchItems();
+  }, []);
+
+  const filteredItems = items.filter((item) =>
+    item.product_name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const totalSales = filteredSales.length;
-  const totalRevenue = filteredSales.reduce(
-    (acc, sale) => acc + sale.amount,
-    0
-  );
-  const totalProfit = totalRevenue * 0.2; // assume 20% profit margin
+  const handleAddToOrder = () => {
+    if (
+      !selectedItem ||
+      orderQuantity <= 0 ||
+      orderQuantity > selectedItem.quantity
+    ) {
+      alert("Please select a valid item and enter a valid quantity.");
+      return;
+    }
+
+    // Check if item is already in the order list
+    const existingOrderItem = orderList.find(
+      (orderItem) => orderItem.item.id === selectedItem.id
+    );
+
+    if (existingOrderItem) {
+      alert("This item is already in the order list.");
+      return;
+    }
+
+    const newOrderItem: OrderItem = {
+      item: selectedItem,
+      orderQuantity,
+    };
+
+    setOrderList([...orderList, newOrderItem]);
+    setOrderQuantity(0);
+    setSelectedItem(null);
+  };
+
+  const handleRemoveFromOrder = (itemId: number) => {
+    setOrderList(orderList.filter((orderItem) => orderItem.item.id !== itemId));
+  };
+
+  const handleSubmitOrder = async () => {
+    const totalAmount = orderList.reduce(
+      (total, orderItem) =>
+        total + orderItem.item.amount * orderItem.orderQuantity,
+      0
+    );
+    const dateSold = new Date().toLocaleString("en-PH", {
+      dateStyle: "long",
+      timeStyle: "short",
+      hour12: true,
+    });
+
+    // Log the sale for each item
+    for (let orderItem of orderList) {
+      const { error: saleError } = await supabase.from("sales").insert([
+        {
+          item_id: orderItem.item.id,
+          product_name: orderItem.item.product_name,
+          quantity: orderItem.orderQuantity,
+          total_amount: orderItem.item.amount * orderItem.orderQuantity,
+          date_sold: dateSold,
+        },
+      ]);
+
+      if (saleError) {
+        console.error(saleError);
+        alert("Error logging the sale.");
+        return;
+      }
+
+      // Update inventory quantity
+      const updatedQty = orderItem.item.quantity - orderItem.orderQuantity;
+      const { error: updateError } = await supabase
+        .from("inventory")
+        .update({ quantity: updatedQty })
+        .eq("id", orderItem.item.id);
+
+      if (updateError) {
+        console.error(updateError);
+        alert("Error updating inventory.");
+        return;
+      }
+    }
+
+    setFeedbackMessage("Order placed successfully!");
+    setOrderList([]); // Clear the order list
+    await fetchItems();
+  };
 
   return (
-    <div className="p-2">
-      <motion.h1
-        className="text-3xl font-bold mb-6"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
-      >
-        Sales
+    <div className="p-6">
+      <motion.h1 className="text-3xl font-bold mb-4">
+        Sales Processing
       </motion.h1>
 
-      {/* Summary Cards */}
-      <motion.div
-        className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6"
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-      >
-        <div className="bg-white p-4 rounded-xl shadow">
-          <p className="text-gray-500">Total Sales</p>
-          <p className="text-xl font-bold">{totalSales}</p>
-        </div>
-        <div className="bg-white p-4 rounded-xl shadow">
-          <p className="text-gray-500">Revenue</p>
-          <p className="text-xl font-bold">₱{totalRevenue.toLocaleString()}</p>
-        </div>
-        <div className="bg-white p-4 rounded-xl shadow">
-          <p className="text-gray-500">Profit</p>
-          <p className="text-xl font-bold">₱{totalProfit.toLocaleString()}</p>
-        </div>
-      </motion.div>
-
-      {/* Search */}
-      <motion.input
+      <input
         type="text"
-        placeholder="Search product..."
+        placeholder="Search products..."
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        className="mb-4 w-full md:w-1/3 px-4 py-2 border rounded shadow-sm"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
+        className="mb-4 w-full md:w-1/3 px-4 py-2 border rounded"
       />
 
-      {/* Table */}
-      <motion.div
-        className="overflow-x-auto rounded-lg shadow"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
-      >
-        <table className="min-w-full bg-white text-sm">
-          <thead className="bg-[#ffba20] text-black text-left">
-            <tr>
-              <th className="py-3 px-5">Product</th>
-              <th className="py-3 px-5">Category</th>
-              <th className="py-3 px-5">Amount</th>
-              <th className="py-3 px-5">Date</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredSales.map((sale) => (
-              <motion.tr
-                key={sale.id}
-                className="border-b hover:bg-gray-100"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.2 }}
-              >
-                <td className="py-3 px-5">{sale.product}</td>
-                <td className="py-3 px-5">{sale.category}</td>
-                <td className="py-3 px-5">₱{sale.amount.toLocaleString()}</td>
-                <td className="py-3 px-5">{sale.date}</td>
-              </motion.tr>
-            ))}
-          </tbody>
-        </table>
-        {filteredSales.length === 0 && (
-          <div className="p-4 text-center text-gray-500">No sales found.</div>
-        )}
-      </motion.div>
+      {feedbackMessage && (
+        <div className="mb-4 text-green-600">{feedbackMessage}</div>
+      )}
+
+      {loading ? (
+        <div>Loading...</div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg shadow mb-6">
+          <table className="min-w-full bg-white text-sm">
+            <thead className="bg-[#ffba20] text-black text-left">
+              <tr>
+                <th className="py-2 px-4">Product Name</th>
+                <th className="py-2 px-4">Category</th>
+                <th className="py-2 px-4">Stock</th>
+                <th className="py-2 px-4">Unit</th>
+                <th className="py-2 px-4">Price</th>
+                <th className="py-2 px-4">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredItems.map((item) => (
+                <tr key={item.id} className="border-b hover:bg-gray-100">
+                  <td className="py-2 px-4">{item.product_name}</td>
+                  <td className="py-2 px-4">{item.category}</td>
+                  <td className="py-2 px-4">{item.quantity}</td>
+                  <td className="py-2 px-4">{item.unit}</td>
+                  <td className="py-2 px-4">₱{item.amount.toFixed(2)}</td>
+                  <td className="py-2 px-4">
+                    <button
+                      className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
+                      onClick={() => setSelectedItem(item)}
+                    >
+                      Add to Order
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {selectedItem && (
+        <motion.div
+          className="p-6 bg-gray-100 rounded shadow-md"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+        >
+          <h2 className="text-xl font-bold mb-4">Add to Order</h2>
+          <div className="mb-4">
+            <strong>Product:</strong> {selectedItem.product_name}
+          </div>
+          <div className="mb-4">
+            <strong>Price per unit:</strong> ₱{selectedItem.amount.toFixed(2)}
+          </div>
+          <label className="block mb-2">Quantity to Order</label>
+          <input
+            type="number"
+            value={orderQuantity}
+            onChange={(e) => setOrderQuantity(Number(e.target.value))}
+            className="w-full mb-4 px-4 py-2 border rounded"
+            min={1}
+            max={selectedItem.quantity}
+          />
+          <button
+            onClick={handleAddToOrder}
+            className="bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600"
+          >
+            Add to Order
+          </button>
+        </motion.div>
+      )}
+
+      {orderList.length > 0 && (
+        <div className="mt-6 p-6 bg-gray-100 rounded shadow-md">
+          <h2 className="text-xl font-bold mb-4">Order Review</h2>
+          <table className="min-w-full bg-white text-sm">
+            <thead className="bg-[#ffba20] text-black text-left">
+              <tr>
+                <th className="py-2 px-4">Product Name</th>
+                <th className="py-2 px-4">Quantity</th>
+                <th className="py-2 px-4">Price</th>
+                <th className="py-2 px-4">Total</th>
+                <th className="py-2 px-4">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orderList.map((orderItem) => (
+                <tr
+                  key={orderItem.item.id}
+                  className="border-b hover:bg-gray-100"
+                >
+                  <td className="py-2 px-4">{orderItem.item.product_name}</td>
+                  <td className="py-2 px-4">{orderItem.orderQuantity}</td>
+                  <td className="py-2 px-4">
+                    ₱{orderItem.item.amount.toFixed(2)}
+                  </td>
+                  <td className="py-2 px-4">
+                    ₱
+                    {(orderItem.orderQuantity * orderItem.item.amount).toFixed(
+                      2
+                    )}
+                  </td>
+                  <td className="py-2 px-4">
+                    <button
+                      onClick={() => handleRemoveFromOrder(orderItem.item.id)}
+                      className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-4">
+            <strong>Total Order Value:</strong> ₱
+            {orderList
+              .reduce(
+                (total, orderItem) =>
+                  total + orderItem.item.amount * orderItem.orderQuantity,
+                0
+              )
+              .toFixed(2)}
+          </div>
+          <button
+            onClick={handleSubmitOrder}
+            className="bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 mt-4"
+          >
+            Submit Order
+          </button>
+        </div>
+      )}
     </div>
   );
 }
