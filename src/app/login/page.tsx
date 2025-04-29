@@ -23,11 +23,14 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState(""); // Error state to display messages
+  const [isOTP, setIsOTP] = useState(false); // State to track OTP verification step
+  const [otp, setOtp] = useState(""); // OTP input state
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Sign in with email and password
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
@@ -37,10 +40,52 @@ export default function LoginPage() {
       setErrorMessage("Login failed: " + error.message);
       return;
     }
-    // On success, data.session now exists
-    router.push("/dashboard");
-  };
 
+    //On success, data.session now exists
+    router.push("/dashboard");
+
+    //   if (!isOTP) {
+    //     // Sign in with email and password
+    //     const { data, error } = await supabase.auth.signInWithPassword({
+    //       email,
+    //       password,
+    //     });
+
+    //     if (error) {
+    //       setErrorMessage("Login failed: " + error.message);
+    //       return;
+    //     }
+
+    //     // OTP verification step
+    //     const { error: otpError } = await supabase.auth.signInWithOtp({
+    //       email,
+    //     });
+
+    //     if (otpError) {
+    //       setErrorMessage("Failed to send OTP: " + otpError.message);
+    //       return;
+    //     }
+
+    //     // Switch to OTP verification step
+    //     setIsOTP(true);
+    //     setErrorMessage(""); // Clear any previous error messages
+    //   } else {
+    //     // Verify the OTP
+    //     const { data, error } = await supabase.auth.verifyOtp({
+    //       email,
+    //       token: otp,
+    //       type: "email",
+    //     });
+
+    //     if (error) {
+    //       setErrorMessage("OTP verification failed: " + error.message);
+    //       return;
+    //     }
+    //     // On success, data.session now exists
+    //     router.push("/dashboard");
+    //   }
+    // };
+  };
   return (
     <div
       className={`h-screen overflow-hidden flex flex-col ${dmSans.className}`}
@@ -58,7 +103,6 @@ export default function LoginPage() {
             <div className="flex items-center justify-between">
               {/* Logo section */}
               <Image src={Logo} alt="UniAsia Logo" height={50} width={50} />
-
               {/* Mobile menu icon */}
               <MenuIcon className="h-5 w-5 md:hidden" />
             </div>
