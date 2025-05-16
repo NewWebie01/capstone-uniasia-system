@@ -1,6 +1,6 @@
 // app/dashboard/layout.tsx
 import { DM_Sans } from "next/font/google";
-import "@/styles/globals.css";
+import "@/STYLES/globals.css";
 import { Sidebar } from "@/components/Sidebar";
 
 const dmSans = DM_Sans({
