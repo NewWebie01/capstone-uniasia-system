@@ -9,8 +9,9 @@ import Image from "next/image";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
 import { motion } from "framer-motion";
-import supabase from "@/config/supabaseClient";
-import bcrypt from "bcryptjs";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+
+const supabase = createClientComponentClient();
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -21,32 +22,69 @@ const dmSans = DM_Sans({
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-
+  const [errorMessage, setErrorMessage] = useState(""); // Error state to display messages
+  const [isOTP, setIsOTP] = useState(false); // State to track OTP verification step
+  const [otp, setOtp] = useState(""); // OTP input state
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const { data, error } = await supabase
-      .from("createUserAccount")
-      .select("email, password")
-      .eq("email", email)
-      .single();
+    // Sign in with email and password
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-    if (error || !data) {
-      alert("Account not found.");
+    if (error) {
+      setErrorMessage("Login failed: " + error.message);
       return;
     }
 
-    const passwordMatch = await bcrypt.compare(password, data.password);
-
-    if (!passwordMatch) {
-      alert("Incorrect password.");
-      return;
-    }
-
-    // Redirect to dashboard
+    //On success, data.session now exists
     router.push("/dashboard");
+
+    //   if (!isOTP) {
+    //     // Sign in with email and password
+    //     const { data, error } = await supabase.auth.signInWithPassword({
+    //       email,
+    //       password,
+    //     });
+
+    //     if (error) {
+    //       setErrorMessage("Login failed: " + error.message);
+    //       return;
+    //     }
+
+    //     // OTP verification step
+    //     const { error: otpError } = await supabase.auth.signInWithOtp({
+    //       email,
+    //     });
+
+    //     if (otpError) {
+    //       setErrorMessage("Failed to send OTP: " + otpError.message);
+    //       return;
+    //     }
+
+    //     // Switch to OTP verification step
+    //     setIsOTP(true);
+    //     setErrorMessage(""); // Clear any previous error messages
+    //   } else {
+    //     // Verify the OTP
+    //     const { data, error } = await supabase.auth.verifyOtp({
+    //       email,
+    //       token: otp,
+    //       type: "email",
+    //     });
+
+    //     if (error) {
+    //       setErrorMessage("OTP verification failed: " + error.message);
+    //       return;
+    //     }
+    //     // On success, data.session now exists
+    //     router.push("/dashboard");
+    //   }
+    // };
   };
   return (
     <div
@@ -65,7 +103,6 @@ export default function LoginPage() {
             <div className="flex items-center justify-between">
               {/* Logo section */}
               <Image src={Logo} alt="UniAsia Logo" height={50} width={50} />
-
               {/* Mobile menu icon */}
               <MenuIcon className="h-5 w-5 md:hidden" />
             </div>
@@ -84,6 +121,11 @@ export default function LoginPage() {
           {/* Form Box */}
           <div className="flex flex-col items-center justify-center text-center p-20 gap-8 bg-white rounded-2xl xl:rounded-tr-none xl:rounded-br-none">
             <h1 className="section-title text-5xl font-bold">Welcome</h1>
+
+            {/* Show error message if login fails */}
+            {errorMessage && (
+              <div className="text-red-500 mb-4">{errorMessage}</div>
+            )}
 
             <form
               onSubmit={handleSubmit}
@@ -129,16 +171,6 @@ export default function LoginPage() {
                 Login
               </button>
             </form>
-
-            {/* <p className="font-semibold">
-              Don't have an account?{" "}
-              <a
-                href="#"
-                className="hover:text-[#ffba20] hover:underline transition-colors duration-300"
-              >
-                Register
-              </a>
-            </p> */}
           </div>
 
           {/* Splash Image */}
