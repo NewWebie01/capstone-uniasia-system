@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { DM_Sans } from "next/font/google";
-import "@/styles/globals.css";
+import "@/STYLES/globals.css";
 import splashImage from "@/assets/tools-log-in-splash.jpg";
 import Image from "next/image";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
