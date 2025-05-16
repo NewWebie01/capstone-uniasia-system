@@ -96,7 +96,9 @@ const TestimonialsColumn = (props: {
       {[...new Array(2)].fill(0).map((_, index) => (
         <React.Fragment key={index}>
           {props.testimonials.map(({ text, imageSrc, name, username }) => (
-            <div className="card">
+            <div key={name} className="card">
+              {" "}
+              {/* Add key using name */}
               <div>{text}</div>
               <div className="flex items-center gap-2 mt-5">
                 <Image
@@ -131,8 +133,8 @@ export const Testimonials = () => {
           </div>
           <h2 className="section-title mt-5">What Our Clients Say</h2>
           <p className="section-description mt-5">
-            See what our customers have to say about UniAsia's quality and
-            service.
+            See what our customers have to say about UniAsia&apos;s quality and
+            service. {/* Escape apostrophe in UniAsia's */}
           </p>
         </div>
         <div className="flex justify-center gap-6 mt-10 [mask-image:linear-gradient(to_bottom,transparent,black_25%,black_75%,transparent)] max-h-[738px] overflow-hidden">

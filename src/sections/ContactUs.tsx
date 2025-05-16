@@ -11,7 +11,9 @@ export const ContactUs = () => {
     >
       <div className="max-w-lg mx-auto text-center">
         <h2 className="section-title mt-0">Contact Us</h2>
-        <p className="section-description mt-5">We'd love to hear from you!</p>
+        <p className="section-description mt-5">
+          We&apos;d love to hear from you!
+        </p>
       </div>
 
       <div className="mt-8 max-w-lg mx-auto bg-white p-8 rounded-lg shadow-lg">
