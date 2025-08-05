@@ -21,13 +21,12 @@ const dmSans = DM_Sans({
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string>("");
 
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    console.log("Submitting...");
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
@@ -36,12 +35,15 @@ export default function LoginPage() {
 
     if (error) {
       console.error("Login error:", error.message);
-      alert("Invalid email or password.");
+      setErrorMessage("Incorrect email or password.");
+      setEmail("");
+      setPassword("");
       return;
     }
 
+    // Successful login
     console.log("Login success:", data);
-    console.log("Pushing to dashboard...");
+    setErrorMessage("");
     router.push("/dashboard");
   };
 
