@@ -183,48 +183,49 @@ export default function InventoryPage() {
   const totalPages = Math.ceil(items.length / itemsPerPage);
   return (
     <div className="p-4">
-      <h1 className="text-2xl font-bold mb-4">Inventory</h1>
+      <h1 className="text-3xl font-bold mb-6 text-gray-800">Inventory</h1>
 
       <input
-        className="border px-3 py-2 mb-4 w-full md:w-1/2"
+        className="border px-3 py-2 mb-4 w-full md:w-1/2 rounded-full"
         placeholder="Search inventory..."
         title="Search by product, category or subcategory"
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
       />
 
-      <div className="overflow-auto">
-        <table className="min-w-full bg-white text-sm">
+      <div className="overflow-auto rounded-lg shadow">
+        <table className="min-w-full bg-white text-sm rounded-md overflow-hidden">
           <thead className="bg-[#ffba20] text-black text-left">
             <tr>
-              <th className="p-2 text-left">SKU</th>
-              <th className="p-2 text-left">Product Name</th>
-              <th className="p-2 text-left">Category</th>
-              <th className="p-2 text-left">Subcategory</th>
-              <th className="p-2 text-left">Quantity</th>
-              <th className="p-2 text-left">Unit Price</th>
-              <th className="p-2 text-left">Total Price</th>
-              <th className="p-2 text-left">Status</th>
-              <th className="p-2 text-left">Date Added</th>
-              <th className="p-2 text-left">Actions</th>
+              <th className="px-4 py-3">SKU</th>
+              <th className="px-4 py-3">Product Name</th>
+              <th className="px-4 py-3">Category</th>
+              <th className="px-4 py-3">Subcategory</th>
+              <th className="px-4 py-3">Quantity</th>
+              <th className="px-4 py-3">Unit Price</th>
+              <th className="px-4 py-3">Total Price</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Date Added</th>
+              <th className="px-4 py-3">Actions</th>
             </tr>
           </thead>
-
           <tbody>
             {filteredItems.map((item) => (
               <tr key={item.id} className="border-b hover:bg-gray-100">
-                <td className="p-2">{item.sku}</td>
-                <td className="p-2">{item.product_name}</td>
-                <td className="p-2">{item.category}</td>
-                <td className="p-2">{item.subcategory}</td>
-                <td className="p-2">{item.quantity.toLocaleString()}</td>
-                <td className="p-2">₱{item.unit_price.toLocaleString()}</td>
-                <td className="p-2">₱{item.amount.toLocaleString()}</td>
-                <td className="p-2">
+                <td className="px-4 py-3">{item.sku}</td>
+                <td className="px-4 py-3">{item.product_name}</td>
+                <td className="px-4 py-3">{item.category}</td>
+                <td className="px-4 py-3">{item.subcategory}</td>
+                <td className="px-4 py-3">{item.quantity.toLocaleString()}</td>
+                <td className="px-4 py-3">
+                  ₱{item.unit_price.toLocaleString()}
+                </td>
+                <td className="px-4 py-3">₱{item.amount.toLocaleString()}</td>
+                <td className="px-4 py-3">
                   {getStatus(item.quantity, item.max_quantity)}
                 </td>
-                <td className="p-2">{item.date_created}</td>
-                <td className="p-2">
+                <td className="px-4 py-3">{item.date_created}</td>
+                <td className="px-4 py-3">
                   <button
                     className="text-blue-600 hover:underline"
                     onClick={() => {
@@ -241,21 +242,33 @@ export default function InventoryPage() {
           </tbody>
         </table>
 
-        <div className="mt-3 flex justify-between">
+        <div className="mt-3 flex justify-between items-center bg-[#f0ca75] rounded-lg px-4 py-3 shadow-sm">
           <button
             disabled={currentPage === 1}
             onClick={() => setCurrentPage((p) => p - 1)}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
+              currentPage === 1
+                ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+                : "bg-white hover:bg-[#ffba20] text-black"
+            }`}
           >
-            Prev
+            ← Prev
           </button>
-          <span>
+
+          <span className="text-sm font-semibold text-gray-800">
             Page {currentPage} of {totalPages}
           </span>
+
           <button
             disabled={currentPage === totalPages}
             onClick={() => setCurrentPage((p) => p + 1)}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
+              currentPage === totalPages
+                ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+                : "bg-white hover:bg-[#ffba20] text-black"
+            }`}
           >
-            Next
+            Next →
           </button>
         </div>
       </div>
@@ -282,7 +295,7 @@ export default function InventoryPage() {
               sku: "",
             });
           }}
-          className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+          className="px-4 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
         >
           Add New Item
         </button>
@@ -290,7 +303,7 @@ export default function InventoryPage() {
 
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="bg-white p-6 rounded shadow-lg w-full max-w-lg">
+          <div className="bg-white p-8 rounded-xl shadow-xl w-full max-w-xl space-y-4">
             <h2 className="text-xl font-bold mb-4">
               {editingItemId ? "Edit Item" : "Add New Item"}
             </h2>
@@ -378,7 +391,7 @@ export default function InventoryPage() {
                   setShowForm(false);
                   setEditingItemId(null);
                 }}
-                className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+                className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
               >
                 Cancel
               </button>
@@ -403,14 +416,14 @@ export default function InventoryPage() {
                   });
                   setEditingItemId(null);
                 }}
-                className="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600"
+                className="bg-[#ffba20] text-white px-4 py-2 rounded hover:bg-yellow-600"
               >
                 Clear
               </button>
 
               <button
                 onClick={handleSubmitItem}
-                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                className="px-4 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
               >
                 {editingItemId ? "Update Item" : "Add Item"}
               </button>
