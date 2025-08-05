@@ -5,10 +5,11 @@ import Image from "next/image"; // Importing Image component from Next.js
 import MenuIcon from "../assets/menu.svg"; // Importing menu icon for mobile navigation
 import { useState, useEffect } from "react"; // Importing useState and useEffect
 import { useRouter } from "next/navigation"; // Importing useRouter for navigation
-import { motion } from "framer-motion"; // Importing motion for animations
+import { motion, AnimatePresence } from "framer-motion"; // Importing motion for animations
 
 export const Header = () => {
   const [activeLink, setActiveLink] = useState<string>(""); // State to store the clicked navigation link
+  const [isMenuOpen, setIsMenuOpen] = useState(false); // Mobile menu toggle
   const router = useRouter(); // Initialize the router
 
   // Function to handle navigation link clicks for smooth scrolling
@@ -16,6 +17,7 @@ export const Header = () => {
     event.preventDefault(); // Prevent default anchor behavior
     const targetId = event.currentTarget.getAttribute("href")?.substring(1); // Get target section ID
     setActiveLink(targetId || "");
+    setIsMenuOpen(false); // Close mobile menu when link clicked
 
     if (targetId) {
       const targetSection = document.getElementById(targetId); // Get the target section element
@@ -27,6 +29,7 @@ export const Header = () => {
 
   // Function to navigate to login page
   const handleLoginClick = () => {
+    setIsMenuOpen(false); // Close mobile menu
     router.push("/login"); // Navigate to login page
   };
 
@@ -70,10 +73,93 @@ export const Header = () => {
         <div className="container">
           <div className="flex items-center justify-between">
             {/* Logo section */}
-            <Image src={Logo} alt="UniAsia Logo" height={50} width={50} />
+            <motion.button
+              onClick={() => {
+                const heroSection = document.getElementById("hero");
+                if (heroSection) {
+                  heroSection.scrollIntoView({ behavior: "smooth" });
+                }
+              }}
+              whileHover={{ scale: 1.1 }}
+              transition={{ type: "spring", stiffness: 300 }}
+            >
+              <Image
+                src={Logo}
+                alt="UniAsia Logo"
+                height={50}
+                width={50}
+                className="cursor-pointer"
+              />
+            </motion.button>
 
             {/* Mobile menu icon (Only visible on smaller screens) */}
-            <MenuIcon className="h-5 w-5 md:hidden" />
+            <div className="md:hidden relative">
+              <MenuIcon
+                className="h-5 w-5 cursor-pointer"
+                onClick={() => setIsMenuOpen(!isMenuOpen)}
+              />
+
+              <AnimatePresence>
+                {isMenuOpen && (
+                  <motion.div
+                    key="mobile-menu"
+                    initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                    transition={{ duration: 0.25 }}
+                    className="absolute right-0 mt-3 w-48 bg-white shadow-lg rounded-lg z-50"
+                  >
+                    <ul className="flex flex-col gap-4 p-4 text-sm text-black">
+                      <li>
+                        <a
+                          href="#hero"
+                          onClick={handleClick}
+                          className="hover:text-[#ffba20]"
+                        >
+                          Home
+                        </a>
+                      </li>
+                      <li>
+                        <a
+                          href="#about-us"
+                          onClick={handleClick}
+                          className="hover:text-[#ffba20]"
+                        >
+                          About Us
+                        </a>
+                      </li>
+                      {/* <li>
+                        <a
+                          href="#contact-us"
+                          onClick={handleClick}
+                          className="hover:text-[#ffba20]"
+                        >
+                          Contact
+                        </a>
+                      </li> */}
+                      {/* <li>
+                        <a
+                          href="#help"
+                          onClick={handleClick}
+                          className="hover:text-[#ffba20]"
+                        >
+                          Help
+                        </a>
+                      </li> */}
+                      <li>
+                        <motion.button
+                          onClick={handleLoginClick}
+                          whileTap={{ scale: 1.1 }}
+                          className="bg-[#181918] text-white w-full py-2 rounded-md hover:text-[#ffba20]"
+                        >
+                          Log-In
+                        </motion.button>
+                      </li>
+                    </ul>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
             {/* Navigation links */}
             <nav className="hidden md:flex gap-6 text-black/60 items-center">
@@ -92,13 +178,13 @@ export const Header = () => {
               >
                 About Us
               </a>
-              <a
+              {/* <a
                 href="#contact-us"
                 onClick={handleClick}
                 className="hover:text-[#ffba20] transition-colors duration-300"
               >
                 Contact
-              </a>
+              </a> */}
               {/* <a
                 href="#help"
                 id="help"

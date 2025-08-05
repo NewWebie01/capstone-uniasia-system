@@ -16,7 +16,7 @@ export default function Home() {
       <LogoTicker /> {/* Render LogoTicker component */}
       <AboutUs /> {/* Render ProductShowcase component */}
       {/* <Testimonials /> Render Testimonials component */}
-      <ContactUs /> {/* Render Pricing component */}
+      {/* <ContactUs /> Render Pricing component */}
       <Footer /> {/* Render Footer component */}
     </>
   );
