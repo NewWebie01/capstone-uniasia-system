@@ -37,7 +37,7 @@ export const Sidebar = () => {
   const Menus = [
     { title: "Dashboard", src: ChartFill, href: "/dashboard" },
     { title: "Inventory", src: Calendar, href: "/inventory" },
-    { title: "Logistics", src: Logistics, href: "/logistics" },
+    { title: "Truck Delivery", src: Logistics, href: "/logistics" }, // 🔁 Updated here
     { title: "Sales", src: Sales, href: "/sales" },
     { title: "Sales Report", src: Chart, href: "/sales-report" },
     { title: "Activity Log", src: Folder, href: "/activity-log" },
