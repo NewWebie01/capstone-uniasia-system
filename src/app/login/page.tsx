@@ -31,22 +31,12 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const { data, error } = await supabase
-      .from("createUserAccount")
-      .select("email, password")
-      .eq("email", email)
-      .single();
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-    if (error || !data) {
-      setErrorMessage("Incorrect email or password.");
-      setEmail("");
-      setPassword("");
-      return;
-    }
-
-    const passwordMatch = await bcrypt.compare(password, data.password);
-
-    if (!passwordMatch) {
+    if (error) {
       setErrorMessage("Incorrect email or password.");
       setEmail("");
       setPassword("");
@@ -54,7 +44,7 @@ export default function LoginPage() {
     }
 
     setErrorMessage("");
-    router.push("/dashboard");
+    router.push("/dashboard"); // ✅ Adjust this if you're routing by role (e.g., /admin, /customer)
   };
 
   return (

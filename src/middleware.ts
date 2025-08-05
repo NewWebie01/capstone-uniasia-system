@@ -87,7 +87,7 @@ export async function middleware(req: NextRequest) {
       });
     }
     // Otherwise redirect to login page:
-    return NextResponse.redirect(new URL("/login", req.url));
+    //return NextResponse.redirect(new URL("/login", req.url));
   }
 
   // 2️⃣ Authenticated → but trying to reach /signup? send to dashboard:

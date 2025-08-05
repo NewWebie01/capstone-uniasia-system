@@ -1,15 +1,15 @@
-"use client"; // This tells Next.js to treat this file as a Client Component
+"use client";
 
 import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
 import supabase from "@/config/supabaseClient";
 
-// Type Definitions for Inventory Items
 type InventoryItem = {
   id: number;
   sku: string;
   product_name: string;
   category: string;
+  subcategory?: string;
+  unit_price: number;
   quantity: number;
   unit: string;
   amount: number;
@@ -23,13 +23,19 @@ export default function InventoryPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [showForm, setShowForm] = useState(false);
+  const itemsPerPage = 20;
+
   const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
     product_name: "",
     category: "",
-    quantity: 0, // Ensure it's a number, not a string
+    subcategory: "",
+    quantity: 0,
+    unit_price: 0,
     unit: "",
-    amount: 0, // Ensure it's a number, not a string
-    max_quantity: 0, // Will be set dynamically based on the quantity input
+    amount: 0,
+    max_quantity: 0,
     date_created: new Date().toLocaleString("en-PH", {
       dateStyle: "long",
       timeStyle: "short",
@@ -38,223 +44,111 @@ export default function InventoryPage() {
     sku: "",
   });
 
-  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  useEffect(() => {
+    // Live total calculation
+    const total = newItem.unit_price * newItem.quantity;
+    setNewItem((prev) => ({ ...prev, amount: total }));
+  }, [newItem.unit_price, newItem.quantity]);
+  const unitOptions = ["Pieces (pcs)", "Gallons (gal)", "Sets"];
+  const categoryOptions = ["Nails", "Screws", "Paint"];
+  const subcategoryOptions: { [key: string]: string[] } = {
+    Nails: ["Common Nails", "Finishing Nails"],
+    Screws: ["Wood Screws", "Machine Screws"],
+    Paint: ["Gloss", "Matte"],
+  };
 
-  // Pagination state
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 20;
+  const handleProductNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const name = e.target.value;
+    const sub =
+      subcategoryOptions[newItem.category]?.find((sub) =>
+        name.toLowerCase().includes(sub.toLowerCase())
+      ) || "";
+    setNewItem({ ...newItem, product_name: name, subcategory: sub });
+  };
 
-  // List of units for the dropdown
-  const unitOptions = [
-    "Pieces (pcs)",
-    "Gallons (gal)",
-    "Sets",
-    "Kilograms (kg)",
-    "Grams (g)",
-    "Pounds (lbs)",
-    "Feet (ft)",
-    "Inches (in)",
-    "Yards (yd)",
-    "Meters (m)",
-    "Centimeters (cm)",
-    "Millimeters (mm)",
-    "Liters (L)",
-    "Cubic Meters (m³)",
-    "Boxes",
-    "Rolls",
-    "Sheets",
-    "Bundles",
-    "Cans",
-    "Pallets",
-    "Sacks",
-    "Bags",
-    "Tubes",
-    "Bars",
-    "Drums",
-    "Boxes",
-    "Containers",
-    "Buckets",
-    "Jars",
-    "Carton",
-  ];
+  const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const category = e.target.value;
+    const sub =
+      subcategoryOptions[category]?.find((sub) =>
+        newItem.product_name.toLowerCase().includes(sub.toLowerCase())
+      ) || "";
+    setNewItem({ ...newItem, category, subcategory: sub });
+  };
 
-  // Predefined categories for dropdown
-  const categoryOptions = [
-    "Nails",
-    "Screws",
-    "Bolts",
-    "Nuts",
-    "Washers",
-    "Hammers",
-    "Wrenches",
-    "Screwdrivers",
-    "Pliers",
-    "Drills",
-    "Saw Blades",
-    "Paint Brushes",
-    "Paint",
-    "Sandpaper",
-    "Tape Measure",
-    "Utility Knives",
-    "Extension Cords",
-    "Light Bulbs",
-    "Ladders",
-    "Electrical Tape",
-    "Pipe Fittings",
-    "Plumbing Tools",
-    "Adhesives",
-    "Caulking",
-    "Safety Gear",
-    "Power Tools",
-    "Hand Tools",
-    "Batteries",
-    "Welding Equipment",
-    "PVC Pipes",
-    "Insulation Materials",
-    "Wood",
-    "Concrete Mix",
-    "Mortar",
-    "Fertilizers",
-    "Garden Tools",
-    "Soil",
-    "Lawn Mowers",
-    "Shovels",
-    "Rakes",
-  ];
+  const handleInputChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    field: "quantity" | "unit_price"
+  ) => {
+    const value = parseFloat(e.target.value) || 0;
+    setNewItem((prev) => ({ ...prev, [field]: value }));
+  };
 
-  // Sort settings
-  const [sortBy, setSortBy] = useState<string | null>(null);
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const handleUnitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setNewItem((prev) => ({ ...prev, unit: e.target.value }));
+  };
 
-  // Fetch all items from the inventory
+  const handleSubcategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setNewItem((prev) => ({ ...prev, subcategory: e.target.value }));
+  };
+  const generateUniqueSku = async (category: string) => {
+    const prefix = category.slice(0, 3).toUpperCase();
+    const { data: existingItems } = await supabase
+      .from("inventory")
+      .select("sku")
+      .like("sku", `${prefix}%`);
+    const seq = String((existingItems?.length || 0) + 1).padStart(3, "0");
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+    return `${prefix}-${seq}-${timestamp}-${random}`;
+  };
+
   const fetchItems = async () => {
     setLoading(true);
     const { data, error } = await supabase.from("inventory").select();
-    if (error) {
-      setFetchError("Could not fetch the data");
-      console.error(error);
-    } else {
-      setItems(data); // Directly set the data here
-      setFetchError(null);
-    }
+    if (error) setFetchError("Could not fetch data");
+    else setItems(data);
     setLoading(false);
   };
 
-  // Fetch items on mount
   useEffect(() => {
     fetchItems();
   }, []);
 
-  // Handle category change with auto-suggestions
-  const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setNewItem({ ...newItem, category: e.target.value });
-  };
-
-  // Handle unit change with dropdown selection
-  const handleUnitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setNewItem({ ...newItem, unit: e.target.value });
-  };
-
-  // Handle quantity and amount input change and ensure they are numbers
-  const handleInputChange = (
-    e: React.ChangeEvent<HTMLInputElement>,
-    field: "quantity" | "amount"
-  ) => {
-    const value = e.target.value;
-    // Parse the value as a number, defaulting to 0 if it's an empty string or invalid
-    const parsedValue = value === "" ? 0 : parseFloat(value);
-
-    // If quantity is changed, set max_quantity dynamically to the inputted quantity
-    if (field === "quantity") {
-      setNewItem({
-        ...newItem,
-        [field]: parsedValue,
-        max_quantity: parsedValue,
-      });
-    } else {
-      setNewItem({ ...newItem, [field]: parsedValue });
-    }
-  };
-
-  // Generate SKU based on category, sequential number, and timestamp
-  const generateUniqueSku = async (category: string) => {
-    const categoryPrefix = category.slice(0, 3).toUpperCase(); // First three letters of the category
-
-    // Generate sequential ID based on the existing items in the same category
-    const { data: existingItems, error } = await supabase
-      .from("inventory")
-      .select("sku")
-      .like("sku", `${categoryPrefix}%`);
-
-    if (error) {
-      console.error("Error fetching items for SKU generation:", error);
-      throw new Error("Failed to fetch existing items for SKU generation.");
-    }
-
-    // Sequential ID padded to 3 digits
-    const sequentialId = String(existingItems.length + 1).padStart(3, "0");
-
-    // Timestamp in milliseconds and random string for uniqueness
-    const timestamp = Date.now();
-    const randomSuffix = Math.random()
-      .toString(36)
-      .substring(2, 8)
-      .toUpperCase();
-
-    return `${categoryPrefix}-${sequentialId}-${timestamp}-${randomSuffix}`;
-  };
-
-  // Handle item form submission (add or update item)
   const handleSubmitItem = async () => {
-    // Ensure all required fields are filled
     if (
       !newItem.product_name ||
       !newItem.category ||
-      !newItem.unit || // Ensure that unit is selected
-      !newItem.date_created ||
-      newItem.amount <= 0 ||
+      !newItem.unit ||
+      !newItem.subcategory ||
       newItem.quantity <= 0 ||
-      newItem.max_quantity <= 0
+      newItem.unit_price <= 0
     ) {
-      alert("Please fill all fields and make sure values are valid!");
+      alert("Please fill all fields properly.");
       return;
     }
 
     try {
-      if (editingItemId !== null) {
-        // Regenerate SKU if category is changed
-        newItem.sku = await generateUniqueSku(newItem.category);
-      }
+      newItem.sku = await generateUniqueSku(newItem.category);
 
-      if (editingItemId !== null) {
-        // Update the item in the database
-        const { error } = await supabase
-          .from("inventory")
-          .update({ ...newItem })
-          .eq("id", editingItemId);
-        if (error) throw error;
-      } else {
-        // Generate SKU for new item before inserting
-        newItem.sku = await generateUniqueSku(newItem.category);
+      const { error } =
+        editingItemId !== null
+          ? await supabase
+              .from("inventory")
+              .update({ ...newItem })
+              .eq("id", editingItemId)
+          : await supabase.from("inventory").insert([{ ...newItem }]);
 
-        const itemToInsert = { ...newItem };
-        const { error } = await supabase
-          .from("inventory")
-          .insert([itemToInsert]);
-        if (error) throw error;
-      }
+      if (error) throw error;
 
-      // Fetch updated items after submission
-      await fetchItems();
-
-      // Reset the form for a new item
       setNewItem({
         product_name: "",
         category: "",
-        quantity: 0, // Reset quantity to 0
-        unit: "", // Reset unit to an empty string
-        amount: 0, // Reset amount to 0
-        max_quantity: 0, // Reset max_quantity to 0
+        subcategory: "",
+        quantity: 0,
+        unit_price: 0,
+        unit: "",
+        amount: 0,
+        max_quantity: 0,
         date_created: new Date().toLocaleString("en-PH", {
           dateStyle: "long",
           timeStyle: "short",
@@ -262,334 +156,268 @@ export default function InventoryPage() {
         }),
         sku: "",
       });
-      setEditingItemId(null);
-      setFeedbackMessage("Item successfully added/updated!");
 
-      // Ensure the new/updated item is on the first page, and at the top of the list
-      setCurrentPage(1); // Reset to the first page
-    } catch (error: any) {
-      console.error("Error saving item:", error);
-      setFeedbackMessage(`An error occurred: ${error.message}`);
+      setEditingItemId(null);
+      fetchItems();
+      setCurrentPage(1);
+      setShowForm(false);
+    } catch (err: any) {
+      console.error("Error:", err.message);
     }
   };
 
-  // Sorting logic
-  const handleSort = (column: string) => {
-    const direction =
-      sortBy === column && sortDirection === "asc" ? "desc" : "asc";
-    setSortBy(column);
-    setSortDirection(direction);
+  const getStatus = (qty: number, max: number) => {
+    if (qty >= max) return "In Stock";
+    if (qty > 0) return "Low Stock";
+    return "Out of Stock";
   };
 
-  // Filter and sort items based on search query and sorting
   const filteredItems = items
-    .filter((item) => {
-      const query = searchQuery.toLowerCase();
-      return (
-        item.product_name.toLowerCase().includes(query) ||
-        item.category.toLowerCase().includes(query)
-      );
-    })
-    .sort((a, b) => {
-      if (!sortBy) return 0;
-      const aValue = a[sortBy as keyof InventoryItem];
-      const bValue = b[sortBy as keyof InventoryItem];
-      if (typeof aValue === "number" && typeof bValue === "number") {
-        return sortDirection === "asc" ? aValue - bValue : bValue - aValue;
-      } else {
-        return sortDirection === "asc"
-          ? String(aValue).localeCompare(String(bValue))
-          : String(bValue).localeCompare(String(aValue));
-      }
-    })
+    .filter((item) =>
+      `${item.product_name} ${item.category} ${item.subcategory}`
+        .toLowerCase()
+        .includes(searchQuery.toLowerCase())
+    )
     .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const totalPages = Math.ceil(items.length / itemsPerPage);
-
-  // Scroll to the add/edit form when editing an item
-  const scrollToForm = () => {
-    const element = document.getElementById("add-item-form");
-    if (element) {
-      element.scrollIntoView({ behavior: "smooth" });
-    }
-  };
-
-  // Get the status based on quantity
-  const getStatus = (quantity: number, maxQuantity: number) => {
-    if (quantity >= maxQuantity) {
-      return "In Stock";
-    } else if (quantity > 0) {
-      return "Low Stock";
-    } else {
-      return "Out of Stock";
-    }
-  };
-
   return (
-    <div className="pt-2 p-4">
-      <motion.h1
-        className="text-3xl font-bold mb-4"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
-      >
-        Inventory
-      </motion.h1>
+    <div className="p-4">
+      <h1 className="text-2xl font-bold mb-4">Inventory</h1>
 
-      {/* Search Bar */}
-      <motion.input
-        type="text"
-        placeholder="Search items..."
+      <input
+        className="border px-3 py-2 mb-4 w-full md:w-1/2"
+        placeholder="Search inventory..."
+        title="Search by product, category or subcategory"
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        className="mb-4 w-full md:w-1/3 px-4 py-2 border rounded shadow-sm"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
       />
 
-      {/* Feedback Message */}
-      {feedbackMessage && (
-        <motion.div
-          className="mb-4 text-green-600"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.3 }}
-        >
-          {feedbackMessage}
-        </motion.div>
-      )}
+      <div className="overflow-auto">
+        <table className="min-w-full bg-white text-sm">
+          <thead className="bg-[#ffba20] text-black text-left">
+            <tr>
+              <th className="p-2 text-left">SKU</th>
+              <th className="p-2 text-left">Product Name</th>
+              <th className="p-2 text-left">Category</th>
+              <th className="p-2 text-left">Subcategory</th>
+              <th className="p-2 text-left">Quantity</th>
+              <th className="p-2 text-left">Unit Price</th>
+              <th className="p-2 text-left">Total Price</th>
+              <th className="p-2 text-left">Status</th>
+              <th className="p-2 text-left">Date Added</th>
+              <th className="p-2 text-left">Actions</th>
+            </tr>
+          </thead>
 
-      {/* Inventory Table */}
-      <motion.div className="overflow-x-auto rounded-lg shadow">
-        {loading ? (
-          <motion.div
-            className="p-4 text-center text-gray-500"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.3 }}
-          >
-            Loading...
-          </motion.div>
-        ) : (
-          <>
-            <motion.table
-              className="min-w-full bg-white text-sm"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.3 }}
-            >
-              <thead className="bg-[#ffba20] text-black text-left">
-                <tr>
-                  <th
-                    className="py-3 px-5 cursor-pointer"
-                    onClick={() => handleSort("product_name")}
+          <tbody>
+            {filteredItems.map((item) => (
+              <tr key={item.id} className="border-b hover:bg-gray-100">
+                <td className="p-2">{item.sku}</td>
+                <td className="p-2">{item.product_name}</td>
+                <td className="p-2">{item.category}</td>
+                <td className="p-2">{item.subcategory}</td>
+                <td className="p-2">{item.quantity.toLocaleString()}</td>
+                <td className="p-2">₱{item.unit_price.toLocaleString()}</td>
+                <td className="p-2">₱{item.amount.toLocaleString()}</td>
+                <td className="p-2">
+                  {getStatus(item.quantity, item.max_quantity)}
+                </td>
+                <td className="p-2">{item.date_created}</td>
+                <td className="p-2">
+                  <button
+                    className="text-blue-600 hover:underline"
+                    onClick={() => {
+                      setEditingItemId(item.id);
+                      setNewItem({ ...item });
+                      setShowForm(true);
+                    }}
                   >
-                    PRODUCT NAME
-                  </th>
-                  <th
-                    className="py-3 px-5 cursor-pointer"
-                    onClick={() => handleSort("quantity")}
-                  >
-                    QUANTITY
-                  </th>
-                  <th
-                    className="py-3 px-5 cursor-pointer"
-                    onClick={() => handleSort("unit")}
-                  >
-                    UNIT
-                  </th>
-                  <th
-                    className="py-3 px-5 cursor-pointer"
-                    onClick={() => handleSort("category")}
-                  >
-                    CATEGORY
-                  </th>
-                  <th
-                    className="py-3 px-5 cursor-pointer"
-                    onClick={() => handleSort("amount")}
-                  >
-                    AMOUNT
-                  </th>
-                  <th
-                    className="py-3 px-5 cursor-pointer"
-                    onClick={() => handleSort("date_created")}
-                  >
-                    DATE CREATED
-                  </th>
-                  <th
-                    className="py-3 px-5 cursor-pointer"
-                    onClick={() => handleSort("sku")}
-                  >
-                    SKU
-                  </th>
-                  <th className="py-3 px-5">STATUS</th>
-                  <th className="py-3 px-5">EDIT</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {filteredItems.map((item) => {
-                  return (
-                    <motion.tr
-                      key={item.id}
-                      className="border-b hover:bg-gray-100 transition duration-150"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      <td className="py-3 px-5">{item.product_name}</td>
-                      <td className="py-3 px-5">{item.quantity}</td>
-                      <td className="py-3 px-5">{item.unit}</td>
-                      <td className="py-3 px-5">{item.category}</td>
-                      <td className="py-3 px-5">{item.amount}</td>
-                      <td className="py-3 px-5">{item.date_created}</td>
-                      <td className="py-3 px-5">{item.sku}</td>
-                      <td
-                        className={`py-3 px-5 ${
-                          getStatus(item.quantity, item.max_quantity) ===
-                          "In Stock"
-                            ? "text-green-600"
-                            : getStatus(item.quantity, item.max_quantity) ===
-                              "Low Stock"
-                            ? "text-yellow-500"
-                            : "text-red-500"
-                        }`}
-                      >
-                        {getStatus(item.quantity, item.max_quantity)}
-                      </td>
-                      <td className="py-3 px-5">
-                        <button
-                          onClick={() => {
-                            setEditingItemId(item.id);
-                            setNewItem({
-                              product_name: item.product_name,
-                              category: item.category,
-                              quantity: item.quantity,
-                              unit: item.unit, // Pass the unit value for editing
-                              amount: item.amount,
-                              max_quantity: item.max_quantity, // Pass the max quantity for editing
-                              date_created: item.date_created,
-                              sku: item.sku,
-                            });
-                            scrollToForm(); // Scroll to the form when editing
-                          }}
-                          className="bg-blue-500 text-white px-3 py-1 rounded hover:text-[#ffba20] transition-colors duration-300"
-                        >
-                          Edit
-                        </button>
-                      </td>
-                    </motion.tr>
-                  );
-                })}
-              </tbody>
-            </motion.table>
-
-            {/* Pagination Controls */}
-            <div className="flex justify-between items-center mt-4">
-              <button
-                onClick={() => setCurrentPage(currentPage - 1)}
-                disabled={currentPage === 1}
-                className="px-5 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
-              >
-                Previous
-              </button>
-
-              <div>
-                Page {currentPage} of {totalPages}
-              </div>
-
-              <button
-                onClick={() => setCurrentPage(currentPage + 1)}
-                disabled={currentPage === totalPages}
-                className="px-5 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
-              >
-                Next
-              </button>
-            </div>
-          </>
-        )}
-      </motion.div>
-
-      {/* Add Item Form Below */}
-      <motion.div
-        id="add-item-form"
-        className="mt-8 p-6 bg-gray-100 rounded shadow-md"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
-      >
-        <h2 className="text-2xl font-bold mb-4">
-          {editingItemId ? "Edit Item" : "Add New Item"}
-        </h2>
-        <div>
-          <label className="block mb-2">Product Name</label>
-          <input
-            type="text"
-            value={newItem.product_name}
-            onChange={(e) =>
-              setNewItem({ ...newItem, product_name: e.target.value })
-            }
-            className="w-full mb-4 px-4 py-2 border rounded"
-          />
-
-          <label className="block mb-2">Category</label>
-          <select
-            value={newItem.category}
-            onChange={handleCategoryChange}
-            className="w-full mb-4 px-4 py-2 border rounded"
-          >
-            <option value="" disabled>
-              Select a Category
-            </option>
-            {categoryOptions.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
+                    Edit
+                  </button>
+                </td>
+              </tr>
             ))}
-          </select>
+          </tbody>
+        </table>
 
-          <label className="block mb-2">Unit</label>
-          <select
-            value={newItem.unit}
-            onChange={handleUnitChange}
-            className="w-full mb-4 px-4 py-2 border rounded"
-          >
-            <option value="" disabled>
-              Select a Unit
-            </option>
-            {unitOptions.map((unit) => (
-              <option key={unit} value={unit}>
-                {unit}
-              </option>
-            ))}
-          </select>
-
-          <label className="block mb-2">Quantity</label>
-          <input
-            type="number"
-            value={newItem.quantity}
-            onChange={(e) => handleInputChange(e, "quantity")}
-            className="w-full mb-4 px-4 py-2 border rounded"
-          />
-
-          <label className="block mb-2">Amount</label>
-          <input
-            type="number"
-            value={newItem.amount}
-            onChange={(e) => handleInputChange(e, "amount")}
-            className="w-full mb-4 px-4 py-2 border rounded"
-          />
-
-          {/* Removed Max Quantity input */}
+        <div className="mt-3 flex justify-between">
           <button
-            onClick={handleSubmitItem}
-            className="bg-blue-500 text-white py-2 px-4 rounded hover:text-[#ffba20] transition-colors duration-300"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage((p) => p - 1)}
           >
-            {editingItemId ? "Update Item" : "Add Item"}
+            Prev
+          </button>
+          <span>
+            Page {currentPage} of {totalPages}
+          </span>
+          <button
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage((p) => p + 1)}
+          >
+            Next
           </button>
         </div>
-      </motion.div>
+      </div>
+
+      <div className="mt-6">
+        <button
+          onClick={() => {
+            setShowForm(true);
+            setEditingItemId(null);
+            setNewItem({
+              product_name: "",
+              category: "",
+              subcategory: "",
+              quantity: 0,
+              unit_price: 0,
+              unit: "",
+              amount: 0,
+              max_quantity: 0,
+              date_created: new Date().toLocaleString("en-PH", {
+                dateStyle: "long",
+                timeStyle: "short",
+                hour12: true,
+              }),
+              sku: "",
+            });
+          }}
+          className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+        >
+          Add New Item
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white p-6 rounded shadow-lg w-full max-w-lg">
+            <h2 className="text-xl font-bold mb-4">
+              {editingItemId ? "Edit Item" : "Add New Item"}
+            </h2>
+
+            <input
+              title="e.g. Boysen Gloss Paint"
+              placeholder="Input product name"
+              value={newItem.product_name}
+              onChange={handleProductNameChange}
+              className="w-full mb-3 px-3 py-2 border"
+            />
+
+            <select
+              title="Select a category (e.g. Screws, Paint)"
+              value={newItem.category}
+              onChange={handleCategoryChange}
+              className="w-full mb-3 px-3 py-2 border"
+            >
+              <option value="">Select Category</option>
+              {categoryOptions.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+            </select>
+
+            {subcategoryOptions[newItem.category] && (
+              <select
+                title="Select a subcategory (e.g. Wood Screws)"
+                value={newItem.subcategory}
+                onChange={handleSubcategoryChange}
+                className="w-full mb-3 px-3 py-2 border"
+              >
+                <option value="">Select Subcategory</option>
+                {subcategoryOptions[newItem.category].map((sub, i) => (
+                  <option key={`${sub}-${i}`} value={sub}>
+                    {sub}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <select
+              title="Select unit of measurement (e.g. pcs, gal)"
+              value={newItem.unit}
+              onChange={handleUnitChange}
+              className="w-full mb-3 px-3 py-2 border"
+            >
+              <option value="">Select Unit</option>
+              {unitOptions.map((unit, i) => (
+                <option key={`${unit}-${i}`} value={unit}>
+                  {unit}
+                </option>
+              ))}
+            </select>
+
+            <input
+              title="e.g. 5"
+              placeholder="Input quantity"
+              value={newItem.quantity}
+              onChange={(e) => handleInputChange(e, "quantity")}
+              className="w-full mb-3 px-3 py-2 border"
+            />
+
+            <input
+              title="e.g. 129.99"
+              placeholder="Input unit price"
+              value={newItem.unit_price}
+              onChange={(e) => handleInputChange(e, "unit_price")}
+              className="w-full mb-3 px-3 py-2 border"
+            />
+
+            <input
+              type="number"
+              title="Automatically calculated (unit price x quantity)"
+              placeholder="Total Price"
+              value={newItem.amount}
+              readOnly
+              className="w-full mb-3 px-3 py-2 border bg-gray-100 text-gray-600 cursor-not-allowed"
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setShowForm(false);
+                  setEditingItemId(null);
+                }}
+                className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={() => {
+                  setNewItem({
+                    product_name: "",
+                    category: "",
+                    subcategory: "",
+                    quantity: 0,
+                    unit_price: 0,
+                    unit: "",
+                    amount: 0,
+                    max_quantity: 0,
+                    date_created: new Date().toLocaleString("en-PH", {
+                      dateStyle: "long",
+                      timeStyle: "short",
+                      hour12: true,
+                    }),
+                    sku: "",
+                  });
+                  setEditingItemId(null);
+                }}
+                className="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600"
+              >
+                Clear
+              </button>
+
+              <button
+                onClick={handleSubmitItem}
+                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+              >
+                {editingItemId ? "Update Item" : "Add Item"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
