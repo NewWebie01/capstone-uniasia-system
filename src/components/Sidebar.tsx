@@ -37,11 +37,10 @@ export const Sidebar = () => {
   const Menus = [
     { title: "Dashboard", src: ChartFill, href: "/dashboard" },
     { title: "Inventory", src: Calendar, href: "/inventory" },
-    { title: "Truck Delivery", src: Logistics, href: "/logistics" }, // 🔁 Updated here
+    { title: "Truck Delivery", src: Logistics, href: "/logistics" },
     { title: "Sales", src: Sales, href: "/sales" },
-    { title: "Sales Report", src: Chart, href: "/sales-report" },
-    { title: "Activity Log", src: Folder, href: "/activity-log" },
-    { title: "Setting", src: Setting, gap: true, href: "/settings" },
+    { title: "Invoice", src: Chart, href: "/invoice" },
+    { title: "Transaction-History", src: Folder, href: "/transaction-history" },
   ];
 
   return (
@@ -106,9 +105,9 @@ export const Sidebar = () => {
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
-                className={`text-black text-sm flex items-center gap-x-4 cursor-pointer p-2 rounded-md hover:bg-gray-400 transition-colors ${
-                  menu.gap ? "mt-9" : "mt-2"
-                } ${isActive ? "bg-gray-100 font-semibold" : ""}`}
+                className={`text-black text-sm flex items-center gap-x-4 cursor-pointer p-2 rounded-md hover:bg-gray-400 transition-colors mt-2 ${
+                  isActive ? "bg-gray-100 font-semibold" : ""
+                }`}
               >
                 <Image src={menu.src} alt={menu.title} width={20} height={20} />
                 <AnimatePresence>
