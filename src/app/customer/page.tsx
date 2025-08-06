@@ -65,7 +65,9 @@ export default function CustomerInventoryPage() {
     if (!selectedItem) return;
 
     if (orderQuantity > selectedItem.quantity) {
-      alert(`Cannot order more than available stock (${selectedItem.quantity})`);
+      alert(
+        `Cannot order more than available stock (${selectedItem.quantity})`
+      );
       return;
     }
 
@@ -219,7 +221,9 @@ export default function CustomerInventoryPage() {
       {selectedItem && (
         <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex justify-center items-center">
           <div className="bg-white p-6 rounded shadow-lg max-w-md w-full">
-            <h2 className="text-xl font-bold mb-4">{selectedItem.product_name}</h2>
+            <h2 className="text-xl font-bold mb-4">
+              {selectedItem.product_name}
+            </h2>
             <p>Category: {selectedItem.category}</p>
             <p>Subcategory: {selectedItem.subcategory}</p>
             <p>Status: {selectedItem.status}</p>
