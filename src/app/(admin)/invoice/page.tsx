@@ -1,11 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-//import { exportInvoiceToPDF } from "@/utils/exportInvoice";
 import { generatePDFBlob } from "@/utils/exportInvoice";
 import {
   DollarSign,
@@ -14,9 +13,9 @@ import {
   Printer,
   Filter,
   CalendarDays,
+  X,
 } from "lucide-react";
 
-// Sample sales data
 const salesData = [
   {
     id: "S001",
@@ -45,18 +44,8 @@ const salesData = [
     date: "2025-04-03",
     customer: "Juan Dela Cruz",
   },
-  {
-    id: "S004",
-    product: "Cordless Screwdriver",
-    quantity: 30,
-    revenue: 1800,
-    status: "Completed",
-    date: "2025-04-04",
-    customer: "Pedro Reyes",
-  },
 ];
 
-// Mock transaction history per invoice
 const mockTransactions = [
   {
     date: "2025-04-01",
@@ -81,6 +70,7 @@ const SalesInvoicePage = () => {
   const [searchName, setSearchName] = useState("");
   const [searchDate, setSearchDate] = useState("");
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [openDialogId, setOpenDialogId] = useState<string | null>(null);
 
   const filteredSales = salesData.filter((sale) => {
     return (
@@ -90,7 +80,7 @@ const SalesInvoicePage = () => {
   });
 
   return (
-    <motion.div className="p-4 space-y-6" initial="hidden" animate="visible">
+    <motion.div className="p-4 space-y-6">
       <motion.h1 className="text-3xl font-bold">Sales Invoices</motion.h1>
 
       {/* Filters */}
@@ -101,9 +91,7 @@ const SalesInvoicePage = () => {
             type="text"
             placeholder="Filter by Customer Name"
             value={searchName}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-              setSearchName(e.target.value)
-            }
+            onChange={(e) => setSearchName(e.target.value)}
             className="max-w-xs"
           />
         </div>
@@ -112,17 +100,19 @@ const SalesInvoicePage = () => {
           <Input
             type="date"
             value={searchDate}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-              setSearchDate(e.target.value)
-            }
+            onChange={(e) => setSearchDate(e.target.value)}
           />
         </div>
       </div>
 
-      {/* Compact Invoice Cards */}
+      {/* Compact Cards */}
       <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
         {filteredSales.map((sale) => (
-          <Dialog key={sale.id}>
+          <Dialog
+            key={sale.id}
+            open={openDialogId === sale.id}
+            onOpenChange={(open) => setOpenDialogId(open ? sale.id : null)}
+          >
             <DialogTrigger asChild>
               <Card
                 onClick={() => setSelectedSale(sale)}
@@ -155,15 +145,15 @@ const SalesInvoicePage = () => {
                       if (blob) {
                         const url = URL.createObjectURL(blob);
                         setPdfUrl(url);
+                        setOpenDialogId(null);
                       }
                     }}
                   >
-                    <Printer className="w-4 h-4" />
-                    Preview PDF
+                    <Printer className="w-4 h-4" /> Preview PDF
                   </button>
                 </div>
 
-                {/* Customer Info */}
+                {/* Invoice Info */}
                 <div className="grid grid-cols-2 text-sm gap-y-1">
                   <p>
                     <strong>NAME:</strong> {sale.customer}
@@ -194,9 +184,8 @@ const SalesInvoicePage = () => {
                   </p>
                 </div>
 
-                {/* Table of Transactions */}
                 <div className="overflow-auto mt-4">
-                  <table className="w-full text-sm border print:w-full">
+                  <table className="w-full text-sm border">
                     <thead className="bg-gray-100">
                       <tr>
                         <th className="border px-2 py-1">DATE</th>
@@ -234,6 +223,36 @@ const SalesInvoicePage = () => {
           </Dialog>
         ))}
       </div>
+
+      {/* PDF Preview Modal with Transition */}
+      <AnimatePresence>
+        {pdfUrl && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            transition={{ duration: 0.3 }}
+            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
+          >
+            <div className="bg-white p-4 w-[90%] h-[90%] rounded shadow-xl relative">
+              <iframe
+                src={pdfUrl}
+                title="Invoice Preview"
+                className="w-full h-full border"
+              />
+              <button
+                onClick={() => {
+                  URL.revokeObjectURL(pdfUrl);
+                  setPdfUrl(null);
+                }}
+                className="absolute top-3 right-4 bg-transparent text-gray-600 hover:text-black"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 };
