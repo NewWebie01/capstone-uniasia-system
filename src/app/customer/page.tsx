@@ -65,9 +65,7 @@ export default function CustomerInventoryPage() {
     if (!selectedItem) return;
 
     if (orderQuantity > selectedItem.quantity) {
-      alert(
-        `Cannot order more than available stock (${selectedItem.quantity})`
-      );
+      alert(`Cannot order more than available stock (${selectedItem.quantity})`);
       return;
     }
 
@@ -157,17 +155,7 @@ export default function CustomerInventoryPage() {
         .insert(items);
       if (itemError) throw itemError;
 
-      for (const ci of cart) {
-        const newQty = ci.item.quantity - ci.quantity;
-        const { error: updateError } = await supabase
-          .from("inventory")
-          .update({ quantity: newQty })
-          .eq("id", ci.item.id);
-        if (updateError) throw updateError;
-      }
-
       alert("Order submitted successfully!");
-
       setCart([]);
       setCustomerInfo({ name: "", email: "", phone: "", address: "" });
       setShowCartPopup(false);
@@ -231,9 +219,7 @@ export default function CustomerInventoryPage() {
       {selectedItem && (
         <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex justify-center items-center">
           <div className="bg-white p-6 rounded shadow-lg max-w-md w-full">
-            <h2 className="text-xl font-bold mb-4">
-              {selectedItem.product_name}
-            </h2>
+            <h2 className="text-xl font-bold mb-4">{selectedItem.product_name}</h2>
             <p>Category: {selectedItem.category}</p>
             <p>Subcategory: {selectedItem.subcategory}</p>
             <p>Status: {selectedItem.status}</p>

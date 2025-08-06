@@ -1,10 +1,10 @@
+// app/sales/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import supabase from "@/config/supabaseClient";
 
-// Inventory type definition
 type InventoryItem = {
   id: number;
   product_name: string;
@@ -15,132 +15,159 @@ type InventoryItem = {
   sku: string;
 };
 
-type OrderItem = {
-  item: InventoryItem;
-  orderQuantity: number;
+type OrderWithDetails = {
+  id: string;
+  total_amount: number;
+  status: string;
+  date_created: string;
+  customers: {
+    name: string;
+    email: string;
+    phone: string;
+    address: string;
+  };
+  order_items: {
+    quantity: number;
+    price: number;
+    inventory: {
+      product_name: string;
+      category: string;
+      unit_price: number;
+      id: number;
+      quantity: number;
+    };
+  }[];
+};
+
+type PickingOrder = {
+  orderId: string;
+  status: "accepted" | "rejected";
 };
 
 export default function SalesPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
-  const [orderQuantity, setOrderQuantity] = useState<number>(0);
-  const [orderList, setOrderList] = useState<OrderItem[]>([]); // Track added items
-  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
+  const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
+  const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
 
-  // Fetch inventory
   const fetchItems = async () => {
-    setLoading(true);
-    const { data, error } = await supabase.from("inventory").select();
-    if (error) {
-      setFetchError("Error fetching inventory");
-      console.error(error);
-    } else {
-      setItems(data);
-    }
-    setLoading(false);
+    const { data } = await supabase.from("inventory").select();
+    if (data) setItems(data);
+  };
+
+  const fetchOrders = async () => {
+    const { data } = await supabase
+      .from("orders")
+      .select(
+        `id, total_amount, status, date_created,
+         customers ( name, email, phone, address ),
+         order_items (
+           quantity, price,
+           inventory ( id, product_name, category, unit_price, quantity )
+         )`
+      )
+      .order("date_created", { ascending: false });
+
+    if (data) setOrders(data);
   };
 
   useEffect(() => {
     fetchItems();
+    fetchOrders();
   }, []);
 
-  const filteredItems = items.filter((item) =>
-    item.product_name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const isOrderAccepted = (orderId: string) =>
+    pickingStatus.find(p => p.orderId === orderId && p.status === "accepted");
 
-  const handleAddToOrder = async () => {
-    if (!selectedItem || orderQuantity <= 0) {
-      alert("Please select a valid item and enter a valid quantity.");
-      return;
-    }
-
-    if (orderQuantity > selectedItem.quantity) {
-      alert(`Not enough stock. Only ${selectedItem.quantity} left in stock.`);
-      return;
-    }
-
-    // Check if item is already in the order list
-    const existingOrderItem = orderList.find(
-      (orderItem) => orderItem.item.id === selectedItem.id
-    );
-
-    if (existingOrderItem) {
-      alert("This item is already in the order list.");
-      return;
-    }
-
-    const newOrderItem: OrderItem = {
-      item: selectedItem,
-      orderQuantity,
-    };
-
-    // Update inventory quantity
-    const updatedQty = selectedItem.quantity - orderQuantity;
-    const { error: updateInventoryError } = await supabase
-      .from("inventory")
-      .update({ quantity: updatedQty })
-      .eq("id", selectedItem.id);
-
-    if (updateInventoryError) {
-      console.error(updateInventoryError);
-      alert("Error updating inventory.");
-      return;
-    }
-
-    setOrderList([...orderList, newOrderItem]);
-    setOrderQuantity(0);
-    setSelectedItem(null); // Reset the selected item after adding to order
+  const handleAcceptOrder = (order: OrderWithDetails) => {
+    setPickingStatus(prev => [...prev, { orderId: order.id, status: "accepted" }]);
+    setEditedQuantities(order.order_items.map(item => item.quantity));
+    setSelectedOrder(order);
+    setShowModal(true);
   };
 
-  const handleRemoveFromOrder = (itemId: number) => {
-    setOrderList(orderList.filter((orderItem) => orderItem.item.id !== itemId));
+  const handleRejectOrder = async (order: OrderWithDetails) => {
+    setPickingStatus(prev => [...prev, { orderId: order.id, status: "rejected" }]);
+
+    await supabase.from("orders").update({ status: "rejected" }).eq("id", order.id);
+    await supabase.from("transactions").insert([
+      {
+        order_id: order.id,
+        customer_name: order.customers.name,
+        status: "rejected",
+        date: new Date().toISOString(),
+      },
+    ]);
+
+    fetchOrders();
   };
 
-  const handleSubmitOrder = async () => {
-    const totalAmount = orderList.reduce(
-      (total, orderItem) =>
-        total + orderItem.item.amount * orderItem.orderQuantity,
-      0
-    );
-    const dateSold = new Date().toLocaleString("en-PH", {
-      dateStyle: "long",
-      timeStyle: "short",
-      hour12: true,
-    });
+  const handleOrderComplete = async () => {
+    if (!selectedOrder) return;
 
-    // Log the sale for each item
-    for (let orderItem of orderList) {
-      const { error: saleError } = await supabase.from("sales").insert([
-        {
-          inventory_id: orderItem.item.id,
-          quantity_sold: orderItem.orderQuantity,
-          amount: orderItem.item.amount * orderItem.orderQuantity,
-          date: dateSold,
-        },
-      ]);
+    for (let i = 0; i < selectedOrder.order_items.length; i++) {
+      const oi = selectedOrder.order_items[i];
+      const invId = oi.inventory.id;
+      const currentQty = oi.inventory.quantity;
+      const deductQty = editedQuantities[i];
+      const remaining = currentQty - deductQty;
 
-      if (saleError) {
-        console.error(saleError);
-        alert("Error logging the sale.");
+      if (remaining < 0) {
+        alert(`Insufficient stock for ${oi.inventory.product_name}`);
         return;
       }
+
+      await supabase
+        .from("inventory")
+        .update({ quantity: remaining })
+        .eq("id", invId);
+
+      await supabase.from("sales").insert([
+        {
+          inventory_id: invId,
+          quantity_sold: deductQty,
+          amount: deductQty * oi.price,
+          date: new Date().toISOString(),
+        },
+      ]);
     }
 
-    setFeedbackMessage("Order placed successfully!");
-    setOrderList([]); // Clear the order list
-    await fetchItems(); // Refresh the inventory list
+    await supabase.from("orders").update({ status: "completed" }).eq("id", selectedOrder.id);
+    await supabase.from("transactions").insert([
+      {
+        order_id: selectedOrder.id,
+        customer_name: selectedOrder.customers.name,
+        status: "completed",
+        date: new Date().toISOString(),
+      },
+    ]);
+
+    alert("Order successfully completed.");
+    setShowModal(false);
+    setSelectedOrder(null);
+    fetchOrders();
+    fetchItems();
+  };
+
+  const handleCancel = (orderId: string) => {
+    setPickingStatus(prev => prev.filter(p => p.orderId !== orderId));
+  };
+
+  const handleQuantityChange = (index: number, value: number) => {
+    setEditedQuantities(prev => {
+      const newQuantities = [...prev];
+      newQuantities[index] = value;
+      return newQuantities;
+    });
   };
 
   return (
     <div className="p-6">
-      <motion.h1 className="text-3xl font-bold mb-4">
-        Sales Processing
-      </motion.h1>
+      <motion.h1 className="text-3xl font-bold mb-4">Sales Processing</motion.h1>
 
-      {/* Search input */}
       <input
         type="text"
         placeholder="Search products..."
@@ -149,139 +176,175 @@ export default function SalesPage() {
         className="mb-4 w-full md:w-1/3 px-4 py-2 border rounded"
       />
 
-      {feedbackMessage && (
-        <div className="mb-4 text-green-600">{feedbackMessage}</div>
-      )}
-
-      {loading ? (
-        <div>Loading...</div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg shadow mb-6">
-          <table className="min-w-full bg-white text-sm">
-            <thead className="bg-[#ffba20] text-black text-left">
-              <tr>
-                <th className="py-2 px-4">Product Name</th>
-                <th className="py-2 px-4">Category</th>
-                <th className="py-2 px-4">Stock</th>
-                <th className="py-2 px-4">Unit</th>
-                <th className="py-2 px-4">Price</th>
-                <th className="py-2 px-4">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredItems.map((item) => (
+      {/* Inventory Table */}
+      <div className="overflow-x-auto rounded-lg shadow mb-6">
+        <table className="min-w-full bg-white text-sm">
+          <thead className="bg-[#ffba20] text-black text-left">
+            <tr>
+              <th className="py-2 px-4">Product Name</th>
+              <th className="py-2 px-4">Category</th>
+              <th className="py-2 px-4">Stock</th>
+              <th className="py-2 px-4">Unit</th>
+              <th className="py-2 px-4">Price</th>
+              <th className="py-2 px-4">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items
+              .filter(item =>
+                item.product_name.toLowerCase().includes(searchQuery.toLowerCase())
+              )
+              .map(item => (
                 <tr key={item.id} className="border-b hover:bg-gray-100">
                   <td className="py-2 px-4">{item.product_name}</td>
                   <td className="py-2 px-4">{item.category}</td>
                   <td className="py-2 px-4">{item.quantity}</td>
                   <td className="py-2 px-4">{item.unit}</td>
-                  <td className="py-2 px-4">₱{item.amount.toFixed(2)}</td>
+                  <td className="py-2 px-4">₱{item.amount.toLocaleString()}</td>
                   <td className="py-2 px-4">
                     <button
-                      className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
-                      onClick={() => setSelectedItem(item)} // Select item when clicked
+                      className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                      onClick={() => {
+                        if (selectedOrder && isOrderAccepted(selectedOrder.id)) {
+                          setShowModal(true);
+                        } else {
+                          alert("Accept an order first.");
+                        }
+                      }}
                     >
-                      Add to Order
+                      Order Item
                     </button>
                   </td>
                 </tr>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+          </tbody>
+        </table>
+      </div>
 
-      {/* Add to Order Form */}
-      {selectedItem && (
-        <motion.div
-          className="p-6 bg-gray-100 rounded shadow-md"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-        >
-          <h2 className="text-xl font-bold mb-4">Add to Order</h2>
-          <div className="mb-4">
-            <strong>Product:</strong> {selectedItem.product_name}
-          </div>
-          <div className="mb-4">
-            <strong>Price per unit:</strong> ₱{selectedItem.amount.toFixed(2)}
-          </div>
-          <label className="block mb-2">Quantity to Order</label>
-          <input
-            type="number"
-            value={orderQuantity}
-            onChange={(e) => setOrderQuantity(Number(e.target.value))}
-            className="w-full mb-4 px-4 py-2 border rounded"
-            min={1}
-            max={selectedItem.quantity} // Limit quantity to stock available
-          />
-          <button
-            onClick={handleAddToOrder} // Add to order when clicked
-            className="bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600"
-          >
-            Add to Order
-          </button>
-        </motion.div>
-      )}
+      {/* Customer Orders */}
+      <div className="mt-10">
+        <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
+        {orders
+          .filter(o => o.status === "pending" || o.status === "accepted")
+          .map(order => {
+            const isAccepted = isOrderAccepted(order.id);
+            const isRejected = pickingStatus.find(p => p.orderId === order.id && p.status === "rejected");
 
-      {/* Order Review */}
-      {orderList.length > 0 && (
-        <div className="mt-6 p-6 bg-gray-100 rounded shadow-md">
-          <h2 className="text-xl font-bold mb-4">Order Review</h2>
-          <table className="min-w-full bg-white text-sm">
-            <thead className="bg-[#ffba20] text-black text-left">
-              <tr>
-                <th className="py-2 px-4">Product Name</th>
-                <th className="py-2 px-4">Quantity</th>
-                <th className="py-2 px-4">Price</th>
-                <th className="py-2 px-4">Total</th>
-                <th className="py-2 px-4">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orderList.map((orderItem) => (
-                <tr
-                  key={orderItem.item.id}
-                  className="border-b hover:bg-gray-100"
-                >
-                  <td className="py-2 px-4">{orderItem.item.product_name}</td>
-                  <td className="py-2 px-4">{orderItem.orderQuantity}</td>
-                  <td className="py-2 px-4">
-                    ₱{orderItem.item.amount.toFixed(2)}
-                  </td>
-                  <td className="py-2 px-4">
-                    ₱
-                    {(orderItem.orderQuantity * orderItem.item.amount).toFixed(
-                      2
+            return (
+              <div key={order.id} className={`border p-4 mb-4 rounded shadow bg-white ${isAccepted ? "border-green-600 border-2" : ""}`}>
+                <p className="font-bold">Customer: {order.customers.name}</p>
+                <p>Email: {order.customers.email}</p>
+                <p>Phone: {order.customers.phone}</p>
+                <p>Address: {order.customers.address}</p>
+                <p>
+                  Order Time: {new Date(order.date_created).toLocaleString("en-PH", {
+                    timeZone: "Asia/Manila",
+                    dateStyle: "long",
+                    timeStyle: "short",
+                  })}
+                </p>
+                <ul className="mt-2 list-disc list-inside">
+                  {order.order_items.map((item, idx) => (
+                    <li key={idx}>
+                      {item.inventory.product_name} - {item.quantity} pcs @ ₱{item.price.toFixed(2)}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 font-bold">Total: ₱{order.total_amount.toFixed(2)}</p>
+                <p className="mb-2">Status: {order.status}</p>
+
+                {order.status !== "completed" && order.status !== "rejected" && (
+                  <div className="flex gap-2 mt-2">
+                    {!isAccepted && !isRejected && (
+                      <>
+                        <button
+                          onClick={() => handleAcceptOrder(order)}
+                          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                        >
+                          Accept Order
+                        </button>
+                        <button
+                          onClick={() => handleRejectOrder(order)}
+                          className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                        >
+                          Reject Order
+                        </button>
+                      </>
                     )}
-                  </td>
-                  <td className="py-2 px-4">
-                    <button
-                      onClick={() => handleRemoveFromOrder(orderItem.item.id)} // Remove item from order
-                      className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
-                    >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
+                    {isAccepted && (
+                      <>
+                        <button
+                          onClick={handleOrderComplete}
+                          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                        >
+                          Order Complete
+                        </button>
+                        <button
+                          onClick={() => handleCancel(order.id)}
+                          className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+      </div>
+
+      {/* Modal */}
+      {showModal && selectedOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+          <div className="bg-white p-6 rounded shadow-md w-full max-w-3xl flex justify-between">
+            <div className="w-1/2 pr-4 border-r">
+              <h2 className="font-bold text-lg mb-2">Customer Info</h2>
+              <p><strong>Name:</strong> {selectedOrder.customers.name}</p>
+              <p><strong>Email:</strong> {selectedOrder.customers.email}</p>
+              <p><strong>Phone:</strong> {selectedOrder.customers.phone}</p>
+              <p><strong>Address:</strong> {selectedOrder.customers.address}</p>
+              <p><strong>Date:</strong> {new Date(selectedOrder.date_created).toLocaleString("en-PH", {
+                timeZone: "Asia/Manila",
+                dateStyle: "short",
+                timeStyle: "short"
+              })}</p>
+              <p><strong>Total:</strong> ₱{selectedOrder.total_amount.toFixed(2)}</p>
+            </div>
+            <div className="w-1/2 pl-4">
+              <h2 className="font-bold text-lg mb-2">Picking List</h2>
+              {selectedOrder.order_items.map((item, idx) => (
+                <div key={idx} className="mb-2">
+                  <p>{item.inventory.product_name}:</p>
+                  <input
+                    type="number"
+                    min={1}
+                    max={item.inventory.quantity}
+                    value={editedQuantities[idx]}
+                    onChange={(e) => handleQuantityChange(idx, Number(e.target.value))}
+                    className="border rounded px-2 py-1 w-24"
+                  />
+                </div>
               ))}
-            </tbody>
-          </table>
-          <div className="mt-4">
-            <strong>Total Order Value:</strong> ₱
-            {orderList
-              .reduce(
-                (total, orderItem) =>
-                  total + orderItem.item.amount * orderItem.orderQuantity,
-                0
-              )
-              .toFixed(2)}
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  className="bg-gray-400 text-white px-4 py-2 rounded"
+                  onClick={() => {
+                    setShowModal(false);
+                    setSelectedOrder(null);
+                  }}
+                >
+                  OK
+                </button>
+                <button
+                  className="bg-blue-600 text-white px-4 py-2 rounded"
+                  onClick={handleOrderComplete}
+                >
+                  Order Complete
+                </button>
+              </div>
+            </div>
           </div>
-          <button
-            onClick={handleSubmitOrder} // Submit the order
-            className="bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 mt-4"
-          >
-            Submit Order
-          </button>
         </div>
       )}
     </div>
