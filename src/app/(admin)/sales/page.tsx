@@ -73,7 +73,18 @@ export default function SalesPage() {
       )
       .order("date_created", { ascending: false });
 
-    if (data) setOrders(data);
+    if (data) {
+      setOrders(
+        data.map((order: any) => ({
+          ...order,
+          customers: Array.isArray(order.customers) ? order.customers[0] : order.customers,
+          order_items: order.order_items.map((oi: any) => ({
+            ...oi,
+            inventory: Array.isArray(oi.inventory) ? oi.inventory[0] : oi.inventory,
+          })),
+        }))
+      );
+    }
   };
 
   useEffect(() => {
