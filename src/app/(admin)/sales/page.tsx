@@ -71,7 +71,7 @@ export default function SalesPage() {
       )
       .order("date_created", { ascending: false });
 
-    //if (data) setOrders(data);
+    if (data) setOrders(data);
   };
 
   useEffect(() => {
