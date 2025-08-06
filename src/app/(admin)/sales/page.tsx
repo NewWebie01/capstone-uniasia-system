@@ -54,6 +54,8 @@ export default function SalesPage() {
   );
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+const ordersPerPage = 10;
 
   const fetchItems = async () => {
     const { data } = await supabase.from("inventory").select();
@@ -256,9 +258,12 @@ export default function SalesPage() {
       {/* Customer Orders */}
       <div className="mt-10">
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
-        {orders
-          .filter((o) => o.status === "pending" || o.status === "accepted")
-          .map((order) => {
+    
+         {orders
+  .filter((o) => o.status === "pending" || o.status === "accepted")
+  .slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage)
+  .map((order) => {
+
             const isAccepted = isOrderAccepted(order.id);
             const isRejected = pickingStatus.find(
               (p) => p.orderId === order.id && p.status === "rejected"
@@ -337,6 +342,58 @@ export default function SalesPage() {
             );
           })}
       </div>
+      {/* Pagination Controls */}
+<div className="flex justify-between items-center mt-6">
+  <button
+    onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+    disabled={currentPage === 1}
+    className={`px-4 py-2 rounded ${
+      currentPage === 1
+        ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+        : "bg-blue-600 text-white hover:bg-blue-700"
+    }`}
+  >
+    ← Prev
+  </button>
+  <span className="text-sm font-semibold text-gray-700">
+    Page {currentPage} of {Math.ceil(
+      orders.filter((o) => o.status === "pending" || o.status === "accepted")
+        .length / ordersPerPage
+    )}
+  </span>
+  <button
+    onClick={() =>
+      setCurrentPage((p) =>
+        p <
+        Math.ceil(
+          orders.filter((o) => o.status === "pending" || o.status === "accepted")
+            .length / ordersPerPage
+        )
+          ? p + 1
+          : p
+      )
+    }
+    disabled={
+      currentPage >=
+      Math.ceil(
+        orders.filter((o) => o.status === "pending" || o.status === "accepted")
+          .length / ordersPerPage
+      )
+    }
+    className={`px-4 py-2 rounded ${
+      currentPage >=
+      Math.ceil(
+        orders.filter((o) => o.status === "pending" || o.status === "accepted")
+          .length / ordersPerPage
+      )
+        ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+        : "bg-blue-600 text-white hover:bg-blue-700"
+    }`}
+  >
+    Next →
+  </button>
+</div>
+
 
       {/* Modal */}
       {showModal && selectedOrder && (
