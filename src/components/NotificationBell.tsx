@@ -20,7 +20,8 @@ export default function NotificationBell() {
         },
         (payload) => {
           console.log("🔔 New order received:", payload);
-          // setHasNewNotification(true); or show badge, etc.
+          setHasNewOrder(true); // set red badge when new order comes in
+        
         }
       )
       .subscribe();

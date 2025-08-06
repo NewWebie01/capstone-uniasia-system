@@ -25,7 +25,7 @@ export default function InventoryPage() {
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [showForm, setShowForm] = useState(false);
-  const itemsPerPage = 20;
+  const itemsPerPage = 10;
 
   const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
     product_name: "",
@@ -36,11 +36,7 @@ export default function InventoryPage() {
     unit: "",
     amount: 0,
     max_quantity: 0,
-    date_created: new Date().toLocaleString("en-PH", {
-      dateStyle: "long",
-      timeStyle: "short",
-      hour12: true,
-    }),
+   date_created: new Date().toISOString(),
     sku: "",
   });
 
@@ -49,13 +45,83 @@ export default function InventoryPage() {
     const total = newItem.unit_price * newItem.quantity;
     setNewItem((prev) => ({ ...prev, amount: total }));
   }, [newItem.unit_price, newItem.quantity]);
-  const unitOptions = ["Pieces (pcs)", "Gallons (gal)", "Sets"];
-  const categoryOptions = ["Nails", "Screws", "Paint"];
+  const unitOptions = [
+  "Pieces (pcs)",
+  "Gallons (gal)",
+  "Liters (L)",
+  "Milliliters (ml)",
+  "Sets",
+  "Boxes",
+  "Packs",
+  "Kilograms (kg)",
+  "Grams (g)",
+  "Tons",
+  "Meters (m)",
+  "Centimeters (cm)",
+  "Millimeters (mm)",
+  "Inches (in)",
+  "Feet (ft)",
+  "Rolls",
+  "Sheets",
+  "Bundles",
+  "Tubes",
+  "Cans",
+  "Bottles",
+  "Pails",
+  "Bars",
+  "Panels",
+  "Coils",
+  "Sacks"
+];
+
+  const categoryOptions = [
+  "Nails",
+  "Screws",
+  "Paint",
+  "Hand Tools",
+  "Power Tools",
+  "Plumbing Supplies",
+  "Electrical Supplies",
+  "Construction Materials",
+  "Lumber & Wood Products",
+  "Adhesives & Sealants",
+  "Locks & Security",
+  "Roofing Materials",
+  "Metal Works",
+  "Paint Tools",
+  "PVC & Plastic Materials",
+  "Lighting Fixtures",
+  "Measuring Tools",
+  "Cleaning Supplies",
+  "Safety Gear",
+  "Gardening Tools",
+  "Bathroom Fixtures"
+];
+
   const subcategoryOptions: { [key: string]: string[] } = {
-    Nails: ["Common Nails", "Finishing Nails"],
-    Screws: ["Wood Screws", "Machine Screws"],
-    Paint: ["Gloss", "Matte"],
-  };
+  Nails: ["Common Nails", "Finishing Nails", "Concrete Nails", "Roofing Nails"],
+  Screws: ["Wood Screws", "Machine Screws", "Drywall Screws", "Sheet Metal Screws"],
+  Paint: ["Gloss", "Matte", "Primer", "Enamel", "Latex"],
+  "Hand Tools": ["Hammers", "Screwdrivers", "Wrenches", "Pliers", "Hand Saws"],
+  "Power Tools": ["Drills", "Grinders", "Cutting Machines", "Electric Screwdrivers", "Sanders"],
+  "Plumbing Supplies": ["Pipes", "Fittings", "Valves", "Faucets", "Teflon Tape"],
+  "Electrical Supplies": ["Wires", "Sockets", "Switches", "Breakers", "Conduits"],
+  "Construction Materials": ["Cement", "Gravel", "Sand", "Rebar", "Concrete Blocks"],
+  "Lumber & Wood Products": ["Plywood", "2x2", "2x4", "Hardwood", "Marine Plywood"],
+  "Adhesives & Sealants": ["Epoxy", "Silicone", "PVC Cement", "Contact Cement", "Wood Glue"],
+  "Locks & Security": ["Padlocks", "Deadbolts", "Door Locks", "Hasps", "Security Chains"],
+  "Roofing Materials": ["Roof Sheets", "Sealants", "Gutters", "Ridge Caps", "Screws & Nails"],
+  "Metal Works": ["Flat Bars", "Angle Bars", "Steel Pipes", "Expanded Metal", "Square Tubes"],
+  "Paint Tools": ["Rollers", "Paint Brushes", "Paint Trays", "Mixing Sticks", "Scrapers"],
+  "PVC & Plastic Materials": ["PVC Pipes", "PVC Fittings", "Polycarbonate Sheets", "Plastic Panels"],
+  "Lighting Fixtures": ["Bulbs", "LED Tubes", "Ceiling Lights", "Wall Lamps", "Emergency Lights"],
+  "Measuring Tools": ["Tape Measures", "Levels", "Calipers", "Squares", "Rulers"],
+  "Cleaning Supplies": ["Rags", "Brushes", "Detergents", "Buckets", "Mops"],
+  "Safety Gear": ["Helmets", "Gloves", "Goggles", "Safety Vests", "Face Shields"],
+  "Gardening Tools": ["Shovels", "Rakes", "Watering Cans", "Pruners", "Garden Hoses"],
+  "Bathroom Fixtures": ["Shower Heads", "Toilet Bowls", "Sink Faucets", "Tissue Holders", "Drain Covers"]
+};
+
 
   const handleProductNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const name = e.target.value;
@@ -103,16 +169,37 @@ export default function InventoryPage() {
   };
 
   const fetchItems = async () => {
-    setLoading(true);
-    const { data, error } = await supabase.from("inventory").select();
-    if (error) setFetchError("Could not fetch data");
-    else setItems(data);
-    setLoading(false);
-  };
+  setLoading(true);
+  const { data, error } = await supabase
+    .from("inventory")
+    .select()
+    .order("date_created", { ascending: false }); // 👈 Sort by latest
+
+  if (error) setFetchError("Could not fetch data");
+  else setItems(data);
+  setLoading(false);
+};
+
 
   useEffect(() => {
-    fetchItems();
-  }, []);
+  fetchItems();
+
+  const channel = supabase
+    .channel('inventory-updates')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'inventory' },
+      () => {
+        fetchItems(); // Auto-refresh on insert/update/delete
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, []);
+
 
   const handleSubmitItem = async () => {
     if (
@@ -130,12 +217,16 @@ export default function InventoryPage() {
     try {
       newItem.sku = await generateUniqueSku(newItem.category);
 
-      const { error } =
-        editingItemId !== null
-          ? await supabase
-              .from("inventory")
-              .update({ ...newItem })
-              .eq("id", editingItemId)
+     const { error } =
+  editingItemId !== null
+    ? await supabase
+        .from("inventory")
+        .update({
+          ...newItem,
+          date_created: new Date().toISOString(), // 👈 Set new time on edit
+        })
+        .eq("id", editingItemId)
+
           : await supabase.from("inventory").insert([{ ...newItem }]);
 
       if (error) throw error;
@@ -149,11 +240,8 @@ export default function InventoryPage() {
         unit: "",
         amount: 0,
         max_quantity: 0,
-        date_created: new Date().toLocaleString("en-PH", {
-          dateStyle: "long",
-          timeStyle: "short",
-          hour12: true,
-        }),
+       date_created: new Date().toISOString(),
+
         sku: "",
       });
 
@@ -185,13 +273,37 @@ export default function InventoryPage() {
     <div className="p-4">
       <h1 className="text-3xl font-bold mb-6 text-gray-800">Inventory</h1>
 
-      <input
-        className="border px-3 py-2 mb-4 w-full md:w-1/2 rounded-full"
-        placeholder="Search inventory..."
-        title="Search by product, category or subcategory"
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-      />
+     <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-4 gap-4">
+  <input
+    className="border px-3 py-2 w-full md:w-1/2 rounded-full"
+    placeholder="Search inventory..."
+    title="Search by product, category or subcategory"
+    value={searchQuery}
+    onChange={(e) => setSearchQuery(e.target.value)}
+  />
+  <button
+    onClick={() => {
+      setShowForm(true);
+      setEditingItemId(null);
+      setNewItem({
+        product_name: "",
+        category: "",
+        subcategory: "",
+        quantity: 0,
+        unit_price: 0,
+        unit: "",
+        amount: 0,
+        max_quantity: 0,
+        date_created: new Date().toISOString(),
+        sku: "",
+      });
+    }}
+    className="px-4 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
+  >
+    Add New Item
+  </button>
+</div>
+
 
       <div className="overflow-auto rounded-lg shadow">
         <table className="min-w-full bg-white text-sm rounded-md overflow-hidden">
@@ -224,7 +336,15 @@ export default function InventoryPage() {
                 <td className="px-4 py-3">
                   {getStatus(item.quantity, item.max_quantity)}
                 </td>
-                <td className="px-4 py-3">{item.date_created}</td>
+                <td className="px-4 py-3">
+  {new Date(item.date_created).toLocaleString("en-PH", {
+    timeZone: "Asia/Manila",
+    dateStyle: "long",
+    timeStyle: "short",
+    hour12: true,
+  })}
+</td>
+
                 <td className="px-4 py-3">
                   <button
                     className="text-blue-600 hover:underline"
@@ -273,33 +393,7 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      <div className="mt-6">
-        <button
-          onClick={() => {
-            setShowForm(true);
-            setEditingItemId(null);
-            setNewItem({
-              product_name: "",
-              category: "",
-              subcategory: "",
-              quantity: 0,
-              unit_price: 0,
-              unit: "",
-              amount: 0,
-              max_quantity: 0,
-              date_created: new Date().toLocaleString("en-PH", {
-                dateStyle: "long",
-                timeStyle: "short",
-                hour12: true,
-              }),
-              sku: "",
-            });
-          }}
-          className="px-4 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
-        >
-          Add New Item
-        </button>
-      </div>
+
 
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
@@ -361,7 +455,7 @@ export default function InventoryPage() {
             </select>
 
             <input
-              title="e.g. 5"
+              title="Input Quantity (e.g. 5)"
               placeholder="Input quantity"
               value={newItem.quantity}
               onChange={(e) => handleInputChange(e, "quantity")}
@@ -369,7 +463,7 @@ export default function InventoryPage() {
             />
 
             <input
-              title="e.g. 129.99"
+              title="Input Unit Price (e.g. 129.99)"
               placeholder="Input unit price"
               value={newItem.unit_price}
               onChange={(e) => handleInputChange(e, "unit_price")}
@@ -407,11 +501,8 @@ export default function InventoryPage() {
                     unit: "",
                     amount: 0,
                     max_quantity: 0,
-                    date_created: new Date().toLocaleString("en-PH", {
-                      dateStyle: "long",
-                      timeStyle: "short",
-                      hour12: true,
-                    }),
+                    date_created: new Date().toISOString(),
+
                     sku: "",
                   });
                   setEditingItemId(null);
