@@ -1,7 +1,9 @@
-// app/dashboard/layout.tsx
-import { DM_Sans } from "next/font/google";
-import "@/STYLES/globals.css";
+"use client";
+
 import { Sidebar } from "@/components/Sidebar";
+import NotificationBell from "@/components/NotificationBell";
+import { DM_Sans } from "next/font/google";
+import { useState } from "react";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -14,6 +16,8 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(true);
+
   return (
     <div
       className={`min-h-screen bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)] ${dmSans.className}`}
@@ -25,10 +29,16 @@ export default function DashboardLayout({
         </div>
       </header>
 
+      {/* Fixed Notification Bell (globally visible and floating) */}
+      <NotificationBell />
+
       {/* Layout */}
       <div className="flex h-[calc(100vh-3rem)] overflow-hidden">
-        <Sidebar />
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        {/* Sidebar */}
+        <Sidebar open={open} setOpen={setOpen} />
+
+        {/* Main Content */}
+        <main className="flex-1 overflow-y-auto p-6 relative">{children}</main>
       </div>
     </div>
   );
