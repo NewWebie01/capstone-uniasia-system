@@ -101,10 +101,11 @@ export default function TruckDeliveryPage() {
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-3xl font-bold">Truck Delivery</h1>
-        <button
-          onClick={showForm}
-          className="bg-[#181918] text-white px-4 py-2 rounded hover:bg-[#2b2b2b] flex items-center gap-2"
-        >
+<button
+  onClick={showForm}
+  className="bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] flex items-center gap-2 mr-20"
+>
+
           <Plus size={18} />
           Add Delivery Schedule
         </button>
