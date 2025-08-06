@@ -1,4 +1,5 @@
 "use client";
+
 import arrowcontrol from "@/assets/control.png";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import ChartFill from "@/assets/Chart_fill.png";
@@ -7,20 +8,23 @@ import Calendar from "@/assets/Calendar.png";
 import Sales from "@/assets/Sales.png";
 import Chart from "@/assets/Chart.png";
 import Folder from "@/assets/Folder.png";
-import Setting from "@/assets/Setting.png";
 import LogoutIcon from "@/assets/power-button.png";
-import supabase from "@/config/supabaseClient";
-import { useRouter } from "next/navigation";
 
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { Dispatch, SetStateAction } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { useRouter } from "next/navigation";
 
-export const Sidebar = () => {
-  const [open, setOpen] = useState(true);
+// ✅ Accept props from layout
+interface SidebarProps {
+  open: boolean;
+  setOpen: Dispatch<SetStateAction<boolean>>;
+}
+
+export const Sidebar = ({ open, setOpen }: SidebarProps) => {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClientComponentClient();
@@ -30,18 +34,17 @@ export const Sidebar = () => {
     if (error) {
       console.error("Logout failed:", error.message);
     } else {
-      //router.push("/");
       window.location.href = "/login";
     }
   };
+
   const Menus = [
     { title: "Dashboard", src: ChartFill, href: "/dashboard" },
     { title: "Inventory", src: Calendar, href: "/inventory" },
-    { title: "Truck Delivery", src: Logistics, href: "/logistics" }, // 🔁 Updated here
+    { title: "Truck Delivery", src: Logistics, href: "/logistics" },
     { title: "Sales", src: Sales, href: "/sales" },
-    { title: "Sales Report", src: Chart, href: "/sales-report" },
-    { title: "Activity Log", src: Folder, href: "/activity-log" },
-    { title: "Setting", src: Setting, gap: true, href: "/settings" },
+    { title: "Invoice", src: Chart, href: "/invoice" },
+    { title: "Transaction-History", src: Folder, href: "/transaction-history" },
   ];
 
   return (
@@ -50,19 +53,19 @@ export const Sidebar = () => {
       transition={{ duration: 0.3, type: "spring", damping: 15 }}
       className="h-full bg-white relative flex flex-col"
     >
-      {/* Arrow control */}
+      {/* Toggle Button */}
       <Image
         src={arrowcontrol}
-        alt="Arrow control"
+        alt="Toggle Sidebar"
         width={50}
         height={50}
-        className={`absolute cursor-pointer rounded-full -right-3 top-9 w-7 border-2 border-[#ffba20] ${
+        className={`absolute cursor-pointer rounded-full -right-3 top-9 w-7 border-2 border-[#ffba20] bg-white z-50 ${
           !open && "rotate-180"
         }`}
         onClick={() => setOpen(!open)}
       />
 
-      {/* Top section */}
+      {/* Logo Section */}
       <div className="p-5 pt-8">
         <div className="flex gap-x-4 items-center">
           <motion.div
@@ -71,7 +74,7 @@ export const Sidebar = () => {
           >
             <Image
               src={Logo}
-              alt="logo"
+              alt="UNIASIA Logo"
               width={40}
               height={40}
               className="cursor-pointer"
@@ -94,7 +97,7 @@ export const Sidebar = () => {
         </div>
       </div>
 
-      {/* Scrollable menu */}
+      {/* Menu Items */}
       <div className="flex-1 overflow-y-auto px-5">
         <ul className="flex flex-col gap-y-4">
           {Menus.map((menu, index) => {
@@ -106,9 +109,9 @@ export const Sidebar = () => {
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
-                className={`text-black text-sm flex items-center gap-x-4 cursor-pointer p-2 rounded-md hover:bg-gray-400 transition-colors ${
-                  menu.gap ? "mt-9" : "mt-2"
-                } ${isActive ? "bg-gray-100 font-semibold" : ""}`}
+                className={`text-black text-sm flex items-center gap-x-4 cursor-pointer p-2 rounded-md hover:bg-gray-400 transition-colors mt-2 ${
+                  isActive ? "bg-gray-100 font-semibold" : ""
+                }`}
               >
                 <Image src={menu.src} alt={menu.title} width={20} height={20} />
                 <AnimatePresence>
@@ -138,7 +141,7 @@ export const Sidebar = () => {
         </ul>
       </div>
 
-      {/* Bottom log-out button */}
+      {/* Logout Button */}
       <div className="p-5">
         {open ? (
           <motion.button
@@ -164,7 +167,6 @@ export const Sidebar = () => {
               alt="Log out"
               width={24}
               height={24}
-              className="hover:text-[#ffba20] transition-colors duration-300"
               onClick={handleLogout}
             />
           </motion.div>
