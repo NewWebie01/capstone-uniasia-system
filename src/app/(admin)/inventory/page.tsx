@@ -26,6 +26,14 @@ export default function InventoryPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [showForm, setShowForm] = useState(false);
   const itemsPerPage = 10;
+  const [isCustomCategory, setIsCustomCategory] = useState(false);
+  const [customCategory, setCustomCategory] = useState("");
+  const [isCustomSubcategory, setIsCustomSubcategory] = useState(false);
+  const [customSubcategory, setCustomSubcategory] = useState("");
+  const [isCustomUnit, setIsCustomUnit] = useState(false);
+  const [customUnit, setCustomUnit] = useState("");
+
+
 
   const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
     product_name: "",
@@ -156,17 +164,7 @@ export default function InventoryPage() {
   const handleSubcategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setNewItem((prev) => ({ ...prev, subcategory: e.target.value }));
   };
-  const generateUniqueSku = async (category: string) => {
-    const prefix = category.slice(0, 3).toUpperCase();
-    const { data: existingItems } = await supabase
-      .from("inventory")
-      .select("sku")
-      .like("sku", `${prefix}%`);
-    const seq = String((existingItems?.length || 0) + 1).padStart(3, "0");
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    return `${prefix}-${seq}-${timestamp}-${random}`;
-  };
+  
 
   const fetchItems = async () => {
   setLoading(true);
@@ -201,58 +199,82 @@ export default function InventoryPage() {
 }, []);
 
 
-  const handleSubmitItem = async () => {
-    if (
-      !newItem.product_name ||
-      !newItem.category ||
-      !newItem.unit ||
-      !newItem.subcategory ||
-      newItem.quantity <= 0 ||
-      newItem.unit_price <= 0
-    ) {
-      alert("Please fill all fields properly.");
-      return;
-    }
+const handleSubmitItem = async () => {
+  const finalCategory = isCustomCategory
+    ? customCategory.trim()
+    : newItem.category;
 
-    try {
-      newItem.sku = await generateUniqueSku(newItem.category);
+  if (
+    !newItem.product_name ||
+    !finalCategory ||
+    !newItem.unit ||
+    !newItem.subcategory ||
+    newItem.quantity <= 0 ||
+    newItem.unit_price <= 0
+  ) {
+    alert("Please fill all fields properly.");
+    return;
+  }
+const handleSubmitItem = async () => {
+  if (
+    !newItem.product_name ||
+    !newItem.category ||
+    !newItem.subcategory ||
+    !newItem.unit ||
+    newItem.quantity <= 0 ||
+    newItem.unit_price <= 0
+  ) {
+    alert("Please fill all fields properly.");
+    return;
+  }
 
-     const { error } =
-  editingItemId !== null
-    ? await supabase
-        .from("inventory")
-        .update({
-          ...newItem,
-          date_created: new Date().toISOString(), // 👈 Set new time on edit
-        })
-        .eq("id", editingItemId)
+  const dataToSave = { ...newItem, date_created: new Date().toISOString() };
 
-          : await supabase.from("inventory").insert([{ ...newItem }]);
+  // call Supabase insert or update here...
+};
 
-      if (error) throw error;
+  try {
+    const dataToSave = {
+      ...newItem,
+      category: finalCategory,
+      date_created: new Date().toISOString(),
+    };
 
-      setNewItem({
-        product_name: "",
-        category: "",
-        subcategory: "",
-        quantity: 0,
-        unit_price: 0,
-        unit: "",
-        amount: 0,
-        max_quantity: 0,
-       date_created: new Date().toISOString(),
+    const { error } =
+      editingItemId !== null
+        ? await supabase
+            .from("inventory")
+            .update(dataToSave)
+            .eq("id", editingItemId)
+        : await supabase.from("inventory").insert([dataToSave]);
 
-        sku: "",
-      });
+    if (error) throw error;
 
-      setEditingItemId(null);
-      fetchItems();
-      setCurrentPage(1);
-      setShowForm(false);
-    } catch (err: any) {
-      console.error("Error:", err.message);
-    }
-  };
+    // Reset form and update UI
+    setNewItem({
+      product_name: "",
+      category: "",
+      subcategory: "",
+      quantity: 0,
+      unit_price: 0,
+      unit: "",
+      amount: 0,
+      max_quantity: 0,
+      date_created: new Date().toISOString(),
+      sku: "",
+    });
+    setEditingItemId(null);
+    setShowForm(false);
+    fetchItems();
+    setCurrentPage(1);
+    setIsCustomCategory(false);
+    setCustomCategory("");
+  } catch (err: any) {
+    console.error("Error:", err);
+    alert("Failed to save item: " + (err.message || err));
+  }
+};
+
 
   const getStatus = (qty: number, max: number) => {
     if (qty >= max) return "In Stock";
@@ -397,129 +419,228 @@ export default function InventoryPage() {
 
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="bg-white p-8 rounded-xl shadow-xl w-full max-w-xl space-y-4">
-            <h2 className="text-xl font-bold mb-4">
-              {editingItemId ? "Edit Item" : "Add New Item"}
-            </h2>
+         <div className="bg-white p-8 rounded-xl shadow-xl w-full max-w-xl">
+  <h2 className="text-xl font-bold mb-4">{editingItemId ? "Edit Item" : "Add New Item"}</h2>
 
-            <input
-              title="e.g. Boysen Gloss Paint"
-              placeholder="Input product name"
-              value={newItem.product_name}
-              onChange={handleProductNameChange}
-              className="w-full mb-3 px-3 py-2 border"
-            />
+  {/* Each field with label on the left */}
+  <div className="space-y-4">
+    {/* SKU */}
+    <div className="flex items-center gap-3">
+      <label className="w-32 text-sm text-gray-700">Product ID (SKU)</label>
+      <input
+        type="text"
+        value={newItem.sku}
+        onChange={(e) => setNewItem({ ...newItem, sku: e.target.value })}
+        placeholder="e.g. HW-001-A"
+        className="flex-1 px-4 py-2 border rounded"
+      />
+    </div>
 
-            <select
-              title="Select a category (e.g. Screws, Paint)"
-              value={newItem.category}
-              onChange={handleCategoryChange}
-              className="w-full mb-3 px-3 py-2 border"
-            >
-              <option value="">Select Category</option>
-              {categoryOptions.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-            </select>
+    {/* Product Name */}
+    <div className="flex items-center gap-3">
+      <label className="w-32 text-sm text-gray-700">Product Name</label>
+      <input
+        value={newItem.product_name}
+        onChange={handleProductNameChange}
+        placeholder="e.g. Boysen Paint"
+        className="flex-1 px-4 py-2 border rounded"
+      />
+    </div>
 
-            {subcategoryOptions[newItem.category] && (
-              <select
-                title="Select a subcategory (e.g. Wood Screws)"
-                value={newItem.subcategory}
-                onChange={handleSubcategoryChange}
-                className="w-full mb-3 px-3 py-2 border"
-              >
-                <option value="">Select Subcategory</option>
-                {subcategoryOptions[newItem.category].map((sub, i) => (
-                  <option key={`${sub}-${i}`} value={sub}>
-                    {sub}
-                  </option>
-                ))}
-              </select>
-            )}
+    {/* Category */}
+<div className="flex flex-col gap-2">
+  <label className="text-sm text-gray-700">Category</label>
 
-            <select
-              title="Select unit of measurement (e.g. pcs, gal)"
-              value={newItem.unit}
-              onChange={handleUnitChange}
-              className="w-full mb-3 px-3 py-2 border"
-            >
-              <option value="">Select Unit</option>
-              {unitOptions.map((unit, i) => (
-                <option key={`${unit}-${i}`} value={unit}>
-                  {unit}
-                </option>
-              ))}
-            </select>
+  {!isCustomCategory ? (
+    <select
+      value={newItem.category}
+      onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
+      className="px-4 py-2 border rounded"
+    >
+      <option value="" disabled>
+        Select Category
+      </option>
+      {categoryOptions.map((cat) => (
+        <option key={cat} value={cat}>
+          {cat}
+        </option>
+      ))}
+    </select>
+  ) : (
+    <input
+      type="text"
+      placeholder="Enter new category"
+      value={customCategory}
+      onChange={(e) => setCustomCategory(e.target.value)}
+      className="px-4 py-2 border rounded"
+    />
+  )}
 
-            <input
-              title="Input Quantity (e.g. 5)"
-              placeholder="Input quantity"
-              value={newItem.quantity}
-              onChange={(e) => handleInputChange(e, "quantity")}
-              className="w-full mb-3 px-3 py-2 border"
-            />
+  <label className="inline-flex items-center mt-1">
+    <input
+      type="checkbox"
+      checked={isCustomCategory}
+      onChange={() => setIsCustomCategory(!isCustomCategory)}
+      className="mr-2"
+    />
+    Add new category manually
+  </label>
+</div>
 
-            <input
-              title="Input Unit Price (e.g. 129.99)"
-              placeholder="Input unit price"
-              value={newItem.unit_price}
-              onChange={(e) => handleInputChange(e, "unit_price")}
-              className="w-full mb-3 px-3 py-2 border"
-            />
 
-            <input
-              type="number"
-              title="Automatically calculated (unit price x quantity)"
-              placeholder="Total Price"
-              value={newItem.amount}
-              readOnly
-              className="w-full mb-3 px-3 py-2 border bg-gray-100 text-gray-600 cursor-not-allowed"
-            />
+{/* Subcategory */}
+<div className="flex flex-col gap-2">
+  <label className="text-sm text-gray-700">Subcategory</label>
 
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => {
-                  setShowForm(false);
-                  setEditingItemId(null);
-                }}
-                className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
-              >
-                Cancel
-              </button>
+  {!isCustomSubcategory && subcategoryOptions[newItem.category] ? (
+    <select
+      value={newItem.subcategory}
+      onChange={(e) => setNewItem({ ...newItem, subcategory: e.target.value })}
+      className="px-4 py-2 border rounded"
+    >
+      <option value="">Select Subcategory</option>
+      {subcategoryOptions[newItem.category].map((sub, i) => (
+        <option key={`${sub}-${i}`} value={sub}>
+          {sub}
+        </option>
+      ))}
+    </select>
+  ) : (
+    <input
+      type="text"
+      placeholder="Enter new subcategory"
+      value={customSubcategory}
+      onChange={(e) => setCustomSubcategory(e.target.value)}
+      className="px-4 py-2 border rounded"
+    />
+  )}
 
-              <button
-                onClick={() => {
-                  setNewItem({
-                    product_name: "",
-                    category: "",
-                    subcategory: "",
-                    quantity: 0,
-                    unit_price: 0,
-                    unit: "",
-                    amount: 0,
-                    max_quantity: 0,
-                    date_created: new Date().toISOString(),
+  <label className="inline-flex items-center mt-1">
+    <input
+      type="checkbox"
+      checked={isCustomSubcategory}
+      onChange={() => setIsCustomSubcategory(!isCustomSubcategory)}
+      className="mr-2"
+    />
+    Add new subcategory manually
+  </label>
+</div>
 
-                    sku: "",
-                  });
-                  setEditingItemId(null);
-                }}
-                className="bg-[#ffba20] text-white px-4 py-2 rounded hover:bg-yellow-600"
-              >
-                Clear
-              </button>
 
-              <button
-                onClick={handleSubmitItem}
-                className="px-4 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
-              >
-                {editingItemId ? "Update Item" : "Add Item"}
-              </button>
-            </div>
-          </div>
+
+  {/* Unit */}
+<div className="flex flex-col gap-2">
+  <label className="text-sm text-gray-700">Unit</label>
+
+  {!isCustomUnit ? (
+    <select
+      value={newItem.unit}
+      onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
+      className="px-4 py-2 border rounded"
+    >
+      <option value="">Select Unit</option>
+      {unitOptions.map((unit, i) => (
+        <option key={`${unit}-${i}`} value={unit}>
+          {unit}
+        </option>
+      ))}
+    </select>
+  ) : (
+    <input
+      type="text"
+      placeholder="Enter new unit"
+      value={customUnit}
+      onChange={(e) => setCustomUnit(e.target.value)}
+      className="px-4 py-2 border rounded"
+    />
+  )}
+
+  <label className="inline-flex items-center mt-1">
+    <input
+      type="checkbox"
+      checked={isCustomUnit}
+      onChange={() => setIsCustomUnit(!isCustomUnit)}
+      className="mr-2"
+    />
+    Add new unit manually
+  </label>
+</div>
+
+
+    {/* Quantity */}
+    <div className="flex items-center gap-3">
+      <label className="w-32 text-sm text-gray-700">Quantity</label>
+      <input
+        type="number"
+        value={newItem.quantity}
+        onChange={(e) => handleInputChange(e, "quantity")}
+        className="flex-1 px-4 py-2 border rounded"
+      />
+    </div>
+
+    {/* Unit Price */}
+    <div className="flex items-center gap-3">
+      <label className="w-32 text-sm text-gray-700">Unit Price</label>
+      <input
+        type="number"
+        value={newItem.unit_price}
+        onChange={(e) => handleInputChange(e, "unit_price")}
+        className="flex-1 px-4 py-2 border rounded"
+      />
+    </div>
+
+    {/* Total Price (readonly) */}
+    <div className="flex items-center gap-3">
+      <label className="w-32 text-sm text-gray-700">Total Price</label>
+      <input
+        type="number"
+        value={newItem.amount}
+        readOnly
+        className="flex-1 px-4 py-2 border rounded bg-gray-100 text-gray-500"
+      />
+    </div>
+
+    {/* Action buttons */}
+    <div className="flex justify-end gap-2 pt-6">
+      <button
+        onClick={() => {
+          setShowForm(false);
+          setEditingItemId(null);
+        }}
+        className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+      >
+        Cancel
+      </button>
+      <button
+        onClick={() => {
+          setNewItem({
+            product_name: "",
+            category: "",
+            subcategory: "",
+            quantity: 0,
+            unit_price: 0,
+            unit: "",
+            amount: 0,
+            max_quantity: 0,
+            date_created: new Date().toISOString(),
+            sku: "",
+          });
+          setEditingItemId(null);
+        }}
+        className="bg-yellow-400 text-white px-4 py-2 rounded hover:bg-yellow-500"
+      >
+        Clear
+      </button>
+      <button
+        onClick={handleSubmitItem}
+        className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
+      >
+        {editingItemId ? "Update Item" : "Add Item"}
+      </button>
+    </div>
+  </div>
+</div>
+
         </div>
       )}
     </div>

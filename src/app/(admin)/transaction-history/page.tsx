@@ -1,155 +1,104 @@
 "use client";
 
-import { CheckCircle, XCircle, Activity } from "lucide-react";
-import { motion } from "framer-motion";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { useState } from "react";
 
-const activityLogData = [
+type Transaction = {
+  date: string;
+  accountId: string;
+  title: string;
+  type: string;
+  method: string;
+  amount: string;
+  status: string;
+};
+
+const dummyTransactions: Transaction[] = [
   {
-    id: "A001",
-    action: "User Login",
-    user: "John Doe",
-    date: "2025-04-01 10:30 AM",
-    status: "Success",
+    date: "2025-08-07",
+    accountId: "ACC-001",
+    title: "Payment Received",
+    type: "Deposit",
+    method: "WIRE",
+    amount: "₱23,021.00",
+    status: "Pending Receipt",
   },
   {
-    id: "A002",
-    action: "Password Change",
-    user: "Jane Smith",
-    date: "2025-04-01 11:15 AM",
-    status: "Success",
+    date: "2025-08-06",
+    accountId: "ACC-002",
+    title: "Cash Deposit",
+    type: "Deposit",
+    method: "CHECK",
+    amount: "₱234.00",
+    status: "Pending Receipt",
   },
   {
-    id: "A003",
-    action: "Failed Login Attempt",
-    user: "Bob Johnson",
-    date: "2025-04-01 01:00 PM",
-    status: "Failed",
+    date: "2025-08-05",
+    accountId: "ACC-003",
+    title: "Order Refund",
+    type: "Withdrawal",
+    method: "WIRE",
+    amount: "₱61.00",
+    status: "Not Confirmed",
   },
   {
-    id: "A004",
-    action: "Data Export",
-    user: "Alice Williams",
-    date: "2025-04-01 03:45 PM",
-    status: "Success",
+    date: "2025-08-04",
+    accountId: "ACC-004",
+    title: "Supplier Payment",
+    type: "Withdrawal",
+    method: "WIRE",
+    amount: "₱1,000.00",
+    status: "Not Confirmed",
   },
 ];
 
-const getStatusIcon = (status: string) => {
-  switch (status) {
-    case "Success":
-      return <CheckCircle className="text-green-500" />;
-    case "Failed":
-      return <XCircle className="text-red-500" />;
-    default:
-      return null;
-  }
-};
+export default function TransactionHistoryPage() {
+  const [searchQuery, setSearchQuery] = useState("");
 
-const ActivityLogPage = () => {
-  return (
-    <motion.div
-      className="p-2"
-      initial="hidden"
-      animate="visible"
-      variants={{
-        hidden: {},
-        visible: {
-          transition: {
-            staggerChildren: 0.15,
-          },
-        },
-      }}
-    >
-      {/* Header */}
-      <motion.h1
-        className="text-3xl font-bold mb-6"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
-      >
-        Activity Log
-      </motion.h1>
-
-      {/* Activity Log Cards */}
-      <motion.div
-        className="grid gap-6 md:grid-cols-2 xl:grid-cols-3"
-        initial="hidden"
-        animate="visible"
-        variants={{
-          hidden: {},
-          visible: {
-            transition: {
-              staggerChildren: 0.15,
-            },
-          },
-        }}
-      >
-        {activityLogData.map((log) => (
-          <motion.div
-            key={log.id}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: "easeOut" }}
-          >
-            <Card className="border-muted">
-              <CardHeader className="flex items-center justify-between">
-                <CardTitle className="text-base">{log.action}</CardTitle>
-                {getStatusIcon(log.status)}
-              </CardHeader>
-              <CardContent className="text-sm space-y-1">
-                <div>
-                  <span className="font-medium">User:</span> {log.user}
-                </div>
-                <div>
-                  <span className="font-medium">Date:</span> {log.date}
-                </div>
-                <div>
-                  <span className="font-medium">Status:</span>{" "}
-                  <span
-                    className={`font-semibold ${
-                      log.status === "Success"
-                        ? "text-green-500"
-                        : "text-red-500"
-                    }`}
-                  >
-                    {log.status}
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-        ))}
-      </motion.div>
-
-      {/* Activity Summary */}
-      <motion.div
-        className="mt-8 p-6 bg-white border shadow-md rounded-md"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.5 }}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold">Activity Summary</h2>
-          <Activity className="text-gray-500" />
-        </div>
-        <div className="flex justify-between">
-          <div>
-            <span className="font-medium">Total Activities:</span>{" "}
-            {activityLogData.length}
-          </div>
-          <div>
-            <span className="font-medium">Success:</span>{" "}
-            {activityLogData.filter((log) => log.status === "Success").length}
-          </div>
-          <div>
-            <span className="font-medium">Failed:</span>{" "}
-            {activityLogData.filter((log) => log.status === "Failed").length}
-          </div>
-        </div>
-      </motion.div>
-    </motion.div>
+  const filtered = dummyTransactions.filter((t) =>
+    `${t.accountId} ${t.title} ${t.type} ${t.method} ${t.amount} ${t.status}`
+      .toLowerCase()
+      .includes(searchQuery.toLowerCase())
   );
-};
 
-export default ActivityLogPage;
+  return (
+    <div className="p-6">
+      <h1 className="text-3xl font-bold mb-6 text-gray-800">Transaction History</h1>
+
+      <input
+        className="border px-4 py-2 mb-4 w-full md:w-1/3 rounded-full"
+        placeholder="Search by ID, title, amount..."
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+      />
+
+      <div className="overflow-x-auto rounded-lg shadow">
+        <table className="min-w-full bg-white text-sm rounded-md overflow-hidden">
+          <thead className="bg-[#ffba20] text-black text-left">
+            <tr>
+              <th className="px-4 py-3">Date</th>
+              <th className="px-4 py-3">Account ID</th>
+              <th className="px-4 py-3">Title</th>
+              <th className="px-4 py-3">Type</th>
+              <th className="px-4 py-3">Method</th>
+              <th className="px-4 py-3">Amount / Position</th>
+              <th className="px-4 py-3">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((tx, index) => (
+              <tr key={index} className="border-b hover:bg-gray-100">
+                <td className="px-4 py-3">{tx.date}</td>
+                <td className="px-4 py-3">{tx.accountId}</td>
+                <td className="px-4 py-3">{tx.title}</td>
+                <td className="px-4 py-3">{tx.type}</td>
+                <td className="px-4 py-3">{tx.method}</td>
+                <td className="px-4 py-3">{tx.amount}</td>
+                <td className="px-4 py-3">{tx.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

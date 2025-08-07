@@ -25,6 +25,15 @@ type OrderWithDetails = {
     email: string;
     phone: string;
     address: string;
+    contact_person?: string;
+    code?: string;
+    area?: string;
+    date?: string;
+    transaction?: string;
+    status?: string;
+    payment_type?: string;
+    customer_type?: string;
+    order_count?: number;
   };
   order_items: {
     quantity: number;
@@ -49,13 +58,9 @@ export default function SalesPage() {
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showModal, setShowModal] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
-    null
-  );
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
-  const [currentPage, setCurrentPage] = useState(1);
-const ordersPerPage = 10;
 
   const fetchItems = async () => {
     const { data } = await supabase.from("inventory").select();
@@ -65,14 +70,20 @@ const ordersPerPage = 10;
   const fetchOrders = async () => {
     const { data } = await supabase
       .from("orders")
-      .select(
-        `id, total_amount, status, date_created,
-         customers ( name, email, phone, address ),
-         order_items (
-           quantity, price,
-           inventory ( id, product_name, category, unit_price, quantity )
-         )`
-      )
+     .select(
+  `id, total_amount, status, date_created,
+   customers (
+     name, email, phone, address,
+     contact_person, code, area, date,
+     transaction, status, payment_type,
+     customer_type, order_count
+   ),
+   order_items (
+     quantity, price,
+     inventory ( id, product_name, category, unit_price, quantity )
+   )`
+)
+
       .order("date_created", { ascending: false });
 
     if (data) {
@@ -80,10 +91,6 @@ const ordersPerPage = 10;
         data.map((order: any) => ({
           ...order,
           customers: Array.isArray(order.customers) ? order.customers[0] : order.customers,
-          order_items: order.order_items.map((oi: any) => ({
-            ...oi,
-            inventory: Array.isArray(oi.inventory) ? oi.inventory[0] : oi.inventory,
-          })),
         }))
       );
     }
@@ -95,28 +102,19 @@ const ordersPerPage = 10;
   }, []);
 
   const isOrderAccepted = (orderId: string) =>
-    pickingStatus.find((p) => p.orderId === orderId && p.status === "accepted");
+    pickingStatus.find(p => p.orderId === orderId && p.status === "accepted");
 
   const handleAcceptOrder = (order: OrderWithDetails) => {
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "accepted" },
-    ]);
-    setEditedQuantities(order.order_items.map((item) => item.quantity));
+    setPickingStatus(prev => [...prev, { orderId: order.id, status: "accepted" }]);
+    setEditedQuantities(order.order_items.map(item => item.quantity));
     setSelectedOrder(order);
     setShowModal(true);
   };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "rejected" },
-    ]);
+    setPickingStatus(prev => [...prev, { orderId: order.id, status: "rejected" }]);
 
-    await supabase
-      .from("orders")
-      .update({ status: "rejected" })
-      .eq("id", order.id);
+    await supabase.from("orders").update({ status: "rejected" }).eq("id", order.id);
     await supabase.from("transactions").insert([
       {
         order_id: order.id,
@@ -159,10 +157,7 @@ const ordersPerPage = 10;
       ]);
     }
 
-    await supabase
-      .from("orders")
-      .update({ status: "completed" })
-      .eq("id", selectedOrder.id);
+    await supabase.from("orders").update({ status: "completed" }).eq("id", selectedOrder.id);
     await supabase.from("transactions").insert([
       {
         order_id: selectedOrder.id,
@@ -180,11 +175,11 @@ const ordersPerPage = 10;
   };
 
   const handleCancel = (orderId: string) => {
-    setPickingStatus((prev) => prev.filter((p) => p.orderId !== orderId));
+    setPickingStatus(prev => prev.filter(p => p.orderId !== orderId));
   };
 
   const handleQuantityChange = (index: number, value: number) => {
-    setEditedQuantities((prev) => {
+    setEditedQuantities(prev => {
       const newQuantities = [...prev];
       newQuantities[index] = value;
       return newQuantities;
@@ -193,9 +188,7 @@ const ordersPerPage = 10;
 
   return (
     <div className="p-6">
-      <motion.h1 className="text-3xl font-bold mb-4">
-        Sales Processing
-      </motion.h1>
+      <motion.h1 className="text-3xl font-bold mb-4">Sales Processing</motion.h1>
 
       <input
         type="text"
@@ -220,12 +213,10 @@ const ordersPerPage = 10;
           </thead>
           <tbody>
             {items
-              .filter((item) =>
-                item.product_name
-                  .toLowerCase()
-                  .includes(searchQuery.toLowerCase())
+              .filter(item =>
+                item.product_name.toLowerCase().includes(searchQuery.toLowerCase())
               )
-              .map((item) => (
+              .map(item => (
                 <tr key={item.id} className="border-b hover:bg-gray-100">
                   <td className="py-2 px-4">{item.product_name}</td>
                   <td className="py-2 px-4">{item.category}</td>
@@ -236,10 +227,7 @@ const ordersPerPage = 10;
                     <button
                       className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
                       onClick={() => {
-                        if (
-                          selectedOrder &&
-                          isOrderAccepted(selectedOrder.id)
-                        ) {
+                        if (selectedOrder && isOrderAccepted(selectedOrder.id)) {
                           setShowModal(true);
                         } else {
                           alert("Accept an order first.");
@@ -258,31 +246,20 @@ const ordersPerPage = 10;
       {/* Customer Orders */}
       <div className="mt-10">
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
-    
-         {orders
-  .filter((o) => o.status === "pending" || o.status === "accepted")
-  .slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage)
-  .map((order) => {
-
+        {orders
+          .filter(o => o.status === "pending" || o.status === "accepted")
+          .map(order => {
             const isAccepted = isOrderAccepted(order.id);
-            const isRejected = pickingStatus.find(
-              (p) => p.orderId === order.id && p.status === "rejected"
-            );
+            const isRejected = pickingStatus.find(p => p.orderId === order.id && p.status === "rejected");
 
             return (
-              <div
-                key={order.id}
-                className={`border p-4 mb-4 rounded shadow bg-white ${
-                  isAccepted ? "border-green-600 border-2" : ""
-                }`}
-              >
+              <div key={order.id} className={`border p-4 mb-4 rounded shadow bg-white ${isAccepted ? "border-green-600 border-2" : ""}`}>
                 <p className="font-bold">Customer: {order.customers.name}</p>
                 <p>Email: {order.customers.email}</p>
                 <p>Phone: {order.customers.phone}</p>
                 <p>Address: {order.customers.address}</p>
                 <p>
-                  Order Time:{" "}
-                  {new Date(order.date_created).toLocaleString("en-PH", {
+                  Order Time: {new Date(order.date_created).toLocaleString("en-PH", {
                     timeZone: "Asia/Manila",
                     dateStyle: "long",
                     timeStyle: "short",
@@ -291,140 +268,81 @@ const ordersPerPage = 10;
                 <ul className="mt-2 list-disc list-inside">
                   {order.order_items.map((item, idx) => (
                     <li key={idx}>
-                      {item.inventory.product_name} - {item.quantity} pcs @ ₱
-                      {item.price.toFixed(2)}
+                      {item.inventory.product_name} - {item.quantity} pcs @ ₱{item.price.toFixed(2)}
                     </li>
                   ))}
                 </ul>
-                <p className="mt-2 font-bold">
-                  Total: ₱{order.total_amount.toFixed(2)}
-                </p>
+                <p className="mt-2 font-bold">Total: ₱{order.total_amount.toFixed(2)}</p>
                 <p className="mb-2">Status: {order.status}</p>
 
-                {order.status !== "completed" &&
-                  order.status !== "rejected" && (
-                    <div className="flex gap-2 mt-2">
-                      {!isAccepted && !isRejected && (
-                        <>
-                          <button
-                            onClick={() => handleAcceptOrder(order)}
-                            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-                          >
-                            Accept Order
-                          </button>
-                          <button
-                            onClick={() => handleRejectOrder(order)}
-                            className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
-                          >
-                            Reject Order
-                          </button>
-                        </>
-                      )}
-                      {isAccepted && (
-                        <>
-                          <button
-                            onClick={handleOrderComplete}
-                            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-                          >
-                            Order Complete
-                          </button>
-                          <button
-                            onClick={() => handleCancel(order.id)}
-                            className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
+                {order.status !== "completed" && order.status !== "rejected" && (
+                  <div className="flex gap-2 mt-2">
+                    {!isAccepted && !isRejected && (
+                      <>
+                        <button
+                          onClick={() => handleAcceptOrder(order)}
+                          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                        >
+                          Accept Order
+                        </button>
+                        <button
+                          onClick={() => handleRejectOrder(order)}
+                          className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                        >
+                          Reject Order
+                        </button>
+                      </>
+                    )}
+                    {isAccepted && (
+                      <>
+                        <button
+                          onClick={handleOrderComplete}
+                          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                        >
+                          Order Complete
+                        </button>
+                        <button
+                          onClick={() => handleCancel(order.id)}
+                          className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
       </div>
-      {/* Pagination Controls */}
-<div className="flex justify-between items-center mt-6">
-  <button
-    onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
-    disabled={currentPage === 1}
-    className={`px-4 py-2 rounded ${
-      currentPage === 1
-        ? "bg-gray-300 text-gray-600 cursor-not-allowed"
-        : "bg-blue-600 text-white hover:bg-blue-700"
-    }`}
-  >
-    ← Prev
-  </button>
-  <span className="text-sm font-semibold text-gray-700">
-    Page {currentPage} of {Math.ceil(
-      orders.filter((o) => o.status === "pending" || o.status === "accepted")
-        .length / ordersPerPage
-    )}
-  </span>
-  <button
-    onClick={() =>
-      setCurrentPage((p) =>
-        p <
-        Math.ceil(
-          orders.filter((o) => o.status === "pending" || o.status === "accepted")
-            .length / ordersPerPage
-        )
-          ? p + 1
-          : p
-      )
-    }
-    disabled={
-      currentPage >=
-      Math.ceil(
-        orders.filter((o) => o.status === "pending" || o.status === "accepted")
-          .length / ordersPerPage
-      )
-    }
-    className={`px-4 py-2 rounded ${
-      currentPage >=
-      Math.ceil(
-        orders.filter((o) => o.status === "pending" || o.status === "accepted")
-          .length / ordersPerPage
-      )
-        ? "bg-gray-300 text-gray-600 cursor-not-allowed"
-        : "bg-blue-600 text-white hover:bg-blue-700"
-    }`}
-  >
-    Next →
-  </button>
-</div>
-
 
       {/* Modal */}
       {showModal && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
           <div className="bg-white p-6 rounded shadow-md w-full max-w-3xl flex justify-between">
-            <div className="w-1/2 pr-4 border-r">
-              <h2 className="font-bold text-lg mb-2">Customer Info</h2>
-              <p>
-                <strong>Name:</strong> {selectedOrder.customers.name}
-              </p>
-              <p>
-                <strong>Email:</strong> {selectedOrder.customers.email}
-              </p>
-              <p>
-                <strong>Phone:</strong> {selectedOrder.customers.phone}
-              </p>
-              <p>
-                <strong>Address:</strong> {selectedOrder.customers.address}
-              </p>
-              <p>
-                <strong>Date:</strong>{" "}
-                {new Date(selectedOrder.date_created).toLocaleString("en-PH", {
-                  timeZone: "Asia/Manila",
-                  dateStyle: "short",
-                  timeStyle: "short",
-                })}
-              </p>
-              <p>
-                <strong>Total:</strong> ₱{selectedOrder.total_amount.toFixed(2)}
-              </p>
-            </div>
+            <div className="w-1/2 pr-4 border-r text-sm space-y-1">
+  <h2 className="font-bold text-lg mb-2">Customer Info</h2>
+  <p><strong>Name:</strong> {selectedOrder.customers.name}</p>
+  <p><strong>Contact Person:</strong> {selectedOrder.customers.contact_person}</p>
+  <p><strong>Email:</strong> {selectedOrder.customers.email}</p>
+  <p><strong>Phone:</strong> {selectedOrder.customers.phone}</p>
+  <p><strong>Address:</strong> {selectedOrder.customers.address}</p>
+  <p><strong>Code:</strong> {selectedOrder.customers.code}</p>
+  <p><strong>Area:</strong> {selectedOrder.customers.area}</p>
+  <p><strong>Transaction:</strong> {selectedOrder.customers.transaction}</p>
+  <p><strong>Status:</strong> {selectedOrder.customers.status}</p>
+  <p><strong>Payment Type:</strong> {selectedOrder.customers.payment_type}</p>
+  <p><strong>Customer Type:</strong> {selectedOrder.customers.customer_type}</p>
+  <p><strong>Order Count:</strong> {selectedOrder.customers.order_count}</p>
+  <p><strong>Date Created:</strong> {selectedOrder.customers.date ? new Date(selectedOrder.customers.date).toLocaleDateString("en-PH") : "N/A"}</p>
+  <p><strong>Order Date:</strong> {new Date(selectedOrder.date_created).toLocaleString("en-PH", {
+    timeZone: "Asia/Manila",
+    dateStyle: "short",
+    timeStyle: "short"
+  })}</p>
+  <p><strong>Total:</strong> ₱{selectedOrder.total_amount.toFixed(2)}</p>
+</div>
+
             <div className="w-1/2 pl-4">
               <h2 className="font-bold text-lg mb-2">Picking List</h2>
               {selectedOrder.order_items.map((item, idx) => (
@@ -435,9 +353,7 @@ const ordersPerPage = 10;
                     min={1}
                     max={item.inventory.quantity}
                     value={editedQuantities[idx]}
-                    onChange={(e) =>
-                      handleQuantityChange(idx, Number(e.target.value))
-                    }
+                    onChange={(e) => handleQuantityChange(idx, Number(e.target.value))}
                     className="border rounded px-2 py-1 w-24"
                   />
                 </div>
