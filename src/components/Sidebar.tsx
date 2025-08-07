@@ -38,14 +38,16 @@ export const Sidebar = ({ open, setOpen }: SidebarProps) => {
     }
   };
 
-  const Menus = [
-    { title: "Dashboard", src: ChartFill, href: "/dashboard" },
-    { title: "Inventory", src: Calendar, href: "/inventory" },
-    { title: "Truck Delivery", src: Logistics, href: "/logistics" },
-    { title: "Sales", src: Sales, href: "/sales" },
-    { title: "Invoice", src: Chart, href: "/invoice" },
-    { title: "Transaction-History", src: Folder, href: "/transaction-history" },
-  ];
+const Menus = [
+  { title: "Dashboard", src: ChartFill, href: "/dashboard" },
+  { title: "Inventory", src: Calendar, href: "/inventory" },
+  { title: "Truck Delivery", src: Logistics, href: "/logistics" },
+  { title: "Sales", src: Sales, href: "/sales" },
+  { title: "Purchase", src: Folder, href: "/purchase" },
+  { title: "Invoice", src: Chart, href: "/invoice" },
+  { title: "Transaction-History", src: Folder, href: "/transaction-history" },
+];
+
 
   return (
     <motion.div
