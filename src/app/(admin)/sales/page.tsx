@@ -159,7 +159,7 @@ export default function SalesPage() {
         {
           inventory_id: invId,
           quantity_sold: deductQty,
-          amount: deductQty * oi.price * (1 - editedDiscounts[i] / 100), // <--- DISCOUNT APPLIED!
+          amount: deductQty * oi.price * (1 - editedDiscounts[i] / 100),
           date: new Date().toISOString(),
         },
       ]);
