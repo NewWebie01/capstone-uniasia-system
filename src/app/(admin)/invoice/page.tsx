@@ -23,7 +23,7 @@ const salesData = [
     quantity: 120,
     revenue: 2400,
     status: "Completed",
-    date: "2025-04-01",
+    transactionDate: "2025-04-01",
     customer: "Angelo Rosario",
   },
   {
@@ -32,7 +32,7 @@ const salesData = [
     quantity: 45,
     revenue: 6750,
     status: "Completed",
-    date: "2025-04-02",
+    transactionDate: "2025-04-02",
     customer: "Maria Santos",
   },
   {
@@ -41,14 +41,13 @@ const salesData = [
     quantity: 250,
     revenue: 5000,
     status: "Pending",
-    date: "2025-04-03",
+    transactionDate: "2025-04-03",
     customer: "Juan Dela Cruz",
   },
 ];
 
 const mockTransactions = [
   {
-    date: "2025-04-01",
     transaction: "Hammer (Steel Grip)",
     status: "Completed",
     charge: 2400,
@@ -56,7 +55,6 @@ const mockTransactions = [
     balance: 2400,
   },
   {
-    date: "2025-04-03",
     transaction: "White Latex Paint 4L",
     status: "Pending",
     charge: 5000,
@@ -75,7 +73,7 @@ const SalesInvoicePage = () => {
   const filteredSales = salesData.filter((sale) => {
     return (
       sale.customer.toLowerCase().includes(searchName.toLowerCase()) &&
-      sale.date.includes(searchDate)
+      sale.transactionDate.includes(searchDate)
     );
   });
 
@@ -86,18 +84,14 @@ const SalesInvoicePage = () => {
       {/* Filters */}
       <div className="flex flex-wrap gap-4 items-center">
         <div className="flex items-center gap-2">
-<Input
-  type="text"
-  placeholder="Filter by Customer Name"
-  value={searchName}
-  onChange={(e) => setSearchName(e.target.value)}
-  className="w-80 rounded border bg-white px-4 py-2 text-gray-700 placeholder:text-gray-400 shadow-sm focus:outline-none focus:border-1 focus:border-black"
-/>
-
-
-
+          <Input
+            type="text"
+            placeholder="Filter by Customer Name"
+            value={searchName}
+            onChange={(e) => setSearchName(e.target.value)}
+            className="w-80 rounded border bg-white px-4 py-2 text-gray-700 placeholder:text-gray-400 shadow-sm focus:outline-none focus:border-1 focus:border-black"
+          />
         </div>
-
       </div>
 
       {/* Compact Cards */}
@@ -154,7 +148,7 @@ const SalesInvoicePage = () => {
                     <strong>NAME:</strong> {sale.customer}
                   </p>
                   <p>
-                    <strong>CODE:</strong> CUST-{sale.id}
+                    <strong>TRANSACTION CODE:</strong> CUST-{sale.id}
                   </p>
                   <p className="col-span-2">
                     <strong>ADDRESS:</strong> 123 Sample St., Cebu City
@@ -183,7 +177,8 @@ const SalesInvoicePage = () => {
                   <table className="w-full text-sm border">
                     <thead className="bg-gray-100">
                       <tr>
-                        <th className="border px-2 py-1">DATE</th>
+                        <th className="border px-2 py-1">TRANSACTION DATE</th>
+                        <th className="border px-2 py-1">RECEIVED DATE</th>
                         <th className="border px-2 py-1">TRANSACTION</th>
                         <th className="border px-2 py-1">STATUS</th>
                         <th className="border px-2 py-1">CHARGE</th>
@@ -194,7 +189,16 @@ const SalesInvoicePage = () => {
                     <tbody>
                       {mockTransactions.map((txn, idx) => (
                         <tr key={idx}>
-                          <td className="border px-2 py-1">{txn.date}</td>
+                          <td className="border px-2 py-1">
+                            {selectedSale?.transactionDate}
+                          </td>
+                          <td className="border px-2 py-1">
+                            {new Date().toLocaleDateString("en-PH", {
+                              year: "numeric",
+                              month: "long",
+                              day: "numeric",
+                            })}
+                          </td>
                           <td className="border px-2 py-1">
                             {txn.transaction}
                           </td>

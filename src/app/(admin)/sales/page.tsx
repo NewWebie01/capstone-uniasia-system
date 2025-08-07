@@ -60,7 +60,10 @@ export default function SalesPage() {
   const [showModal, setShowModal] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
+  const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const ordersPerPage = 10;
 
   const fetchItems = async () => {
     const { data } = await supabase.from("inventory").select();
@@ -90,7 +93,15 @@ export default function SalesPage() {
       setOrders(
         data.map((order: any) => ({
           ...order,
-          customers: Array.isArray(order.customers) ? order.customers[0] : order.customers,
+          customers: Array.isArray(order.customers)
+            ? order.customers[0]
+            : order.customers,
+          order_items: order.order_items.map((oi: any) => ({
+            ...oi,
+            inventory: Array.isArray(oi.inventory)
+              ? oi.inventory[0]
+              : oi.inventory,
+          })),
         }))
       );
     }
@@ -105,8 +116,12 @@ export default function SalesPage() {
     pickingStatus.find(p => p.orderId === orderId && p.status === "accepted");
 
   const handleAcceptOrder = (order: OrderWithDetails) => {
-    setPickingStatus(prev => [...prev, { orderId: order.id, status: "accepted" }]);
-    setEditedQuantities(order.order_items.map(item => item.quantity));
+    setEditedDiscounts(order.order_items.map(() => 0));
+    setPickingStatus((prev) => [
+      ...prev,
+      { orderId: order.id, status: "accepted" },
+    ]);
+    setEditedQuantities(order.order_items.map((item) => item.quantity));
     setSelectedOrder(order);
     setShowModal(true);
   };
@@ -151,7 +166,7 @@ export default function SalesPage() {
         {
           inventory_id: invId,
           quantity_sold: deductQty,
-          amount: deductQty * oi.price,
+          amount: deductQty * oi.price * (1 - editedDiscounts[i] / 100), // <--- DISCOUNT APPLIED!
           date: new Date().toISOString(),
         },
       ]);
@@ -183,6 +198,14 @@ export default function SalesPage() {
       const newQuantities = [...prev];
       newQuantities[index] = value;
       return newQuantities;
+    });
+  };
+
+  const handleDiscountChange = (index: number, value: number) => {
+    setEditedDiscounts((prev) => {
+      const newDiscounts = [...prev];
+      newDiscounts[index] = value;
+      return newDiscounts;
     });
   };
 
@@ -246,9 +269,11 @@ export default function SalesPage() {
       {/* Customer Orders */}
       <div className="mt-10">
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
+
         {orders
-          .filter(o => o.status === "pending" || o.status === "accepted")
-          .map(order => {
+          .filter((o) => o.status === "pending" || o.status === "accepted")
+          .slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage)
+          .map((order) => {
             const isAccepted = isOrderAccepted(order.id);
             const isRejected = pickingStatus.find(p => p.orderId === order.id && p.status === "rejected");
 
@@ -315,6 +340,62 @@ export default function SalesPage() {
             );
           })}
       </div>
+      {/* Pagination Controls */}
+      <div className="flex justify-between items-center mt-6">
+        <button
+          onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+          disabled={currentPage === 1}
+          className={`px-4 py-2 rounded ${
+            currentPage === 1
+              ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+              : "bg-blue-600 text-white hover:bg-blue-700"
+          }`}
+        >
+          ← Prev
+        </button>
+        <span className="text-sm font-semibold text-gray-700">
+          Page {currentPage} of{" "}
+          {Math.ceil(
+            orders.filter(
+              (o) => o.status === "pending" || o.status === "accepted"
+            ).length / ordersPerPage
+          )}
+        </span>
+        <button
+          onClick={() =>
+            setCurrentPage((p) =>
+              p <
+              Math.ceil(
+                orders.filter(
+                  (o) => o.status === "pending" || o.status === "accepted"
+                ).length / ordersPerPage
+              )
+                ? p + 1
+                : p
+            )
+          }
+          disabled={
+            currentPage >=
+            Math.ceil(
+              orders.filter(
+                (o) => o.status === "pending" || o.status === "accepted"
+              ).length / ordersPerPage
+            )
+          }
+          className={`px-4 py-2 rounded ${
+            currentPage >=
+            Math.ceil(
+              orders.filter(
+                (o) => o.status === "pending" || o.status === "accepted"
+              ).length / ordersPerPage
+            )
+              ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+              : "bg-blue-600 text-white hover:bg-blue-700"
+          }`}
+        >
+          Next →
+        </button>
+      </div>
 
       {/* Modal */}
       {showModal && selectedOrder && (
@@ -345,17 +426,49 @@ export default function SalesPage() {
 
             <div className="w-1/2 pl-4">
               <h2 className="font-bold text-lg mb-2">Picking List</h2>
+              <p className="mt-2 font-bold text-right">
+                Discounted Total: ₱
+                {selectedOrder.order_items
+                  .reduce(
+                    (acc, item, idx) =>
+                      acc +
+                      editedQuantities[idx] *
+                        item.price *
+                        (1 - editedDiscounts[idx] / 100),
+                    0
+                  )
+                  .toFixed(2)}
+              </p>
+
               {selectedOrder.order_items.map((item, idx) => (
-                <div key={idx} className="mb-2">
-                  <p>{item.inventory.product_name}:</p>
+                <div key={idx} className="mb-2 flex items-center gap-2">
+                  <span className="w-32">{item.inventory.product_name}:</span>
                   <input
                     type="number"
                     min={1}
                     max={item.inventory.quantity}
                     value={editedQuantities[idx]}
-                    onChange={(e) => handleQuantityChange(idx, Number(e.target.value))}
-                    className="border rounded px-2 py-1 w-24"
+                    onChange={(e) =>
+                      handleQuantityChange(idx, Number(e.target.value))
+                    }
+                    className="border rounded px-2 py-1 w-20"
+                    title="Quantity"
+                    placeholder="Qty"
                   />
+                  <span>%</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={editedDiscounts[idx]}
+                    onChange={(e) =>
+                      handleDiscountChange(idx, Number(e.target.value))
+                    }
+                    className="border rounded px-2 py-1 w-16"
+                    title="Discount percent"
+                    placeholder="Disc"
+                  />
+                  <span className="text-xs text-gray-400">Discount</span>
                 </div>
               ))}
               <div className="mt-4 flex justify-end gap-2">
