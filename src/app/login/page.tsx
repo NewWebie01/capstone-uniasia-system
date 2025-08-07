@@ -8,10 +8,9 @@ import splashImage from "@/assets/tools-log-in-splash.jpg";
 import Image from "next/image";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
-import { Eye, EyeOff } from "lucide-react"; // 👈 using lucide-react icons
+import { Eye, EyeOff } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import supabase from "@/config/supabaseClient";
-import bcrypt from "bcryptjs";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -44,7 +43,7 @@ export default function LoginPage() {
     }
 
     setErrorMessage("");
-    router.push("/dashboard"); // ✅ Adjust this if you're routing by role (e.g., /admin, /customer)
+    router.push("/dashboard");
   };
 
   return (
@@ -75,7 +74,7 @@ export default function LoginPage() {
                 />
               </motion.button>
 
-              {/* Mobile menu icon */}
+              {/* Mobile Menu */}
               <MenuIcon
                 className="h-5 w-5 md:hidden cursor-pointer"
                 onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -122,6 +121,7 @@ export default function LoginPage() {
               onSubmit={handleSubmit}
               className="flex flex-col gap-6 w-full max-w-sm"
             >
+              {/* Email Field */}
               <div className="flex flex-col text-left">
                 <label className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
                   Username
@@ -136,6 +136,7 @@ export default function LoginPage() {
                 />
               </div>
 
+              {/* Password Field */}
               <div className="flex flex-col text-left relative">
                 <label className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
                   Password
@@ -143,6 +144,7 @@ export default function LoginPage() {
                 <input
                   id="password"
                   type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 pr-10"
@@ -161,15 +163,18 @@ export default function LoginPage() {
                 </button>
               </div>
 
+              {/* Error */}
               {errorMessage && (
                 <p className="text-red-600 text-sm -mt-3">{errorMessage}</p>
               )}
 
+              {/* Remember Me */}
               <div className="flex gap-1 items-center">
                 <input type="checkbox" />
                 <span className="text-base">Remember Password</span>
               </div>
 
+              {/* Submit */}
               <motion.button
                 type="submit"
                 whileTap={{ scale: 0.95 }}

@@ -86,23 +86,18 @@ const SalesInvoicePage = () => {
       {/* Filters */}
       <div className="flex flex-wrap gap-4 items-center">
         <div className="flex items-center gap-2">
-          <Filter className="text-muted-foreground" />
-          <Input
-            type="text"
-            placeholder="Filter by Customer Name"
-            value={searchName}
-            onChange={(e) => setSearchName(e.target.value)}
-            className="max-w-xs"
-          />
+<Input
+  type="text"
+  placeholder="Filter by Customer Name"
+  value={searchName}
+  onChange={(e) => setSearchName(e.target.value)}
+  className="w-80 rounded border bg-white px-4 py-2 text-gray-700 placeholder:text-gray-400 shadow-sm focus:outline-none focus:border-1 focus:border-black"
+/>
+
+
+
         </div>
-        <div className="flex items-center gap-2">
-          <CalendarDays className="text-muted-foreground" />
-          <Input
-            type="date"
-            value={searchDate}
-            onChange={(e) => setSearchDate(e.target.value)}
-          />
-        </div>
+
       </div>
 
       {/* Compact Cards */}
