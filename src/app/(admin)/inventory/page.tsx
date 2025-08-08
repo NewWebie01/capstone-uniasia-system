@@ -27,12 +27,11 @@ export default function InventoryPage() {
   const itemsPerPage = 10;
   const [loading, setLoading] = useState(true);
   const [isCustomCategory, setIsCustomCategory] = useState(false);
-const [isCustomSubcategory, setIsCustomSubcategory] = useState(false);
-const [isCustomUnit, setIsCustomUnit] = useState(false);
-const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
-const [subcategoryOptions, setSubcategoryOptions] = useState<string[]>([]);
-const [unitOptions, setUnitOptions] = useState<string[]>([]);
-
+  const [isCustomSubcategory, setIsCustomSubcategory] = useState(false);
+  const [isCustomUnit, setIsCustomUnit] = useState(false);
+  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const [subcategoryOptions, setSubcategoryOptions] = useState<string[]>([]);
+  const [unitOptions, setUnitOptions] = useState<string[]>([]);
 
   const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
     sku: "",
@@ -70,27 +69,27 @@ const [unitOptions, setUnitOptions] = useState<string[]>([]);
   };
 
   const fetchDropdownOptions = async () => {
-  const { data, error } = await supabase.from("inventory").select("category, subcategory, unit");
+    const { data, error } = await supabase
+      .from("inventory")
+      .select("category, subcategory, unit");
 
-  if (error) {
-    console.error("Failed to fetch dropdown options:", error);
-    return;
-  }
+    if (error) {
+      console.error("Failed to fetch dropdown options:", error);
+      return;
+    }
 
-  const unique = (values: (string | null)[]) =>
-    [...new Set(values.filter(Boolean))] as string[];
+    const unique = (values: (string | null)[]) =>
+      [...new Set(values.filter(Boolean))] as string[];
 
-  setCategoryOptions(unique(data.map((item) => item.category)));
-  setSubcategoryOptions(unique(data.map((item) => item.subcategory)));
-  setUnitOptions(unique(data.map((item) => item.unit)));
-};
-
+    setCategoryOptions(unique(data.map((item) => item.category)));
+    setSubcategoryOptions(unique(data.map((item) => item.subcategory)));
+    setUnitOptions(unique(data.map((item) => item.unit)));
+  };
 
   useEffect(() => {
-  fetchItems();
-  fetchDropdownOptions();
-}, []);
-
+    fetchItems();
+    fetchDropdownOptions();
+  }, []);
 
   useEffect(() => {
     const amount = newItem.unit_price * newItem.quantity;
@@ -145,10 +144,9 @@ const [unitOptions, setUnitOptions] = useState<string[]>([]);
 
       setShowForm(false);
       setEditingItemId(null);
-  
-      fetchItems();
-fetchDropdownOptions(); // refresh dropdown list after new entry
 
+      fetchItems();
+      fetchDropdownOptions(); // refresh dropdown list after new entry
     } catch (err: any) {
       console.error(err);
       alert("Error saving item: " + err.message);
@@ -280,248 +278,246 @@ fetchDropdownOptions(); // refresh dropdown list after new entry
         </button>
       </div>
 
-      
-        {showForm && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-    <div className="bg-white p-8 rounded-lg max-w-xl w-full space-y-4">
-      <h2 className="text-lg font-semibold">
-        {editingItemId ? "Edit Item" : "Add New Item"}
-      </h2>
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white p-8 rounded-lg max-w-xl w-full space-y-4">
+            <h2 className="text-lg font-semibold">
+              {editingItemId ? "Edit Item" : "Add New Item"}
+            </h2>
 
-      <div className="flex items-center gap-2">
-        <label className="w-36 text-sm text-gray-700">SKU</label>
-        <input
-          className="flex-1 border px-4 py-2 rounded"
-          placeholder="PRODUCT ID"
-          value={newItem.sku}
-          onChange={(e) =>
-            setNewItem((prev) => ({ ...prev, sku: e.target.value }))
-          }
-        />
-      </div>
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">SKU</label>
+              <input
+                className="flex-1 border px-4 py-2 rounded"
+                placeholder="PRODUCT ID"
+                value={newItem.sku}
+                onChange={(e) =>
+                  setNewItem((prev) => ({ ...prev, sku: e.target.value }))
+                }
+              />
+            </div>
 
-      <div className="flex items-center gap-2">
-        <label className="w-36 text-sm text-gray-700">Product Name</label>
-        <input
-          className={`flex-1 border px-4 py-2 rounded ${
-            validationErrors.product_name ? "border-red-500" : ""
-          }`}
-          placeholder="e.g. Boysen"
-          value={newItem.product_name}
-          onChange={(e) =>
-            setNewItem((prev) => ({
-              ...prev,
-              product_name: e.target.value,
-            }))
-          }
-        />
-      </div>
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">Product Name</label>
+              <input
+                className={`flex-1 border px-4 py-2 rounded ${
+                  validationErrors.product_name ? "border-red-500" : ""
+                }`}
+                placeholder="e.g. Boysen"
+                value={newItem.product_name}
+                onChange={(e) =>
+                  setNewItem((prev) => ({
+                    ...prev,
+                    product_name: e.target.value,
+                  }))
+                }
+              />
+            </div>
 
-      {/* CATEGORY */}
-      <div className="flex items-center gap-2">
-        <label className="w-36 text-sm text-gray-700">Category</label>
-        <div className="flex-1 flex gap-2">
-          {isCustomCategory ? (
-            <input
-              className="flex-1 border px-4 py-2 rounded"
-              placeholder="Enter new category"
-              value={newItem.category}
-              onChange={(e) =>
-                setNewItem((prev) => ({
-                  ...prev,
-                  category: e.target.value,
-                }))
-              }
-            />
-          ) : (
-            <select
-              value={newItem.category}
-              onChange={(e) =>
-                setNewItem((prev) => ({
-                  ...prev,
-                  category: e.target.value,
-                  subcategory: "", // reset subcategory
-                }))
-              }
-              className="flex-1 border px-4 py-2 rounded"
-            >
-              <option value="">Select Category</option>
-              {categoryOptions.map((category) => (
-                <option key={category} value={category}>
-                  {category}
-                </option>
-              ))}
-            </select>
-          )}
-          <label className="text-sm">
-            <input
-              type="checkbox"
-              checked={isCustomCategory}
-              onChange={(e) => setIsCustomCategory(e.target.checked)}
-            />{" "}
-            New
-          </label>
+            {/* CATEGORY */}
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">Category</label>
+              <div className="flex-1 flex gap-2">
+                {isCustomCategory ? (
+                  <input
+                    className="flex-1 border px-4 py-2 rounded"
+                    placeholder="Enter new category"
+                    value={newItem.category}
+                    onChange={(e) =>
+                      setNewItem((prev) => ({
+                        ...prev,
+                        category: e.target.value,
+                      }))
+                    }
+                  />
+                ) : (
+                  <select
+                    value={newItem.category}
+                    onChange={(e) =>
+                      setNewItem((prev) => ({
+                        ...prev,
+                        category: e.target.value,
+                        subcategory: "", // reset subcategory
+                      }))
+                    }
+                    className="flex-1 border px-4 py-2 rounded"
+                  >
+                    <option value="">Select Category</option>
+                    {categoryOptions.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <label className="text-sm">
+                  <input
+                    type="checkbox"
+                    checked={isCustomCategory}
+                    onChange={(e) => setIsCustomCategory(e.target.checked)}
+                  />{" "}
+                  New
+                </label>
+              </div>
+            </div>
+
+            {/* SUBCATEGORY */}
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">Subcategory</label>
+              <div className="flex-1 flex gap-2">
+                {isCustomSubcategory ? (
+                  <input
+                    className="flex-1 border px-4 py-2 rounded"
+                    placeholder="Enter new subcategory"
+                    value={newItem.subcategory}
+                    onChange={(e) =>
+                      setNewItem((prev) => ({
+                        ...prev,
+                        subcategory: e.target.value,
+                      }))
+                    }
+                  />
+                ) : (
+                  <select
+                    value={newItem.subcategory}
+                    onChange={(e) =>
+                      setNewItem((prev) => ({
+                        ...prev,
+                        subcategory: e.target.value,
+                      }))
+                    }
+                    disabled={!newItem.category}
+                    className="flex-1 border px-4 py-2 rounded"
+                  >
+                    <option value="">Select Subcategory</option>
+                    {subcategoryOptions.map((sub) => (
+                      <option key={sub} value={sub}>
+                        {sub}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <label className="text-sm">
+                  <input
+                    type="checkbox"
+                    checked={isCustomSubcategory}
+                    onChange={(e) => setIsCustomSubcategory(e.target.checked)}
+                  />{" "}
+                  New
+                </label>
+              </div>
+            </div>
+
+            {/* UNIT */}
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">Unit</label>
+              <div className="flex-1 flex gap-2">
+                {isCustomUnit ? (
+                  <input
+                    className="flex-1 border px-4 py-2 rounded"
+                    placeholder="Enter new unit"
+                    value={newItem.unit}
+                    onChange={(e) =>
+                      setNewItem((prev) => ({
+                        ...prev,
+                        unit: e.target.value,
+                      }))
+                    }
+                  />
+                ) : (
+                  <select
+                    value={newItem.unit}
+                    onChange={(e) =>
+                      setNewItem((prev) => ({
+                        ...prev,
+                        unit: e.target.value,
+                      }))
+                    }
+                    className="flex-1 border px-4 py-2 rounded"
+                  >
+                    <option value="">Select Unit</option>
+                    {unitOptions.map((unit) => (
+                      <option key={unit} value={unit}>
+                        {unit}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <label className="text-sm">
+                  <input
+                    type="checkbox"
+                    checked={isCustomUnit}
+                    onChange={(e) => setIsCustomUnit(e.target.checked)}
+                  />{" "}
+                  New
+                </label>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">Quantity</label>
+              <input
+                type="number"
+                className={`flex-1 border px-4 py-2 rounded ${
+                  validationErrors.quantity ? "border-red-500" : ""
+                }`}
+                placeholder="Enter quantity"
+                value={newItem.quantity}
+                onChange={(e) =>
+                  setNewItem((prev) => ({
+                    ...prev,
+                    quantity: parseInt(e.target.value) || 0,
+                  }))
+                }
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">Unit Price</label>
+              <input
+                type="number"
+                className={`flex-1 border px-4 py-2 rounded ${
+                  validationErrors.unit_price ? "border-red-500" : ""
+                }`}
+                placeholder="₱ per unit"
+                value={newItem.unit_price}
+                onChange={(e) =>
+                  setNewItem((prev) => ({
+                    ...prev,
+                    unit_price: parseFloat(e.target.value) || 0,
+                  }))
+                }
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">Total Price</label>
+              <input
+                type="text"
+                className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
+                value={`₱${newItem.amount.toLocaleString()}`}
+                readOnly
+                disabled
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4">
+              <button
+                onClick={() => setShowForm(false)}
+                className="bg-gray-300 px-4 py-2 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitItem}
+                className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
+              >
+                {editingItemId ? "Update Item" : "Add Item"}
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
-
-      {/* SUBCATEGORY */}
-      <div className="flex items-center gap-2">
-        <label className="w-36 text-sm text-gray-700">Subcategory</label>
-        <div className="flex-1 flex gap-2">
-          {isCustomSubcategory ? (
-            <input
-              className="flex-1 border px-4 py-2 rounded"
-              placeholder="Enter new subcategory"
-              value={newItem.subcategory}
-              onChange={(e) =>
-                setNewItem((prev) => ({
-                  ...prev,
-                  subcategory: e.target.value,
-                }))
-              }
-            />
-          ) : (
-            <select
-              value={newItem.subcategory}
-              onChange={(e) =>
-                setNewItem((prev) => ({
-                  ...prev,
-                  subcategory: e.target.value,
-                }))
-              }
-              disabled={!newItem.category}
-              className="flex-1 border px-4 py-2 rounded"
-            >
-              <option value="">Select Subcategory</option>
-              {subcategoryOptions.map((sub) => (
-                <option key={sub} value={sub}>
-                  {sub}
-                </option>
-              ))}
-            </select>
-          )}
-          <label className="text-sm">
-            <input
-              type="checkbox"
-              checked={isCustomSubcategory}
-              onChange={(e) => setIsCustomSubcategory(e.target.checked)}
-            />{" "}
-            New
-          </label>
-        </div>
-      </div>
-
-      {/* UNIT */}
-      <div className="flex items-center gap-2">
-        <label className="w-36 text-sm text-gray-700">Unit</label>
-        <div className="flex-1 flex gap-2">
-          {isCustomUnit ? (
-            <input
-              className="flex-1 border px-4 py-2 rounded"
-              placeholder="Enter new unit"
-              value={newItem.unit}
-              onChange={(e) =>
-                setNewItem((prev) => ({
-                  ...prev,
-                  unit: e.target.value,
-                }))
-              }
-            />
-          ) : (
-            <select
-              value={newItem.unit}
-              onChange={(e) =>
-                setNewItem((prev) => ({
-                  ...prev,
-                  unit: e.target.value,
-                }))
-              }
-              className="flex-1 border px-4 py-2 rounded"
-            >
-              <option value="">Select Unit</option>
-              {unitOptions.map((unit) => (
-                <option key={unit} value={unit}>
-                  {unit}
-                </option>
-              ))}
-            </select>
-          )}
-          <label className="text-sm">
-            <input
-              type="checkbox"
-              checked={isCustomUnit}
-              onChange={(e) => setIsCustomUnit(e.target.checked)}
-            />{" "}
-            New
-          </label>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="w-36 text-sm text-gray-700">Quantity</label>
-        <input
-          type="number"
-          className={`flex-1 border px-4 py-2 rounded ${
-            validationErrors.quantity ? "border-red-500" : ""
-          }`}
-          placeholder="Enter quantity"
-          value={newItem.quantity}
-          onChange={(e) =>
-            setNewItem((prev) => ({
-              ...prev,
-              quantity: parseInt(e.target.value) || 0,
-            }))
-          }
-        />
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="w-36 text-sm text-gray-700">Unit Price</label>
-        <input
-          type="number"
-          className={`flex-1 border px-4 py-2 rounded ${
-            validationErrors.unit_price ? "border-red-500" : ""
-          }`}
-          placeholder="₱ per unit"
-          value={newItem.unit_price}
-          onChange={(e) =>
-            setNewItem((prev) => ({
-              ...prev,
-              unit_price: parseFloat(e.target.value) || 0,
-            }))
-          }
-        />
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="w-36 text-sm text-gray-700">Total Price</label>
-        <input
-          type="text"
-          className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
-          value={`₱${newItem.amount.toLocaleString()}`}
-          readOnly
-          disabled
-        />
-      </div>
-
-      <div className="flex justify-end gap-2 pt-4">
-        <button
-          onClick={() => setShowForm(false)}
-          className="bg-gray-300 px-4 py-2 rounded"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={handleSubmitItem}
-          className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
-        >
-          {editingItemId ? "Update Item" : "Add Item"}
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-
+      )}
     </div>
   );
 }

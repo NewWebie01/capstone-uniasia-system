@@ -15,7 +15,9 @@ const SalesInvoicePage = () => {
   const [openDialogId, setOpenDialogId] = useState<string | null>(null);
   const [searchName, setSearchName] = useState("");
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [orders, setOrders] = useState<any[]>([]);
 
+  // Fetch all customers (runs on mount)
   useEffect(() => {
     const fetchCustomers = async () => {
       const { data, error } = await supabase
@@ -29,6 +31,22 @@ const SalesInvoicePage = () => {
     fetchCustomers();
   }, []);
 
+  // Fetch orders for selected customer (runs every time selectedCustomer changes)
+  useEffect(() => {
+    if (!selectedCustomer) return;
+
+    const fetchOrders = async () => {
+      const { data, error } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("customer_id", selectedCustomer.id);
+
+      if (data) setOrders(data);
+    };
+
+    fetchOrders();
+  }, [selectedCustomer]);
+
   const filteredCustomers = customers.filter((c) =>
     c.name.toLowerCase().includes(searchName.toLowerCase())
   );
@@ -38,16 +56,15 @@ const SalesInvoicePage = () => {
       <h1 className="text-3xl font-bold">Sales Invoices</h1>
 
       {/* Search */}
-<div className="w-full max-w-md">
-  <input
-    type="text"
-    placeholder="Search by customer name..."
-    value={searchName}
-    onChange={(e) => setSearchName(e.target.value)}
-    className="w-full px-4 py-2 rounded-md shadow bg-white focus:outline-none focus:ring-2 focus:ring-black transition"
-  />
-</div>
-
+      <div className="w-full max-w-md">
+        <input
+          type="text"
+          placeholder="Search by customer name..."
+          value={searchName}
+          onChange={(e) => setSearchName(e.target.value)}
+          className="w-full px-4 py-2 rounded-md shadow bg-white focus:outline-none focus:ring-2 focus:ring-black transition"
+        />
+      </div>
 
       {/* Invoices */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
@@ -117,16 +134,16 @@ const SalesInvoicePage = () => {
                       <strong>TEL NO:</strong> {selectedCustomer.phone}
                     </p>
                     <p>
-                      <strong>TERMS:</strong> Net 30
+                      <strong>TERMS:</strong>
                     </p>
                     <p>
-                      <strong>COLLECTION:</strong> On Delivery
+                      <strong>COLLECTION:</strong>
                     </p>
                     <p>
-                      <strong>CREDIT LIMIT:</strong> ₱20,000
+                      <strong>CREDIT LIMIT:</strong>
                     </p>
                     <p>
-                      <strong>SALESMAN:</strong> Pedro Reyes
+                      <strong>SALESMAN:</strong>
                     </p>
                   </div>
 
@@ -145,36 +162,39 @@ const SalesInvoicePage = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {(selectedCustomer.transaction?.split(",") || []).map(
-                          (txn: string, index: number) => (
-                            <tr key={index}>
-                              <td className="border px-2 py-1">
+                        {orders.map((order, idx) => (
+                          <tr key={order.id || idx}>
+                            <td className="border px-2 py-1">
+                              {
+                                new Date(order.date_created)
+                                  .toISOString()
+                                  .split("T")[0]
+                              }
+                            </td>
+                            <td className="border px-2 py-1">
+                              {new Date(order.date_created).toLocaleDateString(
+                                "en-PH",
                                 {
-                                  new Date(
-                                    selectedCustomer.date ||
-                                      selectedCustomer.created_at
-                                  )
-                                    .toISOString()
-                                    .split("T")[0]
-                                }
-                              </td>
-                              <td className="border px-2 py-1">
-                                {new Date().toLocaleDateString("en-PH", {
                                   year: "numeric",
                                   month: "long",
                                   day: "numeric",
-                                })}
-                              </td>
-                              <td className="border px-2 py-1">{txn.trim()}</td>
-                              <td className="border px-2 py-1">
-                                {selectedCustomer.status || "Pending"}
-                              </td>
-                              <td className="border px-2 py-1">₱5,000</td>
-                              <td className="border px-2 py-1">₱0</td>
-                              <td className="border px-2 py-1">₱5,000</td>
-                            </tr>
-                          )
-                        )}
+                                }
+                              )}
+                            </td>
+                            <td className="border px-2 py-1">
+                              {/* You can display transaction summary or product name if available */}
+                              {selectedCustomer.transaction}
+                            </td>
+                            <td className="border px-2 py-1">{order.status}</td>
+                            <td className="border px-2 py-1">
+                              ₱{Number(order.total_amount).toLocaleString()}
+                            </td>
+                            <td className="border px-2 py-1">₱0</td>
+                            <td className="border px-2 py-1">
+                              ₱{Number(order.total_amount).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>
