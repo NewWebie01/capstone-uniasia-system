@@ -1,8 +1,10 @@
+// src/app/customer/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 
 type InventoryItem = {
@@ -22,6 +24,7 @@ type CartItem = {
 };
 
 type CustomerInfo = {
+  id?: string;
   name: string;
   email: string;
   phone: string;
@@ -47,6 +50,7 @@ export default function CustomerInventoryPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [orderQuantity, setOrderQuantity] = useState(1);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [showCartPopup, setShowCartPopup] = useState(false);
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
@@ -61,39 +65,51 @@ export default function CustomerInventoryPage() {
     customer_type: undefined,
   });
 
+  // fetchInventory pulled out so we can call it on mount and on realtime events
+  const fetchInventory = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from("inventory").select("*");
+    if (error) {
+      console.error("Error fetching inventory:", error.message);
+      toast.error("Could not load inventory.");
+    } else {
+      setInventory(data ?? []);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    // initial load
+    fetchInventory();
+
+    // subscribe to realtime changes on inventory
+    const channel: RealtimeChannel = supabase
+      .channel("public:inventory")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "inventory" },
+        () => {
+          fetchInventory();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchInventory]);
+
+  // enforce payment_type logic
   useEffect(() => {
     if (customerInfo.customer_type === "New Customer") {
-      setCustomerInfo(prev => ({ ...prev, payment_type: "Cash" }));
+      setCustomerInfo((prev) => ({ ...prev, payment_type: "Cash" }));
     } else if (customerInfo.customer_type === "Existing Customer") {
-      setCustomerInfo(prev => ({
+      setCustomerInfo((prev) => ({
         ...prev,
         payment_type: prev.payment_type === "Credit" ? "Credit" : "Cash",
       }));
     }
   }, [customerInfo.customer_type]);
-
-  const handleShowCart = () => {
-    if (!customerInfo.code) {
-      setCustomerInfo(prev => ({ ...prev, code: generateTransactionCode() }));
-    }
-    setShowCartPopup(true);
-  };
-
-  const [orderQuantity, setOrderQuantity] = useState(1);
-
-  useEffect(() => {
-    async function fetchInventory() {
-      setLoading(true);
-      const { data, error } = await supabase.from("inventory").select("*");
-      if (error) {
-        console.error("Error fetching inventory:", error.message);
-      } else {
-        setInventory(data ?? []);
-      }
-      setLoading(false);
-    }
-    fetchInventory();
-  }, []);
 
   const handleAddToCartClick = (item: InventoryItem) => {
     setSelectedItem(item);
@@ -106,7 +122,7 @@ export default function CustomerInventoryPage() {
       toast.error(`Cannot order more than available stock (${selectedItem.quantity})`);
       return;
     }
-    if (cart.some(ci => ci.item.id === selectedItem.id)) {
+    if (cart.some((ci) => ci.item.id === selectedItem.id)) {
       toast.error("Item already in cart.");
       return;
     }
@@ -116,10 +132,18 @@ export default function CustomerInventoryPage() {
   };
 
   const removeFromCart = (itemId: number) => {
-    setCart(prev => prev.filter(ci => ci.item.id !== itemId));
+    setCart((prev) => prev.filter((ci) => ci.item.id !== itemId));
+  };
+
+  const handleShowCart = () => {
+    if (!customerInfo.code) {
+      setCustomerInfo((prev) => ({ ...prev, code: generateTransactionCode() }));
+    }
+    setShowCartPopup(true);
   };
 
   const handleSubmitOrder = async () => {
+    // validate customer fields
     if (
       !customerInfo.name ||
       !customerInfo.email ||
@@ -143,48 +167,49 @@ export default function CustomerInventoryPage() {
       return;
     }
 
-    const customerPayload: CustomerInfo = {
+    // prepare payloads
+    const customerPayload: Partial<CustomerInfo> = {
       ...customerInfo,
       date: new Date().toISOString(),
       status: "pending",
-      transaction: cart.map(ci => `${ci.item.product_name} x${ci.quantity}`).join(", "),
+      transaction: cart.map((ci) => `${ci.item.product_name} x${ci.quantity}`).join(", "),
     };
-
     try {
-      const { data: customer, error: custErr } = await supabase
+      // insert customer
+      const { data: cust, error: custErr } = await supabase
         .from("customers")
         .insert([customerPayload])
         .select()
         .single();
       if (custErr) throw custErr;
+      const customerId = cust.id;
 
-      const customerId = customer.id;
+      // insert order
       const totalAmount = cart.reduce(
         (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
         0
       );
-
-      const { data: order, error: orderErr } = await supabase
+      const { data: ord, error: ordErr } = await supabase
         .from("orders")
         .insert([{ customer_id: customerId, total_amount: totalAmount, status: "pending" }])
         .select()
         .single();
-      if (orderErr) throw orderErr;
+      if (ordErr) throw ordErr;
+      const orderId = ord.id;
 
-      const orderId = order.id;
-      const orderItems = cart.map(ci => ({
+      // insert order items
+      const orderItems = cart.map((ci) => ({
         order_id: orderId,
         inventory_id: ci.item.id,
         quantity: ci.quantity,
         price: ci.item.unit_price || 0,
       }));
-
       const { error: itemsErr } = await supabase.from("order_items").insert(orderItems);
       if (itemsErr) throw itemsErr;
 
-      toast.success(`Order submitted successfully! Transaction Code: ${customerInfo.code}`);
+      toast.success(`Order submitted! Code: ${customerInfo.code}`);
 
-      // reset
+      // reset state
       setCart([]);
       setCustomerInfo({
         name: "",
@@ -201,8 +226,7 @@ export default function CustomerInventoryPage() {
       setSelectedItem(null);
 
       // refresh inventory
-      const { data: newInv } = await supabase.from("inventory").select("*");
-      setInventory(newInv ?? []);
+      await fetchInventory();
     } catch (e: any) {
       console.error("Order submission error:", e.message);
       toast.error("Something went wrong. Please try again.");
@@ -219,7 +243,7 @@ export default function CustomerInventoryPage() {
         <p>Loading inventory...</p>
       ) : (
         <div className="overflow-x-auto rounded-lg shadow mb-6">
-          <table className="w-full min-w-full bg-white text-sm table-fixed">
+          <table className="w-full table-fixed bg-white text-sm">
             <thead className="bg-[#ffba20] text-black text-left">
               <tr>
                 <th className="py-2 px-4 w-1/5">Product Name</th>
@@ -230,7 +254,7 @@ export default function CustomerInventoryPage() {
               </tr>
             </thead>
             <tbody>
-              {inventory.map(item => (
+              {inventory.map((item) => (
                 <tr key={item.id} className="border-b hover:bg-gray-100">
                   <td className="py-2 px-4">{item.product_name}</td>
                   <td className="py-2 px-4">{item.category}</td>
@@ -251,8 +275,9 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
+      {/* Add to Cart Modal */}
       {selectedItem && (
-        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex justify-center items-center">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
           <div className="bg-white p-6 rounded shadow-lg max-w-md w-full">
             <h2 className="text-xl font-bold mb-4">{selectedItem.product_name}</h2>
             <p>Category: {selectedItem.category}</p>
@@ -266,7 +291,7 @@ export default function CustomerInventoryPage() {
                 min={1}
                 max={selectedItem.quantity}
                 value={orderQuantity}
-                onChange={e => setOrderQuantity(Number(e.target.value))}
+                onChange={(e) => setOrderQuantity(Number(e.target.value))}
               />
             </div>
             <div className="mt-4 flex justify-end gap-2">
@@ -287,25 +312,28 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
+      {/* Cart Preview */}
       {cart.length > 0 && (
         <div className="mt-10 bg-gray-100 p-4 rounded shadow">
           <h2 className="text-xl font-bold mb-4">Cart</h2>
-          <table className="min-w-full bg-white text-sm">
+          <table className="w-full bg-white text-sm mb-4">
             <thead className="bg-[#ffba20] text-black text-left">
               <tr>
-                <th className="py-2 px-4">Product Name</th>
+                <th className="py-2 px-4">Product</th>
                 <th className="py-2 px-4">Category</th>
                 <th className="py-2 px-4">Subcategory</th>
+                <th className="py-2 px-4">Qty</th>
                 <th className="py-2 px-4">Status</th>
                 <th className="py-2 px-4">Remove</th>
               </tr>
             </thead>
             <tbody>
-              {cart.map(ci => (
+              {cart.map((ci) => (
                 <tr key={ci.item.id} className="border-b">
                   <td className="py-2 px-4">{ci.item.product_name}</td>
                   <td className="py-2 px-4">{ci.item.category}</td>
                   <td className="py-2 px-4">{ci.item.subcategory}</td>
+                  <td className="py-2 px-4">{ci.quantity}</td>
                   <td className="py-2 px-4">{ci.item.status}</td>
                   <td className="py-2 px-4">
                     <button
@@ -319,7 +347,8 @@ export default function CustomerInventoryPage() {
               ))}
             </tbody>
           </table>
-          <div className="mt-4 flex justify-between items-center">
+
+          <div className="flex justify-between items-center">
             <div>Total Items: {totalItems}</div>
             <button
               className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
@@ -331,42 +360,46 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
+      {/* Order Confirmation Popup */}
       {showCartPopup && (
-        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex justify-center items-center">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
           <div className="bg-white p-6 rounded-none shadow w-full max-w-5xl space-y-4">
             <h2 className="text-xl font-bold">Confirm Order</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Customer Info Inputs */}
               <input
                 placeholder="Customer Name"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.name}
-                onChange={e => setCustomerInfo({ ...customerInfo, name: e.target.value })}
+                onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
               />
               <input
                 type="email"
                 placeholder="Email"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.email}
-                onChange={e => setCustomerInfo({ ...customerInfo, email: e.target.value })}
+                onChange={(e) => setCustomerInfo({ ...customerInfo, email: e.target.value })}
               />
               <input
                 type="tel"
                 placeholder="Phone"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.phone}
-                onChange={e => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
+                onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
               />
               <input
                 placeholder="Address"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.address}
-                onChange={e => setCustomerInfo({ ...customerInfo, address: e.target.value })}
+                onChange={(e) => setCustomerInfo({ ...customerInfo, address: e.target.value })}
               />
               <input
                 placeholder="Contact Person"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.contact_person}
-                onChange={e => setCustomerInfo({ ...customerInfo, contact_person: e.target.value })}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, contact_person: e.target.value })
+                }
               />
               <input
                 placeholder="Transaction Code"
@@ -380,14 +413,14 @@ export default function CustomerInventoryPage() {
                 placeholder="Area"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.area}
-                onChange={e => setCustomerInfo({ ...customerInfo, area: e.target.value })}
+                onChange={(e) => setCustomerInfo({ ...customerInfo, area: e.target.value })}
               />
               <div className="col-span-2">
                 <label className="block mb-1">Customer Type</label>
                 <select
                   className="border px-3 py-2 rounded w-full"
                   value={customerInfo.customer_type || ""}
-                  onChange={e =>
+                  onChange={(e) =>
                     setCustomerInfo({
                       ...customerInfo,
                       customer_type: e.target.value as
@@ -409,17 +442,20 @@ export default function CustomerInventoryPage() {
                   {(customerInfo.customer_type === "Existing Customer"
                     ? ["Credit", "Balance"]
                     : ["Cash"]
-                  ).map(type => (
+                  ).map((type) => (
                     <label key={type} className="flex items-center gap-2">
                       <input
                         type="radio"
                         name="payment_type"
                         value={type}
                         checked={customerInfo.payment_type === type}
-                        onChange={e =>
+                        onChange={(e) =>
                           setCustomerInfo({
                             ...customerInfo,
-                            payment_type: e.target.value as "Cash" | "Credit" | "Balance",
+                            payment_type: e.target.value as
+                              | "Cash"
+                              | "Credit"
+                              | "Balance",
                           })
                         }
                       />
@@ -429,7 +465,9 @@ export default function CustomerInventoryPage() {
                 </div>
               </div>
             </div>
-            <table className="w-full table-fixed text-sm mt-4 bg-gray-100">
+
+            {/* Cart Items Summary */}
+            <table className="w-full table-fixed text-sm bg-gray-100">
               <thead className="bg-gray-200">
                 <tr>
                   <th className="py-2 px-3 text-left">Product</th>
@@ -440,8 +478,8 @@ export default function CustomerInventoryPage() {
                 </tr>
               </thead>
               <tbody>
-                {cart.map(ci => (
-                  <tr key={ci.item.id} className="border-b"> 
+                {cart.map((ci) => (
+                  <tr key={ci.item.id} className="border-b">
                     <td className="py-2 px-3">{ci.item.product_name}</td>
                     <td className="py-2 px-3">{ci.item.category}</td>
                     <td className="py-2 px-3">{ci.item.subcategory}</td>
@@ -451,6 +489,7 @@ export default function CustomerInventoryPage() {
                 ))}
               </tbody>
             </table>
+
             <div className="flex justify-end gap-2 mt-4">
               <button
                 onClick={() => setShowCartPopup(false)}
