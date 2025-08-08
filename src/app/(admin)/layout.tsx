@@ -1,9 +1,10 @@
-"use client";
+'use client';
 
 import { Sidebar } from "@/components/Sidebar";
 import NotificationBell from "@/components/NotificationBell";
 import { DM_Sans } from "next/font/google";
 import { useState } from "react";
+import { Toaster } from 'sonner';
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -22,6 +23,9 @@ export default function DashboardLayout({
     <div
       className={`min-h-screen bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)] ${dmSans.className}`}
     >
+      {/* Global Toast Provider */}
+      <Toaster richColors position="top-right" />
+
       {/* Sticky Header */}
       <header className="sticky top-0 z-30 backdrop-blur-sm w-full h-12">
         <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
@@ -29,7 +33,7 @@ export default function DashboardLayout({
         </div>
       </header>
 
-      {/* Fixed Notification Bell (globally visible and floating) */}
+      {/* Floating Notification Bell */}
       <NotificationBell />
 
       {/* Layout */}
