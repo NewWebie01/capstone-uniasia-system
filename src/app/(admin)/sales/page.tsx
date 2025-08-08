@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 
 type InventoryItem = {
@@ -62,76 +63,83 @@ export default function SalesPage() {
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
+  const [insertedOrders, setInsertedOrders] = useState<string[]>([]);
+
   const ordersPerPage = 10;
 
-  // Fetch inventory items
   const fetchItems = async () => {
     const { data } = await supabase.from("inventory").select();
     if (data) setItems(data);
   };
 
-  // Fetch customer orders with details
-const fetchOrders = async () => {
+  const fetchOrders = async () => {
+    const { data, error } = await supabase
+      .from("orders")
+      .select(`
+        *,
+        customers:customer_id (
+          name, email, phone, address, contact_person,
+          code, area, date, transaction, status, payment_type,
+          customer_type, order_count
+        ),
+        order_items (
+          quantity,
+          price,
+          inventory:inventory_id (
+            id,
+            product_name,
+            category,
+            unit_price,
+            quantity
+          )
+        )
+      `);
 
- const { data, error } = await supabase
-  .from('orders')
-  .select(`
-    *,
-    customers:customer_id (
-      name,
-      email,
-      phone,
-      address,
-      contact_person,
-      code,
-      area,
-      date,
-      transaction,
-      status,
-      payment_type,
-      customer_type,
-      order_count
-    ),
-    order_items (
-      id,
-      quantity,
-      price,
-      inventory:inventory_id (
-        product_name,
-        category,
-        subcategory,
-        status
-      )
-    )
-  `);
-
-
-  if (error) {
-    console.error("Failed to fetch orders:", JSON.stringify(error, null, 2));
-  } else if (data) {
- setOrders(
-  data.map((order: any) => ({
-    ...order,
-    customer: order.customers,
-    items: order.order_items,
-  }))
-);
-
-  }
-};
-
- 
-
-
-
+    if (error) {
+      console.error("Failed to fetch orders:", error);
+    } else if (data) {
+      setOrders(data);
+    }
+  };
 
   useEffect(() => {
+    // initial fetch
     fetchItems();
     fetchOrders();
+
+    // subscribe to inventory changes
+    const inventoryChannel: RealtimeChannel = supabase
+      .channel("inventory-channel")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "inventory" },
+        () => {
+          fetchItems();
+        }
+      )
+      .subscribe();
+
+    // subscribe to orders changes
+    const ordersChannel: RealtimeChannel = supabase
+      .channel("orders-channel")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        () => {
+          fetchOrders();
+        }
+      )
+      .subscribe();
+
+    // cleanup on unmount
+    return () => {
+      supabase.removeChannel(inventoryChannel);
+      supabase.removeChannel(ordersChannel);
+    };
   }, []);
 
   const isOrderAccepted = (orderId: string) =>
-    pickingStatus.find((p) => p.orderId === orderId && p.status === "accepted");
+    pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
   const handleAcceptOrder = (order: OrderWithDetails) => {
     setEditedDiscounts(order.order_items.map(() => 0));
@@ -143,17 +151,7 @@ const fetchOrders = async () => {
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
     setPickingStatus((prev) => [...prev, { orderId: order.id, status: "rejected" }]);
-
     await supabase.from("orders").update({ status: "rejected" }).eq("id", order.id);
-    await supabase.from("transactions").insert([
-      {
-        order_id: order.id,
-        customer_name: order.customers.name,
-        status: "rejected",
-        date: new Date().toISOString(),
-      },
-    ]);
-
     fetchOrders();
   };
 
@@ -185,19 +183,26 @@ const fetchOrders = async () => {
     }
 
     await supabase.from("orders").update({ status: "completed" }).eq("id", selectedOrder.id);
-    await supabase.from("transactions").insert([
-      {
-        order_id: selectedOrder.id,
-        customer_name: selectedOrder.customers.name,
-        status: "completed",
-        date: new Date().toISOString(),
-      },
-    ]);
 
     alert("Order successfully completed.");
     setShowModal(false);
     setSelectedOrder(null);
     fetchOrders();
+    fetchItems();
+  };
+
+  const handleInsertToInventory = async (order: OrderWithDetails) => {
+    for (const item of order.order_items) {
+      const invItem = items.find((i) => i.id === item.inventory.id);
+      const insertQty = invItem && invItem.quantity > 0 ? item.quantity : 0;
+
+      await supabase
+        .from("inventory")
+        .update({ quantity: insertQty })
+        .eq("id", item.inventory.id);
+    }
+
+    alert("Inventory updated based on order quantities.");
     fetchItems();
   };
 
@@ -207,17 +212,17 @@ const fetchOrders = async () => {
 
   const handleQuantityChange = (index: number, value: number) => {
     setEditedQuantities((prev) => {
-      const newQuantities = [...prev];
-      newQuantities[index] = value;
-      return newQuantities;
+      const updated = [...prev];
+      updated[index] = value;
+      return updated;
     });
   };
 
   const handleDiscountChange = (index: number, value: number) => {
     setEditedDiscounts((prev) => {
-      const newDiscounts = [...prev];
-      newDiscounts[index] = value;
-      return newDiscounts;
+      const updated = [...prev];
+      updated[index] = value;
+      return updated;
     });
   };
 
@@ -233,17 +238,15 @@ const fetchOrders = async () => {
         className="mb-4 w-full md:w-1/3 px-4 py-2 border rounded"
       />
 
-      {/* Inventory Table */}
       <div className="overflow-x-auto rounded-lg shadow mb-6">
         <table className="min-w-full bg-white text-sm">
           <thead className="bg-[#ffba20] text-black text-left">
             <tr>
               <th className="py-2 px-4">Product Name</th>
               <th className="py-2 px-4">Category</th>
-              <th className="py-2 px-4">Stock</th>
               <th className="py-2 px-4">Unit</th>
               <th className="py-2 px-4">Price</th>
-              <th className="py-2 px-4">Action</th>
+              <th className="py-2 px-4">Stock</th>
             </tr>
           </thead>
           <tbody>
@@ -255,30 +258,15 @@ const fetchOrders = async () => {
                 <tr key={item.id} className="border-b hover:bg-gray-100">
                   <td className="py-2 px-4">{item.product_name}</td>
                   <td className="py-2 px-4">{item.category}</td>
-                  <td className="py-2 px-4">{item.quantity}</td>
                   <td className="py-2 px-4">{item.unit}</td>
                   <td className="py-2 px-4">₱{item.amount.toLocaleString()}</td>
-                  <td className="py-2 px-4">
-                    <button
-                      className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                      onClick={() => {
-                        if (selectedOrder && isOrderAccepted(selectedOrder.id)) {
-                          setShowModal(true);
-                        } else {
-                          alert("Accept an order first.");
-                        }
-                      }}
-                    >
-                      Order Item
-                    </button>
-                  </td>
+                  <td className="py-2 px-4">{item.quantity}</td>
                 </tr>
               ))}
           </tbody>
         </table>
       </div>
 
-      {/* Customer Orders */}
       <div className="mt-10">
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
 
@@ -287,7 +275,7 @@ const fetchOrders = async () => {
           .slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage)
           .map((order) => {
             const isAccepted = isOrderAccepted(order.id);
-            const isRejected = pickingStatus.find(
+            const isRejected = pickingStatus.some(
               (p) => p.orderId === order.id && p.status === "rejected"
             );
 
@@ -302,14 +290,6 @@ const fetchOrders = async () => {
                 <p>Email: {order.customers.email}</p>
                 <p>Phone: {order.customers.phone}</p>
                 <p>Address: {order.customers.address}</p>
-                <p>
-                  Order Time:{" "}
-                  {new Date(order.date_created).toLocaleString("en-PH", {
-                    timeZone: "Asia/Manila",
-                    dateStyle: "long",
-                    timeStyle: "short",
-                  })}
-                </p>
                 <ul className="mt-2 list-disc list-inside">
                   {order.order_items.map((item, idx) => (
                     <li key={idx}>
@@ -333,6 +313,22 @@ const fetchOrders = async () => {
                         >
                           Accept Order
                         </button>
+
+                        <button
+                          onClick={() => {
+                            handleInsertToInventory(order);
+                            setInsertedOrders((prev) => [...prev, order.id]);
+                          }}
+                          disabled={insertedOrders.includes(order.id)}
+                          className={`px-4 py-2 rounded ${
+                            insertedOrders.includes(order.id)
+                              ? "bg-gray-400 text-white cursor-not-allowed"
+                              : "bg-yellow-500 text-white hover:bg-yellow-600"
+                          }`}
+                        >
+                          Check
+                        </button>
+
                         <button
                           onClick={() => handleRejectOrder(order)}
                           className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
@@ -342,20 +338,12 @@ const fetchOrders = async () => {
                       </>
                     )}
                     {isAccepted && (
-                      <>
-                        <button
-                          onClick={handleOrderComplete}
-                          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-                        >
-                          Order Complete
-                        </button>
-                        <button
-                          onClick={() => handleCancel(order.id)}
-                          className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
-                        >
-                          Cancel
-                        </button>
-                      </>
+                      <button
+                        onClick={() => handleCancel(order.id)}
+                        className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                      >
+                        Cancel
+                      </button>
                     )}
                   </div>
                 )}
@@ -364,7 +352,7 @@ const fetchOrders = async () => {
           })}
       </div>
 
-      {/* Pagination Controls */}
+      {/* Pagination */}
       <div className="flex justify-between items-center mt-6">
         <button
           onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
@@ -380,9 +368,8 @@ const fetchOrders = async () => {
         <span className="text-sm font-semibold text-gray-700">
           Page {currentPage} of{" "}
           {Math.ceil(
-            orders.filter(
-              (o) => o.status === "pending" || o.status === "accepted"
-            ).length / ordersPerPage
+            orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+              ordersPerPage
           )}
         </span>
         <button
@@ -390,9 +377,8 @@ const fetchOrders = async () => {
             setCurrentPage((p) =>
               p <
               Math.ceil(
-                orders.filter(
-                  (o) => o.status === "pending" || o.status === "accepted"
-                ).length / ordersPerPage
+                orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                  ordersPerPage
               )
                 ? p + 1
                 : p
@@ -401,17 +387,15 @@ const fetchOrders = async () => {
           disabled={
             currentPage >=
             Math.ceil(
-              orders.filter(
-                (o) => o.status === "pending" || o.status === "accepted"
-              ).length / ordersPerPage
+              orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                ordersPerPage
             )
           }
           className={`px-4 py-2 rounded ${
             currentPage >=
             Math.ceil(
-              orders.filter(
-                (o) => o.status === "pending" || o.status === "accepted"
-              ).length / ordersPerPage
+              orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                ordersPerPage
             )
               ? "bg-gray-300 text-gray-600 cursor-not-allowed"
               : "bg-blue-600 text-white hover:bg-blue-700"
@@ -431,9 +415,6 @@ const fetchOrders = async () => {
                 <strong>Name:</strong> {selectedOrder.customers.name}
               </p>
               <p>
-                <strong>Contact Person:</strong> {selectedOrder.customers.contact_person}
-              </p>
-              <p>
                 <strong>Email:</strong> {selectedOrder.customers.email}
               </p>
               <p>
@@ -441,41 +422,6 @@ const fetchOrders = async () => {
               </p>
               <p>
                 <strong>Address:</strong> {selectedOrder.customers.address}
-              </p>
-              <p>
-                <strong>Code:</strong> {selectedOrder.customers.code}
-              </p>
-              <p>
-                <strong>Area:</strong> {selectedOrder.customers.area}
-              </p>
-              <p>
-                <strong>Transaction:</strong> {selectedOrder.customers.transaction}
-              </p>
-              <p>
-                <strong>Status:</strong> {selectedOrder.customers.status}
-              </p>
-              <p>
-                <strong>Payment Type:</strong> {selectedOrder.customers.payment_type}
-              </p>
-              <p>
-                <strong>Customer Type:</strong> {selectedOrder.customers.customer_type}
-              </p>
-              <p>
-                <strong>Order Count:</strong> {selectedOrder.customers.order_count}
-              </p>
-              <p>
-                <strong>Date Created:</strong>{" "}
-                {selectedOrder.customers.date
-                  ? new Date(selectedOrder.customers.date).toLocaleDateString("en-PH")
-                  : "N/A"}
-              </p>
-              <p>
-                <strong>Order Date:</strong>{" "}
-                {new Date(selectedOrder.date_created).toLocaleString("en-PH", {
-                  timeZone: "Asia/Manila",
-                  dateStyle: "short",
-                  timeStyle: "short",
-                })}
               </p>
               <p>
                 <strong>Total:</strong> ₱{selectedOrder.total_amount.toFixed(2)}
@@ -513,19 +459,19 @@ const fetchOrders = async () => {
               ))}
               <div className="mt-4 flex justify-end gap-2">
                 <button
-                  className="bg-gray-400 text-white px-4 py-2 rounded"
+                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                  onClick={handleOrderComplete}
+                >
+                  Order Complete
+                </button>
+                <button
+                  className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
                   onClick={() => {
                     setShowModal(false);
                     setSelectedOrder(null);
                   }}
                 >
-                  OK
-                </button>
-                <button
-                  className="bg-blue-600 text-white px-4 py-2 rounded"
-                  onClick={handleOrderComplete}
-                >
-                  Order Complete
+                  CANCEL
                 </button>
               </div>
             </div>
