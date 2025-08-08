@@ -38,13 +38,16 @@ const SalesInvoicePage = () => {
       <h1 className="text-3xl font-bold">Sales Invoices</h1>
 
       {/* Search */}
-      <Input
-        type="text"
-        placeholder="Search by customer name..."
-        value={searchName}
-        onChange={(e) => setSearchName(e.target.value)}
-        className="w-80 rounded border px-4 py-2"
-      />
+<div className="w-full max-w-md">
+  <input
+    type="text"
+    placeholder="Search by customer name..."
+    value={searchName}
+    onChange={(e) => setSearchName(e.target.value)}
+    className="w-full px-4 py-2 rounded-md shadow bg-white focus:outline-none focus:ring-2 focus:ring-black transition"
+  />
+</div>
+
 
       {/* Invoices */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
