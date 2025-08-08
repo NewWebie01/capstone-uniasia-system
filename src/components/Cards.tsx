@@ -1,47 +1,159 @@
 // components/Cards.tsx
+"use client";
+
+import { useState, useEffect } from "react";
 import {
-  FaBoxes,
+  FaDollarSign,
   FaExclamationTriangle,
   FaTruck,
   FaUserFriends,
 } from "react-icons/fa";
+import supabase from "@/config/supabaseClient";
+
+type InventoryItem = {
+  id: number;
+  product_name: string;
+  quantity: number;
+};
+
+type Delivery = {
+  id: number;
+  destination: string;
+};
 
 const Cards = () => {
+  const [totalSales, setTotalSales] = useState<number | null>(null);
+  const [outOfStockItems, setOutOfStockItems] = useState<InventoryItem[] | null>(null);
+  const [ongoingDeliveries, setOngoingDeliveries] = useState<Delivery[] | null>(null);
+  const [customersCount, setCustomersCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    // 1) Fetch total sales sum
+    async function fetchTotalSales() {
+      const { data, error } = await supabase
+        .from("sales")
+        .select("amount");
+      if (!error && data) {
+        const sum = data.reduce((acc, row) => acc + Number(row.amount ?? 0), 0);
+        setTotalSales(sum);
+      }
+    }
+
+    // 2) Fetch out-of-stock items
+    async function fetchOutOfStockItems() {
+      const { data, error } = await supabase
+        .from("inventory")
+        .select("id, product_name, quantity")
+        .eq("quantity", 0)
+        .order("product_name", { ascending: true });
+      if (!error && data) {
+        setOutOfStockItems(data);
+      }
+    }
+
+    // 3) Fetch ongoing deliveries
+    async function fetchOngoingDeliveries() {
+      const { data, error } = await supabase
+        .from("truck_deliveries")
+        .select("id, destination")
+        .eq("status", "Ongoing")
+        .order("destination", { ascending: true });
+      if (!error && data) {
+        setOngoingDeliveries(data);
+      }
+    }
+
+    // 4) Fetch total customers count
+    async function fetchCustomers() {
+      const { count, error } = await supabase
+        .from("customers")
+        .select("*", { count: "exact", head: true });
+      if (!error) {
+        setCustomersCount(count);
+      }
+    }
+
+    fetchTotalSales();
+    fetchOutOfStockItems();
+    fetchOngoingDeliveries();
+    fetchCustomers();
+  }, []);
+
+  const renderNumber = (val: number | null, prefix = "") =>
+    val === null ? "…" : prefix + val.toLocaleString();
+
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      {/* Total Sales */}
       <div className="bg-white p-4 rounded-xl shadow-sm flex items-center gap-4 overflow-hidden">
-        <FaBoxes className="text-3xl text-[#001E80]" />
-        <div className="font-medium text-sm sm:text-base">
-          <div className="truncate">Total Sales</div>
-          <div className="text-xs sm:text-sm text-gray-500 truncate">
-            ₱120,000
+        <FaDollarSign className="text-3xl text-green-600" />
+        <div>
+          <div className="font-medium text-sm sm:text-base">Total Sales</div>
+          <div className="text-xs sm:text-sm text-gray-500">
+            {totalSales === null
+              ? "Loading…"
+              : new Intl.NumberFormat("en-PH", {
+                  style: "currency",
+                  currency: "PHP",
+                  maximumFractionDigits: 0,
+                }).format(totalSales)}
           </div>
         </div>
       </div>
-      <div className="bg-white p-4 rounded-xl shadow-sm flex items-center gap-4 overflow-hidden">
-        <FaExclamationTriangle className="text-3xl text-red-500" />
-        <div className="font-medium text-sm sm:text-base">
-          <div className="truncate">Low Stock</div>
-          <div className="text-xs sm:text-sm text-gray-500 truncate">
-            6 items
+
+      {/* Out of Stock */}
+      <div className="bg-white p-4 rounded-xl shadow-sm overflow-hidden">
+        <div className="flex items-center gap-4 mb-2">
+          <FaExclamationTriangle className="text-3xl text-red-500" />
+          <div>
+            <div className="font-medium text-sm sm:text-base">Out of Stock</div>
+            <div className="text-xs sm:text-sm text-gray-500">
+              {outOfStockItems === null
+                ? "Loading…"
+                : `${outOfStockItems.length} item${outOfStockItems.length === 1 ? "" : "s"}`}
+            </div>
           </div>
         </div>
+        {outOfStockItems && outOfStockItems.length > 0 && (
+          <ul className="text-xs text-gray-700 list-disc list-inside space-y-1 max-h-24 overflow-y-auto">
+            {outOfStockItems.map((item) => (
+              <li key={item.id}>{item.product_name}</li>
+            ))}
+          </ul>
+        )}
       </div>
-      <div className="bg-white p-4 rounded-xl shadow-sm flex items-center gap-4 overflow-hidden">
-        <FaTruck className="text-3xl text-green-600" />
-        <div className="font-medium text-sm sm:text-base">
-          <div className="truncate">Deliveries</div>
-          <div className="text-xs sm:text-sm text-gray-500 truncate">
-            24 in transit
+
+      {/* Ongoing Deliveries */}
+      <div className="bg-white p-4 rounded-xl shadow-sm overflow-hidden">
+        <div className="flex items-center gap-4 mb-2">
+          <FaTruck className="text-3xl text-yellow-600" />
+          <div>
+            <div className="font-medium text-sm sm:text-base">
+              Ongoing Deliveries
+            </div>
+            <div className="text-xs sm:text-sm text-gray-500">
+              {ongoingDeliveries === null
+                ? "Loading…"
+                : `${ongoingDeliveries.length} delivery${ongoingDeliveries.length === 1 ? "" : "ies"}`}
+            </div>
           </div>
         </div>
+        {ongoingDeliveries && ongoingDeliveries.length > 0 && (
+          <ul className="text-xs text-gray-700 list-disc list-inside space-y-1 max-h-24 overflow-y-auto">
+            {ongoingDeliveries.map((d) => (
+              <li key={d.id}>{d.destination}</li>
+            ))}
+          </ul>
+        )}
       </div>
+
+      {/* Active Customers */}
       <div className="bg-white p-4 rounded-xl shadow-sm flex items-center gap-4 overflow-hidden">
         <FaUserFriends className="text-3xl text-[#ffba20]" />
-        <div className="font-medium text-sm sm:text-base">
-          <div className="truncate">Customers</div>
-          <div className="text-xs sm:text-sm text-gray-500 truncate">
-            1,042 active
+        <div>
+          <div className="font-medium text-sm sm:text-base">Customers</div>
+          <div className="text-xs sm:text-sm text-gray-500">
+            {renderNumber(customersCount)} active
           </div>
         </div>
       </div>
