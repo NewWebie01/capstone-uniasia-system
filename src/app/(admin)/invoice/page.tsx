@@ -134,16 +134,16 @@ const SalesInvoicePage = () => {
                       <strong>TEL NO:</strong> {selectedCustomer.phone}
                     </p>
                     <p>
-                      <strong>TERMS:</strong> Net 30
+                      <strong>TERMS:</strong>
                     </p>
                     <p>
-                      <strong>COLLECTION:</strong> On Delivery
+                      <strong>COLLECTION:</strong>
                     </p>
                     <p>
-                      <strong>CREDIT LIMIT:</strong> ₱20,000
+                      <strong>CREDIT LIMIT:</strong>
                     </p>
                     <p>
-                      <strong>SALESMAN:</strong> Pedro Reyes
+                      <strong>SALESMAN:</strong>
                     </p>
                   </div>
 
