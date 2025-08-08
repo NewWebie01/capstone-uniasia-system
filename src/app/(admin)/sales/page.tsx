@@ -1,4 +1,3 @@
-// app/sales/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -25,6 +24,15 @@ type OrderWithDetails = {
     email: string;
     phone: string;
     address: string;
+    contact_person?: string;
+    code?: string;
+    area?: string;
+    date?: string;
+    transaction?: string;
+    status?: string;
+    payment_type?: string;
+    customer_type?: string;
+    order_count?: number;
   };
   order_items: {
     quantity: number;
@@ -49,26 +57,31 @@ export default function SalesPage() {
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showModal, setShowModal] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
-    null
-  );
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const ordersPerPage = 10;
 
+  // Fetch inventory items
   const fetchItems = async () => {
     const { data } = await supabase.from("inventory").select();
     if (data) setItems(data);
   };
 
+  // Fetch customer orders with details
   const fetchOrders = async () => {
     const { data } = await supabase
       .from("orders")
       .select(
         `id, total_amount, status, date_created,
-         customers ( name, email, phone, address ),
+         customers (
+           name, email, phone, address,
+           contact_person, code, area, date,
+           transaction, status, payment_type,
+           customer_type, order_count
+         ),
          order_items (
            quantity, price,
            inventory ( id, product_name, category, unit_price, quantity )
@@ -104,25 +117,16 @@ export default function SalesPage() {
 
   const handleAcceptOrder = (order: OrderWithDetails) => {
     setEditedDiscounts(order.order_items.map(() => 0));
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "accepted" },
-    ]);
+    setPickingStatus((prev) => [...prev, { orderId: order.id, status: "accepted" }]);
     setEditedQuantities(order.order_items.map((item) => item.quantity));
     setSelectedOrder(order);
     setShowModal(true);
   };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "rejected" },
-    ]);
+    setPickingStatus((prev) => [...prev, { orderId: order.id, status: "rejected" }]);
 
-    await supabase
-      .from("orders")
-      .update({ status: "rejected" })
-      .eq("id", order.id);
+    await supabase.from("orders").update({ status: "rejected" }).eq("id", order.id);
     await supabase.from("transactions").insert([
       {
         order_id: order.id,
@@ -150,10 +154,7 @@ export default function SalesPage() {
         return;
       }
 
-      await supabase
-        .from("inventory")
-        .update({ quantity: remaining })
-        .eq("id", invId);
+      await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
 
       await supabase.from("sales").insert([
         {
@@ -165,10 +166,7 @@ export default function SalesPage() {
       ]);
     }
 
-    await supabase
-      .from("orders")
-      .update({ status: "completed" })
-      .eq("id", selectedOrder.id);
+    await supabase.from("orders").update({ status: "completed" }).eq("id", selectedOrder.id);
     await supabase.from("transactions").insert([
       {
         order_id: selectedOrder.id,
@@ -207,9 +205,7 @@ export default function SalesPage() {
 
   return (
     <div className="p-6">
-      <motion.h1 className="text-3xl font-bold mb-4">
-        Sales Processing
-      </motion.h1>
+      <motion.h1 className="text-3xl font-bold mb-4">Sales Processing</motion.h1>
 
       <input
         type="text"
@@ -235,9 +231,7 @@ export default function SalesPage() {
           <tbody>
             {items
               .filter((item) =>
-                item.product_name
-                  .toLowerCase()
-                  .includes(searchQuery.toLowerCase())
+                item.product_name.toLowerCase().includes(searchQuery.toLowerCase())
               )
               .map((item) => (
                 <tr key={item.id} className="border-b hover:bg-gray-100">
@@ -250,10 +244,7 @@ export default function SalesPage() {
                     <button
                       className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
                       onClick={() => {
-                        if (
-                          selectedOrder &&
-                          isOrderAccepted(selectedOrder.id)
-                        ) {
+                        if (selectedOrder && isOrderAccepted(selectedOrder.id)) {
                           setShowModal(true);
                         } else {
                           alert("Accept an order first.");
@@ -314,47 +305,47 @@ export default function SalesPage() {
                 </p>
                 <p className="mb-2">Status: {order.status}</p>
 
-                {order.status !== "completed" &&
-                  order.status !== "rejected" && (
-                    <div className="flex gap-2 mt-2">
-                      {!isAccepted && !isRejected && (
-                        <>
-                          <button
-                            onClick={() => handleAcceptOrder(order)}
-                            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-                          >
-                            Accept Order
-                          </button>
-                          <button
-                            onClick={() => handleRejectOrder(order)}
-                            className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
-                          >
-                            Reject Order
-                          </button>
-                        </>
-                      )}
-                      {isAccepted && (
-                        <>
-                          <button
-                            onClick={handleOrderComplete}
-                            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-                          >
-                            Order Complete
-                          </button>
-                          <button
-                            onClick={() => handleCancel(order.id)}
-                            className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
+                {order.status !== "completed" && order.status !== "rejected" && (
+                  <div className="flex gap-2 mt-2">
+                    {!isAccepted && !isRejected && (
+                      <>
+                        <button
+                          onClick={() => handleAcceptOrder(order)}
+                          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                        >
+                          Accept Order
+                        </button>
+                        <button
+                          onClick={() => handleRejectOrder(order)}
+                          className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                        >
+                          Reject Order
+                        </button>
+                      </>
+                    )}
+                    {isAccepted && (
+                      <>
+                        <button
+                          onClick={handleOrderComplete}
+                          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                        >
+                          Order Complete
+                        </button>
+                        <button
+                          onClick={() => handleCancel(order.id)}
+                          className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
       </div>
+
       {/* Pagination Controls */}
       <div className="flex justify-between items-center mt-6">
         <button
@@ -416,10 +407,13 @@ export default function SalesPage() {
       {showModal && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
           <div className="bg-white p-6 rounded shadow-md w-full max-w-3xl flex justify-between">
-            <div className="w-1/2 pr-4 border-r">
+            <div className="w-1/2 pr-4 border-r text-sm space-y-1">
               <h2 className="font-bold text-lg mb-2">Customer Info</h2>
               <p>
                 <strong>Name:</strong> {selectedOrder.customers.name}
+              </p>
+              <p>
+                <strong>Contact Person:</strong> {selectedOrder.customers.contact_person}
               </p>
               <p>
                 <strong>Email:</strong> {selectedOrder.customers.email}
@@ -431,7 +425,34 @@ export default function SalesPage() {
                 <strong>Address:</strong> {selectedOrder.customers.address}
               </p>
               <p>
-                <strong>Date:</strong>{" "}
+                <strong>Code:</strong> {selectedOrder.customers.code}
+              </p>
+              <p>
+                <strong>Area:</strong> {selectedOrder.customers.area}
+              </p>
+              <p>
+                <strong>Transaction:</strong> {selectedOrder.customers.transaction}
+              </p>
+              <p>
+                <strong>Status:</strong> {selectedOrder.customers.status}
+              </p>
+              <p>
+                <strong>Payment Type:</strong> {selectedOrder.customers.payment_type}
+              </p>
+              <p>
+                <strong>Customer Type:</strong> {selectedOrder.customers.customer_type}
+              </p>
+              <p>
+                <strong>Order Count:</strong> {selectedOrder.customers.order_count}
+              </p>
+              <p>
+                <strong>Date Created:</strong>{" "}
+                {selectedOrder.customers.date
+                  ? new Date(selectedOrder.customers.date).toLocaleDateString("en-PH")
+                  : "N/A"}
+              </p>
+              <p>
+                <strong>Order Date:</strong>{" "}
                 {new Date(selectedOrder.date_created).toLocaleString("en-PH", {
                   timeZone: "Asia/Manila",
                   dateStyle: "short",
@@ -442,22 +463,9 @@ export default function SalesPage() {
                 <strong>Total:</strong> ₱{selectedOrder.total_amount.toFixed(2)}
               </p>
             </div>
+
             <div className="w-1/2 pl-4">
               <h2 className="font-bold text-lg mb-2">Picking List</h2>
-              <p className="mt-2 font-bold text-right">
-                Discounted Total: ₱
-                {selectedOrder.order_items
-                  .reduce(
-                    (acc, item, idx) =>
-                      acc +
-                      editedQuantities[idx] *
-                        item.price *
-                        (1 - editedDiscounts[idx] / 100),
-                    0
-                  )
-                  .toFixed(2)}
-              </p>
-
               {selectedOrder.order_items.map((item, idx) => (
                 <div key={idx} className="mb-2 flex items-center gap-2">
                   <span className="w-32">{item.inventory.product_name}:</span>
@@ -466,9 +474,7 @@ export default function SalesPage() {
                     min={1}
                     max={item.inventory.quantity}
                     value={editedQuantities[idx]}
-                    onChange={(e) =>
-                      handleQuantityChange(idx, Number(e.target.value))
-                    }
+                    onChange={(e) => handleQuantityChange(idx, Number(e.target.value))}
                     className="border rounded px-2 py-1 w-20"
                     title="Quantity"
                     placeholder="Qty"
@@ -478,10 +484,8 @@ export default function SalesPage() {
                     type="number"
                     min={0}
                     max={100}
-                    value={editedDiscounts[idx]}
-                    onChange={(e) =>
-                      handleDiscountChange(idx, Number(e.target.value))
-                    }
+                    value={editedDiscounts[idx] || 0}
+                    onChange={(e) => handleDiscountChange(idx, Number(e.target.value))}
                     className="border rounded px-2 py-1 w-16"
                     title="Discount percent"
                     placeholder="Disc"
