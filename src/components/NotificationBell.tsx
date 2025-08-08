@@ -3,10 +3,26 @@
 import { useEffect, useState } from "react";
 import { BellIcon } from "@heroicons/react/24/solid";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { toast } from "sonner";
+
+type OrderItem = {
+  product_name: string;
+  category: string;
+  subcategory: string;
+  quantity: number;
+};
+
+type Order = {
+  id: string;
+  customer_name: string;
+  email: string;
+  phone: string;
+  address: string;
+  items: OrderItem[];
+};
 
 export default function NotificationBell() {
-  const [hasNewOrder, setHasNewOrder] = useState(false);
-  const [latestOrder, setLatestOrder] = useState<any>(null);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const supabase = createClientComponentClient();
@@ -26,7 +42,8 @@ export default function NotificationBell() {
 
           const { data, error } = await supabase
             .from("orders")
-            .select(`
+            .select(
+              `
               id,
               customers (name, email, phone, address),
               order_items (
@@ -37,7 +54,8 @@ export default function NotificationBell() {
                   subcategory
                 )
               )
-            `)
+            `
+            )
             .eq("id", payload.new.id)
             .single();
 
@@ -57,15 +75,17 @@ export default function NotificationBell() {
             quantity: item.quantity,
           }));
 
-          setLatestOrder({
+          const newOrder: Order = {
+            id: data.id,
             customer_name: customer?.name,
             email: customer?.email,
             phone: customer?.phone,
             address: customer?.address,
             items,
-          });
+          };
 
-          setHasNewOrder(true);
+          setOrders((prev) => [newOrder, ...prev.slice(0, 4)]);
+          toast.success("🛒 New order received!");
         }
       )
       .subscribe();
@@ -76,12 +96,16 @@ export default function NotificationBell() {
   }, [supabase]);
 
   const handleClick = () => {
-    setHasNewOrder(false);
     setIsModalOpen(true);
+  };
+
+  const handleMarkAsRead = (orderId: string) => {
+    setOrders((prev) => prev.filter((order) => order.id !== orderId));
   };
 
   return (
     <>
+      {/* Notification Bell */}
       <div
         className="fixed top-16 right-12 z-50 bg-white shadow-lg rounded-full p-3 cursor-pointer transition-transform hover:scale-110"
         title="Notifications"
@@ -93,31 +117,61 @@ export default function NotificationBell() {
           className="h-5 w-5 transition-colors duration-200"
           style={{ color: isHovered ? "#ffba20" : "#181918" }}
         />
-        {hasNewOrder && (
+        {orders.length > 0 && (
           <span className="absolute top-1 right-1 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold leading-none text-white bg-red-600 rounded-full">
-            🔴
+            {orders.length}
           </span>
         )}
       </div>
 
-      {isModalOpen && latestOrder && (
+      {/* Notification Modal */}
+      {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
-          <div className="bg-white rounded-lg p-6 max-w-lg w-full shadow-lg">
-            <h2 className="text-xl font-semibold mb-4">🛒 New Order Details</h2>
-            <div className="mb-2"><strong>Name:</strong> {latestOrder.customer_name}</div>
-            <div className="mb-2"><strong>Email:</strong> {latestOrder.email}</div>
-            <div className="mb-2"><strong>Phone:</strong> {latestOrder.phone}</div>
-            <div className="mb-4"><strong>Address:</strong> {latestOrder.address}</div>
+          <div className="bg-white rounded-lg p-6 max-w-xl w-full shadow-lg max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-semibold mb-4">🛒 Recent Orders</h2>
 
-            <h3 className="text-md font-semibold mb-2">📦 Ordered Items:</h3>
-            <ul className="list-disc list-inside space-y-1 max-h-40 overflow-y-auto">
-              {latestOrder.items.map((item: any, index: number) => (
-                <li key={index}>
-                  <strong>{item.product_name}</strong> — {item.quantity} pcs
-                  ({item.category} / {item.subcategory})
-                </li>
-              ))}
-            </ul>
+            {orders.length === 0 ? (
+              <div className="text-gray-500">No new orders</div>
+            ) : (
+              <div className="space-y-4">
+                {orders.map((order, index) => (
+                  <div
+                    key={order.id}
+                    className="border border-gray-200 rounded p-4"
+                  >
+                    <div className="mb-1">
+                      <strong>Name:</strong> {order.customer_name}
+                    </div>
+                    <div className="mb-1">
+                      <strong>Email:</strong> {order.email}
+                    </div>
+                    <div className="mb-1">
+                      <strong>Phone:</strong> {order.phone}
+                    </div>
+                    <div className="mb-2">
+                      <strong>Address:</strong> {order.address}
+                    </div>
+                    <h3 className="font-medium mb-1">📦 Items:</h3>
+                    <ul className="list-disc list-inside text-sm space-y-1 mb-2">
+                      {order.items.map((item, idx) => (
+                        <li key={idx}>
+                          <strong>{item.product_name}</strong> — {item.quantity} pcs (
+                          {item.category} / {item.subcategory})
+                        </li>
+                      ))}
+                    </ul>
+                    <label className="inline-flex items-center mt-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mr-2"
+                        onChange={() => handleMarkAsRead(order.id)}
+                      />
+                      Mark as Read
+                    </label>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="mt-6 text-right">
               <button
