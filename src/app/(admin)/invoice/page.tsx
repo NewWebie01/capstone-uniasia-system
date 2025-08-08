@@ -30,10 +30,8 @@ type Order = {
   terms?: string;
   credit_limit?: number | string;
   collection?: string;
-  // Add more fields as needed
 };
 
-// ---------- Component ----------
 const SalesInvoicePage = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
