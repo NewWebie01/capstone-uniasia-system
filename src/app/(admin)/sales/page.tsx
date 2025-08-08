@@ -71,41 +71,59 @@ export default function SalesPage() {
   };
 
   // Fetch customer orders with details
-  const fetchOrders = async () => {
-    const { data } = await supabase
-      .from("orders")
-      .select(
-        `id, total_amount, status, date_created,
-         customers (
-           name, email, phone, address,
-           contact_person, code, area, date,
-           transaction, status, payment_type,
-           customer_type, order_count
-         ),
-         order_items (
-           quantity, price,
-           inventory ( id, product_name, category, unit_price, quantity )
-         )`
-      )
-      .order("date_created", { ascending: false });
+const fetchOrders = async () => {
 
-    if (data) {
-      setOrders(
-        data.map((order: any) => ({
-          ...order,
-          customers: Array.isArray(order.customers)
-            ? order.customers[0]
-            : order.customers,
-          order_items: order.order_items.map((oi: any) => ({
-            ...oi,
-            inventory: Array.isArray(oi.inventory)
-              ? oi.inventory[0]
-              : oi.inventory,
-          })),
-        }))
-      );
-    }
-  };
+ const { data, error } = await supabase
+  .from('orders')
+  .select(`
+    *,
+    customers:customer_id (
+      name,
+      email,
+      phone,
+      address,
+      contact_person,
+      code,
+      area,
+      date,
+      transaction,
+      status,
+      payment_type,
+      customer_type,
+      order_count
+    ),
+    order_items (
+      id,
+      quantity,
+      price,
+      inventory:inventory_id (
+        product_name,
+        category,
+        subcategory,
+        status
+      )
+    )
+  `);
+
+
+  if (error) {
+    console.error("Failed to fetch orders:", JSON.stringify(error, null, 2));
+  } else if (data) {
+ setOrders(
+  data.map((order: any) => ({
+    ...order,
+    customer: order.customers,
+    items: order.order_items,
+  }))
+);
+
+  }
+};
+
+ 
+
+
+
 
   useEffect(() => {
     fetchItems();
