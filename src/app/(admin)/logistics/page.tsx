@@ -13,6 +13,8 @@ export default function TruckDeliveryPage() {
       status: "Scheduled",
       scheduleDate: "2025-08-10",
       arrivalDate: "",
+      driver: "Juan Dela Cruz",
+      participants: ["Pedro Santos"],
       expenses: {
         food: 1500,
         gas: 5000,
@@ -21,27 +23,11 @@ export default function TruckDeliveryPage() {
         other: 500,
       },
     },
-    {
-      id: 2,
-      destination: "Iloilo City",
-      plateNumber: "XYZ-5678",
-      status: "Ongoing",
-      scheduleDate: "2025-08-04",
-      arrivalDate: "",
-      expenses: {
-        food: 1200,
-        gas: 4500,
-        toll: 600,
-        boat: 2500,
-        other: 300,
-      },
-    },
   ]);
 
   const [formVisible, setFormVisible] = useState(false);
 
-  const showForm = () => setFormVisible(true);
-  const hideForm = () => setFormVisible(false);
+  const [newPerson, setNewPerson] = useState("");
 
   const [newDelivery, setNewDelivery] = useState({
     destination: "",
@@ -49,6 +35,8 @@ export default function TruckDeliveryPage() {
     status: "Scheduled",
     scheduleDate: "",
     arrivalDate: "",
+    driver: "",
+    participants: [] as string[],
     expenses: {
       food: 0,
       gas: 0,
@@ -58,23 +46,31 @@ export default function TruckDeliveryPage() {
     },
   });
 
-  const handleAddDelivery = (e: React.FormEvent) => {
-    e.preventDefault();
+  const showForm = () => setFormVisible(true);
 
-    const newEntry = {
-      ...newDelivery,
-      id: Date.now(),
-    };
-
-    setDeliveries([...deliveries, newEntry]);
+  const hideForm = () => {
+    setFormVisible(false);
+    setNewPerson("");
     setNewDelivery({
       destination: "",
       plateNumber: "",
       status: "Scheduled",
       scheduleDate: "",
       arrivalDate: "",
+      driver: "",
+      participants: [],
       expenses: { food: 0, gas: 0, toll: 0, boat: 0, other: 0 },
     });
+  };
+
+  const handleAddDelivery = (e: React.FormEvent) => {
+    e.preventDefault();
+    const newEntry = {
+      ...newDelivery,
+      id: Date.now(),
+    };
+
+    setDeliveries([...deliveries, newEntry]);
     hideForm();
   };
 
@@ -97,15 +93,23 @@ export default function TruckDeliveryPage() {
     );
   };
 
+  const addParticipant = () => {
+    if (!newPerson.trim()) return;
+    setNewDelivery((prev) => ({
+      ...prev,
+      participants: [...prev.participants, newPerson.trim()],
+    }));
+    setNewPerson("");
+  };
+
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-3xl font-bold">Truck Delivery</h1>
-<button
-  onClick={showForm}
-  className="bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] flex items-center gap-2 mr-20"
->
-
+        <button
+          onClick={showForm}
+          className="bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] flex items-center gap-2 mr-20"
+        >
           <Plus size={18} />
           Add Delivery Schedule
         </button>
@@ -145,7 +149,7 @@ export default function TruckDeliveryPage() {
             </div>
           </div>
 
-          <div className="mt-2 text-sm text-gray-700">
+          <div className="mt-2 text-sm text-gray-700 space-y-1">
             <p>
               <strong>Schedule Date:</strong> {delivery.scheduleDate}
             </p>
@@ -155,6 +159,14 @@ export default function TruckDeliveryPage() {
             {delivery.arrivalDate && (
               <p>
                 <strong>Arrival Date:</strong> {delivery.arrivalDate}
+              </p>
+            )}
+            <p>
+              <strong>Driver:</strong> {delivery.driver}
+            </p>
+            {delivery.participants.length > 0 && (
+              <p>
+                <strong>Other Participants:</strong> {delivery.participants.join(", ")}
               </p>
             )}
           </div>
@@ -169,10 +181,7 @@ export default function TruckDeliveryPage() {
               <li>📦 Other Fees: ₱{delivery.expenses.other}</li>
               <li className="font-medium">
                 Total: ₱
-                {Object.values(delivery.expenses).reduce(
-                  (acc, val) => acc + val,
-                  0
-                )}
+                {Object.values(delivery.expenses).reduce((acc, val) => acc + val, 0)}
               </li>
             </ul>
           </div>
@@ -185,99 +194,123 @@ export default function TruckDeliveryPage() {
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
-            className="bg-white p-6 rounded-xl w-full max-w-md shadow-lg"
+            className="bg-white p-6 rounded-xl w-full max-w-3xl shadow-lg"
           >
             <h2 className="text-xl font-bold mb-4">Add Delivery Schedule</h2>
             <form onSubmit={handleAddDelivery} className="space-y-4">
-              <div>
-                <label className="text-sm font-medium">Destination</label>
-                <input
-                  type="text"
-                  value={newDelivery.destination}
-                  onChange={(e) =>
-                    setNewDelivery({
-                      ...newDelivery,
-                      destination: e.target.value,
-                    })
-                  }
-                  className="w-full border p-2 rounded"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Plate Number</label>
-                <input
-                  type="text"
-                  value={newDelivery.plateNumber}
-                  onChange={(e) =>
-                    setNewDelivery({
-                      ...newDelivery,
-                      plateNumber: e.target.value,
-                    })
-                  }
-                  className="w-full border p-2 rounded"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Status</label>
-                <select
-                  value={newDelivery.status}
-                  onChange={(e) =>
-                    setNewDelivery({ ...newDelivery, status: e.target.value })
-                  }
-                  className="w-full border p-2 rounded"
-                >
-                  <option>Scheduled</option>
-                  <option>Ongoing</option>
-                  <option>Delivered</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Schedule Date</label>
-                <input
-                  type="date"
-                  value={newDelivery.scheduleDate}
-                  onChange={(e) =>
-                    setNewDelivery({
-                      ...newDelivery,
-                      scheduleDate: e.target.value,
-                    })
-                  }
-                  className="w-full border p-2 rounded"
-                  required
-                />
-              </div>
-
-              {newDelivery.status === "Delivered" && (
-                <div>
-                  <label className="text-sm font-medium">Arrival Date</label>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                <div className="flex items-center gap-2">
+                  <label className="w-32 text-sm font-medium">Destination</label>
                   <input
-                    type="date"
-                    value={newDelivery.arrivalDate}
+                    type="text"
+                    value={newDelivery.destination}
                     onChange={(e) =>
-                      setNewDelivery({
-                        ...newDelivery,
-                        arrivalDate: e.target.value,
-                      })
+                      setNewDelivery({ ...newDelivery, destination: e.target.value })
                     }
                     className="w-full border p-2 rounded"
+                    required
                   />
                 </div>
-              )}
 
-              <div className="grid grid-cols-2 gap-3">
+                <div className="flex items-center gap-2">
+                  <label className="w-32 text-sm font-medium">Plate Number</label>
+                  <input
+                    type="text"
+                    value={newDelivery.plateNumber}
+                    onChange={(e) =>
+                      setNewDelivery({ ...newDelivery, plateNumber: e.target.value })
+                    }
+                    className="w-full border p-2 rounded"
+                    required
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="w-32 text-sm font-medium">Driver</label>
+                  <input
+                    type="text"
+                    value={newDelivery.driver}
+                    onChange={(e) =>
+                      setNewDelivery({ ...newDelivery, driver: e.target.value })
+                    }
+                    className="w-full border p-2 rounded"
+                    required
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="w-32 text-sm font-medium">Participant</label>
+                  <div className="flex gap-2 w-full">
+                    <input
+                      type="text"
+                      value={newPerson}
+                      onChange={(e) => setNewPerson(e.target.value)}
+                      className="w-full border p-2 rounded"
+                    />
+                    <button
+                      type="button"
+                      onClick={addParticipant}
+                      className="bg-gray-800 text-white px-3 py-1 rounded hover:bg-gray-900"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                {newDelivery.participants.length > 0 && (
+                  <div className="col-span-2 text-sm pl-36 text-gray-600">
+                    Current: {newDelivery.participants.join(", ")}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <label className="w-32 text-sm font-medium">Status</label>
+                  <select
+                    value={newDelivery.status}
+                    onChange={(e) =>
+                      setNewDelivery({ ...newDelivery, status: e.target.value })
+                    }
+                    className="w-full border p-2 rounded"
+                  >
+                    <option>Scheduled</option>
+                    <option>Ongoing</option>
+                    <option>Delivered</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="w-32 text-sm font-medium">Schedule Date</label>
+                  <input
+                    type="date"
+                    value={newDelivery.scheduleDate}
+                    onChange={(e) =>
+                      setNewDelivery({ ...newDelivery, scheduleDate: e.target.value })
+                    }
+                    className="w-full border p-2 rounded"
+                    required
+                  />
+                </div>
+
+                {newDelivery.status === "Delivered" && (
+                  <div className="flex items-center gap-2 col-span-2">
+                    <label className="w-32 text-sm font-medium">Arrival Date</label>
+                    <input
+                      type="date"
+                      value={newDelivery.arrivalDate}
+                      onChange={(e) =>
+                        setNewDelivery({ ...newDelivery, arrivalDate: e.target.value })
+                      }
+                      className="w-full border p-2 rounded"
+                    />
+                  </div>
+                )}
+
                 {Object.keys(newDelivery.expenses).map((key) => (
-                  <div key={key}>
-                    <label className="text-sm font-medium capitalize">
-                      {key}
-                    </label>
+                  <div className="flex items-center gap-2" key={key}>
+                    <label className="w-32 text-sm font-medium capitalize">{key}</label>
                     <input
                       type="number"
-                      placeholder={`₱`}
+                      placeholder="₱"
                       value={(newDelivery.expenses as any)[key]}
                       onChange={(e) =>
                         setNewDelivery({
