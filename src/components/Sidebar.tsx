@@ -10,6 +10,7 @@ import Sales from "@/assets/Sales.png";
 import Chart from "@/assets/Chart.png";
 import Folder from "@/assets/Folder.png";
 import LogoutIcon from "@/assets/power-button.png";
+import Invoice from "@/assets/Chat.png";
 
 import { FaHistory } from "react-icons/fa";
 
@@ -37,7 +38,7 @@ const Menus: {
   { title: "Sales", src: Sales, href: "/sales" },
   { title: "Purchase", src: Folder, href: "/purchase" },
   { title: "Invoice", src: Chart, href: "/invoice" },
-  { title: "Transaction History", src: Folder, href: "/transaction-history" },
+  { title: "Transaction History", src: Invoice, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
 ];
 
