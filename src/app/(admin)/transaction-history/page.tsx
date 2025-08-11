@@ -1,104 +1,109 @@
-"use client";
+// // app/transaction-history/page.tsx
+// "use client";
 
-import { useState } from "react";
+// import { useEffect, useMemo, useState } from "react";
+// import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs";
 
-type Transaction = {
-  date: string;
-  accountId: string;
-  title: string;
-  type: string;
-  method: string;
-  amount: string;
-  status: string;
-};
+// type OrderWithCustomer = {
+//   id: string;
+//   date_created: string;
+//   customer: {
+//     contact_person: string;
+//     code: string;
+//   }[];
+// };
 
-const dummyTransactions: Transaction[] = [
-  {
-    date: "2025-08-07",
-    accountId: "ACC-001",
-    title: "Payment Received",
-    type: "Deposit",
-    method: "WIRE",
-    amount: "₱23,021.00",
-    status: "Pending Receipt",
-  },
-  {
-    date: "2025-08-06",
-    accountId: "ACC-002",
-    title: "Cash Deposit",
-    type: "Deposit",
-    method: "CHECK",
-    amount: "₱234.00",
-    status: "Pending Receipt",
-  },
-  {
-    date: "2025-08-05",
-    accountId: "ACC-003",
-    title: "Order Refund",
-    type: "Withdrawal",
-    method: "WIRE",
-    amount: "₱61.00",
-    status: "Not Confirmed",
-  },
-  {
-    date: "2025-08-04",
-    accountId: "ACC-004",
-    title: "Supplier Payment",
-    type: "Withdrawal",
-    method: "WIRE",
-    amount: "₱1,000.00",
-    status: "Not Confirmed",
-  },
-];
+// type Transaction = {
+//   id: string;
+//   date_created: string;
+//   code: string;
+//   customer: string;
+// };
 
-export default function TransactionHistoryPage() {
-  const [searchQuery, setSearchQuery] = useState("");
+// export default function TransactionHistoryPage() {
+//   const supabase = createPagesBrowserClient();
+//   const [searchQuery, setSearchQuery] = useState("");
+//   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
-  const filtered = dummyTransactions.filter((t) =>
-    `${t.accountId} ${t.title} ${t.type} ${t.method} ${t.amount} ${t.status}`
-      .toLowerCase()
-      .includes(searchQuery.toLowerCase())
-  );
+//   useEffect(() => {
+//     async function load() {
+//      const { data, error } = await supabase
+//   .from("orders")
+//   .select(`
+//     id,
+//     date_created,
+//     customer:customer_id (
+//       contact_person,
+//       code
+//     )
+//   `)
+//   .order("date_created", { ascending: false });
 
-  return (
-    <div className="p-6">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">Transaction History</h1>
 
-      <input
-        className="border px-4 py-2 mb-4 w-full md:w-1/3 rounded-full"
-        placeholder="Search by ID, title, amount..."
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-      />
+//       if (error) {
+//         console.error("Error loading orders:", error);
+//         return;
+//       }
 
-      <div className="overflow-x-auto rounded-lg shadow">
-        <table className="min-w-full bg-white text-sm rounded-md overflow-hidden">
-          <thead className="bg-[#ffba20] text-black text-left">
-            <tr>
-              <th className="px-4 py-3">Date</th>
-              <th className="px-4 py-3">Account ID</th>
-              <th className="px-4 py-3">Title</th>
-              <th className="px-4 py-3">Type</th>
-              <th className="px-4 py-3">Method</th>
-              <th className="px-4 py-3">Amount / Position</th>
-              <th className="px-4 py-3">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((tx, index) => (
-              <tr key={index} className="border-b hover:bg-gray-100">
-                <td className="px-4 py-3">{tx.date}</td>
-                <td className="px-4 py-3">{tx.accountId}</td>
-                <td className="px-4 py-3">{tx.title}</td>
-                <td className="px-4 py-3">{tx.type}</td>
-                <td className="px-4 py-3">{tx.method}</td>
-                <td className="px-4 py-3">{tx.amount}</td>
-                <td className="px-4 py-3">{tx.status}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+//       setTransactions(
+//         data.map((o) => ({
+//           id: o.id,
+//           date_created: o.date_created,
+//           code: o.customer[0]?.code ?? "—",
+//           customer: o.customer[0]?.contact_person ?? "—",
+//         }))
+//       );
+//     }
+
+//     load();
+//   }, [supabase]);
+
+//   const filtered = useMemo(
+//     () =>
+//       transactions.filter((t) =>
+//         [t.date_created, t.code, t.customer]
+//           .join(" ")
+//           .toLowerCase()
+//           .includes(searchQuery.toLowerCase())
+//       ),
+//     [searchQuery, transactions]
+//   );
+
+//   return (
+//     <div className="p-6">
+//       <h1 className="text-3xl font-bold mb-6">Transaction History</h1>
+
+//       <input
+//         type="search"
+//         aria-label="Search by date, code or customer"
+//         placeholder="Search by date, code or customer…"
+//         value={searchQuery}
+//         onChange={(e) => setSearchQuery(e.target.value)}
+//         className="border px-4 py-2 mb-4 w-full md:w-1/3 rounded-full"
+//       />
+
+//       <div className="overflow-x-auto rounded-lg shadow">
+//         <table className="min-w-full bg-white text-sm">
+//           <thead className="bg-[#ffba20] text-black text-left">
+//             <tr>
+//               <th className="px-4 py-3">Date</th>
+//               <th className="px-4 py-3">Transaction Code</th>
+//               <th className="px-4 py-3">Customer Name</th>
+//             </tr>
+//           </thead>
+//           <tbody>
+//             {filtered.map((t) => (
+//               <tr key={t.id} className="border-b hover:bg-gray-100">
+//                 <td className="px-4 py-3">
+//                   {new Date(t.date_created).toISOString().slice(0, 10)}
+//                 </td>
+//                 <td className="px-4 py-3">{t.code}</td>
+//                 <td className="px-4 py-3">{t.customer}</td>
+//               </tr>
+//             ))}
+//           </tbody>
+//         </table>
+//       </div>
+//     </div>
+//   );
+// }
