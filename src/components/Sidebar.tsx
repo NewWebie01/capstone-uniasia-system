@@ -1,3 +1,4 @@
+// components/Sidebar.tsx
 "use client";
 
 import arrowcontrol from "@/assets/control.png";
@@ -10,44 +11,45 @@ import Chart from "@/assets/Chart.png";
 import Folder from "@/assets/Folder.png";
 import LogoutIcon from "@/assets/power-button.png";
 
-import Image from "next/image";
+import { FaHistory } from "react-icons/fa";
+
+import Image, { StaticImageData } from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Dispatch, SetStateAction } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
-import { useRouter } from "next/navigation";
 
-// ✅ Accept props from layout
 interface SidebarProps {
   open: boolean;
   setOpen: Dispatch<SetStateAction<boolean>>;
 }
 
-export const Sidebar = ({ open, setOpen }: SidebarProps) => {
-  const pathname = usePathname();
-  const router = useRouter();
-  const supabase = createClientComponentClient();
-
-  const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error("Logout failed:", error.message);
-    } else {
-      window.location.href = "/login";
-    }
-  };
-
-const Menus = [
+const Menus: {
+  title: string;
+  href: string;
+  src?: StaticImageData;
+  icon?: React.ComponentType<{ className?: string }>;
+}[] = [
   { title: "Dashboard", src: ChartFill, href: "/dashboard" },
   { title: "Inventory", src: Calendar, href: "/inventory" },
   { title: "Truck Delivery", src: Logistics, href: "/logistics" },
   { title: "Sales", src: Sales, href: "/sales" },
   { title: "Purchase", src: Folder, href: "/purchase" },
   { title: "Invoice", src: Chart, href: "/invoice" },
-  { title: "Transaction-History", src: Folder, href: "/transaction-history" },
+  { title: "Transaction History", src: Folder, href: "/transaction-history" },
+  { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
 ];
 
+export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
+  const pathname = usePathname();
+  const supabase = createClientComponentClient();
+
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) console.error("Logout failed:", error.message);
+    else window.location.href = "/login";
+  };
 
   return (
     <motion.div
@@ -62,7 +64,7 @@ const Menus = [
         width={50}
         height={50}
         className={`absolute cursor-pointer rounded-full -right-3 top-9 w-7 border-2 border-[#ffba20] bg-white z-50 ${
-          !open && "rotate-180"
+          !open ? "rotate-180" : ""
         }`}
         onClick={() => setOpen(!open)}
       />
@@ -82,7 +84,6 @@ const Menus = [
               className="cursor-pointer"
             />
           </motion.div>
-
           <AnimatePresence>
             {open && (
               <motion.h1
@@ -102,20 +103,27 @@ const Menus = [
       {/* Menu Items */}
       <div className="flex-1 overflow-y-auto px-5">
         <ul className="flex flex-col gap-y-4">
-          {Menus.map((menu, index) => {
+          {Menus.map((menu, idx) => {
             const isActive = pathname === menu.href;
+
+            // either show the image or the icon
+            const IconOrImage = menu.src ? (
+              <Image src={menu.src} alt={menu.title} width={20} height={20} />
+            ) : menu.icon ? (
+              <menu.icon className="h-5 w-5 text-black" />
+            ) : null;
 
             const menuItem = (
               <motion.li
-                key={index}
+                key={menu.title}
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.05 }}
-                className={`text-black text-sm flex items-center gap-x-4 cursor-pointer p-2 rounded-md hover:bg-gray-400 transition-colors mt-2 ${
+                transition={{ delay: idx * 0.05 }}
+                className={`flex items-center gap-x-4 p-2 rounded-md cursor-pointer text-sm text-black hover:bg-gray-200 transition-colors ${
                   isActive ? "bg-gray-100 font-semibold" : ""
                 }`}
               >
-                <Image src={menu.src} alt={menu.title} width={20} height={20} />
+                {IconOrImage}
                 <AnimatePresence>
                   {open && (
                     <motion.span
@@ -123,7 +131,7 @@ const Menus = [
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: -10 }}
                       transition={{ duration: 0.15 }}
-                      className="origin-left duration-200"
+                      className="origin-left"
                     >
                       {menu.title}
                     </motion.span>
@@ -133,11 +141,11 @@ const Menus = [
             );
 
             return menu.href ? (
-              <Link href={menu.href} key={index}>
+              <Link href={menu.href} key={menu.title}>
                 {menuItem}
               </Link>
             ) : (
-              <div key={index}>{menuItem}</div>
+              <div key={menu.title}>{menuItem}</div>
             );
           })}
         </ul>
@@ -177,3 +185,5 @@ const Menus = [
     </motion.div>
   );
 };
+
+export default Sidebar;
