@@ -1,7 +1,7 @@
 // src/app/customer/page.tsx
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
@@ -49,10 +49,21 @@ function generateTransactionCode(): string {
 export default function CustomerInventoryPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const [searchTerm, setSearchTerm] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<string>(""); // "" = All
+
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [orderQuantity, setOrderQuantity] = useState(1);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [showCartPopup, setShowCartPopup] = useState(false);
+
+  const [showCartPopup, setShowCartPopup] = useState(false);   // first modal
+  const [showFinalPopup, setShowFinalPopup] = useState(false); // final confirm modal
+  const [finalOrderDetails, setFinalOrderDetails] = useState<{
+    customer: CustomerInfo;
+    items: CartItem[];
+  } | null>(null);
+
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
     name: "",
     email: "",
@@ -65,7 +76,7 @@ export default function CustomerInventoryPage() {
     customer_type: undefined,
   });
 
-  // fetchInventory pulled out so we can call it on mount and on realtime events
+  // Load inventory + realtime updates
   const fetchInventory = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase.from("inventory").select("*");
@@ -79,18 +90,14 @@ export default function CustomerInventoryPage() {
   }, []);
 
   useEffect(() => {
-    // initial load
     fetchInventory();
 
-    // subscribe to realtime changes on inventory
     const channel: RealtimeChannel = supabase
       .channel("public:inventory")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "inventory" },
-        () => {
-          fetchInventory();
-        }
+        () => fetchInventory()
       )
       .subscribe();
 
@@ -99,7 +106,7 @@ export default function CustomerInventoryPage() {
     };
   }, [fetchInventory]);
 
-  // enforce payment_type logic
+  // Payment type logic
   useEffect(() => {
     if (customerInfo.customer_type === "New Customer") {
       setCustomerInfo((prev) => ({ ...prev, payment_type: "Cash" }));
@@ -111,6 +118,7 @@ export default function CustomerInventoryPage() {
     }
   }, [customerInfo.customer_type]);
 
+  // Add to cart flow
   const handleAddToCartClick = (item: InventoryItem) => {
     setSelectedItem(item);
     setOrderQuantity(1);
@@ -118,15 +126,18 @@ export default function CustomerInventoryPage() {
 
   const addToCart = () => {
     if (!selectedItem) return;
+
     if (orderQuantity > selectedItem.quantity) {
       toast.error(`Cannot order more than available stock (${selectedItem.quantity})`);
       return;
     }
+
     if (cart.some((ci) => ci.item.id === selectedItem.id)) {
       toast.error("Item already in cart.");
       return;
     }
-    setCart([...cart, { item: selectedItem, quantity: orderQuantity }]);
+
+    setCart((prev) => [...prev, { item: selectedItem, quantity: orderQuantity }]);
     setSelectedItem(null);
     setOrderQuantity(1);
   };
@@ -135,6 +146,7 @@ export default function CustomerInventoryPage() {
     setCart((prev) => prev.filter((ci) => ci.item.id !== itemId));
   };
 
+  // Open first confirm modal
   const handleShowCart = () => {
     if (!customerInfo.code) {
       setCustomerInfo((prev) => ({ ...prev, code: generateTransactionCode() }));
@@ -142,8 +154,8 @@ export default function CustomerInventoryPage() {
     setShowCartPopup(true);
   };
 
-  const handleSubmitOrder = async () => {
-    // validate customer fields
+  // First modal "Submit Order" -> only open final confirmation (no DB write, no toast)
+  const handleOpenFinalModal = () => {
     if (
       !customerInfo.name ||
       !customerInfo.email ||
@@ -157,59 +169,75 @@ export default function CustomerInventoryPage() {
       return;
     }
 
-    // check duplicate code
+    setFinalOrderDetails({ customer: customerInfo, items: cart });
+    setShowCartPopup(false);
+    setShowFinalPopup(true);
+  };
+
+  // Final modal "Confirm Order" -> actually insert to DB, then toast + reset
+  const handleConfirmOrder = async () => {
+    if (!finalOrderDetails) return;
+
+    const { customer, items } = finalOrderDetails;
+
+    // Duplicate code check
     const { data: existing } = await supabase
       .from("customers")
       .select("code")
-      .eq("code", customerInfo.code);
+      .eq("code", customer.code);
+
     if (existing && existing.length > 0) {
       toast.error("Duplicate transaction code generated. Please try again.");
       return;
     }
 
-    // prepare payloads
     const customerPayload: Partial<CustomerInfo> = {
-      ...customerInfo,
+      ...customer,
       date: new Date().toISOString(),
       status: "pending",
-      transaction: cart.map((ci) => `${ci.item.product_name} x${ci.quantity}`).join(", "),
+      transaction: items.map((ci) => `${ci.item.product_name} x${ci.quantity}`).join(", "),
     };
+
     try {
-      // insert customer
+      // Insert customer
       const { data: cust, error: custErr } = await supabase
         .from("customers")
         .insert([customerPayload])
         .select()
         .single();
       if (custErr) throw custErr;
-      const customerId = cust.id;
 
-      // insert order
-      const totalAmount = cart.reduce(
+      // Insert order
+      const customerId = cust.id;
+      const totalAmount = items.reduce(
         (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
         0
       );
+
       const { data: ord, error: ordErr } = await supabase
         .from("orders")
         .insert([{ customer_id: customerId, total_amount: totalAmount, status: "pending" }])
         .select()
         .single();
       if (ordErr) throw ordErr;
-      const orderId = ord.id;
 
-      // insert order items
-      const orderItems = cart.map((ci) => ({
+      // Insert order items
+      const orderId = ord.id;
+      const rows = items.map((ci) => ({
         order_id: orderId,
         inventory_id: ci.item.id,
         quantity: ci.quantity,
         price: ci.item.unit_price || 0,
       }));
-      const { error: itemsErr } = await supabase.from("order_items").insert(orderItems);
+      const { error: itemsErr } = await supabase.from("order_items").insert(rows);
       if (itemsErr) throw itemsErr;
 
-      toast.success(`Order submitted! Code: ${customerInfo.code}`);
+      // Success → toast here only
+      toast.success("Your order has been submitted successfully!");
 
-      // reset state
+      // Reset UI
+      setShowFinalPopup(false);
+      setFinalOrderDetails(null);
       setCart([]);
       setCustomerInfo({
         name: "",
@@ -222,10 +250,7 @@ export default function CustomerInventoryPage() {
         payment_type: "Cash",
         customer_type: undefined,
       });
-      setShowCartPopup(false);
-      setSelectedItem(null);
 
-      // refresh inventory
       await fetchInventory();
     } catch (e: any) {
       console.error("Order submission error:", e.message);
@@ -233,11 +258,54 @@ export default function CustomerInventoryPage() {
     }
   };
 
+  // Derived
   const totalItems = cart.reduce((sum, ci) => sum + ci.quantity, 0);
+
+  // categories list for dropdown (from inventory)
+  const categories = useMemo(
+    () => Array.from(new Set(inventory.map((i) => i.category))).sort(),
+    [inventory]
+  );
+
+  // combined filters
+  const filteredInventory = inventory.filter((i) => {
+    const matchesSearch =
+      i.product_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      i.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      i.subcategory.toLowerCase().includes(searchTerm.toLowerCase());
+
+    const matchesCategory = categoryFilter === "" || i.category === categoryFilter;
+
+    return matchesSearch && matchesCategory;
+  });
 
   return (
     <div className="p-4">
       <motion.h1 className="text-3xl font-bold mb-4">Product Catalog</motion.h1>
+
+      {/* Controls: Search + Category Filter */}
+      <div className="mb-4 flex flex-col sm:flex-row gap-3 sm:items-center">
+        <input
+          type="text"
+          placeholder="Search by product, category, or subcategory..."
+          className="border border-gray-300 rounded px-3 py-2 w-full sm:max-w-xs focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
+
+        <select
+          className="border border-gray-300 rounded px-3 py-2 w-full sm:w-auto focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
+        >
+          <option value="">All Categories</option>
+          {categories.map((cat) => (
+            <option key={cat} value={cat}>
+              {cat || "Uncategorized"}
+            </option>
+          ))}
+        </select>
+      </div>
 
       {loading ? (
         <p>Loading inventory...</p>
@@ -254,7 +322,7 @@ export default function CustomerInventoryPage() {
               </tr>
             </thead>
             <tbody>
-              {inventory.map((item) => (
+              {filteredInventory.map((item) => (
                 <tr key={item.id} className="border-b hover:bg-gray-100">
                   <td className="py-2 px-4">{item.product_name}</td>
                   <td className="py-2 px-4">{item.category}</td>
@@ -270,6 +338,14 @@ export default function CustomerInventoryPage() {
                   </td>
                 </tr>
               ))}
+
+              {filteredInventory.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="text-center py-6 text-gray-500">
+                    No products found.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -360,13 +436,13 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* Order Confirmation Popup */}
+      {/* First Confirm Order Modal */}
       {showCartPopup && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex justify-center items-center">
           <div className="bg-white p-6 rounded-none shadow w-full max-w-5xl space-y-4">
             <h2 className="text-xl font-bold">Confirm Order</h2>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Customer Info Inputs */}
               <input
                 placeholder="Customer Name"
                 className="border px-3 py-2 rounded"
@@ -397,16 +473,12 @@ export default function CustomerInventoryPage() {
                 placeholder="Contact Person"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.contact_person}
-                onChange={(e) =>
-                  setCustomerInfo({ ...customerInfo, contact_person: e.target.value })
-                }
+                onChange={(e) => setCustomerInfo({ ...customerInfo, contact_person: e.target.value })}
               />
               <input
                 placeholder="Transaction Code"
                 className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-                value={
-                  customerInfo.code || "Will be generated when you click 'Order Item'"
-                }
+                value={customerInfo.code || "Will be generated when you click 'Order Item'"}
                 readOnly
               />
               <input
@@ -415,6 +487,7 @@ export default function CustomerInventoryPage() {
                 value={customerInfo.area}
                 onChange={(e) => setCustomerInfo({ ...customerInfo, area: e.target.value })}
               />
+
               <div className="col-span-2">
                 <label className="block mb-1">Customer Type</label>
                 <select
@@ -423,9 +496,7 @@ export default function CustomerInventoryPage() {
                   onChange={(e) =>
                     setCustomerInfo({
                       ...customerInfo,
-                      customer_type: e.target.value as
-                        | "New Customer"
-                        | "Existing Customer",
+                      customer_type: e.target.value as "New Customer" | "Existing Customer",
                     })
                   }
                 >
@@ -436,6 +507,7 @@ export default function CustomerInventoryPage() {
                   <option value="Existing Customer">Existing Customer</option>
                 </select>
               </div>
+
               <div className="col-span-2">
                 <label className="block mb-1">Payment Type</label>
                 <div className="flex gap-4">
@@ -452,10 +524,7 @@ export default function CustomerInventoryPage() {
                         onChange={(e) =>
                           setCustomerInfo({
                             ...customerInfo,
-                            payment_type: e.target.value as
-                              | "Cash"
-                              | "Credit"
-                              | "Balance",
+                            payment_type: e.target.value as "Cash" | "Credit" | "Balance",
                           })
                         }
                       />
@@ -466,7 +535,7 @@ export default function CustomerInventoryPage() {
               </div>
             </div>
 
-            {/* Cart Items Summary */}
+            {/* Cart in first modal */}
             <table className="w-full table-fixed text-sm bg-gray-100">
               <thead className="bg-gray-200">
                 <tr>
@@ -498,10 +567,72 @@ export default function CustomerInventoryPage() {
                 Cancel
               </button>
               <button
-                onClick={handleSubmitOrder}
-                className="bg-[#ffba20] text-white px-4 py-2 rounded hover:bg-yellow-600"
+                onClick={handleOpenFinalModal}
+                className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
               >
                 Submit Order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Final Confirmation Modal */}
+      {showFinalPopup && finalOrderDetails && (
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex justify-center items-center">
+          <div className="bg-white p-6 rounded-none shadow w-full max-w-4xl space-y-4">
+            <h2 className="text-xl font-bold">Order Confirmation</h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <div className="text-xs text-gray-500">Customer</div>
+                <div className="font-medium">{finalOrderDetails.customer.name}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Transaction Code</div>
+                <div className="font-medium">{finalOrderDetails.customer.code}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Date</div>
+                <div className="font-medium">{new Date().toLocaleString()}</div>
+              </div>
+            </div>
+
+            <table className="w-full table-fixed text-sm bg-gray-100">
+              <thead className="bg-gray-200">
+                <tr>
+                  <th className="py-2 px-3 text-left">Product</th>
+                  <th className="py-2 px-3 text-left">Category</th>
+                  <th className="py-2 px-3 text-left">Subcategory</th>
+                  <th className="py-2 px-3 text-left">Qty</th>
+                  <th className="py-2 px-3 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {finalOrderDetails.items.map((ci) => (
+                  <tr key={ci.item.id} className="border-b">
+                    <td className="py-2 px-3">{ci.item.product_name}</td>
+                    <td className="py-2 px-3">{ci.item.category}</td>
+                    <td className="py-2 px-3">{ci.item.subcategory}</td>
+                    <td className="py-2 px-3">{ci.quantity}</td>
+                    <td className="py-2 px-3">{ci.item.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setShowFinalPopup(false)}
+                className="bg-gray-500 text-white px-4 py-2 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmOrder} // writes to DB + toast
+                className="bg-[#ffba20] text-white px-4 py-2 rounded hover:bg-yellow-600"
+              >
+                Confirm Order
               </button>
             </div>
           </div>
