@@ -27,7 +27,9 @@ export default function TruckDeliveryPage() {
   const [deliveries, setDeliveries] = useState<any[]>([]);
   const [formVisible, setFormVisible] = useState(false);
   const [newPerson, setNewPerson] = useState("");
-  const [invoiceDialogOpenId, setInvoiceDialogOpenId] = useState<number | null>(null);
+  const [invoiceDialogOpenId, setInvoiceDialogOpenId] = useState<number | null>(
+    null
+  );
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
   const [customers, setCustomers] = useState<any[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -297,11 +299,11 @@ export default function TruckDeliveryPage() {
           <div className="mt-4">
             <h3 className="font-semibold mb-2">Delivery Expenses</h3>
             <ul className="text-sm space-y-1">
-              <li>🚚 Food Allowance: ₱{delivery.food}</li>
-              <li>⛽ Gas: ₱{delivery.gas}</li>
-              <li>🛣 Toll Fees: ₱{delivery.toll}</li>
-              <li>🛥 Boat Shipping: ₱{delivery.boat}</li>
-              <li>📦 Other Fees: ₱{delivery.other}</li>
+              <li>Food Allowance: ₱{delivery.food}</li>
+              <li>Gas: ₱{delivery.gas}</li>
+              <li>Toll Fees: ₱{delivery.toll}</li>
+              <li>Boat Shipping: ₱{delivery.boat}</li>
+              <li>Other Fees: ₱{delivery.other}</li>
               <li className="font-medium">
                 Total: ₱
                 {[

@@ -19,6 +19,7 @@ type InventoryItem = {
 
 export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -54,44 +55,18 @@ export default function InventoryPage() {
     unit_price: false,
   });
 
-const fetchItems = async () => {
-  setLoading(true);
+  const fetchItems = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("inventory")
+      .select("*")
+      .order("date_created", { ascending: false });
 
-const { data, error } = await supabase
-  .from("inventory")
-  .select(`
-    id,
-    sku,
-    product_name,
-    category,
-    subcategory,
-    unit,
-    quantity,
-    unit_price,
-    amount,
-    status,
-    date_created,
-    inventory_batches:inventory_batches!inventory_batches_inventory_id_fkey (
-      qty_remaining,
-      unit_price,
-      date_received
-    )
-  `)
-  .order("date_created", { ascending: false });
-
-
-  if (error) {
-    console.error("Error fetching items:", error.message || error);
+    if (!error && data) {
+      setItems(data);
+    }
     setLoading(false);
-    return;
-  }
-
-  console.log("Fetched inventory:", data);
-  setItems(data || []);
-  setLoading(false);
-};
-
-
+  };
 
   const fetchDropdownOptions = async () => {
     const { data, error } = await supabase
@@ -128,78 +103,38 @@ const { data, error } = await supabase
         category: !newItem.category,
         subcategory: !newItem.subcategory,
         unit: !newItem.unit,
-        quantity: newItem.quantity <= 0,
+        quantity: newItem.quantity < 0,
         unit_price: newItem.unit_price <= 0,
       };
 
       setValidationErrors(errors);
+
       const hasErrors = Object.values(errors).some((v) => v);
-      if (hasErrors) return;
+      if (hasErrors) {
+        return;
+      }
 
       const dataToSave = {
         ...newItem,
         date_created: new Date().toISOString(),
       };
 
-      if (editingItemId !== null) {
-        const { error } = await supabase
-          .from("inventory")
-          .update(dataToSave)
-          .eq("id", editingItemId);
-        if (error) throw error;
-      } else {
-        const { data: existingItem } = await supabase
-          .from("inventory")
-          .select("id")
-          .eq("sku", newItem.sku)
-          .single();
+      const { error } =
+        editingItemId !== null
+          ? await supabase
+              .from("inventory")
+              .update(dataToSave)
+              .eq("id", editingItemId)
+          : await supabase.from("inventory").insert([dataToSave]);
 
-        if (existingItem) {
-          const { error: batchError } = await supabase
-            .from("inventory_batches")
-            .insert([
-              {
-                inventory_id: existingItem.id,
-                qty_received: newItem.quantity,
-                qty_remaining: newItem.quantity,
-                unit_price: newItem.unit_price,
-                unit_cost: newItem.unit_price, // ✅ FIX: Send unit_cost value
-                date_received: new Date().toISOString(),
-              },
-            ]);
-          if (batchError) throw batchError;
-        } else {
-          const { data, error } = await supabase
-            .from("inventory")
-            .insert([dataToSave])
-            .select();
-          if (error) throw error;
-
-          if (data && data.length > 0) {
-            const newInventoryId = data[0].id;
-            const { error: batchError } = await supabase
-              .from("inventory_batches")
-              .insert([
-                {
-                  inventory_id: newInventoryId,
-                  qty_received: newItem.quantity,
-                  qty_remaining: newItem.quantity,
-                  unit_price: newItem.unit_price,
-                  unit_cost: newItem.unit_price, // ✅ FIX: Send unit_cost value
-                  date_received: new Date().toISOString(),
-                },
-              ]);
-            if (batchError) throw batchError;
-          }
-        }
-      }
+      if (error) throw error;
 
       setNewItem({
         sku: "",
         product_name: "",
         category: "",
         quantity: 0,
-        subcategory: "",
+        subcategory: "", // ✅ add this
         unit: "",
         unit_price: 0,
         amount: 0,
@@ -211,7 +146,7 @@ const { data, error } = await supabase
       setEditingItemId(null);
 
       fetchItems();
-      fetchDropdownOptions();
+      fetchDropdownOptions(); // refresh dropdown list after new entry
     } catch (err: any) {
       console.error(err);
       alert("Error saving item: " + err.message);
@@ -229,6 +164,7 @@ const { data, error } = await supabase
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-6">Inventory</h1>
+
       <div className="flex gap-4 mb-4">
         <input
           className="border px-4 py-2 w-full max-w-md rounded"
@@ -246,7 +182,7 @@ const { data, error } = await supabase
               product_name: "",
               category: "",
               quantity: 0,
-              subcategory: "",
+              subcategory: "", // ✅ add this
               unit: "",
               unit_price: 0,
               amount: 0,
@@ -258,6 +194,7 @@ const { data, error } = await supabase
           Add New Item
         </button>
       </div>
+
       <div className="overflow-auto rounded-lg shadow">
         <table className="min-w-full bg-white text-sm">
           <thead className="bg-[#ffba20] text-black text-left">
@@ -267,6 +204,7 @@ const { data, error } = await supabase
               <th className="px-4 py-3">Category</th>
               <th className="px-4 py-3">Subcategory</th>
               <th className="px-4 py-3">Unit</th>
+
               <th className="px-4 py-3">Quantity</th>
               <th className="px-4 py-3">Unit Price</th>
               <th className="px-4 py-3">Total</th>
@@ -284,7 +222,9 @@ const { data, error } = await supabase
                 <td className="px-4 py-2">{item.subcategory}</td>
                 <td className="px-4 py-2">{item.unit}</td>
                 <td className="px-4 py-2">{item.quantity}</td>
-                <td className="px-4 py-2">₱{item.unit_price.toLocaleString()}</td>
+                <td className="px-4 py-2">
+                  ₱{item.unit_price.toLocaleString()}
+                </td>
                 <td className="px-4 py-2">₱{item.amount.toLocaleString()}</td>
                 <td className="px-4 py-2">
                   <span
@@ -317,6 +257,7 @@ const { data, error } = await supabase
           </tbody>
         </table>
       </div>
+
       <div className="mt-4 flex justify-between items-center">
         <button
           disabled={currentPage === 1}
@@ -343,7 +284,7 @@ const { data, error } = await supabase
             <h2 className="text-lg font-semibold">
               {editingItemId ? "Edit Item" : "Add New Item"}
             </h2>
-            {/* SKU */}
+
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">SKU</label>
               <input
@@ -355,7 +296,7 @@ const { data, error } = await supabase
                 }
               />
             </div>
-            {/* Product Name */}
+
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Product Name</label>
               <input
@@ -372,6 +313,7 @@ const { data, error } = await supabase
                 }
               />
             </div>
+
             {/* CATEGORY */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Category</label>
@@ -395,7 +337,7 @@ const { data, error } = await supabase
                       setNewItem((prev) => ({
                         ...prev,
                         category: e.target.value,
-                        subcategory: "",
+                        subcategory: "", // reset subcategory
                       }))
                     }
                     className="flex-1 border px-4 py-2 rounded"
@@ -418,6 +360,7 @@ const { data, error } = await supabase
                 </label>
               </div>
             </div>
+
             {/* SUBCATEGORY */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Subcategory</label>
@@ -464,6 +407,7 @@ const { data, error } = await supabase
                 </label>
               </div>
             </div>
+
             {/* UNIT */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Unit</label>
@@ -509,7 +453,7 @@ const { data, error } = await supabase
                 </label>
               </div>
             </div>
-            {/* QUANTITY */}
+
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Quantity</label>
               <input
@@ -527,7 +471,7 @@ const { data, error } = await supabase
                 }
               />
             </div>
-            {/* UNIT PRICE */}
+
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Unit Price</label>
               <input
@@ -535,7 +479,7 @@ const { data, error } = await supabase
                 className={`flex-1 border px-4 py-2 rounded ${
                   validationErrors.unit_price ? "border-red-500" : ""
                 }`}
-                placeholder="Enter price"
+                placeholder="₱ per unit"
                 value={newItem.unit_price}
                 onChange={(e) =>
                   setNewItem((prev) => ({
@@ -545,29 +489,30 @@ const { data, error } = await supabase
                 }
               />
             </div>
-            {/* TOTAL */}
+
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Total</label>
+              <label className="w-36 text-sm text-gray-700">Total Price</label>
               <input
-                type="number"
-                className="flex-1 border px-4 py-2 rounded bg-gray-100"
+                type="text"
+                className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
+                value={`₱${newItem.amount.toLocaleString()}`}
                 readOnly
-                value={newItem.amount}
+                disabled
               />
             </div>
-            {/* BUTTONS */}
-            <div className="flex justify-end gap-2">
+
+            <div className="flex justify-end gap-2 pt-4">
               <button
-                className="px-4 py-2 bg-gray-300 rounded"
                 onClick={() => setShowForm(false)}
+                className="bg-gray-300 px-4 py-2 rounded"
               >
                 Cancel
               </button>
               <button
-                className="px-4 py-2 bg-black text-white rounded hover:text-[#ffba20]"
                 onClick={handleSubmitItem}
+                className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
               >
-                {editingItemId ? "Update" : "Add"}
+                {editingItemId ? "Update Item" : "Add Item"}
               </button>
             </div>
           </div>
