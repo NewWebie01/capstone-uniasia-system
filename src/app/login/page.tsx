@@ -24,30 +24,60 @@ export default function LoginPage() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsLoading(true);
+    setErrorMessage("");
 
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
     if (error) {
       setErrorMessage("Incorrect email or password.");
-      setEmail("");
       setPassword("");
+      setIsLoading(false);
       return;
     }
 
-    setErrorMessage("");
     router.push("/dashboard");
+    // Keep the loader visible until Next.js completes navigation.
+    // If you want to hide it immediately, uncomment the next line:
+    // setIsLoading(false);
   };
 
   return (
-    <div className={`min-h-screen flex flex-col ${dmSans.className}`}>
+    <div className={`min-h-screen flex flex-col relative ${dmSans.className}`}>
+      {/* Loading Overlay */}
+      <AnimatePresence>
+        {isLoading && (
+          <motion.div
+            key="loader"
+            className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-xl shadow-2xl px-8 py-6 flex items-center gap-3"
+            >
+              <span className="h-5 w-5 rounded-full border-2 border-gray-300 border-t-transparent animate-spin" />
+              <span className="text-sm font-medium text-gray-700">
+                Signing in…
+              </span>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <header className="sticky top-0 backdrop-blur-sm z-20">
         <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
@@ -64,6 +94,7 @@ export default function LoginPage() {
                 onClick={() => router.push("/")}
                 whileHover={{ scale: 1.1 }}
                 transition={{ type: "spring", stiffness: 300 }}
+                aria-label="Go to Home"
               >
                 <Image
                   src={Logo}
@@ -123,7 +154,10 @@ export default function LoginPage() {
             >
               {/* Email Field */}
               <div className="flex flex-col text-left">
-                <label className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
+                <label
+                  htmlFor="username"
+                  className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]"
+                >
                   Username
                 </label>
                 <input
@@ -131,14 +165,18 @@ export default function LoginPage() {
                   type="text"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50"
+                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 disabled:opacity-60"
                   required
+                  disabled={isLoading}
                 />
               </div>
 
               {/* Password Field */}
               <div className="flex flex-col text-left relative">
-                <label className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
+                <label
+                  htmlFor="password"
+                  className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]"
+                >
                   Password
                 </label>
                 <input
@@ -147,13 +185,16 @@ export default function LoginPage() {
                   autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 pr-10"
+                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 pr-10 disabled:opacity-60"
                   required
+                  disabled={isLoading}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-2 top-9"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  disabled={isLoading}
                 >
                   {showPassword ? (
                     <EyeOff size={20} className="text-gray-600" />
@@ -170,7 +211,7 @@ export default function LoginPage() {
 
               {/* Remember Me */}
               <div className="flex gap-1 items-center">
-                <input type="checkbox" />
+                <input type="checkbox" disabled={isLoading} />
                 <span className="text-base">Remember Password</span>
               </div>
 
@@ -178,11 +219,19 @@ export default function LoginPage() {
               <motion.button
                 type="submit"
                 whileTap={{ scale: 0.95 }}
-                whileHover={{ scale: 1.05 }}
+                whileHover={{ scale: isLoading ? 1 : 1.05 }}
                 transition={{ type: "spring", stiffness: 300 }}
-                className="px-10 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
+                className="px-10 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300 disabled:opacity-70 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+                disabled={isLoading}
               >
-                Login
+                {isLoading ? (
+                  <>
+                    <span className="h-4 w-4 rounded-full border-2 border-white/70 border-t-transparent animate-spin" />
+                    <span>Signing in…</span>
+                  </>
+                ) : (
+                  "Login"
+                )}
               </motion.button>
             </form>
           </div>
@@ -192,6 +241,7 @@ export default function LoginPage() {
             src={splashImage}
             alt="Splash Image"
             className="w-full lg:w-[450px] object-cover hidden lg:block"
+            priority
           />
         </div>
       </motion.section>
