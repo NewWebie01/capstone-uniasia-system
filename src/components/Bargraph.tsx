@@ -37,8 +37,10 @@ const periodOptions = [
   { key: "Daily", label: "Last 7 Days" },
   { key: "Weekly", label: "Last 6 Weeks" },
   { key: "Monthly", label: "Last 6 Months" },
+  { key: "YTD", label: "Year to Date" }, // Full display text here
   { key: "Annually", label: "Last 6 Years" },
 ] as const;
+
 type Period = (typeof periodOptions)[number]["key"];
 
 const Bargraph: React.FC = () => {
@@ -52,7 +54,6 @@ const Bargraph: React.FC = () => {
       const buckets: Record<string, number> = {};
       const timeline: Bucket[] = [];
 
-      // Build buckets + timeline
       if (period === "Daily") {
         for (let i = 6; i >= 0; i--) {
           const dt = new Date(now);
@@ -71,6 +72,7 @@ const Bargraph: React.FC = () => {
           const diff = (day + 6) % 7;
           const m = new Date(d);
           m.setDate(d.getDate() - diff);
+          m.setHours(0, 0, 0, 0);
           return m;
         };
         for (let i = 5; i >= 0; i--) {
@@ -79,8 +81,7 @@ const Bargraph: React.FC = () => {
           const monday = getMonday(anchor);
           const key = monday.toISOString().slice(0, 10);
           const weekNum = Math.ceil(
-            ((monday.getTime() -
-              new Date(monday.getFullYear(), 0, 1).getTime()) /
+            ((monday.getTime() - new Date(monday.getFullYear(), 0, 1).getTime()) /
               86400000 +
               1) /
               7
@@ -99,8 +100,21 @@ const Bargraph: React.FC = () => {
           buckets[key] = 0;
           timeline.push({ key, label });
         }
+      } else if (period === "YTD") {
+        // From Jan 1 to today (daily), abbreviated month/day
+        const startOfYear = new Date(now.getFullYear(), 0, 1);
+        let dt = new Date(startOfYear);
+        while (dt <= now) {
+          const key = dt.toISOString().slice(0, 10);
+          const label = dt.toLocaleDateString("en-US", {
+            month: "short", // abbreviated month
+            day: "numeric",
+          });
+          buckets[key] = 0;
+          timeline.push({ key, label });
+          dt.setDate(dt.getDate() + 1);
+        }
       } else {
-        // Annually
         for (let i = 5; i >= 0; i--) {
           const year = now.getFullYear() - i;
           const key = `${year}`;
@@ -110,8 +124,12 @@ const Bargraph: React.FC = () => {
         }
       }
 
-      // Determine startDate for query
-      const startKey = timeline[0].key;
+      const startKey = timeline[0]?.key;
+      if (!startKey) {
+        setData([]);
+        return;
+      }
+
       const startDate =
         period === "Daily"
           ? startKey
@@ -119,9 +137,10 @@ const Bargraph: React.FC = () => {
           ? startKey
           : period === "Monthly"
           ? `${startKey}-01`
+          : period === "YTD"
+          ? startKey
           : `${startKey}-01-01`;
 
-      // Fetch typed rowsRaw
       const { data: rowsRaw, error } = await supabase
         .from("sales")
         .select("amount, date")
@@ -132,16 +151,16 @@ const Bargraph: React.FC = () => {
         return;
       }
 
-      // Aggregate into buckets
       (rowsRaw ?? []).forEach(({ amount, date }) => {
         const dt = new Date(date);
         let key = "";
-        if (period === "Daily") {
+        if (period === "Daily" || period === "YTD") {
           key = dt.toISOString().slice(0, 10);
         } else if (period === "Weekly") {
           const day = dt.getDay();
           const monday = new Date(dt);
           monday.setDate(dt.getDate() - ((day + 6) % 7));
+          monday.setHours(0, 0, 0, 0);
           key = monday.toISOString().slice(0, 10);
         } else if (period === "Monthly") {
           key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(
@@ -151,10 +170,9 @@ const Bargraph: React.FC = () => {
         } else {
           key = `${dt.getFullYear()}`;
         }
-        if (buckets[key] !== undefined) buckets[key] += amount;
+        if (buckets[key] !== undefined) buckets[key] += Number(amount) || 0;
       });
 
-      // Build chart data
       setData(
         timeline.map(({ key, label }) => ({
           label,
@@ -165,6 +183,13 @@ const Bargraph: React.FC = () => {
 
     load();
   }, [period]);
+
+  const formatPHP = (v: number) =>
+    new Intl.NumberFormat("en-PH", {
+      style: "currency",
+      currency: "PHP",
+      maximumFractionDigits: 0,
+    }).format(v || 0);
 
   return (
     <Card>
@@ -183,7 +208,7 @@ const Bargraph: React.FC = () => {
           >
             {periodOptions.map((o) => (
               <option key={o.key} value={o.key}>
-                {o.key}
+                {o.label} {/* Full label display */}
               </option>
             ))}
           </select>
@@ -192,31 +217,11 @@ const Bargraph: React.FC = () => {
 
       <CardContent>
         <ResponsiveContainer width="100%" height={300}>
-          <BarChart
-            data={data}
-            margin={{ top: 20, right: 20, bottom: 20, left: 60 }}
-          >
+          <BarChart data={data} margin={{ top: 20, right: 20, bottom: 20, left: 60 }}>
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="label" tickLine={false} axisLine={false} />
-            <YAxis
-              width={60}
-              tickFormatter={(v) =>
-                new Intl.NumberFormat("en-PH", {
-                  style: "currency",
-                  currency: "PHP",
-                  maximumFractionDigits: 0,
-                }).format(v)
-              }
-            />
-            <Tooltip
-              formatter={(v: number) =>
-                new Intl.NumberFormat("en-PH", {
-                  style: "currency",
-                  currency: "PHP",
-                  maximumFractionDigits: 0,
-                }).format(v)
-              }
-            />
+            <YAxis width={60} tickFormatter={formatPHP} />
+            <Tooltip formatter={(v: number) => formatPHP(v)} />
             <Bar dataKey="total" fill="#ffba20" radius={4} />
           </BarChart>
         </ResponsiveContainer>
