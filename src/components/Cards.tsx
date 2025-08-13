@@ -1,7 +1,7 @@
 // components/Cards.tsx
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   FaDollarSign,
   FaExclamationTriangle,
@@ -10,156 +10,251 @@ import {
 } from "react-icons/fa";
 import supabase from "@/config/supabaseClient";
 
-type InventoryItem = { id: number; product_name: string; quantity: number; };
-type Delivery      = { id: number; destination: string; };
-type Customer      = { id: number; name: string; };
+type InventoryItem = { id: number; product_name: string; quantity: number };
+type Delivery = { id: number; destination: string };
+type Customer = { id: number; name: string };
+
+type ModalType = "outOfStock" | "deliveries" | "customers" | null;
+
+const pluralize = (n: number, one: string, many: string) =>
+  `${n} ${n === 1 ? one : many}`;
 
 const Cards: React.FC = () => {
-  const [totalSales, setTotalSales]               = useState<number | null>(null);
-  const [outOfStockItems, setOutOfStockItems]     = useState<InventoryItem[] | null>(null);
+  const [totalSales, setTotalSales] = useState<number | null>(null);
+  const [outOfStockItems, setOutOfStockItems] = useState<InventoryItem[] | null>(null);
   const [ongoingDeliveries, setOngoingDeliveries] = useState<Delivery[] | null>(null);
   const [existingCustomers, setExistingCustomers] = useState<Customer[] | null>(null);
 
+  const [modal, setModal] = useState<ModalType>(null);
+
   useEffect(() => {
-    // 1) Total sales
-    async function fetchTotalSales() {
-      const { data, error } = await supabase.from("sales").select("amount");
-      if (!error && data) {
-        setTotalSales(data.reduce((sum, r) => sum + Number(r.amount ?? 0), 0));
-      }
-    }
-    // 2) Out-of-stock
-    async function fetchOutOfStockItems() {
-      const { data, error } = await supabase
-        .from("inventory")
-        .select("id, product_name, quantity")
-        .eq("quantity", 0)
-        .order("product_name", { ascending: true });
-      if (!error && data) setOutOfStockItems(data);
-    }
-    // 3) Ongoing deliveries
-    async function fetchOngoingDeliveries() {
-      const { data, error } = await supabase
-        .from("truck_deliveries")
-        .select("id, destination")
-        .eq("status", "Ongoing")
-        .order("destination", { ascending: true });
-      if (!error && data) setOngoingDeliveries(data);
-    }
-    // 4) Existing customers (deduped)
-    async function fetchExistingCustomers() {
-      const { data, error } = await supabase
-        .from("customers")
-        .select("id, name")
-        .eq("customer_type", "Existing Customer")
-        .order("name", { ascending: true });
-      if (!error && data) {
-        const seen = new Set<string>();
-        setExistingCustomers(
-          data.filter(c => {
+    (async () => {
+      try {
+        const [salesRes, invRes, delivRes, custRes] = await Promise.all([
+          supabase.from("sales").select("amount"),
+          supabase
+            .from("inventory")
+            .select("id, product_name, quantity")
+            .eq("quantity", 0)
+            .order("product_name", { ascending: true }),
+          supabase
+            .from("truck_deliveries")
+            .select("id, destination")
+            .eq("status", "Ongoing")
+            .order("destination", { ascending: true }),
+          supabase
+            .from("customers")
+            .select("id, name, customer_type")
+            .eq("customer_type", "Existing Customer")
+            .order("name", { ascending: true }),
+        ]);
+
+        if (!salesRes.error && salesRes.data) {
+          const sum = salesRes.data.reduce(
+            (acc, r: any) => acc + Number(r.amount ?? 0),
+            0
+          );
+          setTotalSales(sum);
+        }
+
+        if (!invRes.error && invRes.data) setOutOfStockItems(invRes.data as InventoryItem[]);
+        if (!delivRes.error && delivRes.data) setOngoingDeliveries(delivRes.data as Delivery[]);
+        if (!custRes.error && custRes.data) {
+          // dedupe by name
+          const seen = new Set<string>();
+          const unique = (custRes.data as Customer[]).filter((c) => {
             if (seen.has(c.name)) return false;
             seen.add(c.name);
             return true;
-          })
-        );
+          });
+          setExistingCustomers(unique);
+        }
+      } catch (e) {
+        console.error("Cards fetch error:", e);
       }
-    }
-
-    fetchTotalSales();
-    fetchOutOfStockItems();
-    fetchOngoingDeliveries();
-    fetchExistingCustomers();
+    })();
   }, []);
 
-  const renderNumber = (val: number | null, prefix = "") =>
-    val === null ? "…" : prefix + val.toLocaleString();
+  const currencyPH = (val: number | null) =>
+    val === null
+      ? "…"
+      : new Intl.NumberFormat("en-PH", {
+          style: "currency",
+          currency: "PHP",
+          maximumFractionDigits: 0,
+        }).format(val);
+
+  const cardButtonProps = (type: ModalType) => ({
+    role: "button" as const,
+    tabIndex: 0,
+    onClick: () => setModal(type),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") setModal(type);
+    },
+    className:
+      "bg-white p-5 rounded-xl shadow-sm overflow-hidden cursor-pointer hover:shadow-md transition-shadow",
+  });
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      {/* Total Sales */}
-      <div className="bg-white p-4 rounded-xl shadow-sm flex items-start gap-4 overflow-hidden">
-        {/* align icon to top of text */}
-        <FaDollarSign className="text-3xl text-green-600 mt-1" />
-        <div>
-          <div className="font-medium text-sm sm:text-base">Total Sales</div>
-          <div className="text-xs sm:text-sm text-gray-500">
-            {totalSales === null
-              ? "Loading…"
-              : new Intl.NumberFormat("en-PH", {
-                  style: "currency",
-                  currency: "PHP",
-                  maximumFractionDigits: 0,
-                }).format(totalSales)}
+    <>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {/* Total Sales (non-clickable) */}
+        <div className="bg-white p-5 rounded-xl shadow-sm flex items-start gap-4 overflow-hidden">
+          <FaDollarSign className="text-3xl text-green-600 mt-1" />
+          <div className="leading-tight">
+            <div className="font-semibold text-base md:text-lg">Total Sales</div>
+            <div className="text-sm md:text-base text-gray-600">
+              {currencyPH(totalSales)}
+            </div>
+          </div>
+        </div>
+
+        {/* Out of Stock (clickable -> modal) */}
+        <div {...cardButtonProps("outOfStock")}>
+          <div className="flex items-center gap-4 mb-2">
+            <FaExclamationTriangle className="text-3xl text-red-500" />
+            <div className="leading-tight">
+              <div className="font-semibold text-base md:text-lg">Out of Stock</div>
+              <div className="text-sm md:text-base text-gray-600">
+                {outOfStockItems === null
+                  ? "Loading…"
+                  : pluralize(outOfStockItems.length, "item", "items")}
+              </div>
+            </div>
+          </div>
+          <div className="text-xs md:text-sm text-gray-400">
+            Click to view details
+          </div>
+        </div>
+
+        {/* Ongoing Deliveries (clickable -> modal) */}
+        <div {...cardButtonProps("deliveries")}>
+          <div className="flex items-center gap-4 mb-2">
+            <FaTruck className="text-3xl text-yellow-600" />
+            <div className="leading-tight">
+              <div className="font-semibold text-base md:text-lg">Ongoing Deliveries</div>
+              <div className="text-sm md:text-base text-gray-600">
+                {ongoingDeliveries === null
+                  ? "Loading…"
+                  : pluralize(ongoingDeliveries.length, "delivery", "deliveries")}
+              </div>
+            </div>
+          </div>
+          <div className="text-xs md:text-sm text-gray-400">
+            Click to view details
+          </div>
+        </div>
+
+        {/* Existing Customers (clickable -> modal) */}
+        <div {...cardButtonProps("customers")}>
+          <div className="flex items-center gap-4 mb-2">
+            <FaUserFriends className="text-3xl text-[#ffba20]" />
+            <div className="leading-tight">
+              <div className="font-semibold text-base md:text-lg">Existing Customers</div>
+              <div className="text-sm md:text-base text-gray-600">
+                {existingCustomers === null
+                  ? "Loading…"
+                  : pluralize(existingCustomers.length, "customer", "customers")}
+              </div>
+            </div>
+          </div>
+          <div className="text-xs md:text-sm text-gray-400">
+            Click to view details
           </div>
         </div>
       </div>
 
-      {/* Out of Stock */}
-      <div className="bg-white p-4 rounded-xl shadow-sm overflow-hidden">
-        <div className="flex items-center gap-4 mb-2">
-          <FaExclamationTriangle className="text-3xl text-red-500" />
-          <div>
-            <div className="font-medium text-sm sm:text-base">Out of Stock</div>
-            <div className="text-xs sm:text-sm text-gray-500">
-              {outOfStockItems === null
-                ? "Loading…"
-                : `${outOfStockItems.length} item${outOfStockItems.length === 1 ? "" : "s"}`}
-            </div>
-          </div>
-        </div>
-        {outOfStockItems && outOfStockItems.length > 0 && (
-          <ul className="text-xs text-gray-700 list-disc list-inside space-y-1 max-h-24 overflow-y-auto">
-            {outOfStockItems.map(item => (
-              <li key={item.id}>{item.product_name}</li>
-            ))}
-          </ul>
-        )}
-      </div>
+      {/* Modal */}
+      {modal && (
+        <Modal onClose={() => setModal(null)} title={modalTitle(modal)}>
+          {modal === "outOfStock" && (
+            <ListSection
+              emptyText="No out-of-stock items."
+              items={outOfStockItems?.map((i) => i.product_name) ?? null}
+            />
+          )}
+          {modal === "deliveries" && (
+            <ListSection
+              emptyText="No ongoing deliveries."
+              items={ongoingDeliveries?.map((d) => d.destination) ?? null}
+            />
+          )}
+          {modal === "customers" && (
+            <ListSection
+              emptyText="No existing customers."
+              items={existingCustomers?.map((c) => c.name) ?? null}
+            />
+          )}
+        </Modal>
+      )}
+    </>
+  );
+};
 
-      {/* Ongoing Deliveries */}
-      <div className="bg-white p-4 rounded-xl shadow-sm overflow-hidden">
-        <div className="flex items-center gap-4 mb-2">
-          <FaTruck className="text-3xl text-yellow-600" />
-          <div>
-            <div className="font-medium text-sm sm:text-base">Ongoing Deliveries</div>
-            <div className="text-xs sm:text-sm text-gray-500">
-              {ongoingDeliveries === null
-                ? "Loading…"
-                : `${ongoingDeliveries.length} delivery${ongoingDeliveries.length === 1 ? "" : "ies"}`}
-            </div>
-          </div>
-        </div>
-        {ongoingDeliveries && ongoingDeliveries.length > 0 && (
-          <ul className="text-xs text-gray-700 list-disc list-inside space-y-1 max-h-24 overflow-y-auto">
-            {ongoingDeliveries.map(d => (
-              <li key={d.id}>{d.destination}</li>
-            ))}
-          </ul>
-        )}
-      </div>
+/* ---------- Helpers (Modal + ListSection) ---------- */
 
-      {/* Existing Customers */}
-      <div className="bg-white p-4 rounded-xl shadow-sm overflow-hidden">
-        <div className="flex items-center gap-4 mb-2">
-          <FaUserFriends className="text-3xl text-[#ffba20]" />
-          <div>
-            <div className="font-medium text-sm sm:text-base">Existing Customers</div>
-            <div className="text-xs sm:text-sm text-gray-500">
-              {existingCustomers === null
-                ? "Loading…"
-                : `${existingCustomers.length} customer${existingCustomers.length === 1 ? "" : "s"}`}
-            </div>
-          </div>
+function modalTitle(type: ModalType) {
+  switch (type) {
+    case "outOfStock":
+      return "Out of Stock Items";
+    case "deliveries":
+      return "Ongoing Deliveries";
+    case "customers":
+      return "Existing Customers";
+    default:
+      return "";
+  }
+}
+
+const Modal: React.FC<{
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}> = ({ title, onClose, children }) => {
+  // close on ESC
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onEsc);
+    return () => window.removeEventListener("keydown", onEsc);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white w-full max-w-2xl rounded-xl shadow-lg p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between mb-4">
+          <h2 className="text-xl font-semibold">{title}</h2>
+          <button
+            onClick={onClose}
+            className="px-3 py-1 rounded border hover:bg-red-600 text-sm hover:text-white"
+          >
+            Close
+          </button>
         </div>
-        {existingCustomers && existingCustomers.length > 0 && (
-          <ul className="text-xs text-gray-700 list-disc list-inside space-y-1 max-h-24 overflow-y-auto">
-            {existingCustomers.map(c => (
-              <li key={c.id}>{c.name}</li>
-            ))}
-          </ul>
-        )}
+        <div className="max-h-[60vh] overflow-y-auto">{children}</div>
       </div>
     </div>
+  );
+};
+
+const ListSection: React.FC<{
+  items: string[] | null;
+  emptyText: string;
+}> = ({ items, emptyText }) => {
+  if (!items || items.length === 0) {
+    return <p className="text-gray-500">{emptyText}</p>;
+  }
+  return (
+    <ul className="space-y-2 text-sm md:text-base text-gray-800 list-disc pl-6">
+      {items.map((t, idx) => (
+        <li key={`${t}-${idx}`}>{t}</li>
+      ))}
+    </ul>
   );
 };
 

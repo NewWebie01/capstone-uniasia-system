@@ -5,6 +5,7 @@ import NotificationBell from "@/components/NotificationBell";
 import { DM_Sans } from "next/font/google";
 import { useState } from "react";
 import { Toaster } from "sonner";
+import GlobalRouteLoader from "@/components/GlobalRouteLoader"; // ⬅️ add this
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -42,8 +43,13 @@ export default function DashboardLayout({
         <Sidebar open={open} setOpen={setOpen} />
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto p-6 relative">{children}</main>
+        <main className="flex-1 overflow-y-auto p-6 relative">
+          {children}
+        </main>
       </div>
+
+      {/* Global route loader (always mounted) */}
+      <GlobalRouteLoader />
     </div>
   );
 }

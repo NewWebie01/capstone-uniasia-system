@@ -7,6 +7,19 @@ import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 
+/* ----------------------------- PSGC helpers ----------------------------- */
+async function fetchJSON<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+type PSGCRegion = { id: number; name: string; code: string };
+type PSGCProvince = { id: number; name: string; code: string; region_id: number };
+type PSGCCity = { id: number; name: string; code: string; province_id: number; type: string };
+type PSGCBarangay = { id: number; name: string; code: string };
+
+/* --------------------------- App data structures --------------------------- */
 type InventoryItem = {
   id: number;
   product_name: string;
@@ -28,7 +41,7 @@ type CustomerInfo = {
   name: string;
   email: string;
   phone: string;
-  address: string;
+  address: string; // composed from houseStreet + barangay/city/province/region
   contact_person?: string;
   code?: string;
   area?: string;
@@ -46,6 +59,11 @@ function generateTransactionCode(): string {
   return `TXN-${yyyymmdd}-${random}`;
 }
 
+function isValidPhone(phone: string) {
+  return /^\d{11}$/.test(phone);
+}
+
+/* -------------------------------- Component ------------------------------- */
 export default function CustomerInventoryPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,7 +94,126 @@ export default function CustomerInventoryPage() {
     customer_type: undefined,
   });
 
-  // Load inventory + realtime updates
+  /* ----------------------------- PSGC state ----------------------------- */
+  const [regions, setRegions] = useState<PSGCRegion[]>([]);
+  const [provinces, setProvinces] = useState<PSGCProvince[]>([]);
+  const [cities, setCities] = useState<PSGCCity[]>([]);
+  const [barangays, setBarangays] = useState<PSGCBarangay[]>([]);
+
+  const [regionCode, setRegionCode] = useState("");
+  const [provinceCode, setProvinceCode] = useState("");
+  const [cityCode, setCityCode] = useState("");
+  const [barangayCode, setBarangayCode] = useState("");
+
+  // House number & street name
+  const [houseStreet, setHouseStreet] = useState("");
+
+  // derived selected objects
+  const selectedRegion = useMemo(
+    () => regions.find((r) => r.code === regionCode) || null,
+    [regions, regionCode]
+  );
+  const selectedProvince = useMemo(
+    () => provinces.find((p) => p.code === provinceCode) || null,
+    [provinces, provinceCode]
+  );
+  const selectedCity = useMemo(
+    () => cities.find((c) => c.code === cityCode) || null,
+    [cities, cityCode]
+  );
+  const selectedBarangay = useMemo(
+    () => barangays.find((b) => b.code === barangayCode) || null,
+    [barangays, barangayCode]
+  );
+
+  // computed full address string
+  const computedAddress = useMemo(() => {
+    const parts = [
+      houseStreet.trim(),
+      selectedBarangay?.name ?? "",
+      selectedCity?.name ?? "",
+      selectedProvince?.name ?? "",
+      selectedRegion?.name ?? "",
+    ].filter(Boolean);
+    return parts.join(", ");
+  }, [houseStreet, selectedBarangay, selectedCity, selectedProvince, selectedRegion]);
+
+  // Sync computed address to customerInfo.address
+  useEffect(() => {
+    setCustomerInfo((prev) => ({ ...prev, address: computedAddress }));
+  }, [computedAddress]);
+
+  // Load regions once
+  useEffect(() => {
+    fetchJSON<PSGCRegion[]>("https://psgc.cloud/api/regions")
+      .then((data) =>
+        setRegions(data.sort((a, b) => a.name.localeCompare(b.name)))
+      )
+      .catch(() => toast.error("Failed to load regions"));
+  }, []);
+
+  // Load provinces when region changes
+  useEffect(() => {
+    setProvinces([]);
+    setProvinceCode("");
+    setCities([]);
+    setCityCode("");
+    setBarangays([]);
+    setBarangayCode("");
+    if (!regionCode) return;
+
+    fetchJSON<PSGCProvince[]>("https://psgc.cloud/api/provinces")
+      .then((all) => {
+        // Province codes begin with the region's 2-digit prefix
+        const provs = all.filter(
+          (p) => p.code.startsWith(regionCode.slice(0, 2))
+        );
+        setProvinces(provs.sort((a, b) => a.name.localeCompare(b.name)));
+      })
+      .catch(() => toast.error("Failed to load provinces"));
+  }, [regionCode]);
+
+  // Load cities + municipalities when province changes
+  useEffect(() => {
+    setCities([]);
+    setCityCode("");
+    setBarangays([]);
+    setBarangayCode("");
+    if (!provinceCode) return;
+
+    Promise.all([
+      fetchJSON<PSGCCity[]>("https://psgc.cloud/api/cities"),
+      fetchJSON<PSGCCity[]>("https://psgc.cloud/api/municipalities"),
+    ])
+      .then(([c, m]) => {
+        // City/Muni codes begin with the province's 4-digit prefix
+        const byProv = (x: PSGCCity) => x.code.startsWith(provinceCode.slice(0, 4));
+        const list = [...c.filter(byProv), ...m.filter(byProv)].sort((a, b) =>
+          a.name.localeCompare(b.name)
+        );
+        setCities(list);
+      })
+      .catch(() => toast.error("Failed to load cities/municipalities"));
+  }, [provinceCode]);
+
+  // Load barangays when city/municipality changes
+  useEffect(() => {
+    setBarangays([]);
+    setBarangayCode("");
+    if (!cityCode) return;
+
+    fetchJSON<PSGCBarangay[]>("https://psgc.cloud/api/barangays")
+      .then((all) => {
+        // Barangay codes begin with the city/municipality's 6-digit prefix
+        const list = all
+          .filter((b) => b.code.startsWith(cityCode.slice(0, 6)))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setBarangays(list);
+      })
+      .catch(() => toast.error("Failed to load barangays"));
+  }, [cityCode]);
+
+  /* --------------------- Inventory load + realtime --------------------- */
   const fetchInventory = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase.from("inventory").select("*");
@@ -106,7 +243,7 @@ export default function CustomerInventoryPage() {
     };
   }, [fetchInventory]);
 
-  // Payment type logic
+  /* --------------------------- Payment type logic --------------------------- */
   useEffect(() => {
     if (customerInfo.customer_type === "New Customer") {
       setCustomerInfo((prev) => ({ ...prev, payment_type: "Cash" }));
@@ -118,7 +255,7 @@ export default function CustomerInventoryPage() {
     }
   }, [customerInfo.customer_type]);
 
-  // Add to cart flow
+  /* ------------------------------- Cart flow ------------------------------- */
   const handleAddToCartClick = (item: InventoryItem) => {
     setSelectedItem(item);
     setOrderQuantity(1);
@@ -154,8 +291,26 @@ export default function CustomerInventoryPage() {
     setShowCartPopup(true);
   };
 
-  // First modal "Submit Order" -> only open final confirmation (no DB write, no toast)
+  // First modal "Submit Order" -> only open final confirmation
   const handleOpenFinalModal = () => {
+    // strict phone validation
+    if (!isValidPhone(customerInfo.phone)) {
+      toast.error("Phone number must be exactly 11 digits.");
+      return;
+    }
+
+    // require full address pieces
+    if (
+      !houseStreet.trim() ||
+      !barangayCode ||
+      !cityCode ||
+      !provinceCode ||
+      !regionCode
+    ) {
+      toast.error("Please complete your full address (House/St., Barangay, City, Province, Region).");
+      return;
+    }
+
     if (
       !customerInfo.name ||
       !customerInfo.email ||
@@ -174,11 +329,21 @@ export default function CustomerInventoryPage() {
     setShowFinalPopup(true);
   };
 
-  // Final modal "Confirm Order" -> actually insert to DB, then toast + reset
+  // Final modal "Confirm Order" -> insert to DB
   const handleConfirmOrder = async () => {
     if (!finalOrderDetails) return;
 
     const { customer, items } = finalOrderDetails;
+
+    // safety re-checks
+    if (!isValidPhone(customer.phone)) {
+      toast.error("Phone number must be exactly 11 digits.");
+      return;
+    }
+    if (!customer.address) {
+      toast.error("Missing address.");
+      return;
+    }
 
     // Duplicate code check
     const { data: existing } = await supabase
@@ -232,13 +397,14 @@ export default function CustomerInventoryPage() {
       const { error: itemsErr } = await supabase.from("order_items").insert(rows);
       if (itemsErr) throw itemsErr;
 
-      // Success → toast here only
       toast.success("Your order has been submitted successfully!");
 
       // Reset UI
       setShowFinalPopup(false);
       setFinalOrderDetails(null);
       setCart([]);
+
+      // reset customer fields and location selectors
       setCustomerInfo({
         name: "",
         email: "",
@@ -250,6 +416,14 @@ export default function CustomerInventoryPage() {
         payment_type: "Cash",
         customer_type: undefined,
       });
+      setRegionCode("");
+      setProvinceCode("");
+      setCityCode("");
+      setBarangayCode("");
+      setProvinces([]);
+      setCities([]);
+      setBarangays([]);
+      setHouseStreet("");
 
       await fetchInventory();
     } catch (e: any) {
@@ -258,16 +432,14 @@ export default function CustomerInventoryPage() {
     }
   };
 
-  // Derived
+  /* ------------------------------ Derived ------------------------------ */
   const totalItems = cart.reduce((sum, ci) => sum + ci.quantity, 0);
 
-  // categories list for dropdown (from inventory)
-  const categories = useMemo(
+  const categoriesList = useMemo(
     () => Array.from(new Set(inventory.map((i) => i.category))).sort(),
     [inventory]
   );
 
-  // combined filters
   const filteredInventory = inventory.filter((i) => {
     const matchesSearch =
       i.product_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -279,6 +451,7 @@ export default function CustomerInventoryPage() {
     return matchesSearch && matchesCategory;
   });
 
+  /* --------------------------------- UI --------------------------------- */
   return (
     <div className="p-4">
       <motion.h1 className="text-3xl font-bold mb-4">Product Catalog</motion.h1>
@@ -299,7 +472,7 @@ export default function CustomerInventoryPage() {
           onChange={(e) => setCategoryFilter(e.target.value)}
         >
           <option value="">All Categories</option>
-          {categories.map((cat) => (
+          {categoriesList.map((cat) => (
             <option key={cat} value={cat}>
               {cat || "Uncategorized"}
             </option>
@@ -458,34 +631,122 @@ export default function CustomerInventoryPage() {
               />
               <input
                 type="tel"
-                placeholder="Phone"
+                placeholder="Phone (11 digits)"
                 className="border px-3 py-2 rounded"
+                inputMode="numeric"
+                pattern="\d*"
+                maxLength={11}
                 value={customerInfo.phone}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
-              />
-              <input
-                placeholder="Address"
-                className="border px-3 py-2 rounded"
-                value={customerInfo.address}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, address: e.target.value })}
+                onChange={(e) => {
+                  const value = e.target.value.replace(/\D/g, ""); // digits only
+                  if (value.length <= 11) {
+                    setCustomerInfo({ ...customerInfo, phone: value });
+                  }
+                }}
               />
               <input
                 placeholder="Contact Person"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.contact_person}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, contact_person: e.target.value })}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, contact_person: e.target.value })
+                }
               />
+
+              {/* Location Pickers + House/Street */}
+              <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
+                {/* Region */}
+                <div>
+                  <label className="block text-sm mb-1">Region</label>
+                  <select
+                    className="border px-3 py-2 rounded w-full"
+                    value={regionCode}
+                    onChange={(e) => setRegionCode(e.target.value)}
+                  >
+                    <option value="">Select region</option>
+                    {regions.map((r) => (
+                      <option key={r.code} value={r.code}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Province */}
+                <div>
+                  <label className="block text-sm mb-1">Province</label>
+                  <select
+                    className="border px-3 py-2 rounded w-full"
+                    value={provinceCode}
+                    onChange={(e) => setProvinceCode(e.target.value)}
+                    disabled={!regionCode}
+                  >
+                    <option value="">
+                      {regionCode ? "Select province" : "Select region first"}
+                    </option>
+                    {provinces.map((p) => (
+                      <option key={p.code} value={p.code}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* City/Municipality */}
+                <div>
+                  <label className="block text-sm mb-1">City / Municipality</label>
+                  <select
+                    className="border px-3 py-2 rounded w-full"
+                    value={cityCode}
+                    onChange={(e) => setCityCode(e.target.value)}
+                    disabled={!provinceCode}
+                  >
+                    <option value="">
+                      {provinceCode ? "Select city/municipality" : "Select province first"}
+                    </option>
+                    {cities.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Barangay */}
+                <div>
+                  <label className="block text-sm mb-1">Barangay</label>
+                  <select
+                    className="border px-3 py-2 rounded w-full"
+                    value={barangayCode}
+                    onChange={(e) => setBarangayCode(e.target.value)}
+                    disabled={!cityCode}
+                  >
+                    <option value="">
+                      {cityCode ? "Select barangay" : "Select city first"}
+                    </option>
+                    {barangays.map((b) => (
+                      <option key={b.code} value={b.code}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* House Number & Street Name */}
               <input
-                placeholder="Transaction Code"
-                className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-                value={customerInfo.code || "Will be generated when you click 'Order Item'"}
+                placeholder="House Number & Street Name"
+                className="border px-3 py-2 rounded col-span-2"
+                value={houseStreet}
+                onChange={(e) => setHouseStreet(e.target.value)}
+              />
+
+              {/* Show the composed address (read-only) */}
+              <input
+                className="border px-3 py-2 rounded col-span-2 bg-gray-50"
+                value={customerInfo.address || ""}
+                placeholder="Address will be set from House/St. + Barangay/City/Province/Region"
                 readOnly
-              />
-              <input
-                placeholder="Area"
-                className="border px-3 py-2 rounded"
-                value={customerInfo.area}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, area: e.target.value })}
               />
 
               <div className="col-span-2">
@@ -598,6 +859,29 @@ export default function CustomerInventoryPage() {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+              <div>
+                <div className="text-xs text-gray-500">Region</div>
+                <div className="font-medium">{selectedRegion?.name ?? "-"}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Province</div>
+                <div className="font-medium">{selectedProvince?.name ?? "-"}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">City/Municipality</div>
+                <div className="font-medium">{selectedCity?.name ?? "-"}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Barangay</div>
+                <div className="font-medium">{selectedBarangay?.name ?? "-"}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">House & Street</div>
+                <div className="font-medium">{houseStreet || "-"}</div>
+              </div>
+            </div>
+
             <table className="w-full table-fixed text-sm bg-gray-100">
               <thead className="bg-gray-200">
                 <tr>
@@ -629,7 +913,7 @@ export default function CustomerInventoryPage() {
                 Cancel
               </button>
               <button
-                onClick={handleConfirmOrder} // writes to DB + toast
+                onClick={handleConfirmOrder}
                 className="bg-[#ffba20] text-white px-4 py-2 rounded hover:bg-yellow-600"
               >
                 Confirm Order
