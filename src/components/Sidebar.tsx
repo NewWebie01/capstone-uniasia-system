@@ -15,7 +15,8 @@ import Invoice from "@/assets/Chat.png";
 import { FaHistory } from "react-icons/fa";
 
 import Image, { StaticImageData } from "next/image";
-import Link from "next/link";
+import NavLink from "@/components/NavLink";
+
 import { usePathname } from "next/navigation";
 import { Dispatch, SetStateAction } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -142,9 +143,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
             );
 
             return menu.href ? (
-              <Link href={menu.href} key={menu.title}>
-                {menuItem}
-              </Link>
+<NavLink href={menu.href} key={menu.title}>
+  {menuItem}
+</NavLink>
+
             ) : (
               <div key={menu.title}>{menuItem}</div>
             );
