@@ -8,13 +8,20 @@ export default function GlobalRouteLoader() {
   const pathname = usePathname();
   const { isNavigating, setNavigating } = useNavPending();
 
-  // When the path actually changes, hide the loader (with a tiny delay to avoid flash)
+  // hide when the route changes
   useEffect(() => {
     if (isNavigating) {
       const t = setTimeout(() => setNavigating(false), 150);
       return () => clearTimeout(t);
     }
   }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // fail-safe: auto-hide after 8s even if nothing changed
+  useEffect(() => {
+    if (!isNavigating) return;
+    const t = setTimeout(() => setNavigating(false), 8000);
+    return () => clearTimeout(t);
+  }, [isNavigating, setNavigating]);
 
   return (
     <AnimatePresence>

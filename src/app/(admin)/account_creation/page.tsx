@@ -16,9 +16,7 @@ export default function Page() {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
-    if (errors[e.target.name]) {
-      setErrors({ ...errors, [e.target.name]: "" });
-    }
+    if (errors[e.target.name]) setErrors({ ...errors, [e.target.name]: "" });
   };
 
   const handleReset = () => {
@@ -79,7 +77,7 @@ export default function Page() {
 
   return (
     <motion.div
-      className="no-vertical-scroll overflow-x-hidden flex items-center justify-center px-4"
+      className="flex items-center justify-center h-[calc(100dvh-88px)] overflow-y-hidden px-4"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3 }}
