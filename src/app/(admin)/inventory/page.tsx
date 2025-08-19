@@ -15,23 +15,28 @@ type InventoryItem = {
   amount: number;
   date_created: string;
   status: string;
+  image_url?: string | null;
 };
 
 export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
-
   const [searchQuery, setSearchQuery] = useState("");
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
   const [loading, setLoading] = useState(true);
+
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [isCustomSubcategory, setIsCustomSubcategory] = useState(false);
   const [isCustomUnit, setIsCustomUnit] = useState(false);
   const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
   const [subcategoryOptions, setSubcategoryOptions] = useState<string[]>([]);
   const [unitOptions, setUnitOptions] = useState<string[]>([]);
+
+  // Image upload state
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
     sku: "",
@@ -44,6 +49,7 @@ export default function InventoryPage() {
     amount: 0,
     date_created: new Date().toISOString(),
     status: "",
+    image_url: null,
   });
 
   const [validationErrors, setValidationErrors] = useState({
@@ -55,16 +61,15 @@ export default function InventoryPage() {
     unit_price: false,
   });
 
+  const BUCKET = "inventory-images";
+
   const fetchItems = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from("inventory")
       .select("*")
       .order("date_created", { ascending: false });
-
-    if (!error && data) {
-      setItems(data);
-    }
+    if (!error && data) setItems(data as InventoryItem[]);
     setLoading(false);
   };
 
@@ -72,18 +77,15 @@ export default function InventoryPage() {
     const { data, error } = await supabase
       .from("inventory")
       .select("category, subcategory, unit");
-
     if (error) {
       console.error("Failed to fetch dropdown options:", error);
       return;
     }
-
     const unique = (values: (string | null)[]) =>
       [...new Set(values.filter(Boolean))] as string[];
-
-    setCategoryOptions(unique(data.map((item) => item.category)));
-    setSubcategoryOptions(unique(data.map((item) => item.subcategory)));
-    setUnitOptions(unique(data.map((item) => item.unit)));
+    setCategoryOptions(unique(data.map((i) => i.category)));
+    setSubcategoryOptions(unique(data.map((i) => i.subcategory)));
+    setUnitOptions(unique(data.map((i) => i.unit)));
   };
 
   useEffect(() => {
@@ -96,6 +98,32 @@ export default function InventoryPage() {
     setNewItem((prev) => ({ ...prev, amount }));
   }, [newItem.unit_price, newItem.quantity]);
 
+  const handleImageSelect = (file: File | null) => {
+    setImageFile(file);
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setImagePreview(url);
+    } else {
+      setImagePreview(null);
+    }
+  };
+
+  const uploadImageAndGetUrl = async (file: File, skuForName: string) => {
+    const ext = file.name.split(".").pop() || "jpg";
+    const safeSku = (skuForName || "item").replace(/\s+/g, "-").toLowerCase();
+    const path = `${safeSku}-${Date.now()}.${ext}`;
+
+    const { error: uploadErr } = await supabase.storage
+      .from(BUCKET)
+      .upload(path, file, { cacheControl: "3600", upsert: false });
+    if (uploadErr) throw uploadErr;
+
+    const { data: publicUrlData } = supabase.storage
+      .from(BUCKET)
+      .getPublicUrl(path);
+    return publicUrlData.publicUrl;
+  };
+
   const handleSubmitItem = async () => {
     try {
       const errors = {
@@ -106,16 +134,21 @@ export default function InventoryPage() {
         quantity: newItem.quantity < 0,
         unit_price: newItem.unit_price <= 0,
       };
-
       setValidationErrors(errors);
+      const hasErrors = Object.values(errors).some(Boolean);
+      if (hasErrors) return;
 
-      const hasErrors = Object.values(errors).some((v) => v);
-      if (hasErrors) {
-        return;
+      let finalImageUrl = newItem.image_url || null;
+      if (imageFile) {
+        finalImageUrl = await uploadImageAndGetUrl(
+          imageFile,
+          newItem.sku || newItem.product_name
+        );
       }
 
       const dataToSave = {
         ...newItem,
+        image_url: finalImageUrl,
         date_created: new Date().toISOString(),
       };
 
@@ -129,24 +162,27 @@ export default function InventoryPage() {
 
       if (error) throw error;
 
+      // reset
       setNewItem({
         sku: "",
         product_name: "",
         category: "",
         quantity: 0,
-        subcategory: "", // ✅ add this
+        subcategory: "",
         unit: "",
         unit_price: 0,
         amount: 0,
         date_created: new Date().toISOString(),
         status: "",
+        image_url: null,
       });
-
+      setImageFile(null);
+      setImagePreview(null);
       setShowForm(false);
       setEditingItemId(null);
 
       fetchItems();
-      fetchDropdownOptions(); // refresh dropdown list after new entry
+      fetchDropdownOptions();
     } catch (err: any) {
       console.error(err);
       alert("Error saving item: " + err.message);
@@ -160,6 +196,25 @@ export default function InventoryPage() {
     .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const totalPages = Math.ceil(items.length / itemsPerPage);
+
+  // Image modal state
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(
+    null
+  );
+
+  const openImageModal = (item: InventoryItem) => {
+    setImageModalItem(item);
+    setShowImageModal(true);
+  };
+  const closeImageModal = () => {
+    setShowImageModal(false);
+    setImageModalItem(null);
+  };
+
+  // Cell utility classes for consistent alignment
+  const cell = "px-4 py-2 text-left align-middle";
+  const cellNowrap = `${cell} whitespace-nowrap`;
 
   return (
     <div className="p-4">
@@ -182,13 +237,16 @@ export default function InventoryPage() {
               product_name: "",
               category: "",
               quantity: 0,
-              subcategory: "", // ✅ add this
+              subcategory: "",
               unit: "",
               unit_price: 0,
               amount: 0,
               date_created: new Date().toISOString(),
               status: "",
+              image_url: null,
             });
+            setImageFile(null);
+            setImagePreview(null);
           }}
         >
           Add New Item
@@ -199,34 +257,51 @@ export default function InventoryPage() {
         <table className="min-w-full bg-white text-sm">
           <thead className="bg-[#ffba20] text-black text-left">
             <tr>
-              <th className="px-4 py-3">SKU</th>
-              <th className="px-4 py-3">Product</th>
-              <th className="px-4 py-3">Category</th>
-              <th className="px-4 py-3">Subcategory</th>
-              <th className="px-4 py-3">Unit</th>
-
-              <th className="px-4 py-3">Quantity</th>
-              <th className="px-4 py-3">Unit Price</th>
-              <th className="px-4 py-3">Total</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Date</th>
-              <th className="px-4 py-3">Actions</th>
+              <th className={`${cellNowrap}`}>SKU</th>
+              <th className={`${cellNowrap}`}>Product</th>
+              <th className={`${cellNowrap}`}>Category</th>
+              <th className={`${cellNowrap}`}>Subcategory</th>
+              <th className={`${cellNowrap}`}>Unit</th>
+              <th className={`${cellNowrap}`}>Quantity</th>
+              <th className={`${cellNowrap}`}>Unit Price</th>
+              <th className={`${cellNowrap}`}>Total</th>
+              <th className={`${cellNowrap}`}>Status</th>
+              <th className={`${cellNowrap}`}>Date</th>
+              <th className={`${cellNowrap}`}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {filteredItems.map((item) => (
               <tr key={item.id} className="border-b hover:bg-gray-50">
-                <td className="px-4 py-2">{item.sku}</td>
-                <td className="px-4 py-2">{item.product_name}</td>
-                <td className="px-4 py-2">{item.category}</td>
-                <td className="px-4 py-2">{item.subcategory}</td>
-                <td className="px-4 py-2">{item.unit}</td>
-                <td className="px-4 py-2">{item.quantity}</td>
-                <td className="px-4 py-2">
+                <td className={cellNowrap}>{item.sku}</td>
+
+                <td className={cellNowrap}>
+                  {item.image_url ? (
+                    <button
+                      className="text-blue-600 hover:underline font-medium"
+                      onClick={() => openImageModal(item)}
+                      title="Click to view image"
+                    >
+                      {item.product_name}
+                    </button>
+                  ) : (
+                    <span className="text-gray-800 font-medium">
+                      {item.product_name}
+                    </span>
+                  )}
+                </td>
+
+                <td className={cellNowrap}>{item.category}</td>
+                <td className={cellNowrap}>{item.subcategory}</td>
+                <td className={cellNowrap}>{item.unit}</td>
+                <td className={cellNowrap}>{item.quantity}</td>
+
+                <td className={cellNowrap}>
                   ₱{item.unit_price.toLocaleString()}
                 </td>
-                <td className="px-4 py-2">₱{item.amount.toLocaleString()}</td>
-                <td className="px-4 py-2">
+                <td className={cellNowrap}>₱{item.amount.toLocaleString()}</td>
+
+                <td className={cellNowrap}>
                   <span
                     className={`font-semibold px-2 py-1 rounded ${
                       item.status === "In Stock"
@@ -237,16 +312,20 @@ export default function InventoryPage() {
                     {item.status}
                   </span>
                 </td>
-                <td className="px-4 py-2">
+
+                <td className={cellNowrap}>
                   {new Date(item.date_created).toLocaleString("en-PH")}
                 </td>
-                <td className="px-4 py-2">
+
+                <td className={cellNowrap}>
                   <button
                     className="text-blue-600 hover:underline"
                     onClick={() => {
                       setShowForm(true);
                       setEditingItemId(item.id);
                       setNewItem({ ...item });
+                      setImageFile(null);
+                      setImagePreview(item.image_url || null);
                     }}
                   >
                     Edit
@@ -254,6 +333,16 @@ export default function InventoryPage() {
                 </td>
               </tr>
             ))}
+            {filteredItems.length === 0 && !loading && (
+              <tr>
+                <td
+                  className="px-4 py-6 text-center text-gray-500"
+                  colSpan={11}
+                >
+                  No items found.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -278,9 +367,70 @@ export default function InventoryPage() {
         </button>
       </div>
 
+      {/* IMAGE MODAL */}
+      {showImageModal && imageModalItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-lg max-w-md w-full overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <h3 className="font-semibold">{imageModalItem.product_name}</h3>
+              <button
+                className="text-gray-500 hover:text-black"
+                onClick={closeImageModal}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4">
+              {imageModalItem.image_url ? (
+                <img
+                  src={imageModalItem.image_url}
+                  alt={imageModalItem.product_name}
+                  className="w-full h-auto rounded"
+                />
+              ) : (
+                <div className="text-center text-gray-500 border rounded p-6">
+                  No image uploaded for this item.
+                </div>
+              )}
+              <div className="mt-3 text-sm text-gray-600">
+                <div>
+                  <span className="font-medium">SKU:</span>{" "}
+                  {imageModalItem.sku || "—"}
+                </div>
+                <div>
+                  <span className="font-medium">Category:</span>{" "}
+                  {imageModalItem.category || "—"}
+                </div>
+                <div>
+                  <span className="font-medium">Subcategory:</span>{" "}
+                  {imageModalItem.subcategory || "—"}
+                </div>
+                <div>
+                  <span className="font-medium">Unit:</span>{" "}
+                  {imageModalItem.unit || "—"}
+                </div>
+                <div>
+                  <span className="font-medium">Quantity:</span>{" "}
+                  {imageModalItem.quantity}
+                </div>
+              </div>
+            </div>
+            <div className="px-4 py-3 border-t text-right">
+              <button
+                onClick={closeImageModal}
+                className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD/EDIT FORM MODAL */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="bg-white p-8 rounded-lg max-w-xl w-full space-y-4">
+          <div className="bg-white p-8 rounded-lg max-w-xl w-full max-h-[90vh] overflow-y-auto space-y-4">
             <h2 className="text-lg font-semibold">
               {editingItemId ? "Edit Item" : "Add New Item"}
             </h2>
@@ -337,15 +487,15 @@ export default function InventoryPage() {
                       setNewItem((prev) => ({
                         ...prev,
                         category: e.target.value,
-                        subcategory: "", // reset subcategory
+                        subcategory: "",
                       }))
                     }
                     className="flex-1 border px-4 py-2 rounded"
                   >
                     <option value="">Select Category</option>
-                    {categoryOptions.map((category) => (
-                      <option key={category} value={category}>
-                        {category}
+                    {categoryOptions.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
                       </option>
                     ))}
                   </select>
@@ -390,9 +540,9 @@ export default function InventoryPage() {
                     className="flex-1 border px-4 py-2 rounded"
                   >
                     <option value="">Select Subcategory</option>
-                    {subcategoryOptions.map((sub) => (
-                      <option key={sub} value={sub}>
-                        {sub}
+                    {subcategoryOptions.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
                       </option>
                     ))}
                   </select>
@@ -418,27 +568,21 @@ export default function InventoryPage() {
                     placeholder="Enter new unit"
                     value={newItem.unit}
                     onChange={(e) =>
-                      setNewItem((prev) => ({
-                        ...prev,
-                        unit: e.target.value,
-                      }))
+                      setNewItem((prev) => ({ ...prev, unit: e.target.value }))
                     }
                   />
                 ) : (
                   <select
                     value={newItem.unit}
                     onChange={(e) =>
-                      setNewItem((prev) => ({
-                        ...prev,
-                        unit: e.target.value,
-                      }))
+                      setNewItem((prev) => ({ ...prev, unit: e.target.value }))
                     }
                     className="flex-1 border px-4 py-2 rounded"
                   >
                     <option value="">Select Unit</option>
-                    {unitOptions.map((unit) => (
-                      <option key={unit} value={unit}>
-                        {unit}
+                    {unitOptions.map((u) => (
+                      <option key={u} value={u}>
+                        {u}
                       </option>
                     ))}
                   </select>
@@ -501,9 +645,57 @@ export default function InventoryPage() {
               />
             </div>
 
+            {/* Image upload + preview */}
+            <div className="flex items-start gap-2">
+              <label className="w-36 text-sm text-gray-700 mt-2">
+                Item Image
+              </label>
+              <div className="flex-1">
+                {imagePreview ? (
+                  <img
+                    src={imagePreview}
+                    alt="Preview"
+                    className="w-full max-h-48 object-contain rounded border mb-2"
+                  />
+                ) : newItem.image_url ? (
+                  <img
+                    src={newItem.image_url}
+                    alt="Current"
+                    className="w-full max-h-48 object-contain rounded border mb-2"
+                  />
+                ) : (
+                  <div className="text-sm text-gray-500 border rounded p-3 mb-2">
+                    No image selected
+                  </div>
+                )}
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =>
+                    handleImageSelect(e.target.files?.[0] || null)
+                  }
+                  className="block w-full text-sm text-gray-700"
+                />
+                {imagePreview && (
+                  <button
+                    type="button"
+                    onClick={() => handleImageSelect(null)}
+                    className="mt-2 text-xs text-red-600 underline"
+                  >
+                    Remove selected image
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div className="flex justify-end gap-2 pt-4">
               <button
-                onClick={() => setShowForm(false)}
+                onClick={() => {
+                  setShowForm(false);
+                  setImageFile(null);
+                  setImagePreview(null);
+                }}
                 className="bg-gray-300 px-4 py-2 rounded"
               >
                 Cancel

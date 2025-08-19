@@ -5,14 +5,11 @@ import arrowcontrol from "@/assets/control.png";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import ChartFill from "@/assets/Chart_fill.png";
 import Logistics from "@/assets/logistics.png";
-import Calendar from "@/assets/Calendar.png";
 import Sales from "@/assets/Sales.png";
-import Chart from "@/assets/Chart.png";
-import Folder from "@/assets/Folder.png";
 import LogoutIcon from "@/assets/power-button.png";
-import Invoice from "@/assets/Chat.png";
 
 import { FaHistory } from "react-icons/fa";
+import { UserPlus, ShoppingCart, Boxes, FileText, Receipt } from "lucide-react";
 
 import Image, { StaticImageData } from "next/image";
 import NavLink from "@/components/NavLink";
@@ -34,13 +31,14 @@ const Menus: {
   icon?: React.ComponentType<{ className?: string }>;
 }[] = [
   { title: "Dashboard", src: ChartFill, href: "/dashboard" },
-  { title: "Inventory", src: Calendar, href: "/inventory" },
+  { title: "Inventory", icon: Boxes, href: "/inventory" },
   { title: "Truck Delivery", src: Logistics, href: "/logistics" },
   { title: "Sales", src: Sales, href: "/sales" },
-  { title: "Purchase", src: Folder, href: "/purchase" },
-  { title: "Invoice", src: Chart, href: "/invoice" },
-  { title: "Transaction History", src: Invoice, href: "/transaction-history" },
+  // { title: "Purchase", icon: ShoppingCart, href: "/purchase" },
+  { title: "Invoice", icon: FileText, href: "/invoice" },
+  { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
+  { title: "Account Creation", icon: UserPlus, href: "/account_creation" },
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
@@ -108,11 +106,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
           {Menus.map((menu, idx) => {
             const isActive = pathname === menu.href;
 
-            // either show the image or the icon
             const IconOrImage = menu.src ? (
               <Image src={menu.src} alt={menu.title} width={20} height={20} />
             ) : menu.icon ? (
-              <menu.icon className="h-5 w-5 text-black" />
+              <menu.icon
+                className={`h-5 w-5 ${
+                  menu.title === "Activity Log" ||
+                  menu.title === "Account Creation" ||
+                  menu.title === "Purchase" ||
+                  menu.title === "Inventory" ||
+                  menu.title === "Invoice" ||
+                  menu.title === "Transaction History"
+                    ? "text-[#ffba20]" // ✅ all important icons yellow
+                    : "text-black"
+                }`}
+              />
             ) : null;
 
             const menuItem = (
@@ -143,10 +151,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
             );
 
             return menu.href ? (
-<NavLink href={menu.href} key={menu.title}>
-  {menuItem}
-</NavLink>
-
+              <NavLink href={menu.href} key={menu.title}>
+                {menuItem}
+              </NavLink>
             ) : (
               <div key={menu.title}>{menuItem}</div>
             );
