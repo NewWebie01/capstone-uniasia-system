@@ -11,7 +11,8 @@ const supabaseAdmin = createClient(
 
 export async function POST(req: Request) {
   try {
-    const { email, password } = await req.json();
+    const body = await req.json();
+    const { email, password, name, role } = body;
 
     if (!email || !password) {
       return NextResponse.json(
@@ -20,11 +21,15 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create user without requiring email confirmation
+    // Create user and include user_metadata for role and name
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
       email_confirm: true, // Force email confirmation
+      user_metadata: {
+        role: role || "customer",   // Default to "customer" if not specified
+        name: name || "",
+      },
     });
 
     if (error) {

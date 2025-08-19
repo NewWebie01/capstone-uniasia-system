@@ -19,9 +19,6 @@ import {
 import { generatePDFBlob } from "@/utils/exportInvoice";
 import { toast } from "sonner";
 
-/* =========================
-   TYPES
-========================= */
 type Delivery = {
   id: number;
   destination: string;
@@ -112,9 +109,6 @@ export default function TruckDeliveryPage() {
     expenses: { food: 0, gas: 0, toll: 0, boat: 0, other: 0 },
   });
 
-  /* =========================
-     LOAD DATA
-  ========================= */
   useEffect(() => {
     fetchDeliveriesAndAssignments();
   }, []);
@@ -224,9 +218,6 @@ export default function TruckDeliveryPage() {
     setUnassignedOrders(data ?? []);
   };
 
-  /* =========================
-     CLEAR INVOICES HANDLER
-  ========================= */
   const handleClearInvoices = async (deliveryId: number) => {
     const delivery = deliveries.find((d) => d.id === deliveryId);
     const orderIds = delivery?._orders?.map((o) => o.id) || [];
@@ -251,9 +242,6 @@ export default function TruckDeliveryPage() {
     await fetchDeliveriesAndAssignments();
   };
 
-  /* =========================
-     HELPERS
-  ========================= */
   const showForm = () => setFormVisible(true);
   const hideForm = () => {
     setFormVisible(false);
@@ -298,19 +286,6 @@ export default function TruckDeliveryPage() {
     toast.success("Delivery schedule added");
     await fetchDeliveriesAndAssignments();
     hideForm();
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "Delivered":
-        return <CheckCircle className="text-green-600" />;
-      case "Ongoing":
-        return <Truck className="text-yellow-600" />;
-      case "Scheduled":
-        return <Clock className="text-blue-600" />;
-      default:
-        return null;
-    }
   };
 
   const updateDeliveryStatusInState = (id: number, status: string) => {
@@ -365,9 +340,6 @@ export default function TruckDeliveryPage() {
     toast.success("Date Received updated");
   };
 
-  /* =========================
-     GROUP BY schedule_date
-  ========================= */
   const groupedDeliveries = useMemo(() => {
     return deliveries.reduce<Record<string, Delivery[]>>((acc, delivery) => {
       const dateKey = delivery.schedule_date || "Unscheduled";
@@ -376,9 +348,6 @@ export default function TruckDeliveryPage() {
     }, {});
   }, [deliveries]);
 
-  /* =========================
-     ASSIGN ORDERS -> DELIVERY
-  ========================= */
   const openAssignDialog = async (deliveryId: number) => {
     setAssignForDeliveryId(deliveryId);
     setSelectedOrderIds([]);
@@ -412,9 +381,6 @@ export default function TruckDeliveryPage() {
     await fetchDeliveriesAndAssignments();
   };
 
-  /* =========================
-     RENDER
-  ========================= */
   return (
     <div className="p-6">
       {/* Header */}
@@ -486,7 +452,49 @@ export default function TruckDeliveryPage() {
                       </p>
                     )}
                   </div>
+
+                  {/* Delivery Expenses at the top */}
+                  <div className="mt-4">
+                    <h3 className="font-semibold mb-2">Delivery Expenses</h3>
+                    <ul className="text-sm space-y-1">
+                      <li>
+                        <span className="font-medium text-gray-700">Food Allowance:</span>{" "}
+                        <span className="text-yellow-600 font-semibold">₱{delivery.food ?? 0}</span>
+                      </li>
+                      <li>
+                        <span className="font-medium text-gray-700">Gas:</span>{" "}
+                        <span className="text-yellow-600 font-semibold">₱{delivery.gas ?? 0}</span>
+                      </li>
+                      <li>
+                        <span className="font-medium text-gray-700">Toll Fees:</span>{" "}
+                        <span className="text-yellow-600 font-semibold">₱{delivery.toll ?? 0}</span>
+                      </li>
+                      <li>
+                        <span className="font-medium text-gray-700">Boat Shipping:</span>{" "}
+                        <span className="text-yellow-600 font-semibold">₱{delivery.boat ?? 0}</span>
+                      </li>
+                      <li>
+                        <span className="font-medium text-gray-700">Other Fees:</span>{" "}
+                        <span className="text-yellow-600 font-semibold">₱{delivery.other ?? 0}</span>
+                      </li>
+                      <li className="font-bold mt-2">
+                        Total:{" "}
+                        <span className="text-yellow-500">
+                          ₱
+                          {[
+                            delivery.food ?? 0,
+                            delivery.gas ?? 0,
+                            delivery.toll ?? 0,
+                            delivery.boat ?? 0,
+                            delivery.other ?? 0,
+                          ].reduce((sum, fee) => sum + (fee || 0), 0)}
+                        </span>
+                      </li>
+                    </ul>
+                  </div>
+                  {/* End Delivery Expenses */}
                 </div>
+
                 <div className="mt-3 w-full max-w-2xl">
                   <h3 className="font-semibold mb-1">Invoices on this truck</h3>
                   {delivery._orders && delivery._orders.length > 0 ? (
@@ -561,7 +569,7 @@ export default function TruckDeliveryPage() {
                     </select>
                   </div>
 
-                                    <button
+                  <button
                     onClick={() => openAssignDialog(delivery.id)}
                     className="px-3 py-1.5 border rounded hover:bg-gray-50"
                   >
@@ -599,23 +607,22 @@ export default function TruckDeliveryPage() {
                             Select an invoice (by customer) assigned to this truck:
                           </p>
                           <select
-  value={selectedOrderForDialog?.id ?? ""}
-  onChange={(e) => {
-    const id = String(e.target.value); // <- Always string!
-    const ord = delivery._orders!.find((x) => String(x.id) === id) || null;
-    setSelectedOrderForDialog(ord);
-    setSelectedCustomer(ord?.customer || null);
-    console.log("Selected order:", ord);
-  }}
-  className="border p-2 rounded w-full"
->
-  <option value="">-- Choose order --</option>
-  {delivery._orders.map((o) => (
-    <option key={o.id} value={o.id}>
-      {o.customer?.name} — {o.customer?.code}
-    </option>
-  ))}
-</select>
+                            value={selectedOrderForDialog?.id ?? ""}
+                            onChange={(e) => {
+                              const id = String(e.target.value);
+                              const ord = delivery._orders!.find((x) => String(x.id) === id) || null;
+                              setSelectedOrderForDialog(ord);
+                              setSelectedCustomer(ord?.customer || null);
+                            }}
+                            className="border p-2 rounded w-full"
+                          >
+                            <option value="">-- Choose order --</option>
+                            {delivery._orders.map((o) => (
+                              <option key={o.id} value={o.id}>
+                                {o.customer?.name} — {o.customer?.code}
+                              </option>
+                            ))}
+                          </select>
 
                           {selectedOrderForDialog?.customer && (
                             <div
@@ -735,27 +742,6 @@ export default function TruckDeliveryPage() {
                     </DialogContent>
                   </Dialog>
                 </div>
-              </div>
-
-              <div className="mt-4">
-                <h3 className="font-semibold mb-2">Delivery Expenses</h3>
-                <ul className="text-sm space-y-1">
-                  <li>🚚 Food Allowance: ₱{delivery.food ?? 0}</li>
-                  <li>⛽ Gas: ₱{delivery.gas ?? 0}</li>
-                  <li>🛣 Toll Fees: ₱{delivery.toll ?? 0}</li>
-                  <li>🛥 Boat Shipping: ₱{delivery.boat ?? 0}</li>
-                  <li>📦 Other Fees: ₱{delivery.other ?? 0}</li>
-                  <li className="font-medium">
-                    Total: ₱
-                    {[
-                      delivery.food ?? 0,
-                      delivery.gas ?? 0,
-                      delivery.toll ?? 0,
-                      delivery.boat ?? 0,
-                      delivery.other ?? 0,
-                    ].reduce((sum, fee) => sum + (fee || 0), 0)}
-                  </li>
-                </ul>
               </div>
             </motion.div>
           ))}
@@ -1022,4 +1008,3 @@ export default function TruckDeliveryPage() {
     </div>
   );
 }
-
