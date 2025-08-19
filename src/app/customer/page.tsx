@@ -341,9 +341,7 @@ export default function CustomerInventoryPage() {
     if (!selectedItem) return;
 
     if (orderQuantity > selectedItem.quantity) {
-      toast.error(
-        `Cannot order more than available stock (${selectedItem.quantity})`
-      );
+      toast.error("Cannot order more than available stock");
       return;
     }
 
