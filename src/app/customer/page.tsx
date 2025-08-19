@@ -64,6 +64,7 @@ function isValidPhone(phone: string) {
 }
 
 /* -------------------------------- Component ------------------------------- */
+
 export default function CustomerInventoryPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,6 +82,11 @@ export default function CustomerInventoryPage() {
     customer: CustomerInfo;
     items: CartItem[];
   } | null>(null);
+
+  const [txn, setTxn] = useState("");
+  const [trackingResult, setTrackingResult] = useState<any | null>(null);
+  const [trackError, setTrackError] = useState<string | null>(null);
+  const [trackingLoading, setTrackingLoading] = useState(false);
 
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
     name: "",
@@ -242,6 +248,57 @@ export default function CustomerInventoryPage() {
       supabase.removeChannel(channel);
     };
   }, [fetchInventory]);
+
+  // HANDLE TRACK FUNC
+  const handleTrack = async (e: React.FormEvent) => {
+  e.preventDefault();
+  setTrackError(null);
+  setTrackingResult(null);
+  setTrackingLoading(true);
+
+  try {
+    const { data, error } = await supabase
+      .from("customers")
+      .select(`
+        id,
+        name,
+        code,
+        contact_person,
+        email,
+        phone,
+        address,
+        status,
+        date,
+        orders (
+          id,
+          total_amount,
+          status,
+          order_items (
+            quantity,
+            price,
+            inventory:inventory_id (
+              product_name,
+              category,
+              subcategory,
+              status
+            )
+          )
+        )
+      `)
+      .eq("code", txn.trim().toUpperCase())
+      .maybeSingle();
+
+    if (error || !data) {
+      setTrackError("Transaction code not found.");
+    } else {
+      setTrackingResult(data);
+    }
+  } catch (err) {
+    setTrackError("Error while fetching. Please try again.");
+  } finally {
+    setTrackingLoading(false);
+  }
+};
 
   /* --------------------------- Payment type logic --------------------------- */
   useEffect(() => {
@@ -479,6 +536,55 @@ export default function CustomerInventoryPage() {
           ))}
         </select>
       </div>
+
+      {/* FOR TRACKING  */}
+      {/* 🟡 Track Your Delivery */}
+      <div className="bg-white border rounded p-4 mb-6 shadow-sm">
+        <h2 className="text-lg font-semibold mb-2">Track Your Delivery</h2>
+        <form onSubmit={handleTrack} className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+          <input
+            value={txn}
+            onChange={(e) => {
+              setTxn(e.target.value);
+              setTrackingResult(null);
+              setTrackError(null);
+            }}
+            placeholder="Enter TXN code (e.g., TXN-20250819-ABC123)"
+            className="w-full border px-3 py-2 rounded text-sm tracking-wider uppercase"
+            required
+          />
+          <button
+            type="submit"
+            disabled={trackingLoading}
+            className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
+          >
+            {trackingLoading ? "Checking..." : "Track"}
+          </button>
+        </form>
+        {trackError && <p className="text-red-600 mt-2 text-sm">{trackError}</p>}
+      </div>
+
+      {trackingResult && (
+          <div className="bg-gray-50 border rounded p-4 mb-6">
+            <h3 className="font-semibold text-md mb-2">Customer & Order Info</h3>
+            <p><strong>Name:</strong> {trackingResult.name}</p>
+            <p><strong>TXN Code:</strong> {trackingResult.code}</p>
+            <p><strong>Status:</strong> {trackingResult.status}</p>
+            <p><strong>Address:</strong> {trackingResult.address}</p>
+            <p><strong>Contact:</strong> {trackingResult.phone}</p>
+            <p><strong>Email:</strong> {trackingResult.email}</p>
+            <p><strong>Date:</strong> {new Date(trackingResult.date).toLocaleString()}</p>
+
+            <h4 className="mt-4 font-semibold">Items Ordered:</h4>
+            <ul className="list-disc ml-6">
+              {trackingResult.orders?.[0]?.order_items.map((item: any, index: number) => (
+                <li key={index}>
+                  {item.inventory?.product_name} – {item.quantity} pcs ({item.inventory?.category}/{item.inventory?.subcategory}) - {item.inventory?.status}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
       {loading ? (
         <p>Loading inventory...</p>
