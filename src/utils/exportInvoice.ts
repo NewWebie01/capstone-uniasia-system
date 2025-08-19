@@ -1,20 +1,41 @@
-// src/utils/exportInvoice.ts
+// utils/exportInvoice.ts
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
-export async function generatePDFBlob(id: string): Promise<Blob | null> {
-  const element = document.getElementById(id);
-  if (!element) return null;
+// Named export
+export async function generatePDFBlob(targetId: string): Promise<Blob | null> {
+  const el = document.getElementById(targetId) as HTMLElement | null;
+  if (!el) return null;
 
-  const canvas = await html2canvas(element);
-  const imgData = canvas.toDataURL("image/png");
+  // (optional) wait for fonts for crisp text
+  try {
+    await (document as any).fonts?.ready;
+  } catch {}
 
-  const pdf = new jsPDF("p", "mm", "a4");
-  const width = pdf.internal.pageSize.getWidth();
-  const height = (canvas.height * width) / canvas.width;
+  const canvas = await html2canvas(el, {
+    scale: 2,
+    useCORS: true,
+    backgroundColor: "#ffffff",
+  });
 
-  pdf.addImage(imgData, "PNG", 0, 0, width, height);
+  const img = canvas.toDataURL("image/png");
+  const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
 
-  const blob = pdf.output("blob");
-  return blob;
+  const pw = pdf.internal.pageSize.getWidth();
+  const ph = pdf.internal.pageSize.getHeight();
+  const iw = pw;
+  const ih = (canvas.height * iw) / canvas.width;
+
+  let remaining = ih;
+  let y = 0;
+  while (remaining > 0) {
+    pdf.addImage(img, "PNG", 0, y, iw, ih);
+    remaining -= ph;
+    if (remaining > 0) {
+      pdf.addPage();
+      y -= ph;
+    }
+  }
+
+  return pdf.output("blob");
 }
