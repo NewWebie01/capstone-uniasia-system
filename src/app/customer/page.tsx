@@ -15,8 +15,19 @@ async function fetchJSON<T>(url: string): Promise<T> {
 }
 
 type PSGCRegion = { id: number; name: string; code: string };
-type PSGCProvince = { id: number; name: string; code: string; region_id: number };
-type PSGCCity = { id: number; name: string; code: string; province_id: number; type: string };
+type PSGCProvince = {
+  id: number;
+  name: string;
+  code: string;
+  region_id: number;
+};
+type PSGCCity = {
+  id: number;
+  name: string;
+  code: string;
+  province_id: number;
+  type: string;
+};
 type PSGCBarangay = { id: number; name: string; code: string };
 
 /* --------------------------- App data structures --------------------------- */
@@ -29,6 +40,7 @@ type InventoryItem = {
   unit_price: number;
   status: string;
   date_added: string;
+  image_url?: string | null; // ✅ NEW (view-only)
 };
 
 type CartItem = {
@@ -76,7 +88,7 @@ export default function CustomerInventoryPage() {
   const [orderQuantity, setOrderQuantity] = useState(1);
   const [cart, setCart] = useState<CartItem[]>([]);
 
-  const [showCartPopup, setShowCartPopup] = useState(false);   // first modal
+  const [showCartPopup, setShowCartPopup] = useState(false); // first modal
   const [showFinalPopup, setShowFinalPopup] = useState(false); // final confirm modal
   const [finalOrderDetails, setFinalOrderDetails] = useState<{
     customer: CustomerInfo;
@@ -142,7 +154,13 @@ export default function CustomerInventoryPage() {
       selectedRegion?.name ?? "",
     ].filter(Boolean);
     return parts.join(", ");
-  }, [houseStreet, selectedBarangay, selectedCity, selectedProvince, selectedRegion]);
+  }, [
+    houseStreet,
+    selectedBarangay,
+    selectedCity,
+    selectedProvince,
+    selectedRegion,
+  ]);
 
   // Sync computed address to customerInfo.address
   useEffect(() => {
@@ -170,9 +188,8 @@ export default function CustomerInventoryPage() {
 
     fetchJSON<PSGCProvince[]>("https://psgc.cloud/api/provinces")
       .then((all) => {
-        // Province codes begin with the region's 2-digit prefix
-        const provs = all.filter(
-          (p) => p.code.startsWith(regionCode.slice(0, 2))
+        const provs = all.filter((p) =>
+          p.code.startsWith(regionCode.slice(0, 2))
         );
         setProvinces(provs.sort((a, b) => a.name.localeCompare(b.name)));
       })
@@ -192,8 +209,8 @@ export default function CustomerInventoryPage() {
       fetchJSON<PSGCCity[]>("https://psgc.cloud/api/municipalities"),
     ])
       .then(([c, m]) => {
-        // City/Muni codes begin with the province's 4-digit prefix
-        const byProv = (x: PSGCCity) => x.code.startsWith(provinceCode.slice(0, 4));
+        const byProv = (x: PSGCCity) =>
+          x.code.startsWith(provinceCode.slice(0, 4));
         const list = [...c.filter(byProv), ...m.filter(byProv)].sort((a, b) =>
           a.name.localeCompare(b.name)
         );
@@ -210,7 +227,6 @@ export default function CustomerInventoryPage() {
 
     fetchJSON<PSGCBarangay[]>("https://psgc.cloud/api/barangays")
       .then((all) => {
-        // Barangay codes begin with the city/municipality's 6-digit prefix
         const list = all
           .filter((b) => b.code.startsWith(cityCode.slice(0, 6)))
           .sort((a, b) => a.name.localeCompare(b.name));
@@ -222,12 +238,13 @@ export default function CustomerInventoryPage() {
   /* --------------------- Inventory load + realtime --------------------- */
   const fetchInventory = useCallback(async () => {
     setLoading(true);
+    // .select("*") will include image_url if the column exists
     const { data, error } = await supabase.from("inventory").select("*");
     if (error) {
       console.error("Error fetching inventory:", error.message);
       toast.error("Could not load inventory.");
     } else {
-      setInventory(data ?? []);
+      setInventory((data ?? []) as InventoryItem[]);
     }
     setLoading(false);
   }, []);
@@ -251,54 +268,56 @@ export default function CustomerInventoryPage() {
 
   // HANDLE TRACK FUNC
   const handleTrack = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setTrackError(null);
-  setTrackingResult(null);
-  setTrackingLoading(true);
+    e.preventDefault();
+    setTrackError(null);
+    setTrackingResult(null);
+    setTrackingLoading(true);
 
-  try {
-    const { data, error } = await supabase
-      .from("customers")
-      .select(`
-        id,
-        name,
-        code,
-        contact_person,
-        email,
-        phone,
-        address,
-        status,
-        date,
-        orders (
+    try {
+      const { data, error } = await supabase
+        .from("customers")
+        .select(
+          `
           id,
-          total_amount,
+          name,
+          code,
+          contact_person,
+          email,
+          phone,
+          address,
           status,
-          order_items (
-            quantity,
-            price,
-            inventory:inventory_id (
-              product_name,
-              category,
-              subcategory,
-              status
+          date,
+          orders (
+            id,
+            total_amount,
+            status,
+            order_items (
+              quantity,
+              price,
+              inventory:inventory_id (
+                product_name,
+                category,
+                subcategory,
+                status
+              )
             )
           )
+        `
         )
-      `)
-      .eq("code", txn.trim().toUpperCase())
-      .maybeSingle();
+        .eq("code", txn.trim().toUpperCase())
+        .maybeSingle();
 
-    if (error || !data) {
-      setTrackError("Transaction code not found.");
-    } else {
-      setTrackingResult(data);
+      if (error || !data) {
+        setTrackError("Transaction code not found.");
+      } else {
+        setTrackingResult(data);
+      }
+    } catch {
+      setTrackError("Error while fetching. Please try again.");
+    } finally {
+      setTrackingLoading(false);
     }
-  } catch (err) {
-    setTrackError("Error while fetching. Please try again.");
-  } finally {
-    setTrackingLoading(false);
-  }
-};
+  };
 
   /* --------------------------- Payment type logic --------------------------- */
   useEffect(() => {
@@ -322,7 +341,9 @@ export default function CustomerInventoryPage() {
     if (!selectedItem) return;
 
     if (orderQuantity > selectedItem.quantity) {
-      toast.error(`Cannot order more than available stock (${selectedItem.quantity})`);
+      toast.error(
+        `Cannot order more than available stock (${selectedItem.quantity})`
+      );
       return;
     }
 
@@ -331,7 +352,10 @@ export default function CustomerInventoryPage() {
       return;
     }
 
-    setCart((prev) => [...prev, { item: selectedItem, quantity: orderQuantity }]);
+    setCart((prev) => [
+      ...prev,
+      { item: selectedItem, quantity: orderQuantity },
+    ]);
     setSelectedItem(null);
     setOrderQuantity(1);
   };
@@ -350,13 +374,10 @@ export default function CustomerInventoryPage() {
 
   // First modal "Submit Order" -> only open final confirmation
   const handleOpenFinalModal = () => {
-    // strict phone validation
     if (!isValidPhone(customerInfo.phone)) {
       toast.error("Phone number must be exactly 11 digits.");
       return;
     }
-
-    // require full address pieces
     if (
       !houseStreet.trim() ||
       !barangayCode ||
@@ -364,10 +385,11 @@ export default function CustomerInventoryPage() {
       !provinceCode ||
       !regionCode
     ) {
-      toast.error("Please complete your full address (House/St., Barangay, City, Province, Region).");
+      toast.error(
+        "Please complete your full address (House/St., Barangay, City, Province, Region)."
+      );
       return;
     }
-
     if (
       !customerInfo.name ||
       !customerInfo.email ||
@@ -392,7 +414,6 @@ export default function CustomerInventoryPage() {
 
     const { customer, items } = finalOrderDetails;
 
-    // safety re-checks
     if (!isValidPhone(customer.phone)) {
       toast.error("Phone number must be exactly 11 digits.");
       return;
@@ -402,7 +423,6 @@ export default function CustomerInventoryPage() {
       return;
     }
 
-    // Duplicate code check
     const { data: existing } = await supabase
       .from("customers")
       .select("code")
@@ -417,11 +437,12 @@ export default function CustomerInventoryPage() {
       ...customer,
       date: new Date().toISOString(),
       status: "pending",
-      transaction: items.map((ci) => `${ci.item.product_name} x${ci.quantity}`).join(", "),
+      transaction: items
+        .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
+        .join(", "),
     };
 
     try {
-      // Insert customer
       const { data: cust, error: custErr } = await supabase
         .from("customers")
         .insert([customerPayload])
@@ -429,7 +450,6 @@ export default function CustomerInventoryPage() {
         .single();
       if (custErr) throw custErr;
 
-      // Insert order
       const customerId = cust.id;
       const totalAmount = items.reduce(
         (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
@@ -438,12 +458,17 @@ export default function CustomerInventoryPage() {
 
       const { data: ord, error: ordErr } = await supabase
         .from("orders")
-        .insert([{ customer_id: customerId, total_amount: totalAmount, status: "pending" }])
+        .insert([
+          {
+            customer_id: customerId,
+            total_amount: totalAmount,
+            status: "pending",
+          },
+        ])
         .select()
         .single();
       if (ordErr) throw ordErr;
 
-      // Insert order items
       const orderId = ord.id;
       const rows = items.map((ci) => ({
         order_id: orderId,
@@ -451,17 +476,17 @@ export default function CustomerInventoryPage() {
         quantity: ci.quantity,
         price: ci.item.unit_price || 0,
       }));
-      const { error: itemsErr } = await supabase.from("order_items").insert(rows);
+      const { error: itemsErr } = await supabase
+        .from("order_items")
+        .insert(rows);
       if (itemsErr) throw itemsErr;
 
       toast.success("Your order has been submitted successfully!");
 
-      // Reset UI
       setShowFinalPopup(false);
       setFinalOrderDetails(null);
       setCart([]);
 
-      // reset customer fields and location selectors
       setCustomerInfo({
         name: "",
         email: "",
@@ -503,10 +528,25 @@ export default function CustomerInventoryPage() {
       i.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
       i.subcategory.toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchesCategory = categoryFilter === "" || i.category === categoryFilter;
+    const matchesCategory =
+      categoryFilter === "" || i.category === categoryFilter;
 
     return matchesSearch && matchesCategory;
   });
+
+  /* ---------------------- Image modal (view-only) ---------------------- */
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(
+    null
+  );
+  const openImageModal = (item: InventoryItem) => {
+    setImageModalItem(item);
+    setShowImageModal(true);
+  };
+  const closeImageModal = () => {
+    setShowImageModal(false);
+    setImageModalItem(null);
+  };
 
   /* --------------------------------- UI --------------------------------- */
   return (
@@ -518,7 +558,7 @@ export default function CustomerInventoryPage() {
         <input
           type="text"
           placeholder="Search by product, category, or subcategory..."
-          className="border border-gray-300 rounded px-3 py-2 w-full sm:max-w-xs focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          className="border border-gray-300 rounded px-3 py-2 w/full sm:max-w-xs focus:outline-none focus:ring-2 focus:ring-yellow-500"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
         />
@@ -538,10 +578,12 @@ export default function CustomerInventoryPage() {
       </div>
 
       {/* FOR TRACKING  */}
-      {/* 🟡 Track Your Delivery */}
       <div className="bg-white border rounded p-4 mb-6 shadow-sm">
         <h2 className="text-lg font-semibold mb-2">Track Your Delivery</h2>
-        <form onSubmit={handleTrack} className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+        <form
+          onSubmit={handleTrack}
+          className="flex flex-col sm:flex-row gap-3 items-start sm:items-end"
+        >
           <input
             value={txn}
             onChange={(e) => {
@@ -561,30 +603,51 @@ export default function CustomerInventoryPage() {
             {trackingLoading ? "Checking..." : "Track"}
           </button>
         </form>
-        {trackError && <p className="text-red-600 mt-2 text-sm">{trackError}</p>}
+        {trackError && (
+          <p className="text-red-600 mt-2 text-sm">{trackError}</p>
+        )}
       </div>
 
       {trackingResult && (
-          <div className="bg-gray-50 border rounded p-4 mb-6">
-            <h3 className="font-semibold text-md mb-2">Customer & Order Info</h3>
-            <p><strong>Name:</strong> {trackingResult.name}</p>
-            <p><strong>TXN Code:</strong> {trackingResult.code}</p>
-            <p><strong>Status:</strong> {trackingResult.status}</p>
-            <p><strong>Address:</strong> {trackingResult.address}</p>
-            <p><strong>Contact:</strong> {trackingResult.phone}</p>
-            <p><strong>Email:</strong> {trackingResult.email}</p>
-            <p><strong>Date:</strong> {new Date(trackingResult.date).toLocaleString()}</p>
+        <div className="bg-gray-50 border rounded p-4 mb-6">
+          <h3 className="font-semibold text-md mb-2">Customer & Order Info</h3>
+          <p>
+            <strong>Name:</strong> {trackingResult.name}
+          </p>
+          <p>
+            <strong>TXN Code:</strong> {trackingResult.code}
+          </p>
+          <p>
+            <strong>Status:</strong> {trackingResult.status}
+          </p>
+          <p>
+            <strong>Address:</strong> {trackingResult.address}
+          </p>
+          <p>
+            <strong>Contact:</strong> {trackingResult.phone}
+          </p>
+          <p>
+            <strong>Email:</strong> {trackingResult.email}
+          </p>
+          <p>
+            <strong>Date:</strong>{" "}
+            {new Date(trackingResult.date).toLocaleString()}
+          </p>
 
-            <h4 className="mt-4 font-semibold">Items Ordered:</h4>
-            <ul className="list-disc ml-6">
-              {trackingResult.orders?.[0]?.order_items.map((item: any, index: number) => (
+          <h4 className="mt-4 font-semibold">Items Ordered:</h4>
+          <ul className="list-disc ml-6">
+            {trackingResult.orders?.[0]?.order_items.map(
+              (item: any, index: number) => (
                 <li key={index}>
-                  {item.inventory?.product_name} – {item.quantity} pcs ({item.inventory?.category}/{item.inventory?.subcategory}) - {item.inventory?.status}
+                  {item.inventory?.product_name} – {item.quantity} pcs (
+                  {item.inventory?.category}/{item.inventory?.subcategory}) -{" "}
+                  {item.inventory?.status}
                 </li>
-              ))}
-            </ul>
-          </div>
-        )}
+              )
+            )}
+          </ul>
+        </div>
+      )}
 
       {loading ? (
         <p>Loading inventory...</p>
@@ -603,7 +666,20 @@ export default function CustomerInventoryPage() {
             <tbody>
               {filteredInventory.map((item) => (
                 <tr key={item.id} className="border-b hover:bg-gray-100">
-                  <td className="py-2 px-4">{item.product_name}</td>
+                  <td className="py-2 px-4">
+                    {/* Clickable product name (view-only image modal) */}
+                    <button
+                      className="text-blue-600 hover:underline font-medium"
+                      onClick={() => openImageModal(item)}
+                      title={
+                        item.image_url
+                          ? "View product image"
+                          : "No image available"
+                      }
+                    >
+                      {item.product_name}
+                    </button>
+                  </td>
                   <td className="py-2 px-4">{item.category}</td>
                   <td className="py-2 px-4">{item.subcategory}</td>
                   <td className="py-2 px-4">{item.status}</td>
@@ -630,11 +706,65 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
+      {/* View-only IMAGE MODAL */}
+      {showImageModal && imageModalItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-lg max-w-md w-full overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <h3 className="font-semibold">{imageModalItem.product_name}</h3>
+              <button
+                className="text-gray-500 hover:text-black"
+                onClick={closeImageModal}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4">
+              {imageModalItem.image_url ? (
+                <img
+                  src={imageModalItem.image_url}
+                  alt={imageModalItem.product_name}
+                  className="w-full h-auto rounded"
+                />
+              ) : (
+                <div className="text-center text-gray-500 border rounded p-6">
+                  No image uploaded for this item.
+                </div>
+              )}
+              <div className="mt-3 text-sm text-gray-600">
+                <div>
+                  <span className="font-medium">Category:</span>{" "}
+                  {imageModalItem.category || "—"}
+                </div>
+                <div>
+                  <span className="font-medium">Subcategory:</span>{" "}
+                  {imageModalItem.subcategory || "—"}
+                </div>
+                <div>
+                  <span className="font-medium">Status:</span>{" "}
+                  {imageModalItem.status || "—"}
+                </div>
+              </div>
+            </div>
+            <div className="px-4 py-3 border-t text-right">
+              <button
+                onClick={closeImageModal}
+                className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add to Cart Modal */}
       {selectedItem && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
           <div className="bg-white p-6 rounded shadow-lg max-w-md w-full">
-            <h2 className="text-xl font-bold mb-4">{selectedItem.product_name}</h2>
+            <h2 className="text-xl font-bold mb-4">
+              {selectedItem.product_name}
+            </h2>
             <p>Category: {selectedItem.category}</p>
             <p>Subcategory: {selectedItem.subcategory}</p>
             <p>Status: {selectedItem.status}</p>
@@ -726,14 +856,18 @@ export default function CustomerInventoryPage() {
                 placeholder="Customer Name"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.name}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, name: e.target.value })
+                }
               />
               <input
                 type="email"
                 placeholder="Email"
                 className="border px-3 py-2 rounded"
                 value={customerInfo.email}
-                onChange={(e) => setCustomerInfo({ ...customerInfo, email: e.target.value })}
+                onChange={(e) =>
+                  setCustomerInfo({ ...customerInfo, email: e.target.value })
+                }
               />
               <input
                 type="tel"
@@ -744,7 +878,7 @@ export default function CustomerInventoryPage() {
                 maxLength={11}
                 value={customerInfo.phone}
                 onChange={(e) => {
-                  const value = e.target.value.replace(/\D/g, ""); // digits only
+                  const value = e.target.value.replace(/\D/g, "");
                   if (value.length <= 11) {
                     setCustomerInfo({ ...customerInfo, phone: value });
                   }
@@ -755,13 +889,15 @@ export default function CustomerInventoryPage() {
                 className="border px-3 py-2 rounded"
                 value={customerInfo.contact_person}
                 onChange={(e) =>
-                  setCustomerInfo({ ...customerInfo, contact_person: e.target.value })
+                  setCustomerInfo({
+                    ...customerInfo,
+                    contact_person: e.target.value,
+                  })
                 }
               />
 
               {/* Location Pickers + House/Street */}
               <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
-                {/* Region */}
                 <div>
                   <label className="block text-sm mb-1">Region</label>
                   <select
@@ -778,7 +914,6 @@ export default function CustomerInventoryPage() {
                   </select>
                 </div>
 
-                {/* Province */}
                 <div>
                   <label className="block text-sm mb-1">Province</label>
                   <select
@@ -798,9 +933,10 @@ export default function CustomerInventoryPage() {
                   </select>
                 </div>
 
-                {/* City/Municipality */}
                 <div>
-                  <label className="block text-sm mb-1">City / Municipality</label>
+                  <label className="block text-sm mb-1">
+                    City / Municipality
+                  </label>
                   <select
                     className="border px-3 py-2 rounded w-full"
                     value={cityCode}
@@ -808,7 +944,9 @@ export default function CustomerInventoryPage() {
                     disabled={!provinceCode}
                   >
                     <option value="">
-                      {provinceCode ? "Select city/municipality" : "Select province first"}
+                      {provinceCode
+                        ? "Select city/municipality"
+                        : "Select province first"}
                     </option>
                     {cities.map((c) => (
                       <option key={c.code} value={c.code}>
@@ -818,7 +956,6 @@ export default function CustomerInventoryPage() {
                   </select>
                 </div>
 
-                {/* Barangay */}
                 <div>
                   <label className="block text-sm mb-1">Barangay</label>
                   <select
@@ -839,7 +976,6 @@ export default function CustomerInventoryPage() {
                 </div>
               </div>
 
-              {/* House Number & Street Name */}
               <input
                 placeholder="House Number & Street Name"
                 className="border px-3 py-2 rounded col-span-2"
@@ -847,7 +983,6 @@ export default function CustomerInventoryPage() {
                 onChange={(e) => setHouseStreet(e.target.value)}
               />
 
-              {/* Show the composed address (read-only) */}
               <input
                 className="border px-3 py-2 rounded col-span-2 bg-gray-50"
                 value={customerInfo.address || ""}
@@ -863,7 +998,9 @@ export default function CustomerInventoryPage() {
                   onChange={(e) =>
                     setCustomerInfo({
                       ...customerInfo,
-                      customer_type: e.target.value as "New Customer" | "Existing Customer",
+                      customer_type: e.target.value as
+                        | "New Customer"
+                        | "Existing Customer",
                     })
                   }
                 >
@@ -891,7 +1028,10 @@ export default function CustomerInventoryPage() {
                         onChange={(e) =>
                           setCustomerInfo({
                             ...customerInfo,
-                            payment_type: e.target.value as "Cash" | "Credit" | "Balance",
+                            payment_type: e.target.value as
+                              | "Cash"
+                              | "Credit"
+                              | "Balance",
                           })
                         }
                       />
@@ -902,7 +1042,6 @@ export default function CustomerInventoryPage() {
               </div>
             </div>
 
-            {/* Cart in first modal */}
             <table className="w-full table-fixed text-sm bg-gray-100">
               <thead className="bg-gray-200">
                 <tr>
@@ -953,11 +1092,15 @@ export default function CustomerInventoryPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <div className="text-xs text-gray-500">Customer</div>
-                <div className="font-medium">{finalOrderDetails.customer.name}</div>
+                <div className="font-medium">
+                  {finalOrderDetails.customer.name}
+                </div>
               </div>
               <div>
                 <div className="text-xs text-gray-500">Transaction Code</div>
-                <div className="font-medium">{finalOrderDetails.customer.code}</div>
+                <div className="font-medium">
+                  {finalOrderDetails.customer.code}
+                </div>
               </div>
               <div>
                 <div className="text-xs text-gray-500">Date</div>
@@ -972,7 +1115,9 @@ export default function CustomerInventoryPage() {
               </div>
               <div>
                 <div className="text-xs text-gray-500">Province</div>
-                <div className="font-medium">{selectedProvince?.name ?? "-"}</div>
+                <div className="font-medium">
+                  {selectedProvince?.name ?? "-"}
+                </div>
               </div>
               <div>
                 <div className="text-xs text-gray-500">City/Municipality</div>
@@ -980,7 +1125,9 @@ export default function CustomerInventoryPage() {
               </div>
               <div>
                 <div className="text-xs text-gray-500">Barangay</div>
-                <div className="font-medium">{selectedBarangay?.name ?? "-"}</div>
+                <div className="font-medium">
+                  {selectedBarangay?.name ?? "-"}
+                </div>
               </div>
               <div>
                 <div className="text-xs text-gray-500">House & Street</div>
