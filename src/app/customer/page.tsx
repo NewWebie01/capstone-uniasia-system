@@ -11,16 +11,38 @@ import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 
+/* ----------------------------- Date formatter ----------------------------- */
+const formatPH = (d?: string | number | Date) =>
+  new Intl.DateTimeFormat("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Manila",
+  }).format(d ? new Date(d) : new Date());
 
-// Remove duplicate function and imports above, keep only the main export below.
+/* ---------------------- Encoding & PSGC fetch helpers --------------------- */
+// Repairs common UTF‑8 → Latin‑1 mojibake like "PiÃ±as" → "Piñas"
+const fixEncoding = (s: string) => {
+  try {
+    // escape() percent-encodes bytes 0–255; decodeURIComponent treats them as UTF‑8
+    return decodeURIComponent(escape(s));
+  } catch {
+    return s;
+  }
+};
 
-/* ----------------------------- PSGC helpers ----------------------------- */
+// Robust JSON fetch with explicit UTF‑8 decode
 async function fetchJSON<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+  const text = new TextDecoder("utf-8").decode(buffer);
+  return JSON.parse(text);
 }
 
+/* ---------------------------------- Types --------------------------------- */
 type PSGCRegion = { id: number; name: string; code: string };
 type PSGCProvince = {
   id: number;
@@ -32,12 +54,11 @@ type PSGCCity = {
   id: number;
   name: string;
   code: string;
-  province_id: number;
-  type: string;
+  province_id?: number;
+  type: string; // 'City' / 'Municipality' etc.
 };
 type PSGCBarangay = { id: number; name: string; code: string };
 
-/* --------------------------- App data structures --------------------------- */
 type InventoryItem = {
   id: number;
   product_name: string;
@@ -47,20 +68,17 @@ type InventoryItem = {
   unit_price: number;
   status: string;
   date_added: string;
-  image_url?: string | null; // ✅ NEW (view-only)
+  image_url?: string | null;
 };
 
-type CartItem = {
-  item: InventoryItem;
-  quantity: number;
-};
+type CartItem = { item: InventoryItem; quantity: number };
 
 type CustomerInfo = {
   id?: string;
   name: string;
   email: string;
   phone: string;
-  address: string; // composed from houseStreet + barangay/city/province/region
+  address: string;
   contact_person?: string;
   code?: string;
   area?: string;
@@ -71,33 +89,32 @@ type CustomerInfo = {
   customer_type?: "New Customer" | "Existing Customer";
 };
 
+/* ------------------------------ Util helpers ------------------------------ */
 function generateTransactionCode(): string {
   const date = new Date();
   const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, "");
   const random = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `TXN-${yyyymmdd}-${random}`;
 }
-
 function isValidPhone(phone: string) {
   return /^\d{11}$/.test(phone);
 }
 
 /* -------------------------------- Component ------------------------------- */
-
 export default function CustomerInventoryPage() {
   
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<string>(""); // "" = All
+  const [categoryFilter, setCategoryFilter] = useState<string>("");
 
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [orderQuantity, setOrderQuantity] = useState(1);
   const [cart, setCart] = useState<CartItem[]>([]);
 
-  const [showCartPopup, setShowCartPopup] = useState(false); // first modal
-  const [showFinalPopup, setShowFinalPopup] = useState(false); // final confirm modal
+  const [showCartPopup, setShowCartPopup] = useState(false);
+  const [showFinalPopup, setShowFinalPopup] = useState(false);
   const [finalOrderDetails, setFinalOrderDetails] = useState<{
     customer: CustomerInfo;
     items: CartItem[];
@@ -131,10 +148,9 @@ export default function CustomerInventoryPage() {
   const [cityCode, setCityCode] = useState("");
   const [barangayCode, setBarangayCode] = useState("");
 
-  // House number & street name
   const [houseStreet, setHouseStreet] = useState("");
 
-  // derived selected objects
+  // Derived selected objects
   const selectedRegion = useMemo(
     () => regions.find((r) => r.code === regionCode) || null,
     [regions, regionCode]
@@ -152,7 +168,18 @@ export default function CustomerInventoryPage() {
     [barangays, barangayCode]
   );
 
-  // computed full address string
+  // NCR (Region 13 / National Capital Region) has no provinces
+  const isNCR = useMemo(
+    () =>
+      !!regionCode &&
+      (regionCode.startsWith("13") ||
+        (selectedRegion?.name || "")
+          .toLowerCase()
+          .includes("national capital")),
+    [regionCode, selectedRegion]
+  );
+
+  // Full address string (province may be empty for NCR)
   const computedAddress = useMemo(() => {
     const parts = [
       houseStreet.trim(),
@@ -160,7 +187,9 @@ export default function CustomerInventoryPage() {
       selectedCity?.name ?? "",
       selectedProvince?.name ?? "",
       selectedRegion?.name ?? "",
-    ].filter(Boolean);
+    ]
+      .filter(Boolean)
+      .map(fixEncoding);
     return parts.join(", ");
   }, [
     houseStreet,
@@ -170,21 +199,26 @@ export default function CustomerInventoryPage() {
     selectedRegion,
   ]);
 
-  // Sync computed address to customerInfo.address
   useEffect(() => {
     setCustomerInfo((prev) => ({ ...prev, address: computedAddress }));
   }, [computedAddress]);
 
-  // Load regions once
+  /* ---------------------------- Load PSGC lists --------------------------- */
+  // Regions
   useEffect(() => {
     fetchJSON<PSGCRegion[]>("https://psgc.cloud/api/regions")
       .then((data) =>
-        setRegions(data.sort((a, b) => a.name.localeCompare(b.name)))
+        setRegions(
+          data
+            .map((r) => ({ ...r, name: fixEncoding(r.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+        )
       )
       .catch(() => toast.error("Failed to load regions"));
   }, []);
 
-  // Load provinces when region changes
+  // Children of region:
+  // NCR → load cities directly; Others → load provinces
   useEffect(() => {
     setProvinces([]);
     setProvinceCode("");
@@ -192,20 +226,43 @@ export default function CustomerInventoryPage() {
     setCityCode("");
     setBarangays([]);
     setBarangayCode("");
+
     if (!regionCode) return;
+
+    if (isNCR) {
+      Promise.all([
+        fetchJSON<PSGCCity[]>(
+          `https://psgc.cloud/api/regions/${regionCode}/cities`
+        ),
+        fetchJSON<PSGCCity[]>(
+          `https://psgc.cloud/api/regions/${regionCode}/municipalities`
+        ),
+      ])
+        .then(([c, m]) => {
+          const list = [...c, ...m]
+            .map((x) => ({ ...x, name: fixEncoding(x.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+          setCities(list);
+        })
+        .catch(() => toast.error("Failed to load cities for NCR"));
+      return;
+    }
 
     fetchJSON<PSGCProvince[]>("https://psgc.cloud/api/provinces")
       .then((all) => {
-        const provs = all.filter((p) =>
-          p.code.startsWith(regionCode.slice(0, 2))
-        );
-        setProvinces(provs.sort((a, b) => a.name.localeCompare(b.name)));
+        const provs = all
+          .filter((p) => p.code.startsWith(regionCode.slice(0, 2)))
+          .map((p) => ({ ...p, name: fixEncoding(p.name) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setProvinces(provs);
       })
       .catch(() => toast.error("Failed to load provinces"));
-  }, [regionCode]);
+  }, [regionCode, isNCR]);
 
-  // Load cities + municipalities when province changes
+  // Cities when province changes (skip for NCR)
   useEffect(() => {
+    if (isNCR) return;
+
     setCities([]);
     setCityCode("");
     setBarangays([]);
@@ -219,34 +276,56 @@ export default function CustomerInventoryPage() {
       .then(([c, m]) => {
         const byProv = (x: PSGCCity) =>
           x.code.startsWith(provinceCode.slice(0, 4));
-        const list = [...c.filter(byProv), ...m.filter(byProv)].sort((a, b) =>
-          a.name.localeCompare(b.name)
-        );
+        const list = [...c.filter(byProv), ...m.filter(byProv)]
+          .map((x) => ({ ...x, name: fixEncoding(x.name) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
         setCities(list);
       })
       .catch(() => toast.error("Failed to load cities/municipalities"));
-  }, [provinceCode]);
+  }, [provinceCode, isNCR]);
 
-  // Load barangays when city/municipality changes
+  // Barangays when city changes
   useEffect(() => {
     setBarangays([]);
     setBarangayCode("");
     if (!cityCode) return;
 
-    fetchJSON<PSGCBarangay[]>("https://psgc.cloud/api/barangays")
-      .then((all) => {
-        const list = all
-          .filter((b) => b.code.startsWith(cityCode.slice(0, 6)))
-          .sort((a, b) => a.name.localeCompare(b.name));
-        setBarangays(list);
-      })
-      .catch(() => toast.error("Failed to load barangays"));
-  }, [cityCode]);
+    const sel = cities.find((c) => c.code === cityCode);
+    if (!sel) return;
+
+    const isCityType = (sel.type || "").toLowerCase().includes("city");
+    const url = isCityType
+      ? `https://psgc.cloud/api/cities/${cityCode}/barangays`
+      : `https://psgc.cloud/api/municipalities/${cityCode}/barangays`;
+
+    fetchJSON<PSGCBarangay[]>(url)
+      .then((list) =>
+        setBarangays(
+          list
+            .map((b) => ({ ...b, name: fixEncoding(b.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+        )
+      )
+      .catch(async () => {
+        // Fallback: filter all by the 9-digit city/municipality prefix
+        try {
+          const all = await fetchJSON<PSGCBarangay[]>(
+            "https://psgc.cloud/api/barangays"
+          );
+          const list = all
+            .filter((b) => b.code.startsWith(cityCode.slice(0, 9)))
+            .map((b) => ({ ...b, name: fixEncoding(b.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+          setBarangays(list);
+        } catch {
+          toast.error("Failed to load barangays");
+        }
+      });
+  }, [cityCode, cities]);
 
   /* --------------------- Inventory load + realtime --------------------- */
   const fetchInventory = useCallback(async () => {
     setLoading(true);
-    // .select("*") will include image_url if the column exists
     const { data, error } = await supabase.from("inventory").select("*");
     if (error) {
       console.error("Error fetching inventory:", error.message);
@@ -274,7 +353,7 @@ export default function CustomerInventoryPage() {
     };
   }, [fetchInventory]);
 
-  // HANDLE TRACK FUNC
+  /* ------------------------------ Tracking ------------------------------ */
   const handleTrack = async (e: React.FormEvent) => {
     e.preventDefault();
     setTrackError(null);
@@ -378,7 +457,7 @@ export default function CustomerInventoryPage() {
     setShowCartPopup(true);
   };
 
-  // First modal "Submit Order" -> only open final confirmation
+  // First modal "Submit Order" -> open final confirmation
   const handleOpenFinalModal = () => {
     if (!isValidPhone(customerInfo.phone)) {
       toast.error("Phone number must be exactly 11 digits.");
@@ -388,11 +467,11 @@ export default function CustomerInventoryPage() {
       !houseStreet.trim() ||
       !barangayCode ||
       !cityCode ||
-      !provinceCode ||
+      (!isNCR && !provinceCode) || // province optional for NCR
       !regionCode
     ) {
       toast.error(
-        "Please complete your full address (House/St., Barangay, City, Province, Region)."
+        "Please complete your full address (House/St., Barangay, City, Province/Region)."
       );
       return;
     }
@@ -441,7 +520,7 @@ export default function CustomerInventoryPage() {
 
     const customerPayload: Partial<CustomerInfo> = {
       ...customer,
-      date: new Date().toISOString(),
+      date: new Date().toISOString(), // UTC
       status: "pending",
       transaction: items
         .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
@@ -530,14 +609,13 @@ export default function CustomerInventoryPage() {
   );
 
   const filteredInventory = inventory.filter((i) => {
+    const q = searchTerm.toLowerCase();
     const matchesSearch =
-      i.product_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      i.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      i.subcategory.toLowerCase().includes(searchTerm.toLowerCase());
-
+      i.product_name.toLowerCase().includes(q) ||
+      i.category.toLowerCase().includes(q) ||
+      i.subcategory.toLowerCase().includes(q);
     const matchesCategory =
       categoryFilter === "" || i.category === categoryFilter;
-
     return matchesSearch && matchesCategory;
   });
 
@@ -569,7 +647,6 @@ export default function CustomerInventoryPage() {
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
         />
-
         <select
           className="border border-gray-300 rounded px-3 py-2 w-full sm:w-auto focus:outline-none focus:ring-2 focus:ring-yellow-500"
           value={categoryFilter}
@@ -584,7 +661,7 @@ export default function CustomerInventoryPage() {
         </select>
       </div>
 
-      {/* FOR TRACKING  */}
+      {/* Tracking */}
       <div className="bg-white border rounded p-4 mb-6 shadow-sm">
         <h2 className="text-lg font-semibold mb-2">Track Your Delivery</h2>
         <form
@@ -637,8 +714,7 @@ export default function CustomerInventoryPage() {
             <strong>Email:</strong> {trackingResult.email}
           </p>
           <p>
-            <strong>Date:</strong>{" "}
-            {new Date(trackingResult.date).toLocaleString()}
+            <strong>Date:</strong> {formatPH(trackingResult.date)}
           </p>
 
           <h4 className="mt-4 font-semibold">Items Ordered:</h4>
@@ -674,7 +750,6 @@ export default function CustomerInventoryPage() {
               {filteredInventory.map((item) => (
                 <tr key={item.id} className="border-b hover:bg-gray-100">
                   <td className="py-2 px-4">
-                    {/* Clickable product name (view-only image modal) */}
                     <button
                       className="text-blue-600 hover:underline font-medium"
                       onClick={() => openImageModal(item)}
@@ -886,9 +961,8 @@ export default function CustomerInventoryPage() {
                 value={customerInfo.phone}
                 onChange={(e) => {
                   const value = e.target.value.replace(/\D/g, "");
-                  if (value.length <= 11) {
+                  if (value.length <= 11)
                     setCustomerInfo({ ...customerInfo, phone: value });
-                  }
                 }}
               />
               <input
@@ -927,16 +1001,21 @@ export default function CustomerInventoryPage() {
                     className="border px-3 py-2 rounded w-full"
                     value={provinceCode}
                     onChange={(e) => setProvinceCode(e.target.value)}
-                    disabled={!regionCode}
+                    disabled={!regionCode || isNCR}
                   >
                     <option value="">
-                      {regionCode ? "Select province" : "Select region first"}
+                      {!regionCode
+                        ? "Select region first"
+                        : isNCR
+                        ? "NCR has no provinces"
+                        : "Select province"}
                     </option>
-                    {provinces.map((p) => (
-                      <option key={p.code} value={p.code}>
-                        {p.name}
-                      </option>
-                    ))}
+                    {!isNCR &&
+                      provinces.map((p) => (
+                        <option key={p.code} value={p.code}>
+                          {p.name}
+                        </option>
+                      ))}
                   </select>
                 </div>
 
@@ -948,10 +1027,14 @@ export default function CustomerInventoryPage() {
                     className="border px-3 py-2 rounded w-full"
                     value={cityCode}
                     onChange={(e) => setCityCode(e.target.value)}
-                    disabled={!provinceCode}
+                    disabled={isNCR ? !regionCode : !provinceCode}
                   >
                     <option value="">
-                      {provinceCode
+                      {isNCR
+                        ? regionCode
+                          ? "Select city/municipality"
+                          : "Select region first"
+                        : provinceCode
                         ? "Select city/municipality"
                         : "Select province first"}
                     </option>
@@ -1111,7 +1194,7 @@ export default function CustomerInventoryPage() {
               </div>
               <div>
                 <div className="text-xs text-gray-500">Date</div>
-                <div className="font-medium">{new Date().toLocaleString()}</div>
+                <div className="font-medium">{formatPH()}</div>
               </div>
             </div>
 
@@ -1123,7 +1206,7 @@ export default function CustomerInventoryPage() {
               <div>
                 <div className="text-xs text-gray-500">Province</div>
                 <div className="font-medium">
-                  {selectedProvince?.name ?? "-"}
+                  {selectedProvince?.name ?? (isNCR ? "—" : "-")}
                 </div>
               </div>
               <div>
