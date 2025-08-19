@@ -11,11 +11,7 @@ import {
   ReceiptText,
 } from "lucide-react";
 import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs";
-import {
-  Dialog,
-  DialogTrigger,
-  DialogContent,
-} from "@/components/ui/dialog";
+import { Dialog, DialogTrigger, DialogContent } from "@/components/ui/dialog";
 import { generatePDFBlob } from "@/utils/exportInvoice";
 import { toast } from "sonner";
 
@@ -80,8 +76,11 @@ export default function TruckDeliveryPage() {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [formVisible, setFormVisible] = useState(false);
   const [newPerson, setNewPerson] = useState("");
-  const [invoiceDialogOpenId, setInvoiceDialogOpenId] = useState<number | null>(null);
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [invoiceDialogOpenId, setInvoiceDialogOpenId] = useState<number | null>(
+    null
+  );
+  const [selectedOrderForInvoice, setSelectedOrderForInvoice] =
+    useState<OrderWithCustomer | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
 
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
@@ -90,12 +89,13 @@ export default function TruckDeliveryPage() {
     newStatus: "",
   });
 
-  const [selectedOrderForDialog, setSelectedOrderForDialog] =
-    useState<OrderWithCustomer | null>(null);
-
   const [assignOpen, setAssignOpen] = useState(false);
-  const [assignForDeliveryId, setAssignForDeliveryId] = useState<number | null>(null);
-  const [unassignedOrders, setUnassignedOrders] = useState<OrderWithCustomer[]>([]);
+  const [assignForDeliveryId, setAssignForDeliveryId] = useState<number | null>(
+    null
+  );
+  const [unassignedOrders, setUnassignedOrders] = useState<OrderWithCustomer[]>(
+    []
+  );
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
 
   const [newDelivery, setNewDelivery] = useState({
@@ -114,8 +114,9 @@ export default function TruckDeliveryPage() {
   }, []);
 
   const fetchDeliveriesAndAssignments = async () => {
+    // NOTE: removed generics to avoid TS incompatibility with your Supabase install
     const { data: dData, error: dErr } = await supabase
-      .from<"truck_deliveries", Delivery>("truck_deliveries")
+      .from("truck_deliveries")
       .select("*")
       .order("created_at", { ascending: false });
 
@@ -126,15 +127,16 @@ export default function TruckDeliveryPage() {
       return;
     }
 
-    const deliveriesList = dData ?? [];
+    const deliveriesList = (dData as Delivery[]) ?? [];
     setDeliveries(deliveriesList);
 
     if (deliveriesList.length === 0) return;
 
     const ids = deliveriesList.map((d) => d.id);
     const { data: oData, error: oErr } = await supabase
-      .from<OrderWithCustomer>("orders")
-      .select(`
+      .from("orders")
+      .select(
+        `
         id,
         total_amount,
         status,
@@ -160,7 +162,8 @@ export default function TruckDeliveryPage() {
             status
           )
         )
-      `)
+      `
+      )
       .in("truck_delivery_id", ids);
 
     if (oErr) {
@@ -168,8 +171,19 @@ export default function TruckDeliveryPage() {
       return;
     }
 
+    const fetchedOrders = (oData as any[]) ?? [];
+
     const byDelivery = new Map<number, OrderWithCustomer[]>();
-    (oData ?? []).forEach((o) => {
+    fetchedOrders.forEach((oRaw) => {
+      // supabase returns nested object customer: { ... } - keep as-is
+      const o: OrderWithCustomer = {
+        id: oRaw.id,
+        total_amount: oRaw.total_amount,
+        status: oRaw.status,
+        truck_delivery_id: oRaw.truck_delivery_id,
+        customer: oRaw.customer ?? null,
+        order_items: oRaw.order_items ?? [],
+      };
       if (!o.truck_delivery_id) return;
       if (!byDelivery.has(o.truck_delivery_id)) {
         byDelivery.set(o.truck_delivery_id, []);
@@ -187,8 +201,9 @@ export default function TruckDeliveryPage() {
 
   const fetchUnassignedOrders = async () => {
     const { data, error } = await supabase
-      .from<OrderWithCustomer>("orders")
-      .select(`
+      .from("orders")
+      .select(
+        `
         id,
         total_amount,
         status,
@@ -204,7 +219,8 @@ export default function TruckDeliveryPage() {
           date,
           created_at
         )
-      `)
+      `
+      )
       .is("truck_delivery_id", null)
       .order("id", { ascending: false });
 
@@ -215,7 +231,7 @@ export default function TruckDeliveryPage() {
       return;
     }
 
-    setUnassignedOrders(data ?? []);
+    setUnassignedOrders((data as OrderWithCustomer[]) || []);
   };
 
   const handleClearInvoices = async (deliveryId: number) => {
@@ -226,20 +242,34 @@ export default function TruckDeliveryPage() {
       return;
     }
 
-    if (!window.confirm("Clear all invoices from this truck?")) return;
+    // Use Sonner toast with action for confirmation (user clicks Confirm in the toast)
+    toast(`Clear all invoices from this truck?`, {
+      action: {
+        label: "Confirm",
+        // onClick may be async; Sonner supports async onClick handlers
+        onClick: async () => {
+          // show a small processing toast
+          const t = toast.loading("Clearing invoices...");
+          const { error } = await supabase
+            .from("orders")
+            .update({ truck_delivery_id: null })
+            .in("id", orderIds);
 
-    const { error } = await supabase
-      .from("orders")
-      .update({ truck_delivery_id: null })
-      .in("id", orderIds);
+          toast.dismiss(t);
 
-    if (error) {
-      toast.error("Failed to clear invoices.");
-      return;
-    }
+          if (error) {
+            toast.error("Failed to clear invoices.");
+            console.error("Clear invoices error:", error);
+            return;
+          }
 
-    toast.success("All invoices cleared from this truck.");
-    await fetchDeliveriesAndAssignments();
+          toast.success("All invoices cleared from this truck.");
+          await fetchDeliveriesAndAssignments();
+        },
+      },
+      // give user some time to confirm, but not forever; you can adjust duration
+      duration: 12000,
+    });
   };
 
   const showForm = () => setFormVisible(true);
@@ -316,6 +346,8 @@ export default function TruckDeliveryPage() {
 
   const addParticipant = () => {
     if (!newPerson.trim()) return;
+    // optional safety: max 3
+    // if (newDelivery.participants.length >= 3) return toast.error("Up to 3 participants only.");
     setNewDelivery((prev) => ({
       ...prev,
       participants: [...prev.participants, newPerson.trim()],
@@ -323,6 +355,7 @@ export default function TruckDeliveryPage() {
     setNewPerson("");
   };
 
+  /** Update arrival_date (a.k.a. Date Received) */
   const updateArrivalDate = async (deliveryId: number, date: string) => {
     const { error } = await supabase
       .from("truck_deliveries")
@@ -357,7 +390,9 @@ export default function TruckDeliveryPage() {
 
   const toggleSelectOrder = (orderId: number) => {
     setSelectedOrderIds((prev) =>
-      prev.includes(orderId) ? prev.filter((id) => id !== orderId) : [...prev, orderId]
+      prev.includes(orderId)
+        ? prev.filter((id) => id !== orderId)
+        : [...prev, orderId]
     );
   };
 
@@ -379,6 +414,25 @@ export default function TruckDeliveryPage() {
     toast.success("Invoices assigned to truck");
     setAssignOpen(false);
     await fetchDeliveriesAndAssignments();
+  };
+
+  /* =========================
+     INVOICE MODAL HELPERS
+  ========================= */
+
+  // open the invoice dialog for the given delivery + optional specific order
+  const openInvoiceDialogForOrder = (
+    deliveryId: number,
+    order?: OrderWithCustomer
+  ) => {
+    setInvoiceDialogOpenId(deliveryId);
+    setSelectedOrderForInvoice(order ?? null);
+  };
+
+  const closeInvoiceDialog = () => {
+    setInvoiceDialogOpenId(null);
+    setSelectedOrderForInvoice(null);
+    setPdfUrl(null);
   };
 
   return (
@@ -426,11 +480,15 @@ export default function TruckDeliveryPage() {
                     {/* Editable Date Received if Delivered */}
                     {delivery.status === "Delivered" ? (
                       <div className="flex items-center gap-2">
-                        <label className="text-sm font-semibold">Date Received:</label>
+                        <label className="text-sm font-semibold">
+                          Date Received:
+                        </label>
                         <input
                           type="date"
                           value={delivery.arrival_date || ""}
-                          onChange={(e) => updateArrivalDate(delivery.id, e.target.value)}
+                          onChange={(e) =>
+                            updateArrivalDate(delivery.id, e.target.value)
+                          }
                           className="border px-2 py-1 rounded text-sm"
                         />
                       </div>
@@ -452,49 +510,7 @@ export default function TruckDeliveryPage() {
                       </p>
                     )}
                   </div>
-
-                  {/* Delivery Expenses at the top */}
-                  <div className="mt-4">
-                    <h3 className="font-semibold mb-2">Delivery Expenses</h3>
-                    <ul className="text-sm space-y-1">
-                      <li>
-                        <span className="font-medium text-gray-700">Food Allowance:</span>{" "}
-                        <span className="text-yellow-600 font-semibold">₱{delivery.food ?? 0}</span>
-                      </li>
-                      <li>
-                        <span className="font-medium text-gray-700">Gas:</span>{" "}
-                        <span className="text-yellow-600 font-semibold">₱{delivery.gas ?? 0}</span>
-                      </li>
-                      <li>
-                        <span className="font-medium text-gray-700">Toll Fees:</span>{" "}
-                        <span className="text-yellow-600 font-semibold">₱{delivery.toll ?? 0}</span>
-                      </li>
-                      <li>
-                        <span className="font-medium text-gray-700">Boat Shipping:</span>{" "}
-                        <span className="text-yellow-600 font-semibold">₱{delivery.boat ?? 0}</span>
-                      </li>
-                      <li>
-                        <span className="font-medium text-gray-700">Other Fees:</span>{" "}
-                        <span className="text-yellow-600 font-semibold">₱{delivery.other ?? 0}</span>
-                      </li>
-                      <li className="font-bold mt-2">
-                        Total:{" "}
-                        <span className="text-yellow-500">
-                          ₱
-                          {[
-                            delivery.food ?? 0,
-                            delivery.gas ?? 0,
-                            delivery.toll ?? 0,
-                            delivery.boat ?? 0,
-                            delivery.other ?? 0,
-                          ].reduce((sum, fee) => sum + (fee || 0), 0)}
-                        </span>
-                      </li>
-                    </ul>
-                  </div>
-                  {/* End Delivery Expenses */}
                 </div>
-
                 <div className="mt-3 w-full max-w-2xl">
                   <h3 className="font-semibold mb-1">Invoices on this truck</h3>
                   {delivery._orders && delivery._orders.length > 0 ? (
@@ -543,9 +559,15 @@ export default function TruckDeliveryPage() {
                 {/* Right controls */}
                 <div className="flex flex-col items-end gap-2 text-sm min-w-[220px]">
                   <div className="flex items-center gap-2">
-                    {delivery.status === "Delivered" && <CheckCircle className="text-green-600" />}
-                    {delivery.status === "Ongoing" && <Truck className="text-yellow-600" />}
-                    {delivery.status === "Scheduled" && <Clock className="text-blue-600" />}
+                    {delivery.status === "Delivered" && (
+                      <CheckCircle className="text-green-600" />
+                    )}
+                    {delivery.status === "Ongoing" && (
+                      <Truck className="text-yellow-600" />
+                    )}
+                    {delivery.status === "Scheduled" && (
+                      <Clock className="text-blue-600" />
+                    )}
                     <select
                       value={delivery.status}
                       onChange={(e) =>
@@ -607,22 +629,23 @@ export default function TruckDeliveryPage() {
                             Select an invoice (by customer) assigned to this truck:
                           </p>
                           <select
-                            value={selectedOrderForDialog?.id ?? ""}
-                            onChange={(e) => {
-                              const id = String(e.target.value);
-                              const ord = delivery._orders!.find((x) => String(x.id) === id) || null;
-                              setSelectedOrderForDialog(ord);
-                              setSelectedCustomer(ord?.customer || null);
-                            }}
-                            className="border p-2 rounded w-full"
-                          >
-                            <option value="">-- Choose order --</option>
-                            {delivery._orders.map((o) => (
-                              <option key={o.id} value={o.id}>
-                                {o.customer?.name} — {o.customer?.code}
-                              </option>
-                            ))}
-                          </select>
+  value={selectedOrderForDialog?.id ?? ""}
+  onChange={(e) => {
+    const id = String(e.target.value); // <- Always string!
+    const ord = delivery._orders!.find((x) => String(x.id) === id) || null;
+    setSelectedOrderForDialog(ord);
+    setSelectedCustomer(ord?.customer || null);
+    console.log("Selected order:", ord);
+  }}
+  className="border p-2 rounded w-full"
+>
+  <option value="">-- Choose order --</option>
+  {delivery._orders.map((o) => (
+    <option key={o.id} value={o.id}>
+      {o.customer?.name} — {o.customer?.code}
+    </option>
+  ))}
+</select>
 
                           {selectedOrderForDialog?.customer && (
                             <div
@@ -743,6 +766,27 @@ export default function TruckDeliveryPage() {
                   </Dialog>
                 </div>
               </div>
+
+              <div className="mt-4">
+                <h3 className="font-semibold mb-2">Delivery Expenses</h3>
+                <ul className="text-sm space-y-1">
+                  <li>🚚 Food Allowance: ₱{delivery.food ?? 0}</li>
+                  <li>⛽ Gas: ₱{delivery.gas ?? 0}</li>
+                  <li>🛣 Toll Fees: ₱{delivery.toll ?? 0}</li>
+                  <li>🛥 Boat Shipping: ₱{delivery.boat ?? 0}</li>
+                  <li>📦 Other Fees: ₱{delivery.other ?? 0}</li>
+                  <li className="font-medium">
+                    Total: ₱
+                    {[
+                      delivery.food ?? 0,
+                      delivery.gas ?? 0,
+                      delivery.toll ?? 0,
+                      delivery.boat ?? 0,
+                      delivery.other ?? 0,
+                    ].reduce((sum, fee) => sum + (fee || 0), 0)}
+                  </li>
+                </ul>
+              </div>
             </motion.div>
           ))}
         </div>
@@ -791,15 +835,20 @@ export default function TruckDeliveryPage() {
         }}
       >
         <DialogContent className="max-w-3xl">
-          <h3 className="text-lg font-semibold mb-2">Assign invoices to truck</h3>
+          <h3 className="text-lg font-semibold mb-2">
+            Assign invoices to truck
+          </h3>
           {unassignedOrders.length === 0 ? (
-            <p className="text-sm text-gray-600">No unassigned invoices found.</p>
+            <p className="text-sm text-gray-600">
+              No unassigned invoices found.
+            </p>
           ) : (
             <div className="max-h-96 overflow-auto border rounded">
               <table className="w-full text-sm">
                 <thead className="bg-gray-100 sticky top-0">
                   <tr>
                     <th className="text-left p-2">Select</th>
+                    <th className="text-left p-2">Order #</th>
                     <th className="text-left p-2">Customer</th>
                     <th className="text-left p-2">TXN</th>
                     <th className="text-left p-2">Amount</th>
@@ -816,6 +865,7 @@ export default function TruckDeliveryPage() {
                           onChange={() => toggleSelectOrder(o.id)}
                         />
                       </td>
+                      <td className="p-2">{o.id}</td>
                       <td className="p-2">{o.customer?.name}</td>
                       <td className="p-2 font-mono">{o.customer?.code}</td>
                       <td className="p-2">₱{o.total_amount ?? 0}</td>
@@ -845,6 +895,222 @@ export default function TruckDeliveryPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Invoice Dialog (used when invoiceDialogOpenId is set) */}
+      <Dialog
+        open={invoiceDialogOpenId !== null}
+        onOpenChange={(open) => {
+          if (!open) closeInvoiceDialog();
+        }}
+      >
+        <DialogContent className="max-w-5xl">
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              Select an invoice (by customer) assigned to this truck:
+            </p>
+
+            {/* If the dialog was opened for a specific delivery, show a dropdown of that delivery's orders */}
+            {invoiceDialogOpenId !== null ? (
+              <>
+                {/* Render invoice content for the selected order */}
+                {selectedOrderForInvoice ? (
+                  <div
+                    id={`invoice-${selectedOrderForInvoice.id}`}
+                    className="bg-white p-6 text-sm"
+                  >
+                    <div className="flex justify-between items-center mb-4">
+                      <h2 className="text-xl font-bold flex items-center gap-2">
+                        <ReceiptText /> Sales Invoice –{" "}
+                        {selectedOrderForInvoice.customer.code}
+                      </h2>
+
+                      {/* THIS IS A BUTTON FOR PRINT PREVIEW */}
+                      {/* <button
+                        onClick={async () => {
+                          const blob = await generatePDFBlob(
+                            `invoice-${selectedOrderForInvoice.id}`
+                          );
+                          if (blob) {
+                            const url = URL.createObjectURL(blob);
+                            setPdfUrl(url);
+                          }
+                        }}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
+                      >
+                        <Printer className="w-4 h-4" /> Preview PDF
+                      </button> */}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-y-1 text-sm">
+                      <p>
+                        <strong>NAME:</strong>{" "}
+                        {selectedOrderForInvoice.customer.name}
+                      </p>
+                      <p>
+                        <strong>TRANSACTION CODE:</strong>{" "}
+                        {selectedOrderForInvoice.customer.code}
+                      </p>
+                      <p className="col-span-2">
+                        <strong>ADDRESS:</strong>{" "}
+                        {selectedOrderForInvoice.customer.address}
+                      </p>
+                      <p>
+                        <strong>CONTACT PERSON:</strong>{" "}
+                        {selectedOrderForInvoice.customer.contact_person}
+                      </p>
+                      <p>
+                        <strong>TEL NO:</strong>{" "}
+                        {selectedOrderForInvoice.customer.phone}
+                      </p>
+                      <p>
+                        <strong>TERMS:</strong> Net 30
+                      </p>
+                      <p>
+                        <strong>COLLECTION:</strong> On Delivery
+                      </p>
+                      <p>
+                        <strong>CREDIT LIMIT:</strong> ₱20,000
+                      </p>
+                      <p>
+                        <strong>SALESMAN:</strong> Pedro Reyes
+                      </p>
+                    </div>
+
+                    <div className="overflow-auto mt-4">
+                      <table className="w-full text-sm border">
+                        <thead className="bg-gray-100">
+                          <tr>
+                            <th className="border px-2 py-1">
+                              TRANSACTION DATE
+                            </th>
+                            <th className="border px-2 py-1">RECEIVED DATE</th>
+                            <th className="border px-2 py-1">TRANSACTION</th>
+                            <th className="border px-2 py-1">STATUS</th>
+                            <th className="border px-2 py-1">CHARGE</th>
+                            <th className="border px-2 py-1">CREDIT</th>
+                            <th className="border px-2 py-1">BALANCE</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {/* try rendering order_items if present, otherwise fall back to transaction string */}
+                          {selectedOrderForInvoice.order_items &&
+                          selectedOrderForInvoice.order_items.length > 0
+                            ? selectedOrderForInvoice.order_items.map(
+                                (it, idx) => {
+                                  const product =
+                                    it.inventory?.product_name ?? "Item";
+                                  const amount =
+                                    (it.price || 0) * (it.quantity || 0);
+                                  return (
+                                    <tr key={idx}>
+                                      <td className="border px-2 py-1">
+                                        {selectedOrderForInvoice.customer
+                                          .date ??
+                                          selectedOrderForInvoice.customer
+                                            .created_at}
+                                      </td>
+                                      <td className="border px-2 py-1">
+                                        {new Date().toLocaleDateString()}
+                                      </td>
+                                      <td className="border px-2 py-1">
+                                        {product} — {it.quantity} @ ₱{it.price}
+                                      </td>
+                                      <td className="border px-2 py-1">
+                                        {selectedOrderForInvoice.status ||
+                                          "pending"}
+                                      </td>
+                                      <td className="border px-2 py-1">
+                                        ₱{amount}
+                                      </td>
+                                      <td className="border px-2 py-1">₱0</td>
+                                      <td className="border px-2 py-1">
+                                        ₱{amount}
+                                      </td>
+                                    </tr>
+                                  );
+                                }
+                              )
+                            : (
+                                selectedOrderForInvoice.customer.transaction?.split(
+                                  ","
+                                ) || []
+                              ).map((txn: string, index: number) => (
+                                <tr key={index}>
+                                  <td className="border px-2 py-1">
+                                    {selectedOrderForInvoice.customer.date ??
+                                      selectedOrderForInvoice.customer
+                                        .created_at}
+                                  </td>
+                                  <td className="border px-2 py-1">
+                                    {new Date().toLocaleDateString()}
+                                  </td>
+                                  <td className="border px-2 py-1">
+                                    {txn.trim()}
+                                  </td>
+                                  <td className="border px-2 py-1">
+                                    {selectedOrderForInvoice.status ||
+                                      "Pending"}
+                                  </td>
+                                  <td className="border px-2 py-1">₱0</td>
+                                  <td className="border px-2 py-1">₱0</td>
+                                  <td className="border px-2 py-1">₱0</td>
+                                </tr>
+                              ))}
+                          {/* total row */}
+                          <tr>
+                            <td
+                              colSpan={4}
+                              className="text-right border px-2 py-1 font-semibold"
+                            >
+                              Total
+                            </td>
+                            <td className="border px-2 py-1 font-semibold">
+                              ₱
+                              {(
+                                selectedOrderForInvoice.order_items || []
+                              ).reduce(
+                                (s, it) =>
+                                  s + (it.price || 0) * (it.quantity || 0),
+                                0
+                              )}
+                            </td>
+                            <td className="border px-2 py-1">₱0</td>
+                            <td className="border px-2 py-1 font-semibold">
+                              ₱
+                              {(
+                                selectedOrderForInvoice.order_items || []
+                              ).reduce(
+                                (s, it) =>
+                                  s + (it.price || 0) * (it.quantity || 0),
+                                0
+                              )}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-600">
+                    Select an invoice above to view details.
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-sm text-gray-600">No delivery selected.</div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={closeInvoiceDialog}
+                className="px-4 py-2 border rounded"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Add Delivery Form Modal */}
       {formVisible && (
         <div className="fixed inset-0 bg-black/40 flex justify-center items-center z-50">
@@ -858,12 +1124,17 @@ export default function TruckDeliveryPage() {
             <form onSubmit={handleAddDelivery} className="space-y-4">
               <div className="grid grid-cols-2 gap-x-6 gap-y-4">
                 <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">Destination</label>
+                  <label className="w-32 text-sm font-medium">
+                    Destination
+                  </label>
                   <input
                     type="text"
                     value={newDelivery.destination}
                     onChange={(e) =>
-                      setNewDelivery({ ...newDelivery, destination: e.target.value })
+                      setNewDelivery({
+                        ...newDelivery,
+                        destination: e.target.value,
+                      })
                     }
                     className="w-full border p-2 rounded"
                     required
@@ -871,12 +1142,17 @@ export default function TruckDeliveryPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">Plate Number</label>
+                  <label className="w-32 text-sm font-medium">
+                    Plate Number
+                  </label>
                   <input
                     type="text"
                     value={newDelivery.plateNumber}
                     onChange={(e) =>
-                      setNewDelivery({ ...newDelivery, plateNumber: e.target.value })
+                      setNewDelivery({
+                        ...newDelivery,
+                        plateNumber: e.target.value,
+                      })
                     }
                     className="w-full border p-2 rounded"
                     required
@@ -897,7 +1173,9 @@ export default function TruckDeliveryPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">Participant</label>
+                  <label className="w-32 text-sm font-medium">
+                    Participant
+                  </label>
                   <div className="flex gap-2 w-full">
                     <input
                       type="text"
@@ -937,12 +1215,17 @@ export default function TruckDeliveryPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">Schedule Date</label>
+                  <label className="w-32 text-sm font-medium">
+                    Schedule Date
+                  </label>
                   <input
                     type="date"
                     value={newDelivery.scheduleDate}
                     onChange={(e) =>
-                      setNewDelivery({ ...newDelivery, scheduleDate: e.target.value })
+                      setNewDelivery({
+                        ...newDelivery,
+                        scheduleDate: e.target.value,
+                      })
                     }
                     className="w-full border p-2 rounded"
                     required
@@ -951,12 +1234,17 @@ export default function TruckDeliveryPage() {
 
                 {newDelivery.status === "Delivered" && (
                   <div className="flex items-center gap-2 col-span-2">
-                    <label className="w-32 text-sm font-medium">Arrival Date</label>
+                    <label className="w-32 text-sm font-medium">
+                      Arrival Date
+                    </label>
                     <input
                       type="date"
                       value={newDelivery.arrivalDate}
                       onChange={(e) =>
-                        setNewDelivery({ ...newDelivery, arrivalDate: e.target.value })
+                        setNewDelivery({
+                          ...newDelivery,
+                          arrivalDate: e.target.value,
+                        })
                       }
                       className="w-full border p-2 rounded"
                     />
@@ -965,7 +1253,9 @@ export default function TruckDeliveryPage() {
 
                 {Object.keys(newDelivery.expenses).map((key) => (
                   <div className="flex items-center gap-2" key={key}>
-                    <label className="w-32 text-sm font-medium capitalize">{key}</label>
+                    <label className="w-32 text-sm font-medium capitalize">
+                      {key}
+                    </label>
                     <input
                       type="number"
                       placeholder="₱"

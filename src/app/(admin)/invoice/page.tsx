@@ -4,13 +4,17 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
-import { ReceiptText } from "lucide-react";
-import { motion } from "framer-motion";
+import { ReceiptText, X } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
 import DeliveryReceiptLikeInvoice, {
   type InvoiceItem,
   type CustomerInfo,
 } from "@/components/DeliveryReceiptLikeInvoice";
+
+// 🔹 Import your PDF helper(s) and alias to avoid name conflicts
+// Make sure utils/exportInvoice.ts exports: `export async function generatePDFBlob(id: string): Promise<Blob|null>`
+import { generatePDFBlob as generatePDFBlobById } from "@/utils/exportInvoice";
 
 // ---------- Types match your schema ----------
 type Customer = {
@@ -19,7 +23,7 @@ type Customer = {
   address?: string;
   phone?: string;
   contact_person?: string;
-  code?: string; // <-- TXN lives here (from customers table)
+  code?: string; // TXN in customers
 };
 
 type Order = {
@@ -32,7 +36,6 @@ type Order = {
   terms?: string;
   credit_limit?: number | string;
   collection?: string;
-  // code?: string; // not used for display
 };
 
 type OrderItemRow = {
@@ -63,12 +66,15 @@ export default function InvoicePage() {
   const [initialDate, setInitialDate] = useState<string | undefined>(undefined);
   const [loadingItems, setLoadingItems] = useState(false);
 
-  // 1) fetch customers (INCLUDE code/txn)
+  // PDF preview state
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+
+  // 1) fetch customers (include code/txn)
   useEffect(() => {
     const run = async () => {
       const { data, error } = await supabase
         .from("customers")
-        .select("id, name, address, phone, contact_person, code") // <-- code added
+        .select("id, name, address, phone, contact_person, code")
         .order("created_at", { ascending: false });
 
       if (!error && data) setCustomers(data as Customer[]);
@@ -158,6 +164,22 @@ export default function InvoicePage() {
     setLoadingItems(false);
   };
 
+  // 🔹 Keep your local function name, but implement it by delegating to the imported helper (no conflict now)
+  async function generatePDFBlob(nodeId: string): Promise<Blob | null> {
+    return await generatePDFBlobById(nodeId);
+  }
+
+  // Create PDF from the visible invoice container (button is outside, so it won't be captured)
+  const handlePreviewPDF = async (orderId: string) => {
+    const blob = await generatePDFBlob(`invoice-capture-${orderId}`);
+    if (!blob) {
+      alert("Failed to generate PDF (element not found).");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    setPdfUrl(url);
+  };
+
   return (
     <motion.div className="p-6 space-y-6 bg-gradient-to-b from-amber-50 to-amber-200/40 min-h-screen">
       <h1 className="text-2xl font-bold">Sales Invoices</h1>
@@ -176,7 +198,7 @@ export default function InvoicePage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredOrders.map((order) => {
           const c = customerMap.get(order.customer_id);
-          const txn = c?.code || order.id; // fallback to id if no code yet
+          const txn = c?.code || order.id; // fallback to id if no code
           return (
             <Dialog
               key={order.id}
@@ -217,17 +239,25 @@ export default function InvoicePage() {
                   </div>
                 ) : (
                   <div className="bg-white">
-                    {/* small header line showing TXN from customers.code */}
+                    {/* Toolbar (NOT captured) */}
                     <div className="flex items-center justify-between px-2 pt-2 pb-1">
                       <div className="text-sm text-neutral-700">
                         <span className="font-semibold">TXN:</span> {txn}
                       </div>
-                      <div className="text-xs text-neutral-500">
-                        Order ID: {order.id}
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+                          onClick={() => handlePreviewPDF(order.id)}
+                          disabled={loadingItems}
+                          title="Preview PDF"
+                        >
+                          Preview PDF
+                        </button>
                       </div>
                     </div>
 
-                    <div className="p-2">
+                    {/* Visible invoice (ONLY this gets captured) */}
+                    <div id={`invoice-capture-${order.id}`} className="p-2">
                       <DeliveryReceiptLikeInvoice
                         customer={customerForOrder}
                         initialItems={items}
@@ -245,6 +275,31 @@ export default function InvoicePage() {
       {!filteredOrders.length && (
         <div className="text-sm text-neutral-600">No invoices found.</div>
       )}
+
+      {/* PDF Preview Modal */}
+      <AnimatePresence>
+        {pdfUrl && (
+          <motion.div
+            initial={{ opacity: 0.0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center"
+          >
+            <div className="bg-white w-[92%] h-[92%] rounded shadow-xl relative overflow-hidden">
+              <iframe src={pdfUrl} className="w-full h-full" />
+              <button
+                onClick={() => {
+                  if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+                  setPdfUrl(null);
+                }}
+                className="absolute top-3 right-4 inline-flex items-center gap-2 px-3 py-1.5 rounded bg-neutral-200 hover:bg-neutral-300"
+              >
+                <X className="w-4 h-4" /> Close
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
