@@ -91,9 +91,9 @@ export async function middleware(req: NextRequest) {
   }
 
   // 2️⃣ Authenticated → but trying to reach /signup? send to dashboard:
-  if (session && req.nextUrl.pathname === "/signup") {
-    return NextResponse.redirect(new URL("/dashboard", req.url));
-  }
+  // if (session && req.nextUrl.pathname === "/signup") {
+  //   return NextResponse.redirect(new URL("/dashboard", req.url));
+  // }
 
   return res;
 }
