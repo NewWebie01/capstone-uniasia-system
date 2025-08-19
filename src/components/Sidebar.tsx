@@ -13,6 +13,7 @@ import LogoutIcon from "@/assets/power-button.png";
 import Invoice from "@/assets/Chat.png";
 
 import { FaHistory } from "react-icons/fa";
+import { UserPlus } from "lucide-react";
 
 import Image, { StaticImageData } from "next/image";
 import NavLink from "@/components/NavLink";
@@ -41,6 +42,7 @@ const Menus: {
   { title: "Invoice", src: Chart, href: "/invoice" },
   { title: "Transaction History", src: Invoice, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
+  { title: "Account Creation", icon: UserPlus, href: "/account_creation" },
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
@@ -108,11 +110,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
           {Menus.map((menu, idx) => {
             const isActive = pathname === menu.href;
 
-            // either show the image or the icon
             const IconOrImage = menu.src ? (
               <Image src={menu.src} alt={menu.title} width={20} height={20} />
             ) : menu.icon ? (
-              <menu.icon className="h-5 w-5 text-black" />
+              <menu.icon
+                className={`h-5 w-5 ${
+                  menu.title === "Activity Log" ||
+                  menu.title === "Account Creation"
+                    ? "text-[#ffba20]" // keep these two yellow always
+                    : "text-black"
+                }`}
+              />
             ) : null;
 
             const menuItem = (
@@ -143,10 +151,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
             );
 
             return menu.href ? (
-<NavLink href={menu.href} key={menu.title}>
-  {menuItem}
-</NavLink>
-
+              <NavLink href={menu.href} key={menu.title}>
+                {menuItem}
+              </NavLink>
             ) : (
               <div key={menu.title}>{menuItem}</div>
             );
