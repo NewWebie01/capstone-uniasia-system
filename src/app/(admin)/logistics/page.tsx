@@ -93,6 +93,9 @@ export default function TruckDeliveryPage() {
     newStatus: "",
   });
 
+  const [selectedOrderForDialog, setSelectedOrderForDialog] =
+    useState<OrderWithCustomer | null>(null);
+
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForDeliveryId, setAssignForDeliveryId] = useState<number | null>(null);
   const [unassignedOrders, setUnassignedOrders] = useState<OrderWithCustomer[]>([]);
@@ -118,7 +121,7 @@ export default function TruckDeliveryPage() {
 
   const fetchDeliveriesAndAssignments = async () => {
     const { data: dData, error: dErr } = await supabase
-      .from<Delivery>("truck_deliveries")
+      .from<"truck_deliveries", Delivery>("truck_deliveries")
       .select("*")
       .order("created_at", { ascending: false });
 
@@ -220,6 +223,34 @@ export default function TruckDeliveryPage() {
 
     setUnassignedOrders(data ?? []);
   };
+
+  /* =========================
+     CLEAR INVOICES HANDLER
+  ========================= */
+  const handleClearInvoices = async (deliveryId: number) => {
+    const delivery = deliveries.find((d) => d.id === deliveryId);
+    const orderIds = delivery?._orders?.map((o) => o.id) || [];
+    if (orderIds.length === 0) {
+      toast.info("No invoices to clear on this truck.");
+      return;
+    }
+
+    if (!window.confirm("Clear all invoices from this truck?")) return;
+
+    const { error } = await supabase
+      .from("orders")
+      .update({ truck_delivery_id: null })
+      .in("id", orderIds);
+
+    if (error) {
+      toast.error("Failed to clear invoices.");
+      return;
+    }
+
+    toast.success("All invoices cleared from this truck.");
+    await fetchDeliveriesAndAssignments();
+  };
+
   /* =========================
      HELPERS
   ========================= */
@@ -310,8 +341,6 @@ export default function TruckDeliveryPage() {
 
   const addParticipant = () => {
     if (!newPerson.trim()) return;
-    // optional safety: max 3
-    // if (newDelivery.participants.length >= 3) return toast.error("Up to 3 participants only.");
     setNewDelivery((prev) => ({
       ...prev,
       participants: [...prev.participants, newPerson.trim()],
@@ -319,7 +348,6 @@ export default function TruckDeliveryPage() {
     setNewPerson("");
   };
 
-  /** Update arrival_date (a.k.a. Date Received) */
   const updateArrivalDate = async (deliveryId: number, date: string) => {
     const { error } = await supabase
       .from("truck_deliveries")
@@ -458,25 +486,50 @@ export default function TruckDeliveryPage() {
                       </p>
                     )}
                   </div>
-
-                  {/* Assigned Invoices (Orders) */}
-                  <div className="mt-3">
-                    <h3 className="font-semibold">Invoices on this truck</h3>
-                    {delivery._orders && delivery._orders.length > 0 ? (
-                      <ul className="list-disc ml-5 text-sm">
-                        {delivery._orders.map((o) => (
-                          <li key={o.id}>
-                            {o.customer?.name} — <span className="font-mono">{o.customer?.code}</span>{" "}
-                            <span className="text-gray-500">
-                              (Order #{o.id}, {o.status || "pending"})
+                </div>
+                <div className="mt-3 w-full max-w-2xl">
+                  <h3 className="font-semibold mb-1">Invoices on this truck</h3>
+                  {delivery._orders && delivery._orders.length > 0 ? (
+                    <div className="flex flex-col gap-2">
+                      {delivery._orders.map((o) => (
+                        <div
+                          key={o.id}
+                          className="flex items-center gap-3 px-4 py-2 rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 transition shadow-sm"
+                        >
+                          {/* TXN */}
+                          <div className="font-mono text-[#222] text-sm font-semibold tracking-tight bg-white px-2 py-1 rounded mr-2 border border-gray-300 shadow-sm min-w-[165px] text-center">
+                            {o.customer?.code}
+                          </div>
+                          {/* Name & Address */}
+                          <div className="flex flex-col flex-1 min-w-0">
+                            <div className="text-gray-800 text-base font-medium truncate">
+                              {o.customer?.name}
+                            </div>
+                            <div className="text-xs text-gray-500 truncate">
+                              {o.customer?.address ? o.customer.address : "No address provided"}
+                            </div>
+                          </div>
+                          {/* Delivery Date at right */}
+                          <div className="ml-auto flex flex-col items-end min-w-[125px]">
+                            <span className="text-xs font-semibold text-gray-500">
+                              Order Completion Date
                             </span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-sm text-gray-500">No invoices assigned yet.</p>
-                    )}
-                  </div>
+                            <span className="text-sm text-gray-700">
+                              {delivery.schedule_date
+                                ? new Date(delivery.schedule_date).toLocaleDateString("en-PH", {
+                                    year: "numeric",
+                                    month: "short",
+                                    day: "2-digit",
+                                  })
+                                : "-"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">No invoices assigned yet.</p>
+                  )}
                 </div>
 
                 {/* Right controls */}
@@ -508,11 +561,18 @@ export default function TruckDeliveryPage() {
                     </select>
                   </div>
 
-                  <button
+                                    <button
                     onClick={() => openAssignDialog(delivery.id)}
                     className="px-3 py-1.5 border rounded hover:bg-gray-50"
                   >
                     Assign Invoices
+                  </button>
+
+                  <button
+                    onClick={() => handleClearInvoices(delivery.id)}
+                    className="px-3 py-1.5 border border-red-500 text-red-500 rounded hover:bg-red-50 transition"
+                  >
+                    Clear Invoices
                   </button>
 
                   {/* View Invoice(s) */}
@@ -520,7 +580,10 @@ export default function TruckDeliveryPage() {
                     open={invoiceDialogOpenId === delivery.id}
                     onOpenChange={(open) => {
                       setInvoiceDialogOpenId(open ? delivery.id : null);
-                      setSelectedCustomer(null);
+                      if (!open) {
+                        setSelectedCustomer(null);
+                        setSelectedOrderForDialog(null);
+                      }
                     }}
                   >
                     <DialogTrigger asChild>
@@ -528,43 +591,52 @@ export default function TruckDeliveryPage() {
                         View Invoice
                       </button>
                     </DialogTrigger>
+
                     <DialogContent className="max-w-5xl">
-                      {/* If this truck has assigned orders, restrict the picker to them */}
                       {delivery._orders && delivery._orders.length > 0 ? (
-                        <div className="space-y-2">
+                        <div className="space-y-3">
                           <p className="text-sm font-medium">
                             Select an invoice (by customer) assigned to this truck:
                           </p>
                           <select
-                            onChange={(e) => {
-                              const id = Number(e.target.value);
-                              const ord = delivery._orders!.find((x) => x.customer?.id === id);
-                              setSelectedCustomer(ord?.customer || null);
-                            }}
-                            className="border p-2 rounded w-full"
-                          >
-                            <option value="">-- Choose customer --</option>
-                            {delivery._orders.map((o) => (
-                              <option key={o.id} value={o.customer?.id}>
-                                {o.customer?.name} – {o.customer?.code}
-                              </option>
-                            ))}
-                          </select>
+  value={selectedOrderForDialog?.id ?? ""}
+  onChange={(e) => {
+    const id = String(e.target.value); // <- Always string!
+    const ord = delivery._orders!.find((x) => String(x.id) === id) || null;
+    setSelectedOrderForDialog(ord);
+    setSelectedCustomer(ord?.customer || null);
+    console.log("Selected order:", ord);
+  }}
+  className="border p-2 rounded w-full"
+>
+  <option value="">-- Choose order --</option>
+  {delivery._orders.map((o) => (
+    <option key={o.id} value={o.id}>
+      {o.customer?.name} — {o.customer?.code}
+    </option>
+  ))}
+</select>
 
-                          {selectedCustomer && (
-                            <div id={`invoice-${selectedCustomer.id}`} className="bg-white p-6 text-sm">
+                          {selectedOrderForDialog?.customer && (
+                            <div
+                              id={`invoice-${selectedOrderForDialog.customer.id}`}
+                              className="bg-white p-6 text-sm"
+                            >
                               <div className="flex justify-between items-center mb-4">
                                 <h2 className="text-xl font-bold flex items-center gap-2">
-                                  <ReceiptText /> Sales Invoice – {selectedCustomer.code}
+                                  <ReceiptText /> Sales Invoice – {selectedOrderForDialog.customer.code}
                                 </h2>
                                 <button
                                   onClick={async () => {
                                     const blob = await generatePDFBlob(
-                                      `invoice-${selectedCustomer.id}`
+                                      `invoice-${selectedOrderForDialog.customer.id}`
                                     );
                                     if (blob) {
                                       const url = URL.createObjectURL(blob);
                                       setPdfUrl(url);
+                                      toast.success("PDF ready — opening preview…");
+                                    } else {
+                                      toast.error("Failed to generate PDF");
                                     }
                                   }}
                                   className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
@@ -572,21 +644,19 @@ export default function TruckDeliveryPage() {
                                   <Printer className="w-4 h-4" /> Preview PDF
                                 </button>
                               </div>
-
                               <div className="grid grid-cols-2 gap-y-1 text-sm">
-                                <p><strong>NAME:</strong> {selectedCustomer.name}</p>
-                                <p><strong>TRANSACTION CODE:</strong> {selectedCustomer.code}</p>
-                                <p className="col-span-2"><strong>ADDRESS:</strong> {selectedCustomer.address}</p>
-                                <p><strong>CONTACT PERSON:</strong> {selectedCustomer.contact_person}</p>
-                                <p><strong>TEL NO:</strong> {selectedCustomer.phone}</p>
+                                <p><strong>NAME:</strong> {selectedOrderForDialog.customer.name}</p>
+                                <p><strong>TRANSACTION CODE:</strong> {selectedOrderForDialog.customer.code}</p>
+                                <p className="col-span-2">
+                                  <strong>ADDRESS:</strong> {selectedOrderForDialog.customer.address}
+                                </p>
+                                <p><strong>CONTACT PERSON:</strong> {selectedOrderForDialog.customer.contact_person}</p>
+                                <p><strong>TEL NO:</strong> {selectedOrderForDialog.customer.phone}</p>
                                 <p><strong>TERMS:</strong> Net 30</p>
                                 <p><strong>COLLECTION:</strong> On Delivery</p>
                                 <p><strong>CREDIT LIMIT:</strong> ₱20,000</p>
                                 <p><strong>SALESMAN:</strong> Pedro Reyes</p>
                               </div>
-
-                              {/* You can render items from the order if you like.
-                                 For simplicity, we kept your legacy table below. */}
                               <div className="overflow-auto mt-4">
                                 <table className="w-full text-sm border">
                                   <thead className="bg-gray-100">
@@ -601,22 +671,55 @@ export default function TruckDeliveryPage() {
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {(selectedCustomer.transaction?.split(",") || []).map(
-                                      (txn: string, index: number) => (
-                                        <tr key={index}>
+                                    {(selectedOrderForDialog.order_items ?? []).map((it, i) => {
+                                      const desc = it.inventory?.product_name ?? "(item)";
+                                      const qty = it.quantity ?? 0;
+                                      const price = it.price ?? 0;
+                                      const charge = qty * price;
+                                      const credit = 0;
+                                      const balance = charge - credit;
+                                      const txnDate =
+                                        (selectedOrderForDialog as any)?.created_at
+                                          ? new Date((selectedOrderForDialog as any).created_at)
+                                              .toLocaleDateString()
+                                          : new Date().toLocaleDateString();
+                                      const receivedDate = delivery.arrival_date
+                                        ? new Date(delivery.arrival_date).toLocaleDateString()
+                                        : "";
+
+                                      return (
+                                        <tr key={i}>
+                                          <td className="border px-2 py-1">{txnDate}</td>
+                                          <td className="border px-2 py-1">{receivedDate}</td>
                                           <td className="border px-2 py-1">
-                                            {selectedCustomer.date || selectedCustomer.created_at}
+                                            {desc} — {qty} @ ₱{price.toLocaleString()}
                                           </td>
                                           <td className="border px-2 py-1">
-                                            {new Date().toLocaleDateString()}
+                                            {selectedOrderForDialog.status || "Pending"}
                                           </td>
-                                          <td className="border px-2 py-1">{txn.trim()}</td>
-                                          <td className="border px-2 py-1">{selectedCustomer.status || "Pending"}</td>
-                                          <td className="border px-2 py-1">₱5,000</td>
-                                          <td className="border px-2 py-1">₱0</td>
-                                          <td className="border px-2 py-1">₱5,000</td>
+                                          <td className="border px-2 py-1">₱{charge.toLocaleString()}</td>
+                                          <td className="border px-2 py-1">₱{credit.toLocaleString()}</td>
+                                          <td className="border px-2 py-1">₱{balance.toLocaleString()}</td>
                                         </tr>
-                                      )
+                                      );
+                                    })}
+                                    {selectedOrderForDialog && (
+                                      <tr>
+                                        <td className="border px-2 py-1 text-right" colSpan={4}>
+                                          <strong>Total</strong>
+                                        </td>
+                                        <td className="border px-2 py-1">
+                                          ₱{(selectedOrderForDialog.order_items ?? [])
+                                            .reduce((s, it) => s + (it.quantity ?? 0) * (it.price ?? 0), 0)
+                                            .toLocaleString()}
+                                        </td>
+                                        <td className="border px-2 py-1">₱0</td>
+                                        <td className="border px-2 py-1">
+                                          ₱{(selectedOrderForDialog.order_items ?? [])
+                                            .reduce((s, it) => s + (it.quantity ?? 0) * (it.price ?? 0), 0)
+                                            .toLocaleString()}
+                                        </td>
+                                      </tr>
                                     )}
                                   </tbody>
                                 </table>
@@ -711,7 +814,6 @@ export default function TruckDeliveryPage() {
                 <thead className="bg-gray-100 sticky top-0">
                   <tr>
                     <th className="text-left p-2">Select</th>
-                    <th className="text-left p-2">Order #</th>
                     <th className="text-left p-2">Customer</th>
                     <th className="text-left p-2">TXN</th>
                     <th className="text-left p-2">Amount</th>
@@ -728,7 +830,6 @@ export default function TruckDeliveryPage() {
                           onChange={() => toggleSelectOrder(o.id)}
                         />
                       </td>
-                      <td className="p-2">{o.id}</td>
                       <td className="p-2">{o.customer?.name}</td>
                       <td className="p-2 font-mono">{o.customer?.code}</td>
                       <td className="p-2">₱{o.total_amount ?? 0}</td>
@@ -921,3 +1022,4 @@ export default function TruckDeliveryPage() {
     </div>
   );
 }
+
