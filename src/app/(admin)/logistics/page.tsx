@@ -93,6 +93,9 @@ export default function TruckDeliveryPage() {
     newStatus: "",
   });
 
+  const [selectedOrderForDialog, setSelectedOrderForDialog] =
+  useState<OrderWithCustomer | null>(null);
+
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForDeliveryId, setAssignForDeliveryId] = useState<number | null>(null);
   const [unassignedOrders, setUnassignedOrders] = useState<OrderWithCustomer[]>([]);
@@ -118,7 +121,7 @@ export default function TruckDeliveryPage() {
 
   const fetchDeliveriesAndAssignments = async () => {
     const { data: dData, error: dErr } = await supabase
-      .from<Delivery>("truck_deliveries")
+      .from<"truck_deliveries", Delivery>("truck_deliveries")
       .select("*")
       .order("created_at", { ascending: false });
 
@@ -466,11 +469,22 @@ export default function TruckDeliveryPage() {
                       <ul className="list-disc ml-5 text-sm">
                         {delivery._orders.map((o) => (
                           <li key={o.id}>
-                            {o.customer?.name} — <span className="font-mono">{o.customer?.code}</span>{" "}
-                            <span className="text-gray-500">
-                              (Order #{o.id}, {o.status || "pending"})
-                            </span>
-                          </li>
+                          {o.customer?.name} —{" "}
+                          <button
+                            type="button"
+                            className="font-mono underline text-blue-600 hover:text-blue-800"
+                            onClick={() => {
+                              setInvoiceDialogOpenId(delivery.id);
+                              setSelectedOrderForDialog(o);       // pick the whole order
+                              setSelectedCustomer(o.customer || null); // keep your header info if you want
+                            }}
+                          >
+                            {o.customer?.code}
+                          </button>{" "}
+                          <span className="text-gray-500">
+                            (Order #{o.id}, {o.status || "pending"})
+                          </span>
+                        </li>
                         ))}
                       </ul>
                     ) : (
@@ -516,121 +530,180 @@ export default function TruckDeliveryPage() {
                   </button>
 
                   {/* View Invoice(s) */}
-                  <Dialog
-                    open={invoiceDialogOpenId === delivery.id}
-                    onOpenChange={(open) => {
-                      setInvoiceDialogOpenId(open ? delivery.id : null);
-                      setSelectedCustomer(null);
-                    }}
-                  >
-                    <DialogTrigger asChild>
-                      <button className="text-sm text-blue-600 underline hover:text-blue-800">
-                        View Invoice
-                      </button>
-                    </DialogTrigger>
-                    <DialogContent className="max-w-5xl">
-                      {/* If this truck has assigned orders, restrict the picker to them */}
-                      {delivery._orders && delivery._orders.length > 0 ? (
-                        <div className="space-y-2">
-                          <p className="text-sm font-medium">
-                            Select an invoice (by customer) assigned to this truck:
-                          </p>
-                          <select
-                            onChange={(e) => {
-                              const id = Number(e.target.value);
-                              const ord = delivery._orders!.find((x) => x.customer?.id === id);
-                              setSelectedCustomer(ord?.customer || null);
-                            }}
-                            className="border p-2 rounded w-full"
-                          >
-                            <option value="">-- Choose customer --</option>
-                            {delivery._orders.map((o) => (
-                              <option key={o.id} value={o.customer?.id}>
-                                {o.customer?.name} – {o.customer?.code}
-                              </option>
-                            ))}
-                          </select>
+                  {/* View Invoice(s) */}
+<Dialog
+  open={invoiceDialogOpenId === delivery.id}
+  onOpenChange={(open) => {
+    setInvoiceDialogOpenId(open ? delivery.id : null);
+    if (!open) {
+      setSelectedCustomer(null);
+      setSelectedOrderForDialog(null);
+    }
+  }}
+>
+  <DialogTrigger asChild>
+    <button className="text-sm text-blue-600 underline hover:text-blue-800">
+      View Invoice
+    </button>
+  </DialogTrigger>
 
-                          {selectedCustomer && (
-                            <div id={`invoice-${selectedCustomer.id}`} className="bg-white p-6 text-sm">
-                              <div className="flex justify-between items-center mb-4">
-                                <h2 className="text-xl font-bold flex items-center gap-2">
-                                  <ReceiptText /> Sales Invoice – {selectedCustomer.code}
-                                </h2>
-                                <button
-                                  onClick={async () => {
-                                    const blob = await generatePDFBlob(
-                                      `invoice-${selectedCustomer.id}`
-                                    );
-                                    if (blob) {
-                                      const url = URL.createObjectURL(blob);
-                                      setPdfUrl(url);
-                                    }
-                                  }}
-                                  className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
-                                >
-                                  <Printer className="w-4 h-4" /> Preview PDF
-                                </button>
-                              </div>
+  <DialogContent className="max-w-5xl">
+    {delivery._orders && delivery._orders.length > 0 ? (
+      <div className="space-y-3">
+        <p className="text-sm font-medium">
+          Select an invoice (by customer) assigned to this truck:
+        </p>
 
-                              <div className="grid grid-cols-2 gap-y-1 text-sm">
-                                <p><strong>NAME:</strong> {selectedCustomer.name}</p>
-                                <p><strong>TRANSACTION CODE:</strong> {selectedCustomer.code}</p>
-                                <p className="col-span-2"><strong>ADDRESS:</strong> {selectedCustomer.address}</p>
-                                <p><strong>CONTACT PERSON:</strong> {selectedCustomer.contact_person}</p>
-                                <p><strong>TEL NO:</strong> {selectedCustomer.phone}</p>
-                                <p><strong>TERMS:</strong> Net 30</p>
-                                <p><strong>COLLECTION:</strong> On Delivery</p>
-                                <p><strong>CREDIT LIMIT:</strong> ₱20,000</p>
-                                <p><strong>SALESMAN:</strong> Pedro Reyes</p>
-                              </div>
+        {/* STEP 3: dropdown chooses by ORDER ID and sets the selected order */}
+        <select
+          value={selectedOrderForDialog?.id ?? ""}
+          onChange={(e) => {
+            const id = Number(e.target.value);
+            const ord = delivery._orders!.find((x) => x.id === id) || null;
+            setSelectedOrderForDialog(ord);
+            setSelectedCustomer(ord?.customer || null); // keep header fields in sync (optional)
+          }}
+          className="border p-2 rounded w-full"
+        >
+          <option value="">-- Choose order --</option>
+          {delivery._orders.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.customer?.name} – {o.customer?.code}
+            </option>
+          ))}
+        </select>
 
-                              {/* You can render items from the order if you like.
-                                 For simplicity, we kept your legacy table below. */}
-                              <div className="overflow-auto mt-4">
-                                <table className="w-full text-sm border">
-                                  <thead className="bg-gray-100">
-                                    <tr>
-                                      <th className="border px-2 py-1">TRANSACTION DATE</th>
-                                      <th className="border px-2 py-1">RECEIVED DATE</th>
-                                      <th className="border px-2 py-1">TRANSACTION</th>
-                                      <th className="border px-2 py-1">STATUS</th>
-                                      <th className="border px-2 py-1">CHARGE</th>
-                                      <th className="border px-2 py-1">CREDIT</th>
-                                      <th className="border px-2 py-1">BALANCE</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {(selectedCustomer.transaction?.split(",") || []).map(
-                                      (txn: string, index: number) => (
-                                        <tr key={index}>
-                                          <td className="border px-2 py-1">
-                                            {selectedCustomer.date || selectedCustomer.created_at}
-                                          </td>
-                                          <td className="border px-2 py-1">
-                                            {new Date().toLocaleDateString()}
-                                          </td>
-                                          <td className="border px-2 py-1">{txn.trim()}</td>
-                                          <td className="border px-2 py-1">{selectedCustomer.status || "Pending"}</td>
-                                          <td className="border px-2 py-1">₱5,000</td>
-                                          <td className="border px-2 py-1">₱0</td>
-                                          <td className="border px-2 py-1">₱5,000</td>
-                                        </tr>
-                                      )
-                                    )}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="text-sm text-gray-600">
-                          No invoices assigned to this truck yet. Use <em>Assign Invoices</em>.
-                        </div>
-                      )}
-                    </DialogContent>
-                  </Dialog>
+        {/* Header + PDF button */}
+        {selectedOrderForDialog?.customer && (
+          <div
+            id={`invoice-${selectedOrderForDialog.customer.id}`}
+            className="bg-white p-6 text-sm"
+          >
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <ReceiptText /> Sales Invoice – {selectedOrderForDialog.customer.code}
+              </h2>
+
+              <button
+                onClick={async () => {
+                  const blob = await generatePDFBlob(
+                    `invoice-${selectedOrderForDialog.customer.id}`
+                  );
+                  if (blob) {
+                    const url = URL.createObjectURL(blob);
+                    setPdfUrl(url);
+                    toast.success("PDF ready — opening preview…");
+                    // window.open(url); // optional if you want to auto-open
+                  } else {
+                    toast.error("Failed to generate PDF");
+                  }
+                }}
+                className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                <Printer className="w-4 h-4" /> Preview PDF
+              </button>
+            </div>
+
+            {/* Customer header fields */}
+            <div className="grid grid-cols-2 gap-y-1 text-sm">
+              <p><strong>NAME:</strong> {selectedOrderForDialog.customer.name}</p>
+              <p><strong>TRANSACTION CODE:</strong> {selectedOrderForDialog.customer.code}</p>
+              <p className="col-span-2">
+                <strong>ADDRESS:</strong> {selectedOrderForDialog.customer.address}
+              </p>
+              <p><strong>CONTACT PERSON:</strong> {selectedOrderForDialog.customer.contact_person}</p>
+              <p><strong>TEL NO:</strong> {selectedOrderForDialog.customer.phone}</p>
+              <p><strong>TERMS:</strong> Net 30</p>
+              <p><strong>COLLECTION:</strong> On Delivery</p>
+              <p><strong>CREDIT LIMIT:</strong> ₱20,000</p>
+              <p><strong>SALESMAN:</strong> Pedro Reyes</p>
+            </div>
+
+            {/* STEP 4: items table from order_items */}
+            <div className="overflow-auto mt-4">
+              <table className="w-full text-sm border">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="border px-2 py-1">TRANSACTION DATE</th>
+                    <th className="border px-2 py-1">RECEIVED DATE</th>
+                    <th className="border px-2 py-1">TRANSACTION</th>
+                    <th className="border px-2 py-1">STATUS</th>
+                    <th className="border px-2 py-1">CHARGE</th>
+                    <th className="border px-2 py-1">CREDIT</th>
+                    <th className="border px-2 py-1">BALANCE</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(selectedOrderForDialog.order_items ?? []).map((it, i) => {
+                    const desc = it.inventory?.product_name ?? "(item)";
+                    const qty = it.quantity ?? 0;
+                    const price = it.price ?? 0;
+                    const charge = qty * price;
+                    const credit = 0; // adjust if you track payments
+                    const balance = charge - credit;
+
+                    // If you have created_at on orders, use it; otherwise fallback to today:
+                    const txnDate =
+                      (selectedOrderForDialog as any)?.created_at
+                        ? new Date((selectedOrderForDialog as any).created_at)
+                            .toLocaleDateString()
+                        : new Date().toLocaleDateString();
+
+                    // Received date: use truck's arrival_date if set
+                    const receivedDate = delivery.arrival_date
+                      ? new Date(delivery.arrival_date).toLocaleDateString()
+                      : "";
+
+                    return (
+                      <tr key={i}>
+                        <td className="border px-2 py-1">{txnDate}</td>
+                        <td className="border px-2 py-1">{receivedDate}</td>
+                        <td className="border px-2 py-1">
+                          {desc} — {qty} @ ₱{price.toLocaleString()}
+                        </td>
+                        <td className="border px-2 py-1">
+                          {selectedOrderForDialog.status || "Pending"}
+                        </td>
+                        <td className="border px-2 py-1">₱{charge.toLocaleString()}</td>
+                        <td className="border px-2 py-1">₱{credit.toLocaleString()}</td>
+                        <td className="border px-2 py-1">₱{balance.toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
+
+                  {/* Totals row */}
+                  {selectedOrderForDialog && (
+                    <tr>
+                      <td className="border px-2 py-1 text-right" colSpan={4}>
+                        <strong>Total</strong>
+                      </td>
+                      <td className="border px-2 py-1">
+                        ₱{(selectedOrderForDialog.order_items ?? [])
+                          .reduce((s, it) => s + (it.quantity ?? 0) * (it.price ?? 0), 0)
+                          .toLocaleString()}
+                      </td>
+                      <td className="border px-2 py-1">₱0</td>
+                      <td className="border px-2 py-1">
+                        ₱{(selectedOrderForDialog.order_items ?? [])
+                          .reduce((s, it) => s + (it.quantity ?? 0) * (it.price ?? 0), 0)
+                          .toLocaleString()}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    ) : (
+      <div className="text-sm text-gray-600">
+        No invoices assigned to this truck yet. Use <em>Assign Invoices</em>.
+      </div>
+    )}
+  </DialogContent>
+</Dialog>
+
                 </div>
               </div>
 
