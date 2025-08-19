@@ -34,7 +34,7 @@ const Menus: {
   { title: "Inventory", icon: Boxes, href: "/inventory" },
   { title: "Truck Delivery", src: Logistics, href: "/logistics" },
   { title: "Sales", src: Sales, href: "/sales" },
-  { title: "Purchase", icon: ShoppingCart, href: "/purchase" },
+  // { title: "Purchase", icon: ShoppingCart, href: "/purchase" },
   { title: "Invoice", icon: FileText, href: "/invoice" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
