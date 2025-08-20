@@ -132,6 +132,24 @@ export default function SalesPage() {
     return getGrandTotalWithInterest();
   };
 
+  // Calculate original subtotal (before any discounts/markups)
+const subtotalBeforeDiscount = selectedOrder
+  ? selectedOrder.order_items.reduce(
+      (sum, item, idx) =>
+        sum + (editedQuantities[idx] ?? item.quantity) * item.price,
+      0
+    )
+  : 0;
+
+// Calculate total discount/add (sum of all LESS/ADD)
+const totalDiscount = selectedOrder
+  ? selectedOrder.order_items.reduce((sum, item, idx) => {
+      const qty = editedQuantities[idx] ?? item.quantity;
+      const percent = editedDiscounts[idx] ?? 0;
+      return sum + qty * item.price * (percent / 100);
+    }, 0)
+  : 0;
+
   const totalSales = useMemo(
     () =>
       orders
@@ -258,11 +276,13 @@ export default function SalesPage() {
   }, []);
 
   useEffect(() => {
-    if (!showModal) {
-      setNumberOfTerms(1);
-      setInterestPercent(0);
-    }
-  }, [showModal]);
+  // Only reset when BOTH modals are closed
+  if (!showModal && !showSalesOrderModal) {
+    setNumberOfTerms(1);
+    setInterestPercent(0);
+  }
+}, [showModal, showSalesOrderModal]);
+
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
@@ -1166,18 +1186,20 @@ export default function SalesPage() {
                   />
                 </div>
                 <div>
-                  <span className="font-medium">Payment Terms: </span>
-                  {selectedOrder.customers.payment_type === "Credit" ? (
-                    <>
-                      Net {numberOfTerms} Monthly
-                      <span className="text-gray-500 ml-2">
-                        (Terms: {numberOfTerms})
-                      </span>
-                    </>
-                  ) : (
-                    selectedOrder.customers.payment_type
-                  )}
-                </div>
+  <span className="font-medium">Payment Terms: </span>
+  {selectedOrder.customers.payment_type === "Credit" ? (
+    <>
+      Net {numberOfTerms} Monthly
+      <span className="text-gray-500 ml-2">
+        (Terms: {numberOfTerms})
+      </span>
+    </>
+  ) : (
+    selectedOrder.customers.payment_type
+  )}
+</div>
+
+
               </div>
             </div>
             {/* CUSTOMER DETAILS */}
@@ -1269,47 +1291,42 @@ export default function SalesPage() {
             </div>
             {/* Totals and Terms */}
             <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
-              <div className="space-y-2 min-w-[350px]">
-                <div className="flex justify-between font-medium">
-                  <span>Subtotal:</span>
-                  <span>
-                    ₱
-                    {computedOrderTotal.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Sales Tax (12%):</span>
-                  <span>
-                    ₱
-                    {salesTaxValue.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-                <div className="flex justify-between text-xl font-bold border-t pt-2">
-                  <span>TOTAL ORDER AMOUNT:</span>
-                  <span className="text-green-700">
-                    ₱
-                    {getGrandTotalWithInterest().toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-                {selectedOrder.customers.payment_type === "Credit" && (
-                  <div className="flex justify-between">
-                    <span>Payment per Term:</span>
-                    <span className="font-bold text-blue-700">
-                      ₱
-                      {getPerTermAmount().toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
+  <div className="space-y-2 min-w-[350px]">
+    <div className="flex justify-between font-medium">
+      <span>Subtotal (Before Discount):</span>
+      <span>
+        ₱{subtotalBeforeDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+      </span>
+    </div>
+    <div className="flex justify-between font-medium">
+      <span>Less/Add (Discount/Markup):</span>
+      <span className={totalDiscount < 0 ? "text-green-600" : "text-orange-500"}>
+        {totalDiscount < 0 ? "–" : "+"}₱{Math.abs(totalDiscount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+      </span>
+    </div>
+    <div className="flex justify-between">
+      <span>Sales Tax (12%):</span>
+      <span>
+        ₱{salesTaxValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+      </span>
+    </div>
+    <div className="flex justify-between text-xl font-bold border-t pt-2">
+      <span>TOTAL ORDER AMOUNT:</span>
+      <span className="text-green-700">
+        ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+      </span>
+    </div>
+    {selectedOrder.customers.payment_type === "Credit" && (
+      <div className="flex justify-between">
+        <span>Payment per Term:</span>
+        <span className="font-bold text-blue-700">
+          ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+        </span>
+      </div>
+    )}
+  </div>
+</div>
+
             {/* Action Buttons */}
             <div className="flex justify-center gap-8 mt-6">
               <button

@@ -20,12 +20,12 @@ const formatPH = (d?: string | number | Date | null) =>
 
 /* ---------------------------------- Types --------------------------------- */
 type Delivery = {
-  id: string;
+  id: string | number;
   status: string | null;
-  schedule_date: string | null; // date
-  date_received?: string | null; // may be null until Delivered
+  schedule_date: string | null;
+  date_received?: string | null;
   driver?: string | null;
-  participants?: string[] | null; // text[]
+  participants?: string[] | null;
 };
 
 export default function TrackPage() {
@@ -43,7 +43,7 @@ export default function TrackPage() {
     setTrackingLoading(true);
 
     try {
-      // 1) Find the customer by TXN code and include the latest order + delivery_id
+      // 1) Get customer by TXN and include latest order with TRUCK delivery id
       const { data, error } = await supabase
         .from("customers")
         .select(
@@ -55,13 +55,12 @@ export default function TrackPage() {
           email,
           phone,
           address,
-          status,
           date,
           orders (
             id,
             total_amount,
             status,
-            delivery_id,
+            truck_delivery_id,
             order_items (
               quantity,
               price,
@@ -86,17 +85,20 @@ export default function TrackPage() {
 
       setTrackingResult(data);
 
-      // 2) If an order has a delivery_id, fetch the truck delivery row
+      // 2) Follow truck_delivery_id to the truck_deliveries table
       const firstOrder = (data.orders ?? [])[0];
-      const deliveryId = firstOrder?.delivery_id as string | undefined;
+      const truckDeliveryId = firstOrder?.truck_delivery_id as
+        | string
+        | number
+        | undefined;
 
-      if (deliveryId) {
+      if (truckDeliveryId != null) {
         const { data: deliv, error: delivErr } = await supabase
           .from("truck_deliveries")
           .select(
             "id, status, schedule_date, date_received, driver, participants"
           )
-          .eq("id", deliveryId)
+          .eq("id", truckDeliveryId)
           .maybeSingle();
 
         if (!delivErr && deliv) setDelivery(deliv as Delivery);
@@ -156,10 +158,15 @@ export default function TrackPage() {
               <span className="font-medium">TXN Code:</span>{" "}
               {trackingResult.code}
             </p>
+
+            {/* 👇 Show TRUCK DELIVERY STATUS (fallback to order status, then em dash) */}
             <p>
-              <span className="font-medium">Status:</span>{" "}
-              {trackingResult.status}
+              <span className="font-medium">Delivery Status:</span>{" "}
+              {delivery?.status ??
+                trackingResult.orders?.[0]?.status ??
+                "—"}
             </p>
+
             <p>
               <span className="font-medium">Date:</span>{" "}
               {formatPH(trackingResult.date)}
@@ -195,7 +202,7 @@ export default function TrackPage() {
       {/* Delivery Status Card */}
       {delivery && (
         <div className="bg-white border rounded p-4 shadow-sm">
-          <h3 className="font-semibold text-md mb-3">Delivery Status</h3>
+          <h3 className="font-semibold text-md mb-3">Delivery Details</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
             <p>
               <span className="font-medium">Status:</span>{" "}
