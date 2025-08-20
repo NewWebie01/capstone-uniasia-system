@@ -15,6 +15,25 @@ import { Dialog, DialogTrigger, DialogContent } from "@/components/ui/dialog";
 import { generatePDFBlob } from "@/utils/exportInvoice";
 import { toast } from "sonner";
 
+// --- PSGC helpers (Region / Province only) ---
+const fixEncoding = (s: string) => {
+  try {
+    return decodeURIComponent(escape(s));
+  } catch {
+    return s;
+  }
+};
+
+async function fetchJSON<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  const buf = await res.arrayBuffer();
+  const txt = new TextDecoder("utf-8").decode(buf);
+  return JSON.parse(txt);
+}
+
+type PSGCRegion = { code: string; name: string };
+type PSGCProvince = { code: string; name: string };
+
 /* =========================
    TYPES
 ========================= */
@@ -102,15 +121,60 @@ export default function TruckDeliveryPage() {
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
 
   const [newDelivery, setNewDelivery] = useState({
-    destination: "",
-    plateNumber: "",
-    status: "Scheduled",
-    scheduleDate: "",
-    arrivalDate: "",
-    driver: "",
-    participants: [] as string[],
-    expenses: { food: 0, gas: 0, toll: 0, boat: 0, other: 0 },
-  });
+  destination: "",
+  plateNumber: "",
+  status: "Scheduled",
+  scheduleDate: "",
+  arrivalDate: "",
+  driver: "",
+  participants: [] as string[],
+});
+// TODO: LOCATION HERE
+// Region / Province pickers for Destination
+const [regions, setRegions] = useState<PSGCRegion[]>([]);
+const [provinces, setProvinces] = useState<PSGCProvince[]>([]);
+const [regionCode, setRegionCode] = useState("");
+const [provinceCode, setProvinceCode] = useState("");
+const [selectedRegionName, setSelectedRegionName] = useState<string>("");
+const [selectedProvinceName, setSelectedProvinceName] = useState<string>("");
+
+// Load regions on mount
+useEffect(() => {
+  fetchJSON<PSGCRegion[]>("https://psgc.cloud/api/regions")
+    .then((data) =>
+      setRegions(
+        data
+          .map((r) => ({ code: r.code, name: fixEncoding((r as any).name ?? r.name) }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      )
+    )
+    .catch(() => toast.error("Failed to load regions"));
+}, []);
+
+// When region changes, (re)load its provinces
+useEffect(() => {
+  setProvinces([]);
+  setProvinceCode("");
+
+  if (!regionCode) return;
+
+  // NCR (13…) has no provinces
+  const isNCR =
+    regionCode.startsWith("13");
+
+  if (isNCR) return;
+
+  fetchJSON<any[]>("https://psgc.cloud/api/provinces")
+    .then((all) => {
+      const list = all
+        .filter((p) => (p.code as string).startsWith(regionCode.slice(0, 2)))
+        .map((p) => ({ code: p.code, name: fixEncoding(p.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setProvinces(list);
+    })
+    .catch(() => toast.error("Failed to load provinces"));
+}, [regionCode]);
+
 
   /* =========================
      LOAD DATA
@@ -156,7 +220,7 @@ export default function TruckDeliveryPage() {
           phone,
           status,
           date,
-          created_at
+          created_at --
         ),
         order_items(
           quantity,
@@ -228,7 +292,8 @@ export default function TruckDeliveryPage() {
       `
       )
       .is("truck_delivery_id", null)
-      .order("id", { ascending: false });
+      .eq("status", "completed")
+      .order("id", { ascending: true });
 
     if (error) {
       console.error("Fetch unassigned orders error:", error);
@@ -236,6 +301,102 @@ export default function TruckDeliveryPage() {
       setUnassignedOrders([]);
       return;
     }
+
+    if (error) {
+  console.error("Fetch unassigned orders error:", error);
+  toast.error("Failed to load unassigned invoices");
+  setUnassignedOrders([]);
+  return;
+}
+
+// 🟡 Sort manually by TXN code (FIFO logic)
+// THIS IS THE PREVIOUS BASED ON TXN NUMBER
+// const sorted = (data as unknown as OrderWithCustomer[]).sort((a, b) => {
+//   const codeA = a.customer?.code || "";
+//   const codeB = b.customer?.code || "";
+//   return codeA.localeCompare(codeB); // FIFO sort by TXN
+// });
+
+// 🟢 Sort by customer created_at date (newest first) time based
+if (data) {
+  const sorted = (data as unknown as OrderWithCustomer[]).sort((a, b) => {
+    const dateA = new Date(a.customer?.created_at || "").getTime();
+    const dateB = new Date(b.customer?.created_at || "").getTime();
+    return dateA - dateB;
+  });
+
+  setUnassignedOrders(sorted);
+}
+
+
+setUnassignedOrders((data as OrderWithCustomer[]) || []);
+
+
+    const assignSelected = async () => {
+  if (!assignForDeliveryId || selectedOrderIds.length === 0) {
+    setAssignOpen(false);
+    return;
+  }
+
+  // 1) Re-check the latest state of the selected orders
+  const { data: checkRows, error: checkErr } = await supabase
+    .from("orders")
+    .select("id, status, truck_delivery_id")
+    .in("id", selectedOrderIds);
+
+  if (checkErr) {
+    console.error("Check before assign error:", checkErr);
+    toast.error("Unable to verify selected invoices. Try again.");
+    return;
+  }
+
+  const invalid = (checkRows ?? []).filter(
+    (r: any) => r.status !== "completed" || r.truck_delivery_id !== null
+  );
+
+  if (invalid.length > 0) {
+    const taken = invalid.filter((r: any) => r.truck_delivery_id !== null).map((r: any) => r.id);
+    const wrongStatus = invalid.filter((r: any) => r.status !== "completed").map((r: any) => r.id);
+
+    if (taken.length) {
+      toast.error(`Some invoices are already assigned to another truck: ${taken.join(", ")}`);
+    }
+    if (wrongStatus.length) {
+      toast.error(`Some invoices are not completed: ${wrongStatus.join(", ")}`);
+    }
+    return;
+  }
+
+  // 2) Defensive update: only assign rows that are still unassigned AND completed
+  const { data: updated, error: updErr } = await supabase
+    .from("orders")
+    .update({ truck_delivery_id: assignForDeliveryId })
+    .in("id", selectedOrderIds)
+    .is("truck_delivery_id", null)
+    .eq("status", "completed")
+    .select("id"); // return which rows were actually updated
+
+  if (updErr) {
+    console.error("Assign error:", updErr);
+    toast.error("Failed to assign invoices to truck");
+    return;
+  }
+
+    const updatedCount = (updated ?? []).length;
+    if (updatedCount === 0) {
+      toast.error("No invoices were assigned. They may have been taken or changed.");
+    } else if (updatedCount < selectedOrderIds.length) {
+      const notUpdated = selectedOrderIds.filter(
+        (id) => !(updated ?? []).some((u: any) => u.id === id)
+      );
+      toast.warning(`Assigned ${updatedCount} invoice(s). Some were skipped: ${notUpdated.join(", ")}`);
+    } else {
+      toast.success(`Assigned ${updatedCount} invoice(s) to the truck.`);
+    }
+
+    setAssignOpen(false);
+    await fetchDeliveriesAndAssignments();
+  };
 
     setUnassignedOrders((data as OrderWithCustomer[]) || []);
   };
@@ -281,7 +442,10 @@ export default function TruckDeliveryPage() {
   /* =========================
      HELPERS
   ========================= */
-  const showForm = () => setFormVisible(true);
+  const showForm = () => {
+  setRegionCode("");
+  setProvinceCode("");
+  setFormVisible(true);};
   const hideForm = () => {
     setFormVisible(false);
     setNewPerson("");
@@ -293,39 +457,42 @@ export default function TruckDeliveryPage() {
       arrivalDate: "",
       driver: "",
       participants: [],
-      expenses: { food: 0, gas: 0, toll: 0, boat: 0, other: 0 },
     });
+    setRegionCode("");
+    setProvinceCode("");
   };
 
   const handleAddDelivery = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const { error } = await supabase.from("truck_deliveries").insert([
-      {
-        destination: newDelivery.destination,
-        plate_number: newDelivery.plateNumber,
-        driver: newDelivery.driver,
-        participants: newDelivery.participants,
-        status: newDelivery.status,
-        schedule_date: newDelivery.scheduleDate,
-        arrival_date: newDelivery.arrivalDate || null,
-        food: newDelivery.expenses.food,
-        gas: newDelivery.expenses.gas,
-        toll: newDelivery.expenses.toll,
-        boat: newDelivery.expenses.boat,
-        other: newDelivery.expenses.other,
-      },
-    ]);
+  e.preventDefault();
 
-    if (error) {
-      console.error("Insert error:", error);
-      toast.error("Failed to add delivery");
-      return;
-    }
+  // Compose destination from region/province; fall back to the text field
+  const destinationComposed =
+    newDelivery.destination?.trim() ||
+    [selectedRegionName, selectedProvinceName].filter(Boolean).join(", ");
 
-    toast.success("Delivery schedule added");
-    await fetchDeliveriesAndAssignments();
-    hideForm();
-  };
+  const { error } = await supabase.from("truck_deliveries").insert([
+    {
+      destination: destinationComposed,          // <-- use composed value
+      plate_number: newDelivery.plateNumber,
+      driver: newDelivery.driver,
+      participants: newDelivery.participants,
+      status: newDelivery.status,
+      schedule_date: newDelivery.scheduleDate,
+      arrival_date: newDelivery.arrivalDate || null,
+      // (remove the expense fields if you already dropped them in the DB)
+    },
+  ]);
+
+  if (error) {
+    console.error("Insert error:", error);
+    toast.error("Failed to add delivery");
+    return;
+  }
+
+  toast.success("Delivery schedule added");
+  await fetchDeliveriesAndAssignments();
+  hideForm();
+};
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -467,7 +634,7 @@ export default function TruckDeliveryPage() {
      RENDER
   ========================= */
   return (
-    <div className="p-6">
+    <div className="p-6 font-sans antialiased text-slate-800">
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-3xl font-bold">Truck Delivery</h1>
@@ -494,182 +661,140 @@ export default function TruckDeliveryPage() {
               transition={{ duration: 0.4 }}
               className="bg-white p-6 rounded-lg shadow-md mb-6"
             >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1">
-                  <h2 className="text-xl font-semibold">
-                    Delivery to {delivery.destination}
-                  </h2>
+              <div className="grid grid-cols-12 gap-6">
+  {/* LEFT: Delivery details */}
+  <div className="col-span-12 lg:col-span-5">
+    <h2 className="text-2xl font-semibold tracking-tight">
+      Delivery to <span className="text-slate-900">{delivery.destination}</span>
+    </h2>
 
-                  <div className="mt-2 text-sm text-gray-700 space-y-1">
-                    <p>
-                      <strong>Schedule Date:</strong> {delivery.schedule_date}
-                    </p>
-                    <p>
-                      <strong>Plate Number:</strong> {delivery.plate_number}
-                    </p>
+    <div className="mt-3 text-sm leading-6">
+      <div className="grid grid-cols-2 gap-y-2">
+        <div className="text-slate-500 uppercase tracking-wide text-xs">Schedule Date</div>
+        <div className="font-medium">{delivery.schedule_date}</div>
 
-                    {/* Editable Date Received if Delivered */}
-                    {delivery.status === "Delivered" ? (
-                      <div className="flex items-center gap-2">
-                        <label className="text-sm font-semibold">
-                          Date Received:
-                        </label>
-                        <input
-                          type="date"
-                          value={delivery.arrival_date || ""}
-                          onChange={(e) =>
-                            updateArrivalDate(delivery.id, e.target.value)
-                          }
-                          className="border px-2 py-1 rounded text-sm"
-                        />
-                      </div>
-                    ) : (
-                      delivery.arrival_date && (
-                        <p>
-                          <strong>Arrival Date:</strong> {delivery.arrival_date}
-                        </p>
-                      )
-                    )}
+        <div className="text-slate-500 uppercase tracking-wide text-xs">Plate Number</div>
+        <div className="font-medium">{delivery.plate_number}</div>
 
-                    <p>
-                      <strong>Driver:</strong> {delivery.driver}
-                    </p>
-                    {(delivery.participants?.length ?? 0) > 0 && (
-                      <p>
-                        <strong>Other Participants:</strong>{" "}
-                        {(delivery.participants || []).join(", ")}
-                      </p>
-                    )}
-                  </div>
+        <div className="text-slate-500 uppercase tracking-wide text-xs">Driver</div>
+        <div className="font-medium">{delivery.driver}</div>
 
-                  {/* Assigned Invoices (Orders) */}
-                  <div className="mt-3">
-                    <h3 className="font-semibold">Invoices on this truck</h3>
+        {delivery.arrival_date && delivery.status !== "Delivered" && (
+          <>
+            <div className="text-slate-500 uppercase tracking-wide text-xs">Arrival Date</div>
+            <div className="font-medium">{delivery.arrival_date}</div>
+          </>
+        )}
+      </div>
 
-                    {delivery._orders && delivery._orders.length > 0 ? (
-                      <div className="space-y-2">
-                        {delivery._orders.map((o) => (
-                          <div
-                            key={o.id}
-                            className="flex items-center gap-3 justify-between bg-gray-50 p-3 rounded"
-                          >
-                            <div className="flex items-center gap-3">
-                              <button
-                                className="border px-3 py-1 rounded font-mono text-xs bg-white hover:bg-gray-100"
-                                onClick={() =>
-                                  openInvoiceDialogForOrder(delivery.id, o)
-                                }
-                              >
-                                {o.customer?.code}
-                              </button>
-                              <div>
-                                <div className="font-medium">
-                                  {o.customer?.name}
-                                </div>
-                                <div className="text-xs text-gray-500">
-                                  {o.customer?.address ?? ""}
-                                </div>
-                              </div>
-                            </div>
+      {/* Editable Date Received if Delivered */}
+      {delivery.status === "Delivered" && (
+        <div className="mt-3">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
+            Date Received
+          </label>
+          <input
+            type="date"
+            value={delivery.arrival_date || ""}
+            onChange={(e) => updateArrivalDate(delivery.id, e.target.value)}
+            className="border rounded-md px-2 py-1 text-sm w-full max-w-xs focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+          />
+        </div>
+      )}
 
-                            <div className="text-right text-xs text-gray-500">
-                              <div>Order #{o.id}</div>
-                              <div className="mt-1">
-                                {o.status ?? "pending"}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-gray-500">
-                        No invoices assigned yet.
-                      </p>
-                    )}
-                  </div>
-                </div>
+      {(delivery.participants?.length ?? 0) > 0 && (
+        <p className="mt-3 text-sm">
+          <span className="text-slate-500 uppercase tracking-wide text-xs">Other Participants</span>
+          <br />
+          <span className="font-medium">{(delivery.participants || []).join(", ")}</span>
+        </p>
+      )}
+    </div>
+  </div>
 
-                {/* Right controls */}
-                <div className="flex flex-col items-end gap-2 text-sm min-w-[220px]">
-                  <div className="flex items-center gap-2">
-                    {delivery.status === "Delivered" && (
-                      <CheckCircle className="text-green-600" />
-                    )}
-                    {delivery.status === "Ongoing" && (
-                      <Truck className="text-yellow-600" />
-                    )}
-                    {delivery.status === "Scheduled" && (
-                      <Clock className="text-blue-600" />
-                    )}
-                    <select
-                      value={delivery.status}
-                      onChange={(e) =>
-                        setConfirmDialog({
-                          open: true,
-                          id: delivery.id,
-                          newStatus: e.target.value,
-                        })
-                      }
-                      className={`border px-2 py-1 rounded text-sm ${
-                        delivery.status === "Delivered"
-                          ? "text-green-600"
-                          : delivery.status === "Ongoing"
-                          ? "text-yellow-600"
-                          : "text-blue-600"
-                      }`}
-                    >
-                      <option value="Scheduled">Scheduled</option>
-                      <option value="Ongoing">Ongoing</option>
-                      <option value="Delivered">Delivered</option>
-                    </select>
-                  </div>
+  {/* MIDDLE: Assigned invoices list */}
+  <div className="col-span-12 lg:col-span-5">
+    <h3 className="text-sm font-semibold text-slate-600 mb-2">Invoices on this truck</h3>
 
-                  <button
-                    onClick={() => openAssignDialog(delivery.id)}
-                    className="px-3 py-1.5 border rounded hover:bg-gray-50"
-                  >
-                    Assign Invoices
-                  </button>
+    {delivery._orders && delivery._orders.length > 0 ? (
+      <div className="space-y-3">
+        {delivery._orders.map((o) => (
+          <div
+            key={o.id}
+            className="grid grid-cols-12 items-center gap-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100 hover:bg-slate-100/60 transition"
+          >
+            {/* TXN pill (click to open invoice modal) */}
+            <button
+              className="col-span-12 sm:col-span-3 border rounded-lg px-3 py-1.5 font-mono text-xs bg-white hover:bg-slate-50 shadow-sm"
+              onClick={() => openInvoiceDialogForOrder(delivery.id, o)}
+              title="Open invoice"
+            >
+              {o.customer?.code}
+            </button>
 
-                  <button
-                    onClick={() => handleClearInvoices(delivery.id)}
-                    className="px-3 py-1.5 border border-red-500 text-red-500 rounded hover:bg-red-50 transition"
-                  >
-                    Clear Invoices
-                  </button>
-
-                  {/* View Invoice Dialog open button (left behavior still available) */}
-                  <button
-                    onClick={() =>
-                      openInvoiceDialogForOrder(delivery.id, undefined)
-                    }
-                    className="text-sm text-blue-600 underline hover:text-blue-800"
-                  >
-                    View Invoice
-                  </button>
-                </div>
+            {/* Customer + address */}
+            <div className="col-span-12 sm:col-span-6">
+              <div className="font-medium truncate">{o.customer?.name}</div>
+              <div className="text-xs text-slate-500 truncate">
+                {o.customer?.address ?? ""}
               </div>
+            </div>
 
-              <div className="mt-4">
-                <h3 className="font-semibold mb-2">Delivery Expenses</h3>
-                <ul className="text-sm space-y-1">
-                  <li>🚚 Food Allowance: ₱{delivery.food ?? 0}</li>
-                  <li>⛽ Gas: ₱{delivery.gas ?? 0}</li>
-                  <li>🛣 Toll Fees: ₱{delivery.toll ?? 0}</li>
-                  <li>🛥 Boat Shipping: ₱{delivery.boat ?? 0}</li>
-                  <li>📦 Other Fees: ₱{delivery.other ?? 0}</li>
-                  <li className="font-medium">
-                    Total: ₱
-                    {[
-                      delivery.food ?? 0,
-                      delivery.gas ?? 0,
-                      delivery.toll ?? 0,
-                      delivery.boat ?? 0,
-                      delivery.other ?? 0,
-                    ].reduce((sum, fee) => sum + (fee || 0), 0)}
-                  </li>
-                </ul>
+            {/* Meta (order/status) */}
+            <div className="col-span-12 sm:col-span-3 text-right">
+              <div className="text-[11px] text-slate-500">Order #{o.id}</div>
+              <div className="mt-1 inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium
+                              bg-slate-100 text-slate-700">
+                {o.status ?? "pending"}
               </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <p className="text-sm text-slate-500">No invoices assigned yet.</p>
+    )}
+  </div>
+
+  {/* RIGHT: Actions & status */}
+  <div className="col-span-12 lg:col-span-2">
+    <div className="flex lg:flex-col gap-2 justify-end lg:justify-start">
+      {/* Status select with icon color */}
+      <div className="inline-flex items-center gap-2">
+        {delivery.status === "Delivered" && <CheckCircle className="text-emerald-600" />}
+        {delivery.status === "Ongoing" && <Truck className="text-amber-600" />}
+        {delivery.status === "Scheduled" && <Clock className="text-sky-600" />}
+
+        <select
+          value={delivery.status}
+          onChange={(e) =>
+            setConfirmDialog({ open: true, id: delivery.id, newStatus: e.target.value })
+          }
+          className="border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+        >
+          <option value="Scheduled">Scheduled</option>
+          <option value="Ongoing">Ongoing</option>
+          <option value="Delivered">Delivered</option>
+        </select>
+      </div>
+
+      <button
+        onClick={() => openAssignDialog(delivery.id)}
+        className="px-3 py-2 rounded-md border text-sm hover:bg-slate-50 transition"
+      >
+        Assign Invoices
+      </button>
+
+      <button
+        onClick={() => handleClearInvoices(delivery.id)}
+        className="px-3 py-2 rounded-md border border-red-400 text-red-600 text-sm hover:bg-red-50 transition"
+      >
+        Clear Invoices
+      </button>
+    </div>
+  </div>
+</div>
+
             </motion.div>
           ))}
         </div>
@@ -731,9 +856,8 @@ export default function TruckDeliveryPage() {
                 <thead className="bg-gray-100 sticky top-0">
                   <tr>
                     <th className="text-left p-2">Select</th>
-                    <th className="text-left p-2">Order #</th>
-                    <th className="text-left p-2">Customer</th>
                     <th className="text-left p-2">TXN</th>
+                    <th className="text-left p-2">Customer</th>
                     <th className="text-left p-2">Amount</th>
                     <th className="text-left p-2">Status</th>
                   </tr>
@@ -748,9 +872,8 @@ export default function TruckDeliveryPage() {
                           onChange={() => toggleSelectOrder(o.id)}
                         />
                       </td>
-                      <td className="p-2">{o.id}</td>
-                      <td className="p-2">{o.customer?.name}</td>
                       <td className="p-2 font-mono">{o.customer?.code}</td>
+                      <td className="p-2">{o.customer?.name}</td>
                       <td className="p-2">₱{o.total_amount ?? 0}</td>
                       <td className="p-2">{o.status || "pending"}</td>
                     </tr>
@@ -787,36 +910,9 @@ export default function TruckDeliveryPage() {
       >
         <DialogContent className="max-w-5xl">
           <div className="space-y-3">
-            <p className="text-sm text-gray-600">
-              Select an invoice (by customer) assigned to this truck:
-            </p>
-
             {/* If the dialog was opened for a specific delivery, show a dropdown of that delivery's orders */}
             {invoiceDialogOpenId !== null ? (
-              <>
-                <select
-                  onChange={(e) => {
-                    const orderId = Number(e.target.value);
-                    const delivery = deliveries.find(
-                      (d) => d.id === invoiceDialogOpenId
-                    );
-                    const ord =
-                      delivery?._orders?.find((x) => x.id === orderId) ?? null;
-                    setSelectedOrderForInvoice(ord);
-                  }}
-                  className="border p-2 rounded w-full"
-                  value={selectedOrderForInvoice?.id ?? ""}
-                >
-                  <option value="">-- Choose invoice --</option>
-                  {deliveries
-                    .find((d) => d.id === invoiceDialogOpenId)
-                    ?._orders?.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.customer?.name} — {o.customer?.code}
-                      </option>
-                    )) ?? []}
-                </select>
-
+              <> 
                 {/* Render invoice content for the selected order */}
                 {selectedOrderForInvoice ? (
                   <div
@@ -1027,158 +1123,144 @@ export default function TruckDeliveryPage() {
             <h2 className="text-xl font-bold mb-4">Add Delivery Schedule</h2>
             <form onSubmit={handleAddDelivery} className="space-y-4">
               <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-                <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">
-                    Destination
-                  </label>
-                  <input
-                    type="text"
-                    value={newDelivery.destination}
-                    onChange={(e) =>
-                      setNewDelivery({
-                        ...newDelivery,
-                        destination: e.target.value,
-                      })
-                    }
-                    className="w-full border p-2 rounded"
-                    required
-                  />
-                </div>
+  <div className="flex items-center gap-2">
+    {/* Destination: Region + Province */}
+<label className="w-32 text-sm font-medium">Destination</label>
+<div className="grid grid-cols-2 gap-2 w-full">
+  <select
+    className="border p-2 rounded"
+    value={regionCode}
+    onChange={(e) => setRegionCode(e.target.value)}
+    required
+  >
+    <option value="">Select region</option>
+    {regions.map((r) => (
+      <option key={r.code} value={r.code}>
+        {r.name}
+      </option>
+    ))}
+  </select>
 
-                <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">
-                    Plate Number
-                  </label>
-                  <input
-                    type="text"
-                    value={newDelivery.plateNumber}
-                    onChange={(e) =>
-                      setNewDelivery({
-                        ...newDelivery,
-                        plateNumber: e.target.value,
-                      })
-                    }
-                    className="w-full border p-2 rounded"
-                    required
-                  />
-                </div>
+  <select
+    className="border p-2 rounded"
+    value={provinceCode}
+    onChange={(e) => setProvinceCode(e.target.value)}
+    // NCR has no provinces -> disable + not required
+    disabled={!regionCode || regionCode.startsWith("13")}
+    required={!regionCode.startsWith("13") && !!regionCode}
+  >
+    <option value="">
+      {regionCode
+        ? regionCode.startsWith("13")
+          ? "NCR has no provinces"
+          : "Select province"
+        : "Select region first"}
+    </option>
+    {!regionCode.startsWith("13") &&
+      provinces.map((p) => (
+        <option key={p.code} value={p.code}>
+          {p.name}
+        </option>
+      ))}
+  </select>
+</div>
+  </div>
 
-                <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">Driver</label>
-                  <input
-                    type="text"
-                    value={newDelivery.driver}
-                    onChange={(e) =>
-                      setNewDelivery({ ...newDelivery, driver: e.target.value })
-                    }
-                    className="w-full border p-2 rounded"
-                    required
-                  />
-                </div>
+  <div className="flex items-center gap-2">
+    <label className="w-32 text-sm font-medium">Plate Number</label>
+    <input
+      type="text"
+      value={newDelivery.plateNumber}
+      onChange={(e) =>
+        setNewDelivery({ ...newDelivery, plateNumber: e.target.value })
+      }
+      className="w-full border p-2 rounded"
+      required
+    />
+  </div>
 
-                <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">
-                    Participant
-                  </label>
-                  <div className="flex gap-2 w-full">
-                    <input
-                      type="text"
-                      value={newPerson}
-                      onChange={(e) => setNewPerson(e.target.value)}
-                      className="w-full border p-2 rounded"
-                    />
-                    <button
-                      type="button"
-                      onClick={addParticipant}
-                      className="bg-gray-800 text-white px-3 py-1 rounded hover:bg-gray-900"
-                    >
-                      Add
-                    </button>
-                  </div>
-                </div>
+  <div className="flex items-center gap-2">
+    <label className="w-32 text-sm font-medium">Driver</label>
+    <input
+      type="text"
+      value={newDelivery.driver}
+      onChange={(e) =>
+        setNewDelivery({ ...newDelivery, driver: e.target.value })
+      }
+      className="w-full border p-2 rounded"
+      required
+    />
+  </div>
 
-                {newDelivery.participants.length > 0 && (
-                  <div className="col-span-2 text-sm pl-36 text-gray-600">
-                    Current: {newDelivery.participants.join(", ")}
-                  </div>
-                )}
+  <div className="flex items-center gap-2">
+    <label className="w-32 text-sm font-medium">Participant</label>
+    <div className="flex gap-2 w-full">
+      <input
+        type="text"
+        value={newPerson}
+        onChange={(e) => setNewPerson(e.target.value)}
+        className="w-full border p-2 rounded"
+      />
+      <button
+        type="button"
+        onClick={addParticipant}
+        className="bg-gray-800 text-white px-3 py-1 rounded hover:bg-gray-900"
+      >
+        Add
+      </button>
+    </div>
+  </div>
 
-                <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">Status</label>
-                  <select
-                    value={newDelivery.status}
-                    onChange={(e) =>
-                      setNewDelivery({ ...newDelivery, status: e.target.value })
-                    }
-                    className="w-full border p-2 rounded"
-                  >
-                    <option>Scheduled</option>
-                    <option>Ongoing</option>
-                    <option>Delivered</option>
-                  </select>
-                </div>
+  {newDelivery.participants.length > 0 && (
+    <div className="col-span-2 text-sm pl-36 text-gray-600">
+      Current: {newDelivery.participants.join(", ")}
+    </div>
+  )}
 
-                <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">
-                    Schedule Date
-                  </label>
-                  <input
-                    type="date"
-                    value={newDelivery.scheduleDate}
-                    onChange={(e) =>
-                      setNewDelivery({
-                        ...newDelivery,
-                        scheduleDate: e.target.value,
-                      })
-                    }
-                    className="w-full border p-2 rounded"
-                    required
-                  />
-                </div>
+  <div className="flex items-center gap-2"> 
+    <label className="w-32 text-sm font-medium">Status</label>
+    <select
+      value={newDelivery.status}
+      onChange={(e) =>
+        setNewDelivery({ ...newDelivery, status: e.target.value })
+      }
+      className="w-full border p-2 rounded"
+    >
+      <option>Scheduled</option>
+      <option>Ongoing</option>
+      <option>Delivered</option>
+    </select>
+  </div>
 
-                {newDelivery.status === "Delivered" && (
-                  <div className="flex items-center gap-2 col-span-2">
-                    <label className="w-32 text-sm font-medium">
-                      Arrival Date
-                    </label>
-                    <input
-                      type="date"
-                      value={newDelivery.arrivalDate}
-                      onChange={(e) =>
-                        setNewDelivery({
-                          ...newDelivery,
-                          arrivalDate: e.target.value,
-                        })
-                      }
-                      className="w-full border p-2 rounded"
-                    />
-                  </div>
-                )}
+  <div className="flex items-center gap-2">
+    <label className="w-32 text-sm font-medium">Schedule Date</label>
+    <input
+      type="date"
+      value={newDelivery.scheduleDate}
+      min={new Date().toISOString().split("T")[0]}
+      onChange={(e) =>
+        setNewDelivery({ ...newDelivery, scheduleDate: e.target.value })
+      }
+      className="w-full border p-2 rounded"
+      required
+    />
+  </div>
 
-                {Object.keys(newDelivery.expenses).map((key) => (
-                  <div className="flex items-center gap-2" key={key}>
-                    <label className="w-32 text-sm font-medium capitalize">
-                      {key}
-                    </label>
-                    <input
-                      type="number"
-                      placeholder="₱"
-                      value={(newDelivery.expenses as any)[key]}
-                      onChange={(e) =>
-                        setNewDelivery({
-                          ...newDelivery,
-                          expenses: {
-                            ...newDelivery.expenses,
-                            [key]: Number(e.target.value),
-                          },
-                        })
-                      }
-                      className="w-full border p-2 rounded"
-                      min={0}
-                    />
-                  </div>
-                ))}
-              </div>
+  {newDelivery.status === "Delivered" && (
+    <div className="flex items-center gap-2 col-span-2">
+      <label className="w-32 text-sm font-medium">Arrival Date</label>
+      <input
+        type="date"
+        value={newDelivery.arrivalDate}
+        onChange={(e) =>
+          setNewDelivery({ ...newDelivery, arrivalDate: e.target.value })
+        }
+        className="w-full border p-2 rounded"
+      />
+    </div>
+  )}
+</div>
+
 
               <div className="flex justify-between pt-4">
                 <button
