@@ -6,7 +6,7 @@ import { DM_Sans } from "next/font/google";
 import { Toaster } from "sonner";
 import CustomerSidebar from "@/components/CustomerSidebar";
 import GlobalRouteLoader from "@/components/GlobalRouteLoader";
-import supabase from "@/config/supabaseClient"; // ✅
+import supabase from "@/config/supabaseClient";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -27,12 +27,8 @@ export default function CustomerLayout({
       const {
         data: { user },
       } = await supabase.auth.getUser();
-
-      if (user) {
-        setUserName(user.user_metadata?.name || user.email || "Guest");
-      }
+      if (user) setUserName(user.user_metadata?.name || user.email || "Guest");
     };
-
     getUser();
   }, []);
 
@@ -55,7 +51,9 @@ export default function CustomerLayout({
         <main className="flex-1 overflow-y-auto p-6 relative">
           {/* 👋 Modern greeting */}
           <div className="flex justify-end mb-2">
-            <div className="bg-white shadow-md rounded-xl px-4 py-2 text-gray-700 mr-6">
+            <div
+              className={`greeting-card bg-white rounded-xl px-4 py-2 text-gray-700 mr-6 select-none cursor-default shadow-md transition-shadow will-change-transform hover:shadow-lg`}
+            >
               <span className="font-semibold">Hi,</span>{" "}
               <span className="text-[#ffba20] font-bold">
                 {userName || "Guest"}
@@ -69,6 +67,36 @@ export default function CustomerLayout({
       </div>
 
       <GlobalRouteLoader />
+
+      {/* Hover shake animation */}
+      <style jsx global>{`
+        @keyframes greeting-wobble {
+          0% {
+            transform: translateX(0) rotate(0);
+          }
+          15% {
+            transform: translateX(-2px) rotate(-1deg);
+          }
+          30% {
+            transform: translateX(3px) rotate(1.2deg);
+          }
+          45% {
+            transform: translateX(-3px) rotate(-1.2deg);
+          }
+          60% {
+            transform: translateX(2px) rotate(0.8deg);
+          }
+          75% {
+            transform: translateX(-2px) rotate(-0.6deg);
+          }
+          100% {
+            transform: translateX(0) rotate(0);
+          }
+        }
+        .greeting-card:hover {
+          animation: greeting-wobble 0.5s ease-in-out both;
+        }
+      `}</style>
     </div>
   );
 }

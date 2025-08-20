@@ -13,7 +13,7 @@ import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import LogoutIcon from "@/assets/power-button.png";
 
 // icons for customer nav
-import { ShoppingBag, ClipboardList } from "lucide-react";
+import { ShoppingBag, ClipboardList, RotateCcw } from "lucide-react";
 
 // shared link wrapper (same as admin)
 import NavLink from "@/components/NavLink";
@@ -37,6 +37,8 @@ const Menus: MenuItem[] = [
     icon: ShoppingBag,
   },
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
+  // NEW: separate returns page
+  { title: "Returns / Issues", href: "/customer/returns", icon: RotateCcw },
 ];
 
 export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
@@ -51,7 +53,6 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
     } catch (err) {
       console.error("Logout failed:", err);
     } finally {
-      // Always navigate away from protected area
       router.replace("/login");
     }
   };
@@ -112,12 +113,19 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
           {Menus.map((menu, idx) => {
             const isActive =
               pathname === menu.href || pathname?.startsWith(menu.href + "/");
+
+            const highlightTitles = new Set([
+              "Product catalog",
+              "My orders",
+              "Returns / Issues",
+            ]);
+
             const IconOrImage = menu.src ? (
               <Image src={menu.src} alt={menu.title} width={20} height={20} />
             ) : menu.icon ? (
               <menu.icon
                 className={`h-5 w-5 ${
-                  menu.title === "Product catalog" || menu.title === "My orders"
+                  highlightTitles.has(menu.title)
                     ? "text-[#ffba20]"
                     : "text-black"
                 }`}
