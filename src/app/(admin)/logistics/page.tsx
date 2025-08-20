@@ -15,6 +15,9 @@ import { Dialog, DialogTrigger, DialogContent } from "@/components/ui/dialog";
 import { generatePDFBlob } from "@/utils/exportInvoice";
 import { toast } from "sonner";
 
+/* =========================
+   TYPES
+========================= */
 type Delivery = {
   id: number;
   destination: string;
@@ -109,6 +112,9 @@ export default function TruckDeliveryPage() {
     expenses: { food: 0, gas: 0, toll: 0, boat: 0, other: 0 },
   });
 
+  /* =========================
+     LOAD DATA
+  ========================= */
   useEffect(() => {
     fetchDeliveriesAndAssignments();
   }, []);
@@ -272,6 +278,9 @@ export default function TruckDeliveryPage() {
     });
   };
 
+  /* =========================
+     HELPERS
+  ========================= */
   const showForm = () => setFormVisible(true);
   const hideForm = () => {
     setFormVisible(false);
@@ -316,6 +325,19 @@ export default function TruckDeliveryPage() {
     toast.success("Delivery schedule added");
     await fetchDeliveriesAndAssignments();
     hideForm();
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "Delivered":
+        return <CheckCircle className="text-green-600" />;
+      case "Ongoing":
+        return <Truck className="text-yellow-600" />;
+      case "Scheduled":
+        return <Clock className="text-blue-600" />;
+      default:
+        return null;
+    }
   };
 
   const updateDeliveryStatusInState = (id: number, status: string) => {
@@ -373,6 +395,9 @@ export default function TruckDeliveryPage() {
     toast.success("Date Received updated");
   };
 
+  /* =========================
+     GROUP BY schedule_date
+  ========================= */
   const groupedDeliveries = useMemo(() => {
     return deliveries.reduce<Record<string, Delivery[]>>((acc, delivery) => {
       const dateKey = delivery.schedule_date || "Unscheduled";
@@ -381,6 +406,9 @@ export default function TruckDeliveryPage() {
     }, {});
   }, [deliveries]);
 
+  /* =========================
+     ASSIGN ORDERS -> DELIVERY
+  ========================= */
   const openAssignDialog = async (deliveryId: number) => {
     setAssignForDeliveryId(deliveryId);
     setSelectedOrderIds([]);
@@ -435,6 +463,9 @@ export default function TruckDeliveryPage() {
     setPdfUrl(null);
   };
 
+  /* =========================
+     RENDER
+  ========================= */
   return (
     <div className="p-6">
       {/* Header */}
@@ -510,50 +541,52 @@ export default function TruckDeliveryPage() {
                       </p>
                     )}
                   </div>
-                </div>
-                <div className="mt-3 w-full max-w-2xl">
-                  <h3 className="font-semibold mb-1">Invoices on this truck</h3>
-                  {delivery._orders && delivery._orders.length > 0 ? (
-                    <div className="flex flex-col gap-2">
-                      {delivery._orders.map((o) => (
-                        <div
-                          key={o.id}
-                          className="flex items-center gap-3 px-4 py-2 rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 transition shadow-sm"
-                        >
-                          {/* TXN */}
-                          <div className="font-mono text-[#222] text-sm font-semibold tracking-tight bg-white px-2 py-1 rounded mr-2 border border-gray-300 shadow-sm min-w-[165px] text-center">
-                            {o.customer?.code}
-                          </div>
-                          {/* Name & Address */}
-                          <div className="flex flex-col flex-1 min-w-0">
-                            <div className="text-gray-800 text-base font-medium truncate">
-                              {o.customer?.name}
+
+                  {/* Assigned Invoices (Orders) */}
+                  <div className="mt-3">
+                    <h3 className="font-semibold">Invoices on this truck</h3>
+
+                    {delivery._orders && delivery._orders.length > 0 ? (
+                      <div className="space-y-2">
+                        {delivery._orders.map((o) => (
+                          <div
+                            key={o.id}
+                            className="flex items-center gap-3 justify-between bg-gray-50 p-3 rounded"
+                          >
+                            <div className="flex items-center gap-3">
+                              <button
+                                className="border px-3 py-1 rounded font-mono text-xs bg-white hover:bg-gray-100"
+                                onClick={() =>
+                                  openInvoiceDialogForOrder(delivery.id, o)
+                                }
+                              >
+                                {o.customer?.code}
+                              </button>
+                              <div>
+                                <div className="font-medium">
+                                  {o.customer?.name}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {o.customer?.address ?? ""}
+                                </div>
+                              </div>
                             </div>
-                            <div className="text-xs text-gray-500 truncate">
-                              {o.customer?.address ? o.customer.address : "No address provided"}
+
+                            <div className="text-right text-xs text-gray-500">
+                              <div>Order #{o.id}</div>
+                              <div className="mt-1">
+                                {o.status ?? "pending"}
+                              </div>
                             </div>
                           </div>
-                          {/* Delivery Date at right */}
-                          <div className="ml-auto flex flex-col items-end min-w-[125px]">
-                            <span className="text-xs font-semibold text-gray-500">
-                              Order Completion Date
-                            </span>
-                            <span className="text-sm text-gray-700">
-                              {delivery.schedule_date
-                                ? new Date(delivery.schedule_date).toLocaleDateString("en-PH", {
-                                    year: "numeric",
-                                    month: "short",
-                                    day: "2-digit",
-                                  })
-                                : "-"}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-500">No invoices assigned yet.</p>
-                  )}
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">
+                        No invoices assigned yet.
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 {/* Right controls */}
@@ -605,165 +638,15 @@ export default function TruckDeliveryPage() {
                     Clear Invoices
                   </button>
 
-                  {/* View Invoice(s) */}
-                  <Dialog
-                    open={invoiceDialogOpenId === delivery.id}
-                    onOpenChange={(open) => {
-                      setInvoiceDialogOpenId(open ? delivery.id : null);
-                      if (!open) {
-                        setSelectedCustomer(null);
-                        setSelectedOrderForDialog(null);
-                      }
-                    }}
+                  {/* View Invoice Dialog open button (left behavior still available) */}
+                  <button
+                    onClick={() =>
+                      openInvoiceDialogForOrder(delivery.id, undefined)
+                    }
+                    className="text-sm text-blue-600 underline hover:text-blue-800"
                   >
-                    <DialogTrigger asChild>
-                      <button className="text-sm text-blue-600 underline hover:text-blue-800">
-                        View Invoice
-                      </button>
-                    </DialogTrigger>
-
-                    <DialogContent className="max-w-5xl">
-                      {delivery._orders && delivery._orders.length > 0 ? (
-                        <div className="space-y-3">
-                          <p className="text-sm font-medium">
-                            Select an invoice (by customer) assigned to this truck:
-                          </p>
-                          <select
-  value={selectedOrderForDialog?.id ?? ""}
-  onChange={(e) => {
-    const id = String(e.target.value); // <- Always string!
-    const ord = delivery._orders!.find((x) => String(x.id) === id) || null;
-    setSelectedOrderForDialog(ord);
-    setSelectedCustomer(ord?.customer || null);
-    console.log("Selected order:", ord);
-  }}
-  className="border p-2 rounded w-full"
->
-  <option value="">-- Choose order --</option>
-  {delivery._orders.map((o) => (
-    <option key={o.id} value={o.id}>
-      {o.customer?.name} — {o.customer?.code}
-    </option>
-  ))}
-</select>
-
-                          {selectedOrderForDialog?.customer && (
-                            <div
-                              id={`invoice-${selectedOrderForDialog.customer.id}`}
-                              className="bg-white p-6 text-sm"
-                            >
-                              <div className="flex justify-between items-center mb-4">
-                                <h2 className="text-xl font-bold flex items-center gap-2">
-                                  <ReceiptText /> Sales Invoice – {selectedOrderForDialog.customer.code}
-                                </h2>
-                                <button
-                                  onClick={async () => {
-                                    const blob = await generatePDFBlob(
-                                      `invoice-${selectedOrderForDialog.customer.id}`
-                                    );
-                                    if (blob) {
-                                      const url = URL.createObjectURL(blob);
-                                      setPdfUrl(url);
-                                      toast.success("PDF ready — opening preview…");
-                                    } else {
-                                      toast.error("Failed to generate PDF");
-                                    }
-                                  }}
-                                  className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
-                                >
-                                  <Printer className="w-4 h-4" /> Preview PDF
-                                </button>
-                              </div>
-                              <div className="grid grid-cols-2 gap-y-1 text-sm">
-                                <p><strong>NAME:</strong> {selectedOrderForDialog.customer.name}</p>
-                                <p><strong>TRANSACTION CODE:</strong> {selectedOrderForDialog.customer.code}</p>
-                                <p className="col-span-2">
-                                  <strong>ADDRESS:</strong> {selectedOrderForDialog.customer.address}
-                                </p>
-                                <p><strong>CONTACT PERSON:</strong> {selectedOrderForDialog.customer.contact_person}</p>
-                                <p><strong>TEL NO:</strong> {selectedOrderForDialog.customer.phone}</p>
-                                <p><strong>TERMS:</strong> Net 30</p>
-                                <p><strong>COLLECTION:</strong> On Delivery</p>
-                                <p><strong>CREDIT LIMIT:</strong> ₱20,000</p>
-                                <p><strong>SALESMAN:</strong> Pedro Reyes</p>
-                              </div>
-                              <div className="overflow-auto mt-4">
-                                <table className="w-full text-sm border">
-                                  <thead className="bg-gray-100">
-                                    <tr>
-                                      <th className="border px-2 py-1">TRANSACTION DATE</th>
-                                      <th className="border px-2 py-1">RECEIVED DATE</th>
-                                      <th className="border px-2 py-1">TRANSACTION</th>
-                                      <th className="border px-2 py-1">STATUS</th>
-                                      <th className="border px-2 py-1">CHARGE</th>
-                                      <th className="border px-2 py-1">CREDIT</th>
-                                      <th className="border px-2 py-1">BALANCE</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {(selectedOrderForDialog.order_items ?? []).map((it, i) => {
-                                      const desc = it.inventory?.product_name ?? "(item)";
-                                      const qty = it.quantity ?? 0;
-                                      const price = it.price ?? 0;
-                                      const charge = qty * price;
-                                      const credit = 0;
-                                      const balance = charge - credit;
-                                      const txnDate =
-                                        (selectedOrderForDialog as any)?.created_at
-                                          ? new Date((selectedOrderForDialog as any).created_at)
-                                              .toLocaleDateString()
-                                          : new Date().toLocaleDateString();
-                                      const receivedDate = delivery.arrival_date
-                                        ? new Date(delivery.arrival_date).toLocaleDateString()
-                                        : "";
-
-                                      return (
-                                        <tr key={i}>
-                                          <td className="border px-2 py-1">{txnDate}</td>
-                                          <td className="border px-2 py-1">{receivedDate}</td>
-                                          <td className="border px-2 py-1">
-                                            {desc} — {qty} @ ₱{price.toLocaleString()}
-                                          </td>
-                                          <td className="border px-2 py-1">
-                                            {selectedOrderForDialog.status || "Pending"}
-                                          </td>
-                                          <td className="border px-2 py-1">₱{charge.toLocaleString()}</td>
-                                          <td className="border px-2 py-1">₱{credit.toLocaleString()}</td>
-                                          <td className="border px-2 py-1">₱{balance.toLocaleString()}</td>
-                                        </tr>
-                                      );
-                                    })}
-                                    {selectedOrderForDialog && (
-                                      <tr>
-                                        <td className="border px-2 py-1 text-right" colSpan={4}>
-                                          <strong>Total</strong>
-                                        </td>
-                                        <td className="border px-2 py-1">
-                                          ₱{(selectedOrderForDialog.order_items ?? [])
-                                            .reduce((s, it) => s + (it.quantity ?? 0) * (it.price ?? 0), 0)
-                                            .toLocaleString()}
-                                        </td>
-                                        <td className="border px-2 py-1">₱0</td>
-                                        <td className="border px-2 py-1">
-                                          ₱{(selectedOrderForDialog.order_items ?? [])
-                                            .reduce((s, it) => s + (it.quantity ?? 0) * (it.price ?? 0), 0)
-                                            .toLocaleString()}
-                                        </td>
-                                      </tr>
-                                    )}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="text-sm text-gray-600">
-                          No invoices assigned to this truck yet. Use <em>Assign Invoices</em>.
-                        </div>
-                      )}
-                    </DialogContent>
-                  </Dialog>
+                    View Invoice
+                  </button>
                 </div>
               </div>
 
@@ -911,6 +794,29 @@ export default function TruckDeliveryPage() {
             {/* If the dialog was opened for a specific delivery, show a dropdown of that delivery's orders */}
             {invoiceDialogOpenId !== null ? (
               <>
+                <select
+                  onChange={(e) => {
+                    const orderId = Number(e.target.value);
+                    const delivery = deliveries.find(
+                      (d) => d.id === invoiceDialogOpenId
+                    );
+                    const ord =
+                      delivery?._orders?.find((x) => x.id === orderId) ?? null;
+                    setSelectedOrderForInvoice(ord);
+                  }}
+                  className="border p-2 rounded w-full"
+                  value={selectedOrderForInvoice?.id ?? ""}
+                >
+                  <option value="">-- Choose invoice --</option>
+                  {deliveries
+                    .find((d) => d.id === invoiceDialogOpenId)
+                    ?._orders?.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.customer?.name} — {o.customer?.code}
+                      </option>
+                    )) ?? []}
+                </select>
+
                 {/* Render invoice content for the selected order */}
                 {selectedOrderForInvoice ? (
                   <div
@@ -922,9 +828,7 @@ export default function TruckDeliveryPage() {
                         <ReceiptText /> Sales Invoice –{" "}
                         {selectedOrderForInvoice.customer.code}
                       </h2>
-
-                      {/* THIS IS A BUTTON FOR PRINT PREVIEW */}
-                      {/* <button
+                      <button
                         onClick={async () => {
                           const blob = await generatePDFBlob(
                             `invoice-${selectedOrderForInvoice.id}`
@@ -937,7 +841,7 @@ export default function TruckDeliveryPage() {
                         className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
                       >
                         <Printer className="w-4 h-4" /> Preview PDF
-                      </button> */}
+                      </button>
                     </div>
 
                     <div className="grid grid-cols-2 gap-y-1 text-sm">
