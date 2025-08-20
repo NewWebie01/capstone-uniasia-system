@@ -1,7 +1,12 @@
 // src/app/customer/layout.tsx
+"use client";
+
+import { useState } from "react";
 import { DM_Sans } from "next/font/google";
 import "@/STYLES/globals.css";
 import { Toaster } from "sonner";
+import CustomerSidebar from "@/components/CustomerSidebar";
+import GlobalRouteLoader from "@/components/GlobalRouteLoader";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -14,19 +19,12 @@ export default function CustomerLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(true);
+
   return (
     <div
-      className={`${dmSans.className} min-h-screen`}
-      style={{
-        // Inline radial gradient — guarantees it shows up without Tailwind escaping headaches
-        background: "radial-gradient(ellipse 200% 100% at bottom left, #ffba20, #dadada 100%)",
-      }}
-      /* If you still want the Tailwind arbitrary class, swap the two lines below:
-      className={`${dmSans.className} min-h-screen bg-[radial-gradient(ellipse_200%25_100%25_at_bottom_left,_#ffba20,_#dadada_100%25)]`}
-      style={{}} 
-      */
+      className={`min-h-screen bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)] ${dmSans.className}`}
     >
-      {/* Toast container */}
       <Toaster richColors position="top-center" />
 
       {/* Sticky Header */}
@@ -36,8 +34,13 @@ export default function CustomerLayout({
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="p-6">{children}</main>
+      {/* Layout */}
+      <div className="flex h-[calc(100vh-3rem)] overflow-hidden">
+        <CustomerSidebar open={open} setOpen={setOpen} />
+        <main className="flex-1 overflow-y-auto p-6 relative">{children}</main>
+      </div>
+
+      <GlobalRouteLoader />
     </div>
   );
 }
