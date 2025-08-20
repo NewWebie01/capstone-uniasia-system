@@ -521,21 +521,36 @@ const totalDiscount = selectedOrder
       {/* --- FAST MOVING MODAL --- */}
       <AnimatePresence>
         {showFastMovingModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
-            onClick={() => setShowFastMovingModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, y: 60 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 60 }}
-              transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full mx-4 p-8 border border-blue-200"
-              onClick={(e) => e.stopPropagation()}
-            >
+        <motion.div
+  initial={{ opacity: 0 }}
+  animate={{ opacity: 1 }}
+  exit={{ opacity: 0 }}
+  className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
+  style={{
+    zIndex: 9999,
+    minHeight: "100vh",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0",
+  }}
+  onClick={() => setShowFastMovingModal(false)}
+>
+  <motion.div
+    initial={{ scale: 0.97, y: 0 }}
+    animate={{ scale: 1, y: 0 }}
+    exit={{ scale: 0.97, y: 0 }}
+    transition={{ type: "spring", stiffness: 400, damping: 32 }}
+    className="bg-white rounded-2xl shadow-2xl w-full max-w-[98vw] md:max-w-4xl p-0 md:p-8 border border-blue-200 overflow-x-auto"
+    style={{
+      margin: "0 auto",
+      position: "relative",
+      maxHeight: "90vh",
+      overflowY: "auto",
+      boxSizing: "border-box",
+    }}
+    onClick={e => e.stopPropagation()}
+  >
               <div className="flex justify-between items-center mb-6">
                 <span className="text-xl font-bold text-black">
                   Top 20 Fast Moving Products{" "}
@@ -552,7 +567,7 @@ const totalDiscount = selectedOrder
                 </button>
               </div>
               <div className="overflow-x-auto">
-                <table className="min-w-full text-sm border rounded-xl shadow">
+  <table className="min-w-[800px] w-full text-sm border rounded-xl shadow">
                   <thead>
                     <tr className="bg-[#ffba20] text-black text-left font-bold text-base border-b">
                       <th className="py-2 px-3">#</th>
@@ -601,22 +616,37 @@ const totalDiscount = selectedOrder
 
       {/* --- SLOW MOVING MODAL --- */}
       <AnimatePresence>
-        {showSlowMovingModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
-            onClick={() => setShowSlowMovingModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, y: 60 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 60 }}
-              transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full mx-4 p-8 border border-orange-200"
-              onClick={(e) => e.stopPropagation()}
-            >
+         {showSlowMovingModal && (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
+      style={{
+        zIndex: 9999,
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "0",
+      }}
+      onClick={() => setShowSlowMovingModal(false)}
+    >
+      <motion.div
+        initial={{ scale: 0.97, y: 0 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.97, y: 0 }}
+        transition={{ type: "spring", stiffness: 400, damping: 32 }}
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-[98vw] md:max-w-4xl p-0 md:p-8 border border-orange-200 overflow-x-auto"
+        style={{
+          margin: "0 auto",
+          position: "relative",
+          maxHeight: "90vh",
+          overflowY: "auto",
+          boxSizing: "border-box",
+        }}
+        onClick={e => e.stopPropagation()}
+      >
               <div className="flex justify-between items-center mb-6">
                 <span className="text-xl font-bold text-black">
                   Top 20 Slow Moving Products{" "}
@@ -633,7 +663,7 @@ const totalDiscount = selectedOrder
                 </button>
               </div>
               <div className="overflow-x-auto">
-                <table className="min-w-full text-sm border rounded-xl shadow">
+  <table className="min-w-[800px] w-full text-sm border rounded-xl shadow">
                   <thead>
                     <tr className="bg-[#ffba20] text-black text-left font-bold text-base border-b">
                       <th className="py-2 px-3">#</th>
@@ -874,75 +904,74 @@ const totalDiscount = selectedOrder
 
       {/* --- MODALS: Picking List, Sales Order, Final Confirmation --- */}
 
-      {/* Picking List Modal */}
-      {showModal && selectedOrder && (
-   <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
+     {/* Picking List Modal */}
+{showModal && selectedOrder && (
+  <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
     <div className="bg-white rounded-xl shadow-2xl w-[96vw] max-w-[1800px] mx-auto flex flex-col px-10 py-8 text-[15px] mt-16">
 
-      {/* Header */}
-      <h2 className="text-xl font-bold mb-3 tracking-wide">PICKING LIST</h2>
+      {/* PICKING LIST MODAL CONTENT */}
+      <h2 className="text-3xl font-bold mb-6 text-center text-gray-900 tracking-wide">
+        Picking List
+      </h2>
+
       {/* Customer & Payment Info */}
-      <div className="flex flex-col md:flex-row md:justify-between mb-3 gap-3">
-        <div>
-          <div className="mb-2">
-            <span className="font-bold">Customer Name:</span> {selectedOrder.customers.name}
-          </div>
-          <div>
-            <span className="font-bold">Email:</span> {selectedOrder.customers.email}
-          </div>
-          <div>
-            <span className="font-bold">Phone:</span> {selectedOrder.customers.phone}
-          </div>
-          <div>
-            <span className="font-bold">Address:</span> {selectedOrder.customers.address}
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        {/* Customer Info */}
+        <div className="bg-gray-50 border rounded-xl p-5 shadow-sm">
+          <h3 className="text-lg font-semibold text-gray-700 mb-3">Customer Details</h3>
+          <p><span className="font-bold">Name:</span> {selectedOrder.customers.name}</p>
+          <p><span className="font-bold">Email:</span> {selectedOrder.customers.email}</p>
+          <p><span className="font-bold">Phone:</span> {selectedOrder.customers.phone}</p>
+          <p><span className="font-bold">Address:</span> {selectedOrder.customers.address}</p>
           {selectedOrder.customers.area && (
-            <div>
-              <span className="font-bold">Area:</span> {selectedOrder.customers.area}
-            </div>
+            <p><span className="font-bold">Area:</span> {selectedOrder.customers.area}</p>
           )}
         </div>
-        <div className="text-right flex flex-col items-end gap-2">
+
+        {/* Payment Info */}
+        <div className="bg-gray-50 border rounded-xl p-5 shadow-sm flex flex-col gap-3">
+          <h3 className="text-lg font-semibold text-gray-700">Payment & Totals</h3>
           <div>
-            <span className="font-semibold">Total:</span>
-            <span className="font-bold text-2xl text-green-700 ml-2">
+            <span className="font-semibold">Total: </span>
+            <span className="text-2xl font-bold text-green-700">
               ₱{computedOrderTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
             </span>
           </div>
           <div>
-            <span className="font-semibold">Payment Terms:</span>{" "}
+            <span className="font-semibold">Payment Type:</span>{" "}
             <span className={
               selectedOrder.customers.payment_type === "Credit" ? "font-bold text-blue-600"
               : selectedOrder.customers.payment_type === "Cash" ? "font-bold text-green-600"
-              : selectedOrder.customers.payment_type === "Balance" ? "font-bold text-orange-500"
-              : "font-bold"
+              : "font-bold text-orange-500"
             }>
               {selectedOrder.customers.payment_type || "N/A"}
             </span>
           </div>
-          <div>
-            <span className="font-semibold mr-1">Terms:</span>
-            <input
-              type="number"
-              min={1}
-              value={numberOfTerms}
-              onChange={e => setNumberOfTerms(Math.max(1, Number(e.target.value)))}
-              className="border rounded px-2 py-1 w-16 text-center"
-              disabled={selectedOrder.customers.payment_type !== "Credit"}
-            />
-          </div>
-          <div>
-            <span className="font-semibold mr-1">Interest %:</span>
-            <input
-              type="number"
-              min={0}
-              value={interestPercent}
-              onChange={e => setInterestPercent(Math.max(0, Number(e.target.value)))}
-              className="border rounded px-2 py-1 w-16 text-center"
-              disabled={selectedOrder.customers.payment_type !== "Credit"}
-            />
-          </div>
-          <div className="flex items-center mt-2">
+          {selectedOrder.customers.payment_type === "Credit" && (
+            <>
+              <div>
+                <label className="font-semibold mr-2">Terms:</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={numberOfTerms}
+                  onChange={e => setNumberOfTerms(Math.max(1, Number(e.target.value)))}
+                  className="border rounded px-2 py-1 w-20 text-center"
+                />
+              </div>
+              <div>
+                <label className="font-semibold mr-2">Interest %:</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={interestPercent}
+                  onChange={e => setInterestPercent(Math.max(0, Number(e.target.value)))}
+                  className="border rounded px-2 py-1 w-20 text-center"
+                />
+              </div>
+            </>
+          )}
+          <div className="flex items-center">
             <input
               type="checkbox"
               checked={isSalesTaxOn}
@@ -950,26 +979,18 @@ const totalDiscount = selectedOrder
               id="sales-tax-toggle"
               className="mr-2 accent-blue-600"
             />
-            <label htmlFor="sales-tax-toggle" className="text-base font-semibold">
-              Sales Tax (12%)
-            </label>
+            <label htmlFor="sales-tax-toggle" className="font-semibold">Include Sales Tax (12%)</label>
           </div>
-          <div className="text-base text-gray-700 mt-1">
-            <b>Grand Total w/ Interest:</b>{" "}
-            <span className="text-blue-700 font-bold">
-              ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-            </span>
-            <br />
-            <b>Per Term:</b>{" "}
-            <span className="text-blue-700 font-bold">
-              ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-            </span>
+          <div className="border-t pt-3 text-sm">
+            <p><b>Grand Total w/ Interest:</b> <span className="font-bold text-blue-700">₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></p>
+            <p><b>Per Term:</b> <span className="font-bold text-blue-700">₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></p>
           </div>
         </div>
       </div>
+
       {/* Picking List Table */}
-      <div className="rounded-xl overflow-x-auto border mt-3">
-        <table className="w-full text-[15px]">
+      <div className="overflow-x-auto rounded-xl border shadow-sm">
+        <table className="w-full text-sm">
           <thead className="bg-[#ffba20] text-black">
             <tr>
               <th className="py-2 px-3 text-left">Quantity</th>
@@ -987,7 +1008,7 @@ const totalDiscount = selectedOrder
               const percent = editedDiscounts[idx] || 0;
               const amount = qty * price * (1 + percent / 100);
               return (
-                <tr key={idx} className="border-t text-[15px]">
+                <tr key={idx} className="border-t hover:bg-gray-50">
                   <td className="py-2 px-3">
                     <input
                       type="number"
@@ -998,68 +1019,26 @@ const totalDiscount = selectedOrder
                         const val = Number(e.target.value);
                         setEditedQuantities(prev => prev.map((q, i) => (i === idx ? val : q)));
                       }}
-                      className="border rounded px-2 py-1 w-14 text-center bg-[#F7FAFC] font-semibold"
-                      title="Quantity"
+                      className="border rounded px-2 py-1 w-16 text-center bg-gray-100 font-medium"
                     />
                   </td>
                   <td className="py-2 px-3">{item.inventory.unit}</td>
-                  <td className="py-2 px-3 text-left">
+                  <td className="py-2 px-3">
                     <div className="font-semibold">{item.inventory.product_name}</div>
                     <div className="text-xs text-gray-500">
-                      <span>SKU: {item.inventory.sku}</span>
-                      {item.inventory.category && <span> | {item.inventory.category}</span>}
-                      {item.inventory.subcategory && <span> | {item.inventory.subcategory}</span>}
+                      SKU: {item.inventory.sku}
                     </div>
                   </td>
-                  <td className="py-2 px-3 text-right">₱{item.inventory.unit_price?.toLocaleString()}</td>
-                  <td className="py-2 px-3 text-right">
-                    <span className="font-bold">
-                      {percent > 0 ? "+" : percent < 0 ? "-" : ""}
-                      {Math.abs(percent)}%
-                    </span>
-                  </td>
-                  <td className="py-2 px-3 text-right font-semibold">
-                    ₱{amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </td>
+                  <td className="py-2 px-3 text-right">₱{price.toLocaleString()}</td>
+                  <td className="py-2 px-3 text-right">{percent}%</td>
+                  <td className="py-2 px-3 text-right font-semibold">₱{amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      {/* Totals & Action Buttons */}
-      <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
-        <div className="space-y-2 min-w-[350px]">
-          <div className="flex justify-between font-medium">
-            <span>Subtotal (Before Discount):</span>
-            <span>₱{subtotalBeforeDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-          </div>
-          <div className="flex justify-between font-medium">
-            <span>Less/Add (Discount/Markup):</span>
-            <span className={totalDiscount < 0 ? "text-green-600" : "text-orange-500"}>
-              {totalDiscount < 0 ? "–" : "+"}₱{Math.abs(totalDiscount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span>Sales Tax (12%):</span>
-            <span>₱{salesTaxValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-          </div>
-          <div className="flex justify-between text-xl font-bold border-t pt-2">
-            <span>TOTAL ORDER AMOUNT:</span>
-            <span className="text-green-700">
-              ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-            </span>
-          </div>
-          {selectedOrder.customers.payment_type === "Credit" && (
-            <div className="flex justify-between">
-              <span>Payment per Term:</span>
-              <span className="font-bold text-blue-700">
-                ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
+
       {/* Action Buttons */}
       <div className="flex justify-center gap-8 mt-6">
         <button
@@ -1073,18 +1052,33 @@ const totalDiscount = selectedOrder
         </button>
         <button
           className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-          onClick={handleCancelModal}
+          onClick={() => {
+            // Reset states back to default
+            setShowModal(false);           
+            setShowSalesOrderModal(false); 
+            setShowFinalConfirm(false);    
+            setSelectedOrder(null);        
+            setEditedQuantities([]);       
+            setEditedDiscounts([]);        
+            setPickingStatus([]);          
+            setPoNumber("");               
+            setRepName("");                
+            setNumberOfTerms(1);           
+            setInterestPercent(0);         
+            setIsSalesTaxOn(true);         
+          }}
         >
           Cancel
         </button>
       </div>
+
     </div>
   </div>
 )}
 
 
+
       {/* SALES ORDER MODAL (Confirmation Layout) */}
-     // ...top of your code stays the same
 {showSalesOrderModal && selectedOrder && (
   <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
     <div

@@ -275,21 +275,22 @@ export default function InventoryPage() {
               <tr key={item.id} className="border-b hover:bg-gray-50">
                 <td className={cellNowrap}>{item.sku}</td>
 
-                <td className={cellNowrap}>
-                  {item.image_url ? (
-                    <button
-                      className="text-blue-600 hover:underline font-medium"
-                      onClick={() => openImageModal(item)}
-                      title="Click to view image"
-                    >
-                      {item.product_name}
-                    </button>
-                  ) : (
-                    <span className="text-gray-800 font-medium">
-                      {item.product_name}
-                    </span>
-                  )}
-                </td>
+                <td className="px-4 py-2 whitespace-normal break-words max-w-xs">
+  {item.image_url ? (
+    <button
+      className="text-blue-600 hover:underline font-medium text-left"
+      onClick={() => openImageModal(item)}
+      title="Click to view image"
+    >
+      {item.product_name}
+    </button>
+  ) : (
+    <span className="text-gray-800 font-medium text-left">
+      {item.product_name}
+    </span>
+  )}
+</td>
+
 
                 <td className={cellNowrap}>{item.category}</td>
                 <td className={cellNowrap}>{item.subcategory}</td>
