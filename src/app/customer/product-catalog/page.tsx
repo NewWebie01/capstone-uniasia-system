@@ -1,7 +1,5 @@
 // src/app/customer/page.tsx
 "use client";
-// src/app/customer/page.tsx
-"use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -97,6 +95,18 @@ function generateTransactionCode(): string {
 }
 function isValidPhone(phone: string) {
   return /^\d{11}$/.test(phone);
+}
+
+// Choose a nice display name from metadata/email
+function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
+  const nameFromMeta =
+    meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
+  if (nameFromMeta && typeof nameFromMeta === "string")
+    return nameFromMeta.trim();
+  if (fallbackEmail && fallbackEmail.includes("@")) {
+    return fallbackEmail.split("@")[0];
+  }
+  return "";
 }
 
 /* -------------------------------- Component ------------------------------- */
@@ -215,8 +225,7 @@ export default function CustomerInventoryPage() {
       .catch(() => toast.error("Failed to load regions"));
   }, []);
 
-  // Children of region:
-  // NCR → load cities directly; Others → load provinces
+  // Children of region: NCR → cities directly; Others → provinces
   useEffect(() => {
     setProvinces([]);
     setProvinceCode("");
@@ -282,44 +291,67 @@ export default function CustomerInventoryPage() {
       .catch(() => toast.error("Failed to load cities/municipalities"));
   }, [provinceCode, isNCR]);
 
-  // Barangays when city changes
+  // Barangays when city changes (robust for City of Manila / NCR)
   useEffect(() => {
     setBarangays([]);
     setBarangayCode("");
     if (!cityCode) return;
 
-    const sel = cities.find((c) => c.code === cityCode);
-    if (!sel) return;
+    const loadBarangays = async () => {
+      const prefix9 = cityCode.slice(0, 9);
+      const prefix6 = cityCode.slice(0, 6);
 
-    const isCityType = (sel.type || "").toLowerCase().includes("city");
-    const url = isCityType
-      ? `https://psgc.cloud/api/cities/${cityCode}/barangays`
-      : `https://psgc.cloud/api/municipalities/${cityCode}/barangays`;
+      // Natural numeric sort so "Barangay 64" < "Barangay 639"
+      const fixSort = (list: PSGCBarangay[]) => {
+        const collator = new Intl.Collator(undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+        return list
+          .map((b) => ({ ...b, name: fixEncoding(b.name) }))
+          .sort((a, b) => collator.compare(a.name, b.name));
+      };
 
-    fetchJSON<PSGCBarangay[]>(url)
-      .then((list) =>
-        setBarangays(
-          list
-            .map((b) => ({ ...b, name: fixEncoding(b.name) }))
-            .sort((a, b) => a.name.localeCompare(b.name))
-        )
-      )
-      .catch(async () => {
-        // Fallback: filter all by the 9-digit city/municipality prefix
-        try {
-          const all = await fetchJSON<PSGCBarangay[]>(
-            "https://psgc.cloud/api/barangays"
-          );
-          const list = all
-            .filter((b) => b.code.startsWith(cityCode.slice(0, 9)))
-            .map((b) => ({ ...b, name: fixEncoding(b.name) }))
-            .sort((a, b) => a.name.localeCompare(b.name));
-          setBarangays(list);
-        } catch {
-          toast.error("Failed to load barangays");
+      // 1) Try CITY endpoint
+      try {
+        const fromCity = await fetchJSON<PSGCBarangay[]>(
+          `https://psgc.cloud/api/cities/${cityCode}/barangays`
+        );
+        const cleaned = fixSort(fromCity);
+        if (cleaned.length > 0) {
+          setBarangays(cleaned);
+          return;
         }
-      });
-  }, [cityCode, cities]);
+      } catch {}
+
+      // 2) Try MUNICIPALITY endpoint
+      try {
+        const fromMunicipality = await fetchJSON<PSGCBarangay[]>(
+          `https://psgc.cloud/api/municipalities/${cityCode}/barangays`
+        );
+        const cleaned = fixSort(fromMunicipality);
+        if (cleaned.length > 0) {
+          setBarangays(cleaned);
+          return;
+        }
+      } catch {}
+
+      // 3) Fallback: filter ALL barangays by prefix (covers Manila)
+      try {
+        const all = await fetchJSON<PSGCBarangay[]>(
+          "https://psgc.cloud/api/barangays"
+        );
+        const filtered = all.filter(
+          (b) => b.code.startsWith(prefix9) || b.code.startsWith(prefix6)
+        );
+        setBarangays(fixSort(filtered));
+      } catch {
+        toast.error("Failed to load barangays");
+      }
+    };
+
+    loadBarangays();
+  }, [cityCode]);
 
   /* --------------------- Inventory load + realtime --------------------- */
   const fetchInventory = useCallback(async () => {
@@ -350,6 +382,27 @@ export default function CustomerInventoryPage() {
       supabase.removeChannel(channel);
     };
   }, [fetchInventory]);
+
+  // Autofill logged-in user name/email (read-only fields)
+  useEffect(() => {
+    (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        const displayName = getDisplayNameFromMetadata(
+          user.user_metadata,
+          user.email || undefined
+        );
+        setCustomerInfo((prev) => ({
+          ...prev,
+          name: prev.name || displayName || "",
+          email: prev.email || user.email || "",
+        }));
+      }
+    })();
+  }, []);
 
   /* ------------------------------ Tracking ------------------------------ */
   const handleTrack = async (e: React.FormEvent) => {
@@ -658,77 +711,6 @@ export default function CustomerInventoryPage() {
         </select>
       </div>
 
-      {/* Tracking
-      <div className="bg-white border rounded p-4 mb-6 shadow-sm">
-        <h2 className="text-lg font-semibold mb-2">Track Your Delivery</h2>
-        <form
-          onSubmit={handleTrack}
-          className="flex flex-col sm:flex-row gap-3 items-start sm:items-end"
-        >
-          <input
-            value={txn}
-            onChange={(e) => {
-              setTxn(e.target.value);
-              setTrackingResult(null);
-              setTrackError(null);
-            }}
-            placeholder="Enter TXN code (e.g., TXN-20250819-ABC123)"
-            className="w-full border px-3 py-2 rounded text-sm tracking-wider uppercase"
-            required
-          />
-          <button
-            type="submit"
-            disabled={trackingLoading}
-            className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
-          >
-            {trackingLoading ? "Checking..." : "Track"}
-          </button>
-        </form>
-        {trackError && (
-          <p className="text-red-600 mt-2 text-sm">{trackError}</p>
-        )}
-      </div>
-
-      {trackingResult && (
-        <div className="bg-gray-50 border rounded p-4 mb-6">
-          <h3 className="font-semibold text-md mb-2">Customer & Order Info</h3>
-          <p>
-            <strong>Name:</strong> {trackingResult.name}
-          </p>
-          <p>
-            <strong>TXN Code:</strong> {trackingResult.code}
-          </p>
-          <p>
-            <strong>Status:</strong> {trackingResult.status}
-          </p>
-          <p>
-            <strong>Address:</strong> {trackingResult.address}
-          </p>
-          <p>
-            <strong>Contact:</strong> {trackingResult.phone}
-          </p>
-          <p>
-            <strong>Email:</strong> {trackingResult.email}
-          </p>
-          <p>
-            <strong>Date:</strong> {formatPH(trackingResult.date)}
-          </p>
-
-          <h4 className="mt-4 font-semibold">Items Ordered:</h4>
-          <ul className="list-disc ml-6">
-            {trackingResult.orders?.[0]?.order_items.map(
-              (item: any, index: number) => (
-                <li key={index}>
-                  {item.inventory?.product_name} – {item.quantity} pcs (
-                  {item.inventory?.category}/{item.inventory?.subcategory}) -{" "}
-                  {item.inventory?.status}
-                </li>
-              )
-            )}
-          </ul>
-        </div>
-      )} */}
-
       {loading ? (
         <p>Loading inventory...</p>
       ) : (
@@ -787,8 +769,8 @@ export default function CustomerInventoryPage() {
 
       {/* View-only IMAGE MODAL */}
       {showImageModal && imageModalItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-lg max-w-md w-full overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl ring-1 ring-black/5">
             <div className="flex items-center justify-between px-4 py-3 border-b">
               <h3 className="font-semibold">{imageModalItem.product_name}</h3>
               <button
@@ -828,7 +810,7 @@ export default function CustomerInventoryPage() {
             <div className="px-4 py-3 border-t text-right">
               <button
                 onClick={closeImageModal}
-                className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
               >
                 Close
               </button>
@@ -839,8 +821,8 @@ export default function CustomerInventoryPage() {
 
       {/* Add to Cart Modal */}
       {selectedItem && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
-          <div className="bg-white p-6 rounded shadow-lg max-w-md w-full">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex justify-center items-center z-50 p-4">
+          <div className="bg-white p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 max-w-md w-full">
             <h2 className="text-xl font-bold mb-4">
               {selectedItem.product_name}
             </h2>
@@ -861,13 +843,13 @@ export default function CustomerInventoryPage() {
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={() => setSelectedItem(null)}
-                className="bg-gray-500 text-white px-4 py-2 rounded"
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
               >
                 Cancel
               </button>
               <button
                 onClick={addToCart}
-                className="bg-[#ffba20] text-white px-4 py-2 rounded hover:bg-yellow-600"
+                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition"
               >
                 Add to Cart
               </button>
@@ -924,342 +906,369 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* First Confirm Order Modal */}
+      {/* First Confirm Order Modal (modern) */}
       {showCartPopup && (
-        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex justify-center items-center">
-          <div className="bg-white p-6 rounded-none shadow w-full max-w-5xl space-y-4">
-            <h2 className="text-xl font-bold">Confirm Order</h2>
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 260, damping: 22 }}
+            className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
+          >
+            {/* Header */}
+            <h2 className="text-2xl font-semibold tracking-tight shrink-0">
+              Confirm Order
+            </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <input
-                placeholder="Customer Name"
-                className="border px-3 py-2 rounded"
-                value={customerInfo.name}
-                onChange={(e) =>
-                  setCustomerInfo({ ...customerInfo, name: e.target.value })
-                }
-              />
-              <input
-                type="email"
-                placeholder="Email"
-                className="border px-3 py-2 rounded"
-                value={customerInfo.email}
-                onChange={(e) =>
-                  setCustomerInfo({ ...customerInfo, email: e.target.value })
-                }
-              />
-              <input
-                type="tel"
-                placeholder="Phone (11 digits)"
-                className="border px-3 py-2 rounded"
-                inputMode="numeric"
-                pattern="\d*"
-                maxLength={11}
-                value={customerInfo.phone}
-                onChange={(e) => {
-                  const value = e.target.value.replace(/\D/g, "");
-                  if (value.length <= 11)
-                    setCustomerInfo({ ...customerInfo, phone: value });
-                }}
-              />
-              <input
-                placeholder="Contact Person"
-                className="border px-3 py-2 rounded"
-                value={customerInfo.contact_person}
-                onChange={(e) =>
-                  setCustomerInfo({
-                    ...customerInfo,
-                    contact_person: e.target.value,
-                  })
-                }
-              />
-
-              {/* Location Pickers + House/Street */}
-              <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
-                <div>
-                  <label className="block text-sm mb-1">Region</label>
-                  <select
-                    className="border px-3 py-2 rounded w-full"
-                    value={regionCode}
-                    onChange={(e) => setRegionCode(e.target.value)}
-                  >
-                    <option value="">Select region</option>
-                    {regions.map((r) => (
-                      <option key={r.code} value={r.code}>
-                        {r.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-1">Province</label>
-                  <select
-                    className="border px-3 py-2 rounded w-full"
-                    value={provinceCode}
-                    onChange={(e) => setProvinceCode(e.target.value)}
-                    disabled={!regionCode || isNCR}
-                  >
-                    <option value="">
-                      {!regionCode
-                        ? "Select region first"
-                        : isNCR
-                        ? "NCR has no provinces"
-                        : "Select province"}
-                    </option>
-                    {!isNCR &&
-                      provinces.map((p) => (
-                        <option key={p.code} value={p.code}>
-                          {p.name}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-1">
-                    City / Municipality
-                  </label>
-                  <select
-                    className="border px-3 py-2 rounded w-full"
-                    value={cityCode}
-                    onChange={(e) => setCityCode(e.target.value)}
-                    disabled={isNCR ? !regionCode : !provinceCode}
-                  >
-                    <option value="">
-                      {isNCR
-                        ? regionCode
-                          ? "Select city/municipality"
-                          : "Select region first"
-                        : provinceCode
-                        ? "Select city/municipality"
-                        : "Select province first"}
-                    </option>
-                    {cities.map((c) => (
-                      <option key={c.code} value={c.code}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm mb-1">Barangay</label>
-                  <select
-                    className="border px-3 py-2 rounded w-full"
-                    value={barangayCode}
-                    onChange={(e) => setBarangayCode(e.target.value)}
-                    disabled={!cityCode}
-                  >
-                    <option value="">
-                      {cityCode ? "Select barangay" : "Select city first"}
-                    </option>
-                    {barangays.map((b) => (
-                      <option key={b.code} value={b.code}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <input
-                placeholder="House Number & Street Name"
-                className="border px-3 py-2 rounded col-span-2"
-                value={houseStreet}
-                onChange={(e) => setHouseStreet(e.target.value)}
-              />
-
-              <input
-                className="border px-3 py-2 rounded col-span-2 bg-gray-50"
-                value={customerInfo.address || ""}
-                placeholder="Address will be set from House/St. + Barangay/City/Province/Region"
-                readOnly
-              />
-
-              <div className="col-span-2">
-                <label className="block mb-1">Customer Type</label>
-                <select
-                  className="border px-3 py-2 rounded w-full"
-                  value={customerInfo.customer_type || ""}
+            {/* Body (scrolls) */}
+            <div className="flex-1 overflow-auto mt-4 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <input
+                  placeholder="Customer Name"
+                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+                  value={customerInfo.name}
+                  readOnly
+                />
+                <input
+                  type="email"
+                  placeholder="Email"
+                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+                  value={customerInfo.email}
+                  readOnly
+                />
+                <input
+                  type="tel"
+                  placeholder="Phone (11 digits)"
+                  className="border px-3 py-2 rounded"
+                  inputMode="numeric"
+                  pattern="\d*"
+                  maxLength={11}
+                  value={customerInfo.phone}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/\D/g, "");
+                    if (value.length <= 11)
+                      setCustomerInfo({ ...customerInfo, phone: value });
+                  }}
+                />
+                <input
+                  placeholder="Contact Person"
+                  className="border px-3 py-2 rounded"
+                  value={customerInfo.contact_person}
                   onChange={(e) =>
                     setCustomerInfo({
                       ...customerInfo,
-                      customer_type: e.target.value as
-                        | "New Customer"
-                        | "Existing Customer",
+                      contact_person: e.target.value,
                     })
                   }
-                >
-                  <option value="" disabled>
-                    Select customer type
-                  </option>
-                  <option value="New Customer">New Customer</option>
-                  <option value="Existing Customer">Existing Customer</option>
-                </select>
+                />
+
+                {/* Location Pickers + House/Street */}
+                <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-sm mb-1">Region</label>
+                    <select
+                      className="border px-3 py-2 rounded w-full"
+                      value={regionCode}
+                      onChange={(e) => setRegionCode(e.target.value)}
+                    >
+                      <option value="">Select region</option>
+                      {regions.map((r) => (
+                        <option key={r.code} value={r.code}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm mb-1">Province</label>
+                    <select
+                      className="border px-3 py-2 rounded w-full"
+                      value={provinceCode}
+                      onChange={(e) => setProvinceCode(e.target.value)}
+                      disabled={!regionCode || isNCR}
+                    >
+                      <option value="">
+                        {!regionCode
+                          ? "Select region first"
+                          : isNCR
+                          ? "NCR has no provinces"
+                          : "Select province"}
+                      </option>
+                      {!isNCR &&
+                        provinces.map((p) => (
+                          <option key={p.code} value={p.code}>
+                            {p.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm mb-1">
+                      City / Municipality
+                    </label>
+                    <select
+                      className="border px-3 py-2 rounded w-full"
+                      value={cityCode}
+                      onChange={(e) => setCityCode(e.target.value)}
+                      disabled={isNCR ? !regionCode : !provinceCode}
+                    >
+                      <option value="">
+                        {isNCR
+                          ? regionCode
+                            ? "Select city/municipality"
+                            : "Select region first"
+                          : provinceCode
+                          ? "Select city/municipality"
+                          : "Select province first"}
+                      </option>
+                      {cities.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm mb-1">Barangay</label>
+                    <select
+                      className="border px-3 py-2 rounded w-full"
+                      value={barangayCode}
+                      onChange={(e) => setBarangayCode(e.target.value)}
+                      disabled={!cityCode}
+                    >
+                      <option value="">
+                        {cityCode ? "Select barangay" : "Select city first"}
+                      </option>
+                      {barangays.map((b) => (
+                        <option key={b.code} value={b.code}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <input
+                  placeholder="House Number & Street Name"
+                  className="border px-3 py-2 rounded col-span-2"
+                  value={houseStreet}
+                  onChange={(e) => setHouseStreet(e.target.value)}
+                />
+
+                <input
+                  className="border px-3 py-2 rounded col-span-2 bg-gray-50"
+                  value={customerInfo.address || ""}
+                  placeholder="Address will be set from House/St. + Barangay/City/Province/Region"
+                  readOnly
+                />
+
+                <div className="col-span-2">
+                  <label className="block mb-1">Customer Type</label>
+                  <select
+                    className="border px-3 py-2 rounded w-full"
+                    value={customerInfo.customer_type || ""}
+                    onChange={(e) =>
+                      setCustomerInfo({
+                        ...customerInfo,
+                        customer_type: e.target.value as
+                          | "New Customer"
+                          | "Existing Customer",
+                      })
+                    }
+                  >
+                    <option value="" disabled>
+                      Select customer type
+                    </option>
+                    <option value="New Customer">New Customer</option>
+                    <option value="Existing Customer">Existing Customer</option>
+                  </select>
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block mb-1">Payment Type</label>
+                  <div className="flex gap-4">
+                    {(customerInfo.customer_type === "Existing Customer"
+                      ? ["Credit", "Balance"]
+                      : ["Cash"]
+                    ).map((type) => (
+                      <label key={type} className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="payment_type"
+                          value={type}
+                          checked={customerInfo.payment_type === type}
+                          onChange={(e) =>
+                            setCustomerInfo({
+                              ...customerInfo,
+                              payment_type: e.target.value as
+                                | "Cash"
+                                | "Credit"
+                                | "Balance",
+                            })
+                          }
+                        />
+                        {type}
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
 
-              <div className="col-span-2">
-                <label className="block mb-1">Payment Type</label>
-                <div className="flex gap-4">
-                  {(customerInfo.customer_type === "Existing Customer"
-                    ? ["Credit", "Balance"]
-                    : ["Cash"]
-                  ).map((type) => (
-                    <label key={type} className="flex items-center gap-2">
-                      <input
-                        type="radio"
-                        name="payment_type"
-                        value={type}
-                        checked={customerInfo.payment_type === type}
-                        onChange={(e) =>
-                          setCustomerInfo({
-                            ...customerInfo,
-                            payment_type: e.target.value as
-                              | "Cash"
-                              | "Credit"
-                              | "Balance",
-                          })
-                        }
-                      />
-                      {type}
-                    </label>
-                  ))}
-                </div>
+              {/* Items table */}
+              <div className="border rounded-xl bg-gray-100 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-200 sticky top-0 z-10">
+                    <tr>
+                      <th className="py-2 px-3 text-left">Product</th>
+                      <th className="py-2 px-3 text-left">Category</th>
+                      <th className="py-2 px-3 text-left">Subcategory</th>
+                      <th className="py-2 px-3 text-left">Qty</th>
+                      <th className="py-2 px-3 text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cart.map((ci) => (
+                      <tr key={ci.item.id} className="border-b">
+                        <td className="py-2 px-3">{ci.item.product_name}</td>
+                        <td className="py-2 px-3">{ci.item.category}</td>
+                        <td className="py-2 px-3">{ci.item.subcategory}</td>
+                        <td className="py-2 px-3">{ci.quantity}</td>
+                        <td className="py-2 px-3">{ci.item.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            <table className="w-full table-fixed text-sm bg-gray-100">
-              <thead className="bg-gray-200">
-                <tr>
-                  <th className="py-2 px-3 text-left">Product</th>
-                  <th className="py-2 px-3 text-left">Category</th>
-                  <th className="py-2 px-3 text-left">Subcategory</th>
-                  <th className="py-2 px-3 text-left">Qty</th>
-                  <th className="py-2 px-3 text-left">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cart.map((ci) => (
-                  <tr key={ci.item.id} className="border-b">
-                    <td className="py-2 px-3">{ci.item.product_name}</td>
-                    <td className="py-2 px-3">{ci.item.category}</td>
-                    <td className="py-2 px-3">{ci.item.subcategory}</td>
-                    <td className="py-2 px-3">{ci.quantity}</td>
-                    <td className="py-2 px-3">{ci.item.status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <div className="flex justify-end gap-2 mt-4">
+            {/* Footer */}
+            <div className="shrink-0 flex justify-end gap-2 mt-4">
               <button
                 onClick={() => setShowCartPopup(false)}
-                className="bg-gray-500 text-white px-4 py-2 rounded"
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
               >
                 Cancel
               </button>
               <button
                 onClick={handleOpenFinalModal}
-                className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                className="px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 active:translate-y-px transition"
               >
                 Submit Order
               </button>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
 
-      {/* Final Confirmation Modal */}
+      {/* Final Confirmation Modal (modern) */}
       {showFinalPopup && finalOrderDetails && (
-        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex justify-center items-center">
-          <div className="bg-white p-6 rounded-none shadow w-full max-w-4xl space-y-4">
-            <h2 className="text-xl font-bold">Order Confirmation</h2>
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 260, damping: 22 }}
+            className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
+          >
+            {/* Header */}
+            <h2 className="text-2xl font-semibold tracking-tight shrink-0">
+              Order Confirmation
+            </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <div className="text-xs text-gray-500">Customer</div>
-                <div className="font-medium">
-                  {finalOrderDetails.customer.name}
+            {/* Body */}
+            <div className="flex-1 overflow-auto mt-4 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <div className="text-xs text-gray-500">Customer</div>
+                  <div className="font-medium">
+                    {finalOrderDetails.customer.name}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Transaction Code</div>
+                  <div className="font-medium">
+                    {finalOrderDetails.customer.code}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Date</div>
+                  <div className="font-medium">{formatPH()}</div>
                 </div>
               </div>
-              <div>
-                <div className="text-xs text-gray-500">Transaction Code</div>
-                <div className="font-medium">
-                  {finalOrderDetails.customer.code}
+
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                <div>
+                  <div className="text-xs text-gray-500">Region</div>
+                  <div className="font-medium">
+                    {selectedRegion?.name ?? "-"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Province</div>
+                  <div className="font-medium">
+                    {selectedProvince?.name ?? (isNCR ? "—" : "-")}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">City/Municipality</div>
+                  <div className="font-medium">{selectedCity?.name ?? "-"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Barangay</div>
+                  <div className="font-medium">
+                    {selectedBarangay?.name ?? "-"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">House & Street</div>
+                  <div className="font-medium">{houseStreet || "-"}</div>
                 </div>
               </div>
-              <div>
-                <div className="text-xs text-gray-500">Date</div>
-                <div className="font-medium">{formatPH()}</div>
+
+              <div className="border rounded-xl bg-gray-100 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-200 sticky top-0 z-10">
+                    <tr>
+                      <th className="py-2 px-3 text-left">Product</th>
+                      <th className="py-2 px-3 text-left">Category</th>
+                      <th className="py-2 px-3 text-left">Subcategory</th>
+                      <th className="py-2 px-3 text-left">Qty</th>
+                      <th className="py-2 px-3 text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {finalOrderDetails.items.map((ci) => (
+                      <tr key={ci.item.id} className="border-b">
+                        <td className="py-2 px-3">{ci.item.product_name}</td>
+                        <td className="py-2 px-3">{ci.item.category}</td>
+                        <td className="py-2 px-3">{ci.item.subcategory}</td>
+                        <td className="py-2 px-3">{ci.quantity}</td>
+                        <td className="py-2 px-3">{ci.item.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-              <div>
-                <div className="text-xs text-gray-500">Region</div>
-                <div className="font-medium">{selectedRegion?.name ?? "-"}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500">Province</div>
-                <div className="font-medium">
-                  {selectedProvince?.name ?? (isNCR ? "—" : "-")}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500">City/Municipality</div>
-                <div className="font-medium">{selectedCity?.name ?? "-"}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500">Barangay</div>
-                <div className="font-medium">
-                  {selectedBarangay?.name ?? "-"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500">House & Street</div>
-                <div className="font-medium">{houseStreet || "-"}</div>
-              </div>
-            </div>
-
-            <table className="w-full table-fixed text-sm bg-gray-100">
-              <thead className="bg-gray-200">
-                <tr>
-                  <th className="py-2 px-3 text-left">Product</th>
-                  <th className="py-2 px-3 text-left">Category</th>
-                  <th className="py-2 px-3 text-left">Subcategory</th>
-                  <th className="py-2 px-3 text-left">Qty</th>
-                  <th className="py-2 px-3 text-left">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {finalOrderDetails.items.map((ci) => (
-                  <tr key={ci.item.id} className="border-b">
-                    <td className="py-2 px-3">{ci.item.product_name}</td>
-                    <td className="py-2 px-3">{ci.item.category}</td>
-                    <td className="py-2 px-3">{ci.item.subcategory}</td>
-                    <td className="py-2 px-3">{ci.quantity}</td>
-                    <td className="py-2 px-3">{ci.item.status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <div className="flex justify-end gap-2 mt-4">
+            {/* Footer */}
+            <div className="shrink-0 flex justify-end gap-2 mt-4">
               <button
                 onClick={() => setShowFinalPopup(false)}
-                className="bg-gray-500 text-white px-4 py-2 rounded"
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmOrder}
-                className="bg-[#ffba20] text-white px-4 py-2 rounded hover:bg-yellow-600"
+                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition"
               >
                 Confirm Order
               </button>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
     </div>
