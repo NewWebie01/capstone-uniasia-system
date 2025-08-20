@@ -198,7 +198,7 @@ useEffect(() => {
     const { data: dData, error: dErr } = await supabase
       .from("truck_deliveries")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: true });
 
     if (dErr) {
       console.error("Fetch deliveries error:", dErr);
@@ -461,7 +461,6 @@ setUnassignedOrders((data as OrderWithCustomer[]) || []);
   setProvinceCode("");
   setFormVisible(true);
 };
-
   const hideForm = () => {
     setFormVisible(false);
     setNewPerson("");

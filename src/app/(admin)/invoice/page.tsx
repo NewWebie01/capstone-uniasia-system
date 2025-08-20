@@ -2,28 +2,22 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
-import { ReceiptText, X } from "lucide-react";
+import { X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-
 import DeliveryReceiptLikeInvoice, {
   type InvoiceItem,
   type CustomerInfo,
 } from "@/components/DeliveryReceiptLikeInvoice";
-
-// 🔹 Import your PDF helper(s) and alias to avoid name conflicts
-// Make sure utils/exportInvoice.ts exports: `export async function generatePDFBlob(id: string): Promise<Blob|null>`
 import { generatePDFBlob as generatePDFBlobById } from "@/utils/exportInvoice";
 
-// ---------- Types match your schema ----------
 type Customer = {
   id: string;
   name: string;
   address?: string;
   phone?: string;
   contact_person?: string;
-  code?: string; // TXN in customers
+  code?: string;
 };
 
 type Order = {
@@ -34,8 +28,6 @@ type Order = {
   date_created?: string;
   salesman?: string;
   terms?: string;
-  credit_limit?: number | string;
-  collection?: string;
 };
 
 type OrderItemRow = {
@@ -55,8 +47,6 @@ export default function InvoicePage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [search, setSearch] = useState("");
-
-  // dialog state
   const [openId, setOpenId] = useState<string | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<InvoiceItem[] | null>(null);
@@ -65,44 +55,34 @@ export default function InvoicePage() {
   );
   const [initialDate, setInitialDate] = useState<string | undefined>(undefined);
   const [loadingItems, setLoadingItems] = useState(false);
-
-  // PDF preview state
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
 
-  // 1) fetch customers (include code/txn)
   useEffect(() => {
-    const run = async () => {
-      const { data, error } = await supabase
-        .from("customers")
-        .select("id, name, address, phone, contact_person, code")
-        .order("created_at", { ascending: false });
-
-      if (!error && data) setCustomers(data as Customer[]);
-    };
-    run();
+    supabase
+      .from("customers")
+      .select("id, name, address, phone, contact_person, code")
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (!error && data) setCustomers(data);
+      });
   }, []);
 
-  // 2) fetch orders
   useEffect(() => {
-    const run = async () => {
-      const { data, error } = await supabase
-        .from("orders")
-        .select("*")
-        .order("date_created", { ascending: false });
-
-      if (!error && data) setOrders(data as Order[]);
-    };
-    run();
+    supabase
+      .from("orders")
+      .select("*")
+      .order("date_created", { ascending: false })
+      .then(({ data, error }) => {
+        if (!error && data) setOrders(data);
+      });
   }, []);
 
-  // quick map for lookup
   const customerMap = useMemo(() => {
-    const m = new Map<string, Customer>();
-    customers.forEach((c) => m.set(c.id, c));
-    return m;
+    const map = new Map<string, Customer>();
+    customers.forEach((c) => map.set(c.id, c));
+    return map;
   }, [customers]);
 
-  // filter by customer name
   const filteredOrders = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return orders;
@@ -111,7 +91,6 @@ export default function InvoicePage() {
     );
   }, [orders, customerMap, search]);
 
-  // open a card -> load items and prep invoice props
   const openInvoice = async (order: Order) => {
     setSelectedOrder(order);
     setOpenId(order.id);
@@ -122,18 +101,14 @@ export default function InvoicePage() {
       name: cust?.name ?? "—",
       address: cust?.address ?? "",
     });
-    setInitialDate(
-      order.date_created ? order.date_created.slice(0, 10) : undefined
-    );
+    setInitialDate(order.date_created?.slice(0, 10));
 
     const { data: rows, error } = await supabase
       .from("order_items")
-      .select(
-        `
+      .select(`
         id, order_id, inventory_id, quantity, price,
         inventory:inventory_id ( product_name, unit, unit_price )
-      `
-      )
+      `)
       .eq("order_id", order.id);
 
     if (!error) {
@@ -164,117 +139,114 @@ export default function InvoicePage() {
     setLoadingItems(false);
   };
 
-  // 🔹 Keep your local function name, but implement it by delegating to the imported helper (no conflict now)
   async function generatePDFBlob(nodeId: string): Promise<Blob | null> {
     return await generatePDFBlobById(nodeId);
   }
 
-  // Create PDF from the visible invoice container (button is outside, so it won't be captured)
   const handlePreviewPDF = async (orderId: string) => {
     const blob = await generatePDFBlob(`invoice-capture-${orderId}`);
-    if (!blob) {
-      alert("Failed to generate PDF (element not found).");
-      return;
-    }
+    if (!blob) return alert("Failed to generate PDF.");
     const url = URL.createObjectURL(blob);
     setPdfUrl(url);
   };
 
   return (
-    <motion.div className="p-6 space-y-6 bg-gradient-to-b from-amber-50 to-amber-200/40 min-h-screen">
+    <motion.div className="p-6 space-y-6 from-amber-50 to-amber-200/40 min-h-screen">
       <h1 className="text-2xl font-bold">Sales Invoices</h1>
 
-      <div className="w-full max-w-md">
+      <div className="max-w-md">
         <input
           type="text"
           placeholder="Search by customer name..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full px-4 py-2 rounded-md shadow bg-white focus:outline-none focus:ring-2 focus:ring-black transition"
+          className="w-full px-4 py-2 rounded-md shadow bg-white focus:outline-none focus:ring-2 focus:ring-black"
         />
       </div>
 
-      {/* one card PER ORDER — shows TXN from customers.code */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filteredOrders.map((order) => {
-          const c = customerMap.get(order.customer_id);
-          const txn = c?.code || order.id; // fallback to id if no code
-          return (
-            <Dialog
-              key={order.id}
-              open={openId === order.id}
-              onOpenChange={(open) => {
-                if (!open) {
-                  setOpenId(null);
-                  setSelectedOrder(null);
-                  setItems(null);
-                } else {
-                  openInvoice(order);
-                }
-              }}
-            >
-              <DialogTrigger asChild>
-                <Card
-                  className="cursor-pointer p-4 bg-white shadow hover:shadow-lg transition"
-                  onClick={() => openInvoice(order)}
-                >
-                  <p className="font-semibold flex items-center gap-2">
-                    <ReceiptText className="w-4 h-4" />
-                    Sales Invoice: {txn}
-                  </p>
-                  <p className="mt-1">
-                    CUSTOMER NAME: {c?.name ?? "Unknown customer"}
-                  </p>
-                  <p>ADDRESS: {c?.address ?? "—"}</p>
-                  <p>CONTACT NUMBER: {c?.phone ?? "—"}</p>
-                </Card>
-              </DialogTrigger>
+      {/* Table View */}
+<div className="overflow-x-auto rounded-lg shadow bg-white">
+  <table className="min-w-full text-sm">
+    <thead className="bg-[#ffba20] text-black text-left">
+      <tr>
+        <th className="px-4 py-2">Sales Invoice (TXN)</th>
+        <th className="px-4 py-2">Customer Name</th>
+        <th className="px-4 py-2 text-center">Action</th>
+      </tr>
+    </thead>
+    <tbody className="divide-y divide-gray-200">
+      {filteredOrders.map((order) => {
+        const c = customerMap.get(order.customer_id);
+        const txn = c?.code || order.id;
+        return (
+          <Dialog
+            key={order.id}
+            open={openId === order.id}
+            onOpenChange={(open) => {
+              if (!open) {
+                setOpenId(null);
+                setSelectedOrder(null);
+                setItems(null);
+              } else {
+                openInvoice(order);
+              }
+            }}
+          >
+            <tr className="hover:bg-gray-50 transition">
+              <td className="px-4 py-2">{txn}</td>
+              <td className="px-4 py-2">{c?.name ?? "Unknown"}</td>
+              <td className="px-4 py-2 text-center">
+                <DialogTrigger asChild>
+                  <button
+                    className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                    onClick={() => openInvoice(order)} // ✅ keep this so data loads
+                  >
+                    View
+                  </button>
+                </DialogTrigger>
+              </td>
+            </tr>
 
-              <DialogContent className="max-w-5xl print:block print:static">
-                {!selectedOrder || openId !== order.id ? (
-                  <div className="p-6 text-sm text-neutral-600">Loading…</div>
-                ) : loadingItems || !items || !customerForOrder ? (
-                  <div className="p-6 text-sm text-neutral-600">
-                    Fetching items…
+            <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
+              {!selectedOrder || openId !== order.id ? (
+                <div className="p-6 text-sm">Loading…</div>
+              ) : loadingItems || !items || !customerForOrder ? (
+                <div className="p-6 text-sm">Fetching items…</div>
+              ) : (
+                <div>
+                  <div className="flex items-center justify-between px-2 pt-2 pb-1">
+                    <div className="text-sm">TXN: {txn}</div>
+                    <button
+                      className="bg-blue-600 text-white px-3 py-1.5 rounded"
+                      onClick={() => handlePreviewPDF(order.id)}
+                    >
+                      Preview PDF
+                    </button>
                   </div>
-                ) : (
-                  <div className="bg-white">
-                    {/* Toolbar (NOT captured) */}
-                    <div className="flex items-center justify-between px-2 pt-2 pb-1">
-                      <div className="text-sm text-neutral-700">
-                        <span className="font-semibold">TXN:</span> {txn}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
-                          onClick={() => handlePreviewPDF(order.id)}
-                          disabled={loadingItems}
-                          title="Preview PDF"
-                        >
-                          Preview PDF
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Visible invoice (ONLY this gets captured) */}
-                    <div id={`invoice-capture-${order.id}`} className="p-2">
-                      <DeliveryReceiptLikeInvoice
-                        customer={customerForOrder}
-                        initialItems={items}
-                        initialDate={initialDate}
-                      />
-                    </div>
+                  <div id={`invoice-capture-${order.id}`} className="p-2">
+                    <DeliveryReceiptLikeInvoice
+                      customer={customerForOrder}
+                      initialItems={items}
+                      initialDate={initialDate}
+                    />
                   </div>
-                )}
-              </DialogContent>
-            </Dialog>
-          );
-        })}
-      </div>
-
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+        );
+      })}
       {!filteredOrders.length && (
-        <div className="text-sm text-neutral-600">No invoices found.</div>
+        <tr>
+          <td colSpan={3} className="text-center py-4 text-neutral-500">
+            No invoices found.
+          </td>
+        </tr>
       )}
+    </tbody>
+  </table>
+</div>
+
 
       {/* PDF Preview Modal */}
       <AnimatePresence>
@@ -292,9 +264,9 @@ export default function InvoicePage() {
                   if (pdfUrl) URL.revokeObjectURL(pdfUrl);
                   setPdfUrl(null);
                 }}
-                className="absolute top-3 right-4 inline-flex items-center gap-2 px-3 py-1.5 rounded bg-neutral-200 hover:bg-neutral-300"
+                className="absolute top-3 right-4 px-3 py-1.5 bg-neutral-200 hover:bg-neutral-300"
               >
-                <X className="w-4 h-4" /> Close
+                <X className="w-4 h-4" /> 
               </button>
             </div>
           </motion.div>
