@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState, useMemo, useRef } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
+import { toast } from "sonner";
 
 type InventoryItem = {
   id: number;
@@ -15,6 +16,19 @@ type InventoryItem = {
   quantity: number;
   unit_price: number;
   amount: number;
+};
+
+type FastMovingProduct = {
+  id: number;
+  sku: string;
+  product_name: string;
+  category: string;
+  subcategory: string;
+  unit: string;
+  current_stock: number;
+  units_90d: number;
+  est_days_of_cover: number | null;
+  pr_units_velocity: number;
 };
 
 type OrderWithDetails = {
@@ -75,9 +89,65 @@ export default function SalesPage() {
   const [showFinalConfirm, setShowFinalConfirm] = useState(false);
   const [poNumber, setPoNumber] = useState("");
   const [repName, setRepName] = useState("");
-  const [taxAmount, setTaxAmount] = useState(0);
-  const [freightAmount, setFreightAmount] = useState(0);
+  const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
+
+  const [fastMovingProducts, setFastMovingProducts] = useState<FastMovingProduct[]>([]);
+  const [showFastMovingModal, setShowFastMovingModal] = useState(false);
+  const [slowMovingProducts, setSlowMovingProducts] = useState<FastMovingProduct[]>([]);
+  const [showSlowMovingModal, setShowSlowMovingModal] = useState(false);
   const ordersPerPage = 10;
+
+  const computedOrderTotal = useMemo(() => {
+    if (!selectedOrder) return 0;
+    return selectedOrder.order_items.reduce((sum, item, idx) => {
+      const q = editedQuantities[idx] ?? item.quantity;
+      const percent = editedDiscounts[idx] ?? 0;
+      const p = item.price;
+      return sum + q * p * (1 + percent / 100);
+    }, 0);
+  }, [selectedOrder, editedQuantities, editedDiscounts]);
+
+  const salesTaxValue = isSalesTaxOn ? computedOrderTotal * 0.12 : 0;
+
+  const getGrandTotalWithInterest = () => {
+    if (!selectedOrder) return 0;
+    const baseTotal = computedOrderTotal + salesTaxValue;
+    if (
+      selectedOrder.customers.payment_type === "Credit" &&
+      numberOfTerms > 0
+    ) {
+      return baseTotal * (1 + interestPercent / 100);
+    }
+    return baseTotal;
+  };
+
+  const getPerTermAmount = () => {
+    if (
+      selectedOrder &&
+      selectedOrder.customers.payment_type === "Credit" &&
+      numberOfTerms > 0
+    ) {
+      return getGrandTotalWithInterest() / numberOfTerms;
+    }
+    return getGrandTotalWithInterest();
+  };
+
+  const totalSales = useMemo(
+    () =>
+      orders
+        .filter((o) => o.status === "completed")
+        .reduce((sum, o) => sum + (o.total_amount || 0), 0),
+    [orders]
+  );
+  const completedOrders = useMemo(
+    () => orders.filter((o) => o.status === "completed").length,
+    [orders]
+  );
+  const pendingOrders = useMemo(
+    () => orders.filter((o) => o.status === "pending").length,
+    [orders]
+  );
+  const totalOrders = orders.length;
 
   // Fetch all inventory items
   const fetchItems = async () => {
@@ -89,7 +159,8 @@ export default function SalesPage() {
   const fetchOrders = async () => {
     const { data, error } = await supabase
       .from("orders")
-      .select(`
+      .select(
+        `
         id,
         status,
         total_amount,
@@ -123,10 +194,11 @@ export default function SalesPage() {
             unit_price
           )
         )
-      `)
+      `
+      )
       .order("date_created", { ascending: false });
     if (!error && data) {
-      const formatted = data.map((o) => ({
+      const formatted = data.map((o: any) => ({
         ...o,
         customers: Array.isArray(o.customer) ? o.customer[0] : o.customer,
         order_items: o.order_items.map((item: any) => ({
@@ -138,18 +210,45 @@ export default function SalesPage() {
     }
   };
 
+  // Fetch Fast & Slow Moving Products from VIEW
+  const fetchFastMovingProducts = async () => {
+    const { data, error } = await supabase
+      .from("v_fast_moving_products")
+      .select("*")
+      .order("units_90d", { ascending: false });
+    if (!error && data) setFastMovingProducts(data.slice(0, 20));
+  };
+
+  const fetchSlowMovingProducts = async () => {
+    const { data, error } = await supabase
+      .from("v_fast_moving_products")
+      .select("*")
+      .order("units_90d", { ascending: true });
+    if (!error && data) setSlowMovingProducts(data.slice(0, 20));
+  };
+
   useEffect(() => {
     fetchItems();
     fetchOrders();
-    // Realtime inventory & orders
+    fetchFastMovingProducts();
+    fetchSlowMovingProducts();
+
+    // Realtime for INVENTORY: update inventory & fast/slow movers on any change
     const inventoryChannel: RealtimeChannel = supabase
       .channel("inventory-channel")
-      .on("postgres_changes", { event: "*", schema: "public", table: "inventory" }, fetchItems)
+      .on("postgres_changes", { event: "*", schema: "public", table: "inventory" }, () => {
+        fetchItems();
+        fetchFastMovingProducts();
+        fetchSlowMovingProducts();
+      })
       .subscribe();
 
+    // Realtime for ORDERS: update orders and also re-calc dashboard cards on change
     const ordersChannel: RealtimeChannel = supabase
       .channel("orders-channel")
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, fetchOrders)
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, () => {
+        fetchOrders();
+      })
       .subscribe();
 
     return () => {
@@ -162,8 +261,6 @@ export default function SalesPage() {
     if (!showModal) {
       setNumberOfTerms(1);
       setInterestPercent(0);
-      setTaxAmount(0);
-      setFreightAmount(0);
     }
   }, [showModal]);
 
@@ -178,8 +275,6 @@ export default function SalesPage() {
     setShowModal(true);
     setNumberOfTerms(1);
     setInterestPercent(0);
-    setTaxAmount(0);
-    setFreightAmount(0);
   };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
@@ -188,47 +283,11 @@ export default function SalesPage() {
     fetchOrders();
   };
 
-  // --- Calculations ---
-  const computedOrderTotal = useMemo(() => {
-    if (!selectedOrder) return 0;
-    return selectedOrder.order_items.reduce((sum, item, idx) => {
-      const q = editedQuantities[idx] ?? item.quantity;
-      const percent = editedDiscounts[idx] ?? 0;
-      const p = item.price;
-      return sum + q * p * (1 + percent / 100);
-    }, 0);
-  }, [selectedOrder, editedQuantities, editedDiscounts]);
-
-  const getGrandTotalWithInterest = () => {
-    if (!selectedOrder) return 0;
-    const baseTotal = computedOrderTotal + taxAmount + freightAmount;
-    if (
-      selectedOrder.customers.payment_type === "Credit" &&
-      numberOfTerms > 0
-    ) {
-      return baseTotal * (1 + interestPercent / 100);
-    }
-    return baseTotal;
-  };
-
-  const getPerTermAmount = () => {
-    if (
-      selectedOrder &&
-      selectedOrder.customers.payment_type === "Credit" &&
-      numberOfTerms > 0
-    ) {
-      return getGrandTotalWithInterest() / numberOfTerms;
-    }
-    return getGrandTotalWithInterest();
-  };
-
-  // Save order & payment terms
   const handleOrderConfirm = async () => {
     if (!selectedOrder) return;
     setShowFinalConfirm(true);
   };
 
-  // After admin confirms in the confirmation modal
   const handleOrderComplete = async () => {
     if (!selectedOrder) return;
     for (let i = 0; i < selectedOrder.order_items.length; i++) {
@@ -236,7 +295,7 @@ export default function SalesPage() {
       const invId = oi.inventory.id;
       const remaining = oi.inventory.quantity - editedQuantities[i];
       if (remaining < 0) {
-        alert(`Insufficient stock for ${oi.inventory.product_name}`);
+        toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
         setShowFinalConfirm(false);
         return;
       }
@@ -253,7 +312,7 @@ export default function SalesPage() {
         },
       ]);
     }
-    // Save payment terms/interest for Credit orders to DB
+    // Save order as completed (update with sales_tax, etc)
     if (selectedOrder.customers.payment_type === "Credit") {
       await supabase
         .from("orders")
@@ -263,8 +322,7 @@ export default function SalesPage() {
           grand_total_with_interest: getGrandTotalWithInterest(),
           per_term_amount: getPerTermAmount(),
           status: "completed",
-          sales_tax: taxAmount,
-          freight: freightAmount,
+          sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
         })
         .eq("id", selectedOrder.id);
     } else {
@@ -272,8 +330,7 @@ export default function SalesPage() {
         .from("orders")
         .update({
           status: "completed",
-          sales_tax: taxAmount,
-          freight: freightAmount,
+          sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
         })
         .eq("id", selectedOrder.id);
     }
@@ -283,16 +340,14 @@ export default function SalesPage() {
     setSelectedOrder(null);
     fetchOrders();
     fetchItems();
-    alert("Order successfully completed.");
+    toast.success("Order successfully completed!");
   };
 
-  // Back to first modal (not close)
   const handleBackModal = () => {
     setShowSalesOrderModal(false);
     setShowModal(true);
   };
 
-  // Cancel and close all
   const handleCancelModal = () => {
     setShowModal(false);
     setSelectedOrder(null);
@@ -300,16 +355,13 @@ export default function SalesPage() {
     setShowFinalConfirm(false);
     setPoNumber("");
     setRepName("");
-    setTaxAmount(0);
-    setFreightAmount(0);
   };
 
-  // RESET discount for a row
   const handleResetDiscount = (idx: number) => {
     setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
   };
 
-  // Add/Minus Discount Hold Support
+  // Discount +/- Hold
   const timersRef = useRef<{ [key: number]: NodeJS.Timeout }>({});
 
   const handleIncrement = (idx: number) => {
@@ -322,16 +374,17 @@ export default function SalesPage() {
       prev.map((d, i) => (i === idx ? Math.max(-100, (Number(d) || 0) - 1) : d))
     );
   };
-
-  // Discount/Add percent input handler (number only, no + or - typing)
   const handleDiscountInput = (idx: number, value: string) => {
-    let percent = parseFloat(value.replace(/[^0-9\-]/g, ''));
+    let percent = parseFloat(value.replace(/[^0-9\-]/g, ""));
     if (isNaN(percent)) percent = 0;
     if (percent > 100) percent = 100;
     if (percent < -100) percent = -100;
     setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? percent : d)));
   };
 
+  const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
+
+  // --- RENDER ---
   return (
     <div className="p-6">
       <motion.h1 className="text-3xl font-bold mb-4">Sales Processing</motion.h1>
@@ -342,6 +395,270 @@ export default function SalesPage() {
         onChange={(e) => setSearchQuery(e.target.value)}
         className="mb-4 w-full md:w-1/3 px-4 py-2 border rounded"
       />
+
+      {/* Cards Section */}
+      <div className="flex flex-wrap gap-4 mb-8">
+        {/* Fast Moving Product */}
+        <div
+          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
+          title="Click to view Top 20 Fast Moving Products"
+          onClick={() => setShowFastMovingModal(true)}
+        >
+          <div className="text-xs text-gray-500 font-semibold mb-2">
+            Fast Moving Product
+          </div>
+          {fastMovingProducts.length > 0 ? (
+            <>
+              <div className="text-base font-bold text-blue-700 mb-1 underline hover:text-blue-900 transition">
+                {fastMovingProducts[0].product_name}
+              </div>
+              <div className="text-sm text-gray-600">
+                Sold in last 90d: <b>{fastMovingProducts[0].units_90d.toLocaleString()}</b> units
+                <br />
+                Stock Left: <b>{fastMovingProducts[0].current_stock.toLocaleString()}</b>
+              </div>
+            </>
+          ) : (
+            <div className="text-sm text-gray-400">No data</div>
+          )}
+        </div>
+
+        {/* Slow Moving Product */}
+        <div
+          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
+          title="Click to view Top 20 Slow Moving Products"
+          onClick={() => setShowSlowMovingModal(true)}
+        >
+          <div className="text-xs text-gray-500 font-semibold mb-2">
+            Slow Moving Product
+          </div>
+          {slowMovingProducts.length > 0 ? (
+            <>
+              <div className="text-base font-bold text-orange-600 mb-1 underline hover:text-orange-800 transition">
+                {slowMovingProducts[0].product_name}
+              </div>
+              <div className="text-sm text-gray-600">
+                Sold in last 90d: <b>{slowMovingProducts[0].units_90d.toLocaleString()}</b> units
+                <br />
+                Stock Left: <b>{slowMovingProducts[0].current_stock.toLocaleString()}</b>
+              </div>
+            </>
+          ) : (
+            <div className="text-sm text-gray-400">No data</div>
+          )}
+        </div>
+
+        {/* Total Orders */}
+        <div
+          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
+          title="Total Orders"
+        >
+          <div className="text-xs text-gray-500 font-semibold mb-2">
+            Total Orders
+          </div>
+          <div className="text-2xl font-bold text-black mb-1">
+            {totalOrders}
+          </div>
+        </div>
+
+        {/* Completed Orders */}
+        <div
+          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
+          title="Completed Orders"
+        >
+          <div className="text-xs text-gray-500 font-semibold mb-2">
+            Completed Orders
+          </div>
+          <div className="text-2xl font-bold text-blue-700 mb-1">
+            {completedOrders}
+          </div>
+        </div>
+
+        {/* Pending Orders */}
+        <div
+          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
+          title="Jump to Pending Orders"
+          onClick={() => {
+            if (pendingOrders > 0) {
+              const ordersSection = document.getElementById('pending-orders-section');
+              if (ordersSection) {
+                ordersSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            } else {
+              toast.info("No Available Orders");
+            }
+          }}
+        >
+          <div className="text-xs text-gray-500 font-semibold mb-2">
+            Pending Orders
+          </div>
+          <div className="text-2xl font-bold text-orange-500 mb-1">
+            {pendingOrders}
+          </div>
+        </div>
+      </div>
+
+      {/* --- FAST MOVING MODAL --- */}
+      <AnimatePresence>
+        {showFastMovingModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
+            onClick={() => setShowFastMovingModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 60 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 60 }}
+              transition={{ type: "spring", stiffness: 400, damping: 30 }}
+              className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full mx-4 p-8 border border-blue-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-center mb-6">
+                <span className="text-xl font-bold text-black">
+                  Top 20 Fast Moving Products{" "}
+                  <span className="font-normal text-base text-gray-600">
+                    (last 90 days)
+                  </span>
+                </span>
+                <button
+                  className="w-8 h-8 text-gray-400 hover:bg-gray-100 rounded-full flex items-center justify-center text-xl"
+                  onClick={() => setShowFastMovingModal(false)}
+                  title="Close"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm border rounded-xl shadow">
+                  <thead>
+                    <tr className="bg-[#ffba20] text-black text-left font-bold text-base border-b">
+                      <th className="py-2 px-3">#</th>
+                      <th className="py-2 px-3">Product</th>
+                      <th className="py-2 px-3">Category</th>
+                      <th className="py-2 px-3">Subcategory</th>
+                      <th className="py-2 px-3 text-right">Sold (90d)</th>
+                      <th className="py-2 px-3 text-right">Stock Left</th>
+                      <th className="py-2 px-3 text-right">Days of Cover</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fastMovingProducts.map((prod, idx) => (
+                      <tr key={prod.id} className="border-b hover:bg-blue-50/80">
+                        <td className="py-2 px-3 font-semibold text-center">
+                          {idx + 1}
+                        </td>
+                        <td className="py-2 px-3 font-bold">
+                          {prod.product_name}
+                        </td>
+                        <td className="py-2 px-3">{prod.category}</td>
+                        <td className="py-2 px-3">{prod.subcategory}</td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.units_90d.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.current_stock.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.est_days_of_cover
+                            ? prod.est_days_of_cover.toFixed(1)
+                            : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="text-xs text-gray-500 mt-4">
+                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last 90 days). Shows how long the stock will last at current sales velocity.
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* --- SLOW MOVING MODAL --- */}
+      <AnimatePresence>
+        {showSlowMovingModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
+            onClick={() => setShowSlowMovingModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 60 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 60 }}
+              transition={{ type: "spring", stiffness: 400, damping: 30 }}
+              className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full mx-4 p-8 border border-orange-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-center mb-6">
+                <span className="text-xl font-bold text-black">
+                  Top 20 Slow Moving Products{" "}
+                  <span className="font-normal text-base text-gray-600">
+                    (last 90 days)
+                  </span>
+                </span>
+                <button
+                  className="w-8 h-8 text-gray-400 hover:bg-gray-100 rounded-full flex items-center justify-center text-xl"
+                  onClick={() => setShowSlowMovingModal(false)}
+                  title="Close"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm border rounded-xl shadow">
+                  <thead>
+                    <tr className="bg-[#ffba20] text-black text-left font-bold text-base border-b">
+                      <th className="py-2 px-3">#</th>
+                      <th className="py-2 px-3">Product</th>
+                      <th className="py-2 px-3">Category</th>
+                      <th className="py-2 px-3">Subcategory</th>
+                      <th className="py-2 px-3 text-right">Sold (90d)</th>
+                      <th className="py-2 px-3 text-right">Stock Left</th>
+                      <th className="py-2 px-3 text-right">Days of Cover</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {slowMovingProducts.map((prod, idx) => (
+                      <tr key={prod.id} className="border-b hover:bg-orange-50/80">
+                        <td className="py-2 px-3 font-semibold text-center">
+                          {idx + 1}
+                        </td>
+                        <td className="py-2 px-3 font-bold">
+                          {prod.product_name}
+                        </td>
+                        <td className="py-2 px-3">{prod.category}</td>
+                        <td className="py-2 px-3">{prod.subcategory}</td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.units_90d.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.current_stock.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.est_days_of_cover
+                            ? prod.est_days_of_cover.toFixed(1)
+                            : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="text-xs text-gray-500 mt-4">
+                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last 90 days). Indicates how long the current inventory will last.
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Inventory Table */}
       <div className="overflow-x-auto rounded-lg shadow mb-6">
@@ -384,7 +701,7 @@ export default function SalesPage() {
       </div>
 
       {/* Orders List */}
-      <div className="mt-10">
+      <div className="mt-10" id="pending-orders-section" ref={pendingOrdersSectionRef}>
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
         {orders
           .filter((o) => o.status === "pending" || o.status === "accepted")
@@ -535,6 +852,8 @@ export default function SalesPage() {
         </div>
       </div>
 
+      {/* --- MODALS: Picking List, Sales Order, Final Confirmation --- */}
+
       {/* Picking List Modal */}
       {showModal && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50 overflow-y-auto">
@@ -543,18 +862,35 @@ export default function SalesPage() {
             <div className="bg-[#F7FAFC] rounded-xl shadow px-8 py-6 border border-gray-200 mb-2">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
                 <div>
-                  <h2 className="font-bold text-base mb-2 tracking-wide text-[#1A202C]">Customer Info</h2>
-                  <p><b>Name:</b> {selectedOrder.customers.name}</p>
-                  <p><b>Email:</b> {selectedOrder.customers.email}</p>
-                  <p><b>Phone:</b> {selectedOrder.customers.phone}</p>
-                  <p><b>Address:</b> {selectedOrder.customers.address}</p>
-                  {selectedOrder.customers.area && <p><b>Area:</b> {selectedOrder.customers.area}</p>}
+                  <h2 className="font-bold text-base mb-2 tracking-wide text-[#1A202C]">
+                    Customer Info
+                  </h2>
+                  <p>
+                    <b>Name:</b> {selectedOrder.customers.name}
+                  </p>
+                  <p>
+                    <b>Email:</b> {selectedOrder.customers.email}
+                  </p>
+                  <p>
+                    <b>Phone:</b> {selectedOrder.customers.phone}
+                  </p>
+                  <p>
+                    <b>Address:</b> {selectedOrder.customers.address}
+                  </p>
+                  {selectedOrder.customers.area && (
+                    <p>
+                      <b>Area:</b> {selectedOrder.customers.area}
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-col justify-start items-end">
                   <p>
                     <b>Total:</b>{" "}
                     <span className="font-bold text-2xl text-green-700">
-                      ₱{computedOrderTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      ₱
+                      {computedOrderTotal.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                      })}
                     </span>
                   </p>
                   <p className="mt-2">
@@ -564,10 +900,10 @@ export default function SalesPage() {
                         selectedOrder.customers.payment_type === "Credit"
                           ? "font-bold text-blue-600"
                           : selectedOrder.customers.payment_type === "Cash"
-                            ? "font-bold text-green-600"
-                            : selectedOrder.customers.payment_type === "Balance"
-                              ? "font-bold text-orange-500"
-                              : "font-bold"
+                          ? "font-bold text-green-600"
+                          : selectedOrder.customers.payment_type === "Balance"
+                          ? "font-bold text-orange-500"
+                          : "font-bold"
                       }
                     >
                       {selectedOrder.customers.payment_type || "N/A"}
@@ -580,7 +916,9 @@ export default function SalesPage() {
                         type="number"
                         min={1}
                         value={numberOfTerms}
-                        onChange={e => setNumberOfTerms(Math.max(1, Number(e.target.value)))}
+                        onChange={(e) =>
+                          setNumberOfTerms(Math.max(1, Number(e.target.value)))
+                        }
                         className="border rounded px-2 py-1 w-16 text-center"
                         disabled={selectedOrder.customers.payment_type !== "Credit"}
                       />
@@ -591,15 +929,41 @@ export default function SalesPage() {
                         type="number"
                         min={0}
                         value={interestPercent}
-                        onChange={e => setInterestPercent(Math.max(0, Number(e.target.value)))}
+                        onChange={(e) =>
+                          setInterestPercent(Math.max(0, Number(e.target.value)))
+                        }
                         className="border rounded px-2 py-1 w-16 text-center"
                         disabled={selectedOrder.customers.payment_type !== "Credit"}
                       />
                     </div>
+                    <div className="flex items-center mt-2">
+                      <input
+                        type="checkbox"
+                        checked={isSalesTaxOn}
+                        onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
+                        id="sales-tax-toggle"
+                        className="mr-2 accent-blue-600"
+                      />
+                      <label htmlFor="sales-tax-toggle" className="text-base font-semibold">
+                        Sales Tax (12%)
+                      </label>
+                    </div>
                     <div className="text-base text-gray-700 mt-1">
-                      <b>Grand Total w/ Interest:</b> <span className="text-blue-700 font-bold">₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      <b>Grand Total w/ Interest:</b>{" "}
+                      <span className="text-blue-700 font-bold">
+                        ₱
+                        {getGrandTotalWithInterest().toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
                       <br />
-                      <b>Per Term:</b> <span className="text-blue-700 font-bold">₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      <b>Per Term:</b>{" "}
+                      <span className="text-blue-700 font-bold">
+                        ₱
+                        {getPerTermAmount().toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -607,7 +971,9 @@ export default function SalesPage() {
             </div>
             {/* Picking List Table */}
             <div className="bg-white rounded-xl shadow border border-gray-200 px-2 py-4 mb-4">
-              <h2 className="font-bold text-base mb-2 tracking-wide text-[#1A202C] text-center">Picking List</h2>
+              <h2 className="font-bold text-base mb-2 tracking-wide text-[#1A202C] text-center">
+                Picking List
+              </h2>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-[15px] border border-gray-200 rounded-xl">
                   <thead className="bg-[#ffba20] text-black">
@@ -639,7 +1005,7 @@ export default function SalesPage() {
                               value={qty}
                               onChange={(e) => {
                                 const val = Number(e.target.value);
-                                setEditedQuantities(prev =>
+                                setEditedQuantities((prev) =>
                                   prev.map((q, i) => (i === idx ? val : q))
                                 );
                               }}
@@ -656,7 +1022,9 @@ export default function SalesPage() {
                               {item.inventory.subcategory && <span> | {item.inventory.subcategory}</span>}
                             </div>
                           </td>
-                          <td className="py-2 px-3 text-right">₱{item.inventory.unit_price?.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-right">
+                            ₱{item.inventory.unit_price?.toLocaleString()}
+                          </td>
                           <td className="py-2 px-3 text-right">
                             <div className="flex flex-col items-center">
                               <div className="flex items-center gap-2">
@@ -665,19 +1033,24 @@ export default function SalesPage() {
                                   title="Minus"
                                   onMouseDown={() => {
                                     handleDecrement(idx);
-                                    timersRef.current[idx] = setInterval(() => handleDecrement(idx), 150);
+                                    timersRef.current[idx] = setInterval(
+                                      () => handleDecrement(idx),
+                                      150
+                                    );
                                   }}
                                   onMouseUp={() => clearInterval(timersRef.current[idx])}
                                   onMouseLeave={() => clearInterval(timersRef.current[idx])}
-                                >–</button>
+                                >
+                                  –
+                                </button>
                                 <input
                                   type="number"
                                   value={percent}
-                                  onChange={e => handleDiscountInput(idx, e.target.value)}
+                                  onChange={(e) => handleDiscountInput(idx, e.target.value)}
                                   min={-100}
                                   max={100}
                                   className="w-14 border rounded px-1 py-1 text-center font-semibold"
-                                  style={{ MozAppearance: 'textfield' }}
+                                  style={{ MozAppearance: "textfield" }}
                                   title="Enter negative for discount, positive for surcharge. Range: -100 to 100"
                                 />
                                 <button
@@ -685,11 +1058,16 @@ export default function SalesPage() {
                                   title="Add"
                                   onMouseDown={() => {
                                     handleIncrement(idx);
-                                    timersRef.current[idx] = setInterval(() => handleIncrement(idx), 150);
+                                    timersRef.current[idx] = setInterval(
+                                      () => handleIncrement(idx),
+                                      150
+                                    );
                                   }}
                                   onMouseUp={() => clearInterval(timersRef.current[idx])}
                                   onMouseLeave={() => clearInterval(timersRef.current[idx])}
-                                >+</button>
+                                >
+                                  +
+                                </button>
                                 <span className="ml-2 font-bold">
                                   {percent > 0 ? "+" : percent < 0 ? "-" : ""}
                                   {Math.abs(percent)}%
@@ -706,8 +1084,12 @@ export default function SalesPage() {
                           </td>
                           <td className="py-2 px-3 text-right text-[#DC7633] font-semibold">
                             {percent >= 0
-                              ? `₱${lessAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-                              : `-₱${Math.abs(lessAmount).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                              ? `₱${lessAmount.toLocaleString(undefined, {
+                                  minimumFractionDigits: 2,
+                                })}`
+                              : `-₱${Math.abs(lessAmount).toLocaleString(undefined, {
+                                  minimumFractionDigits: 2,
+                                })}`}
                           </td>
                           <td className="py-2 px-3 text-right text-[#26734d] font-semibold">
                             ₱{netAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -759,15 +1141,6 @@ export default function SalesPage() {
                   <span className="font-medium">Sales Order Date: </span>
                   {new Date().toISOString().slice(0, 10)}
                 </div>
-                <div>
-                  <span className="font-medium">Ship By: </span>
-                  <input
-                    type="date"
-                    className="border-b outline-none"
-                    style={{ minWidth: 120 }}
-                    defaultValue={new Date().toISOString().slice(0, 10)}
-                  />
-                </div>
               </div>
               <div className="text-right space-y-1">
                 <div>
@@ -775,7 +1148,7 @@ export default function SalesPage() {
                   <input
                     type="text"
                     value={poNumber}
-                    onChange={e => setPoNumber(e.target.value)}
+                    onChange={(e) => setPoNumber(e.target.value)}
                     className="border-b outline-none px-1"
                     style={{ minWidth: 100 }}
                     placeholder="Input PO No"
@@ -786,7 +1159,7 @@ export default function SalesPage() {
                   <input
                     type="text"
                     value={repName}
-                    onChange={e => setRepName(e.target.value)}
+                    onChange={(e) => setRepName(e.target.value)}
                     className="border-b outline-none px-1"
                     style={{ minWidth: 100 }}
                     placeholder="Input Rep"
@@ -797,7 +1170,9 @@ export default function SalesPage() {
                   {selectedOrder.customers.payment_type === "Credit" ? (
                     <>
                       Net {numberOfTerms} Monthly
-                      <span className="text-gray-500 ml-2">(Terms: {numberOfTerms})</span>
+                      <span className="text-gray-500 ml-2">
+                        (Terms: {numberOfTerms})
+                      </span>
                     </>
                   ) : (
                     selectedOrder.customers.payment_type
@@ -805,21 +1180,41 @@ export default function SalesPage() {
                 </div>
               </div>
             </div>
-            {/* CUSTOMER DETAILS: Only show needed fields */}
+            {/* CUSTOMER DETAILS */}
             <div className="bg-[#f6f6f9] border rounded-lg px-4 py-3 mb-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 text-[15px]">
               <div>
                 <div className="font-bold">To:</div>
-                <div><b>Name:</b> {selectedOrder.customers.name}</div>
-                <div><b>Email:</b> {selectedOrder.customers.email}</div>
-                <div><b>Phone:</b> {selectedOrder.customers.phone}</div>
-                <div><b>Address:</b> {selectedOrder.customers.address}</div>
-                {selectedOrder.customers.area && <div><b>Area:</b> {selectedOrder.customers.area}</div>}
+                <div>
+                  <b>Name:</b> {selectedOrder.customers.name}
+                </div>
+                <div>
+                  <b>Email:</b> {selectedOrder.customers.email}
+                </div>
+                <div>
+                  <b>Phone:</b> {selectedOrder.customers.phone}
+                </div>
+                <div>
+                  <b>Address:</b> {selectedOrder.customers.address}
+                </div>
+                {selectedOrder.customers.area && (
+                  <div>
+                    <b>Area:</b> {selectedOrder.customers.area}
+                  </div>
+                )}
               </div>
               <div>
                 <div className="font-bold">Ship To:</div>
-                <div><b>Name:</b> {selectedOrder.customers.name}</div>
-                <div><b>Address:</b> {selectedOrder.customers.address}</div>
-                {selectedOrder.customers.area && <div><b>Area:</b> {selectedOrder.customers.area}</div>}
+                <div>
+                  <b>Name:</b> {selectedOrder.customers.name}
+                </div>
+                <div>
+                  <b>Address:</b> {selectedOrder.customers.address}
+                </div>
+                {selectedOrder.customers.area && (
+                  <div>
+                    <b>Area:</b> {selectedOrder.customers.area}
+                  </div>
+                )}
               </div>
             </div>
             {/* Item Table */}
@@ -848,9 +1243,13 @@ export default function SalesPage() {
                         <td className="py-2 px-3">
                           {item.inventory.product_name}
                           {item.inventory.category ? ` | ${item.inventory.category}` : ""}
-                          {item.inventory.subcategory ? ` | ${item.inventory.subcategory}` : ""}
+                          {item.inventory.subcategory
+                            ? ` | ${item.inventory.subcategory}`
+                            : ""}
                         </td>
-                        <td className="py-2 px-3 text-right">₱{item.price.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-right">
+                          ₱{item.price.toLocaleString()}
+                        </td>
                         <td className="py-2 px-3 text-right">
                           <span className="font-bold">
                             {percent > 0 ? "+" : percent < 0 ? "-" : ""}
@@ -858,7 +1257,9 @@ export default function SalesPage() {
                           </span>
                         </td>
                         <td className="py-2 px-3 text-right font-semibold">
-                          ₱{amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          ₱{amount.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                          })}
                         </td>
                       </tr>
                     );
@@ -871,41 +1272,39 @@ export default function SalesPage() {
               <div className="space-y-2 min-w-[350px]">
                 <div className="flex justify-between font-medium">
                   <span>Subtotal:</span>
-                  <span>₱{computedOrderTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                  <span>
+                    ₱
+                    {computedOrderTotal.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Sales Tax:</span>
-                  <input
-                    type="number"
-                    value={taxAmount}
-                    onChange={e => setTaxAmount(Number(e.target.value))}
-                    className="w-28 border-b text-right px-2 outline-none"
-                    min={0}
-                    step={1}
-                    placeholder="₱0.00"
-                  />
-                </div>
-                <div className="flex justify-between">
-                  <span>Freight:</span>
-                  <input
-                    type="number"
-                    value={freightAmount}
-                    onChange={e => setFreightAmount(Number(e.target.value))}
-                    className="w-28 border-b text-right px-2 outline-none"
-                    min={0}
-                    step={1}
-                    placeholder="₱0.00"
-                  />
+                  <span>Sales Tax (12%):</span>
+                  <span>
+                    ₱
+                    {salesTaxValue.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
                 </div>
                 <div className="flex justify-between text-xl font-bold border-t pt-2">
                   <span>TOTAL ORDER AMOUNT:</span>
-                  <span className="text-green-700">₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                  <span className="text-green-700">
+                    ₱
+                    {getGrandTotalWithInterest().toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
                 </div>
                 {selectedOrder.customers.payment_type === "Credit" && (
                   <div className="flex justify-between">
                     <span>Payment per Term:</span>
                     <span className="font-bold text-blue-700">
-                      ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      ₱
+                      {getPerTermAmount().toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                      })}
                     </span>
                   </div>
                 )}
@@ -935,10 +1334,12 @@ export default function SalesPage() {
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl mx-auto p-10 text-center">
             <div className="text-xl font-bold mb-6 text-gray-800">
-              Are you sure you want to <span className="text-green-700">COMPLETE</span> this order?
+              Are you sure you want to{" "}
+              <span className="text-green-700">COMPLETE</span> this order?
             </div>
             <div className="text-base mb-6">
-              This will deduct the items from inventory, mark the order as completed, and record the sales transaction.
+              This will deduct the items from inventory, mark the order as completed,
+              and record the sales transaction.
             </div>
             <div className="flex justify-center gap-10 mt-4">
               <button
