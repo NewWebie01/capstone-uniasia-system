@@ -3,7 +3,6 @@
 
 import { useState } from "react";
 import { DM_Sans } from "next/font/google";
-import "@/STYLES/globals.css";
 import { Toaster } from "sonner";
 import CustomerSidebar from "@/components/CustomerSidebar";
 import GlobalRouteLoader from "@/components/GlobalRouteLoader";

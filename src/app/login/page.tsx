@@ -28,39 +28,37 @@ export default function LoginPage() {
 
   const router = useRouter();
 
- const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setIsLoading(true);
-  setErrorMessage("");
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setErrorMessage("");
 
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-  if (error) {
-    setErrorMessage("Incorrect email or password.");
-    setPassword("");
-    setIsLoading(false);
-    return;
-  }
+    if (error) {
+      setErrorMessage("Incorrect email or password.");
+      setPassword("");
+      setIsLoading(false);
+      return;
+    }
 
-  const user = data?.user;
-  const role = user?.user_metadata?.role;
+    const user = data?.user;
+    const role = user?.user_metadata?.role;
 
- if (role === "admin") {
-  router.push("/dashboard"); // Redirects admin to /dashboard (not /admin/dashboard)
-} else if (role === "customer") {
-  router.push("/customer");
-} else {
-  setErrorMessage("Access denied: No role found for this account.");
-  await supabase.auth.signOut();
-  setIsLoading(false);
-  return;
-}
-
-};
-
+    if (role === "admin") {
+      router.push("/dashboard"); // Redirects admin to /dashboard (not /admin/dashboard)
+    } else if (role === "customer") {
+      router.push("/customer/product-catalog");
+    } else {
+      setErrorMessage("Access denied: No role found for this account.");
+      await supabase.auth.signOut();
+      setIsLoading(false);
+      return;
+    }
+  };
 
   return (
     <div className={`min-h-screen flex flex-col relative ${dmSans.className}`}>
