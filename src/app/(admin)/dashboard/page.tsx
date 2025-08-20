@@ -1,15 +1,40 @@
 // app/dashboard/page.tsx
 "use client";
 
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import Cards from "@/components/Cards";
-import Graphs from "@/components/Graphs";
 import BottomCards from "@/components/BottomCards";
 import Bargraph from "@/components/Bargraph";
-import { useRouter } from "next/navigation";
 import supabase from "@/config/supabaseClient";
 
 const DashboardPage = () => {
+  const router = useRouter();
+  const [loading, setLoading] = useState(true); // Add loading state
+
+  useEffect(() => {
+    // On mount, check user session and role
+    (async () => {
+      const { data: { session }, error } = await supabase.auth.getSession();
+
+      if (error || !session) {
+        router.replace("/login"); // Not logged in, redirect to login
+        return;
+      }
+
+      const role = session.user.user_metadata?.role;
+      if (role !== "admin") {
+        router.replace("/customer"); // Not an admin, redirect to customer page
+        return;
+      }
+
+      setLoading(false); // User is admin
+    })();
+  }, [router]);
+
+  if (loading) return <p className="text-center mt-10">Checking permissions...</p>;
+
   return (
     <>
       <motion.h1

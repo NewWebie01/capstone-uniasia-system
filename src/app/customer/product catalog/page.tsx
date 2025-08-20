@@ -1,7 +1,11 @@
 // src/app/customer/page.tsx
 "use client";
+// src/app/customer/page.tsx
+"use client";
+
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
@@ -98,6 +102,7 @@ function isValidPhone(phone: string) {
 
 /* -------------------------------- Component ------------------------------- */
 export default function CustomerInventoryPage() {
+  
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -592,6 +597,7 @@ export default function CustomerInventoryPage() {
       console.error("Order submission error:", e.message);
       toast.error("Something went wrong. Please try again.");
     }
+    
   };
 
   /* ------------------------------ Derived ------------------------------ */

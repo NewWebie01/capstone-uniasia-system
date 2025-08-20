@@ -11,6 +11,9 @@ export default function Page() {
     confirmPassword: "",
   });
 
+  // 👇 NEW: Role state
+  const [role, setRole] = useState<"admin" | "customer">("customer");
+
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
 
@@ -21,6 +24,7 @@ export default function Page() {
 
   const handleReset = () => {
     setFormData({ name: "", email: "", password: "", confirmPassword: "" });
+    setRole("customer"); // 👈 Reset to default
     setErrors({});
   };
 
@@ -50,6 +54,7 @@ export default function Page() {
           name: formData.name,
           email: formData.email,
           password: formData.password,
+          role, // 👈 Send selected role!
         }),
       });
 
@@ -114,6 +119,34 @@ export default function Page() {
               )}
             </div>
           ))}
+
+          {/* --- ROLE RADIO BUTTONS ADDED HERE --- */}
+          <div>
+            <span className="block text-sm font-medium mb-1">Account Type</span>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="role"
+                  value="admin"
+                  checked={role === "admin"}
+                  onChange={() => setRole("admin")}
+                />
+                Admin Account
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="role"
+                  value="customer"
+                  checked={role === "customer"}
+                  onChange={() => setRole("customer")}
+                />
+                Customer Account
+              </label>
+            </div>
+          </div>
+          {/* --- END RADIO BUTTONS --- */}
 
           <div className="flex gap-2">
             <button
