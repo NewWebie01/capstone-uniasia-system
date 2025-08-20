@@ -1,11 +1,12 @@
 // src/app/customer/layout.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DM_Sans } from "next/font/google";
 import { Toaster } from "sonner";
 import CustomerSidebar from "@/components/CustomerSidebar";
 import GlobalRouteLoader from "@/components/GlobalRouteLoader";
+import supabase from "@/config/supabaseClient"; // ✅
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -19,6 +20,21 @@ export default function CustomerLayout({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
+  const [userName, setUserName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const getUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        setUserName(user.user_metadata?.name || user.email || "Guest");
+      }
+    };
+
+    getUser();
+  }, []);
 
   return (
     <div
@@ -27,8 +43,8 @@ export default function CustomerLayout({
       <Toaster richColors position="top-center" />
 
       {/* Sticky Header */}
-      <header className="sticky top-0 z-30 backdrop-blur-sm w-full h-12">
-        <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
+      <header className="sticky top-0 z-20 backdrop-blur-sm w-full h-12">
+        <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3 h-full">
           <p>UNIASIA - Reliable Hardware Supplier in the Philippines</p>
         </div>
       </header>
@@ -36,7 +52,20 @@ export default function CustomerLayout({
       {/* Layout */}
       <div className="flex h-[calc(100vh-3rem)] overflow-hidden">
         <CustomerSidebar open={open} setOpen={setOpen} />
-        <main className="flex-1 overflow-y-auto p-6 relative">{children}</main>
+        <main className="flex-1 overflow-y-auto p-6 relative">
+          {/* 👋 Modern greeting */}
+          <div className="flex justify-end mb-2">
+            <div className="bg-white shadow-md rounded-xl px-4 py-2 text-gray-700 mr-6">
+              <span className="font-semibold">Hi,</span>{" "}
+              <span className="text-[#ffba20] font-bold">
+                {userName || "Guest"}
+              </span>
+              👋
+            </div>
+          </div>
+
+          {children}
+        </main>
       </div>
 
       <GlobalRouteLoader />
