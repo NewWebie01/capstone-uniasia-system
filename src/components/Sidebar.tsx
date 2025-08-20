@@ -46,10 +46,29 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   const supabase = createClientComponentClient();
 
   const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) console.error("Logout failed:", error.message);
-    else window.location.href = "/login";
-  };
+  // Get current user before logging out
+  const { data: { user } } = await supabase.auth.getUser();
+  const userEmail = user?.email || "unknown";
+
+  // Insert activity log BEFORE sign out
+  await supabase.from("activity_logs").insert([
+    {
+      user_email: userEmail,
+      action: "Logout",
+      details: {},
+      created_at: new Date().toISOString(),
+    },
+  ]);
+
+  // Then sign out and redirect
+  const { error } = await supabase.auth.signOut();
+  if (error) {
+    console.error("Logout failed:", error.message);
+  } else {
+    window.location.href = "/login";
+  }
+};
+
 
   return (
     <motion.div

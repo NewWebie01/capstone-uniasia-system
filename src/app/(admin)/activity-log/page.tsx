@@ -130,62 +130,48 @@ export default function ActivityLogPage() {
       </div>
 
       <div className="overflow-x-auto rounded-lg shadow mb-4">
-        <table className="min-w-full bg-white text-sm">
-          <thead className="bg-[#ffba20] text-black text-left">
-            <tr>
-              <th className="px-4 py-3">User</th>
-              <th className="px-4 py-3">Activity</th>
-              <th className="px-4 py-3">Details</th>
-              <th className="px-4 py-3">Timestamp</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={4} className="px-4 py-6 text-center">
-                  Loading…
-                </td>
-              </tr>
-            ) : paged.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
-                  No activities found.
-                </td>
-              </tr>
-            ) : (
-              paged.map((act) => (
-                <tr
-                  key={act.id}
-                  className="border-b last:border-0 hover:bg-gray-50"
-                >
-                  <td className="px-4 py-2">{act.user_email ?? "—"}</td>
-                  <td className="px-4 py-2">{act.action}</td>
-                  <td className="px-4 py-2 max-w-[480px]">
-                    {act.details ? (
-                      <details>
-                        <summary className="cursor-pointer underline decoration-dotted">
-                          view
-                        </summary>
-                        <pre className="whitespace-pre-wrap break-words bg-gray-100 p-2 rounded mt-1">
-                          {JSON.stringify(act.details, null, 2)}
-                        </pre>
-                      </details>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className="px-4 py-2 whitespace-nowrap">
-                    {new Date(act.created_at).toLocaleString("en-PH", {
-                      timeZone: "Asia/Manila",
-                      dateStyle: "short",
-                      timeStyle: "short",
-                    })}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+       <table className="min-w-full bg-white text-sm">
+  <thead className="bg-[#ffba20] text-black text-left">
+    <tr>
+      <th className="px-4 py-3">User</th>
+      <th className="px-4 py-3">Activity</th>
+      <th className="px-4 py-3">Timestamp</th>
+    </tr>
+  </thead>
+  <tbody>
+    {loading ? (
+      <tr>
+        <td colSpan={3} className="px-4 py-6 text-center">
+          Loading…
+        </td>
+      </tr>
+    ) : paged.length === 0 ? (
+      <tr>
+        <td colSpan={3} className="px-4 py-6 text-center text-gray-500">
+          No activities found.
+        </td>
+      </tr>
+    ) : (
+      paged.map((act) => (
+        <tr
+          key={act.id}
+          className="border-b last:border-0 hover:bg-gray-50"
+        >
+          <td className="px-4 py-2">{act.user_email ?? "—"}</td>
+          <td className="px-4 py-2">{act.action}</td>
+          <td className="px-4 py-2 whitespace-nowrap">
+            {new Date(act.created_at).toLocaleString("en-PH", {
+              timeZone: "Asia/Manila",
+              dateStyle: "short",
+              timeStyle: "short",
+            })}
+          </td>
+        </tr>
+      ))
+    )}
+  </tbody>
+</table>
+
       </div>
 
       {/* Pagination */}
