@@ -138,6 +138,16 @@ const [provinceCode, setProvinceCode] = useState("");
 const [selectedRegionName, setSelectedRegionName] = useState<string>("");
 const [selectedProvinceName, setSelectedProvinceName] = useState<string>("");
 
+useEffect(() => {
+  const selected = regions.find((r) => r.code === regionCode);
+  if (selected) setSelectedRegionName(selected.name);
+}, [regionCode, regions]);
+
+useEffect(() => {
+  const selected = provinces.find((p) => p.code === provinceCode);
+  if (selected) setSelectedProvinceName(selected.name);
+}, [provinceCode, provinces]);
+
 // Load regions on mount
 useEffect(() => {
   fetchJSON<PSGCRegion[]>("https://psgc.cloud/api/regions")
@@ -220,7 +230,7 @@ useEffect(() => {
           phone,
           status,
           date,
-          created_at --
+          created_at 
         ),
         order_items(
           quantity,
@@ -443,9 +453,15 @@ setUnassignedOrders((data as OrderWithCustomer[]) || []);
      HELPERS
   ========================= */
   const showForm = () => {
+  setNewDelivery((prev) => ({
+    ...prev,
+    destination: "",
+  }));
   setRegionCode("");
   setProvinceCode("");
-  setFormVisible(true);};
+  setFormVisible(true);
+};
+
   const hideForm = () => {
     setFormVisible(false);
     setNewPerson("");
@@ -466,9 +482,12 @@ setUnassignedOrders((data as OrderWithCustomer[]) || []);
   e.preventDefault();
 
   // Compose destination from region/province; fall back to the text field
+  const region = regions.find((r) => r.code === regionCode)?.name || "";
+  const province = provinces.find((p) => p.code === provinceCode)?.name || "";
+
   const destinationComposed =
-    newDelivery.destination?.trim() ||
-    [selectedRegionName, selectedProvinceName].filter(Boolean).join(", ");
+  newDelivery.destination?.trim() ||
+  [region, province].filter(Boolean).join(", ");
 
   const { error } = await supabase.from("truck_deliveries").insert([
     {
@@ -607,8 +626,8 @@ setUnassignedOrders((data as OrderWithCustomer[]) || []);
       return;
     }
     toast.success("Invoices assigned to truck");
-    setAssignOpen(false);
     await fetchDeliveriesAndAssignments();
+    setAssignOpen(false);
   };
 
   /* =========================
@@ -665,7 +684,10 @@ setUnassignedOrders((data as OrderWithCustomer[]) || []);
   {/* LEFT: Delivery details */}
   <div className="col-span-12 lg:col-span-5">
     <h2 className="text-2xl font-semibold tracking-tight">
-      Delivery to <span className="text-slate-900">{delivery.destination}</span>
+      Delivery to{" "}
+      <span className="text-slate-900">
+        {delivery.destination || <span className="italic text-gray-400">[No destination]</span>}
+      </span>
     </h2>
 
     <div className="mt-3 text-sm leading-6">
