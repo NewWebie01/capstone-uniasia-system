@@ -876,475 +876,410 @@ const totalDiscount = selectedOrder
 
       {/* Picking List Modal */}
       {showModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl mx-auto flex flex-col gap-6 p-6 my-10 text-[15px]">
-            {/* Customer Info */}
-            <div className="bg-[#F7FAFC] rounded-xl shadow px-8 py-6 border border-gray-200 mb-2">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
-                <div>
-                  <h2 className="font-bold text-base mb-2 tracking-wide text-[#1A202C]">
-                    Customer Info
-                  </h2>
-                  <p>
-                    <b>Name:</b> {selectedOrder.customers.name}
-                  </p>
-                  <p>
-                    <b>Email:</b> {selectedOrder.customers.email}
-                  </p>
-                  <p>
-                    <b>Phone:</b> {selectedOrder.customers.phone}
-                  </p>
-                  <p>
-                    <b>Address:</b> {selectedOrder.customers.address}
-                  </p>
-                  {selectedOrder.customers.area && (
-                    <p>
-                      <b>Area:</b> {selectedOrder.customers.area}
-                    </p>
-                  )}
-                </div>
-                <div className="flex flex-col justify-start items-end">
-                  <p>
-                    <b>Total:</b>{" "}
-                    <span className="font-bold text-2xl text-green-700">
-                      ₱
-                      {computedOrderTotal.toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
-                  </p>
-                  <p className="mt-2">
-                    <span className="font-semibold">Payment Terms:</span>{" "}
-                    <span
-                      className={
-                        selectedOrder.customers.payment_type === "Credit"
-                          ? "font-bold text-blue-600"
-                          : selectedOrder.customers.payment_type === "Cash"
-                          ? "font-bold text-green-600"
-                          : selectedOrder.customers.payment_type === "Balance"
-                          ? "font-bold text-orange-500"
-                          : "font-bold"
-                      }
-                    >
-                      {selectedOrder.customers.payment_type || "N/A"}
-                    </span>
-                  </p>
-                  <div className="flex flex-col gap-1 mt-2 w-full items-end">
-                    <div>
-                      <span className="font-semibold mr-1">Terms:</span>
-                      <input
-                        type="number"
-                        min={1}
-                        value={numberOfTerms}
-                        onChange={(e) =>
-                          setNumberOfTerms(Math.max(1, Number(e.target.value)))
-                        }
-                        className="border rounded px-2 py-1 w-16 text-center"
-                        disabled={selectedOrder.customers.payment_type !== "Credit"}
-                      />
-                    </div>
-                    <div>
-                      <span className="font-semibold mr-1">Interest %:</span>
-                      <input
-                        type="number"
-                        min={0}
-                        value={interestPercent}
-                        onChange={(e) =>
-                          setInterestPercent(Math.max(0, Number(e.target.value)))
-                        }
-                        className="border rounded px-2 py-1 w-16 text-center"
-                        disabled={selectedOrder.customers.payment_type !== "Credit"}
-                      />
-                    </div>
-                    <div className="flex items-center mt-2">
-                      <input
-                        type="checkbox"
-                        checked={isSalesTaxOn}
-                        onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
-                        id="sales-tax-toggle"
-                        className="mr-2 accent-blue-600"
-                      />
-                      <label htmlFor="sales-tax-toggle" className="text-base font-semibold">
-                        Sales Tax (12%)
-                      </label>
-                    </div>
-                    <div className="text-base text-gray-700 mt-1">
-                      <b>Grand Total w/ Interest:</b>{" "}
-                      <span className="text-blue-700 font-bold">
-                        ₱
-                        {getGrandTotalWithInterest().toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                      <br />
-                      <b>Per Term:</b>{" "}
-                      <span className="text-blue-700 font-bold">
-                        ₱
-                        {getPerTermAmount().toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+   <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
+    <div className="bg-white rounded-xl shadow-2xl w-[96vw] max-w-[1800px] mx-auto flex flex-col px-10 py-8 text-[15px] mt-16">
+
+      {/* Header */}
+      <h2 className="text-xl font-bold mb-3 tracking-wide">PICKING LIST</h2>
+      {/* Customer & Payment Info */}
+      <div className="flex flex-col md:flex-row md:justify-between mb-3 gap-3">
+        <div>
+          <div className="mb-2">
+            <span className="font-bold">Customer Name:</span> {selectedOrder.customers.name}
+          </div>
+          <div>
+            <span className="font-bold">Email:</span> {selectedOrder.customers.email}
+          </div>
+          <div>
+            <span className="font-bold">Phone:</span> {selectedOrder.customers.phone}
+          </div>
+          <div>
+            <span className="font-bold">Address:</span> {selectedOrder.customers.address}
+          </div>
+          {selectedOrder.customers.area && (
+            <div>
+              <span className="font-bold">Area:</span> {selectedOrder.customers.area}
             </div>
-            {/* Picking List Table */}
-            <div className="bg-white rounded-xl shadow border border-gray-200 px-2 py-4 mb-4">
-              <h2 className="font-bold text-base mb-2 tracking-wide text-[#1A202C] text-center">
-                Picking List
-              </h2>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-[15px] border border-gray-200 rounded-xl">
-                  <thead className="bg-[#ffba20] text-black">
-                    <tr>
-                      <th className="py-2 px-3 text-center">QTY</th>
-                      <th className="py-2 px-3 text-center">UNIT</th>
-                      <th className="py-2 px-3 text-left">ITEM DESCRIPTION</th>
-                      <th className="py-2 px-3 text-right">UNIT PRICE</th>
-                      <th className="py-2 px-3 text-right">DISCOUNT/ADD (%)</th>
-                      <th className="py-2 px-3 text-right">LESS/ADD</th>
-                      <th className="py-2 px-3 text-right">AMOUNT</th>
-                      <th className="py-2 px-3 text-right">TOTAL</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedOrder.order_items.map((item, idx) => {
-                      const qty = editedQuantities[idx] ?? item.quantity;
-                      const price = item.price;
-                      const percent = editedDiscounts[idx] || 0;
-                      const lessAmount = qty * price * (percent / 100);
-                      const netAmount = qty * price * (1 + percent / 100);
-                      return (
-                        <tr key={idx} className="border-t text-center text-[15px]">
-                          <td className="py-2 px-3">
-                            <input
-                              type="number"
-                              min={1}
-                              max={item.inventory.quantity}
-                              value={qty}
-                              onChange={(e) => {
-                                const val = Number(e.target.value);
-                                setEditedQuantities((prev) =>
-                                  prev.map((q, i) => (i === idx ? val : q))
-                                );
-                              }}
-                              className="border rounded px-2 py-1 w-14 text-center bg-[#F7FAFC] font-semibold"
-                              title="Quantity"
-                            />
-                          </td>
-                          <td className="py-2 px-3">{item.inventory.unit}</td>
-                          <td className="py-2 px-3 text-left">
-                            <div className="font-semibold">{item.inventory.product_name}</div>
-                            <div className="text-xs text-gray-500">
-                              <span>SKU: {item.inventory.sku}</span>
-                              {item.inventory.category && <span> | {item.inventory.category}</span>}
-                              {item.inventory.subcategory && <span> | {item.inventory.subcategory}</span>}
-                            </div>
-                          </td>
-                          <td className="py-2 px-3 text-right">
-                            ₱{item.inventory.unit_price?.toLocaleString()}
-                          </td>
-                          <td className="py-2 px-3 text-right">
-                            <div className="flex flex-col items-center">
-                              <div className="flex items-center gap-2">
-                                <button
-                                  className="bg-gray-200 px-2 py-1 rounded text-base font-bold hover:bg-gray-300 select-none"
-                                  title="Minus"
-                                  onMouseDown={() => {
-                                    handleDecrement(idx);
-                                    timersRef.current[idx] = setInterval(
-                                      () => handleDecrement(idx),
-                                      150
-                                    );
-                                  }}
-                                  onMouseUp={() => clearInterval(timersRef.current[idx])}
-                                  onMouseLeave={() => clearInterval(timersRef.current[idx])}
-                                >
-                                  –
-                                </button>
-                                <input
-                                  type="number"
-                                  value={percent}
-                                  onChange={(e) => handleDiscountInput(idx, e.target.value)}
-                                  min={-100}
-                                  max={100}
-                                  className="w-14 border rounded px-1 py-1 text-center font-semibold"
-                                  style={{ MozAppearance: "textfield" }}
-                                  title="Enter negative for discount, positive for surcharge. Range: -100 to 100"
-                                />
-                                <button
-                                  className="bg-gray-200 px-2 py-1 rounded text-base font-bold hover:bg-gray-300 select-none"
-                                  title="Add"
-                                  onMouseDown={() => {
-                                    handleIncrement(idx);
-                                    timersRef.current[idx] = setInterval(
-                                      () => handleIncrement(idx),
-                                      150
-                                    );
-                                  }}
-                                  onMouseUp={() => clearInterval(timersRef.current[idx])}
-                                  onMouseLeave={() => clearInterval(timersRef.current[idx])}
-                                >
-                                  +
-                                </button>
-                                <span className="ml-2 font-bold">
-                                  {percent > 0 ? "+" : percent < 0 ? "-" : ""}
-                                  {Math.abs(percent)}%
-                                </span>
-                              </div>
-                              <button
-                                type="button"
-                                className="mt-1 px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300 font-medium"
-                                onClick={() => handleResetDiscount(idx)}
-                              >
-                                Reset
-                              </button>
-                            </div>
-                          </td>
-                          <td className="py-2 px-3 text-right text-[#DC7633] font-semibold">
-                            {percent >= 0
-                              ? `₱${lessAmount.toLocaleString(undefined, {
-                                  minimumFractionDigits: 2,
-                                })}`
-                              : `-₱${Math.abs(lessAmount).toLocaleString(undefined, {
-                                  minimumFractionDigits: 2,
-                                })}`}
-                          </td>
-                          <td className="py-2 px-3 text-right text-[#26734d] font-semibold">
-                            ₱{netAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                          </td>
-                          <td className="py-2 px-3 text-right font-semibold">
-                            ₱{netAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            {/* Action Buttons */}
-            <div className="flex justify-center gap-8 mt-2">
-              <button
-                className="bg-green-600 text-white px-8 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
-                onClick={() => {
-                  setShowModal(false);
-                  setShowSalesOrderModal(true);
-                }}
-              >
-                Proceed Order
-              </button>
-              <button
-                className="bg-gray-400 text-white px-8 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-                onClick={handleCancelModal}
-              >
-                Cancel
-              </button>
-            </div>
+          )}
+        </div>
+        <div className="text-right flex flex-col items-end gap-2">
+          <div>
+            <span className="font-semibold">Total:</span>
+            <span className="font-bold text-2xl text-green-700 ml-2">
+              ₱{computedOrderTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div>
+            <span className="font-semibold">Payment Terms:</span>{" "}
+            <span className={
+              selectedOrder.customers.payment_type === "Credit" ? "font-bold text-blue-600"
+              : selectedOrder.customers.payment_type === "Cash" ? "font-bold text-green-600"
+              : selectedOrder.customers.payment_type === "Balance" ? "font-bold text-orange-500"
+              : "font-bold"
+            }>
+              {selectedOrder.customers.payment_type || "N/A"}
+            </span>
+          </div>
+          <div>
+            <span className="font-semibold mr-1">Terms:</span>
+            <input
+              type="number"
+              min={1}
+              value={numberOfTerms}
+              onChange={e => setNumberOfTerms(Math.max(1, Number(e.target.value)))}
+              className="border rounded px-2 py-1 w-16 text-center"
+              disabled={selectedOrder.customers.payment_type !== "Credit"}
+            />
+          </div>
+          <div>
+            <span className="font-semibold mr-1">Interest %:</span>
+            <input
+              type="number"
+              min={0}
+              value={interestPercent}
+              onChange={e => setInterestPercent(Math.max(0, Number(e.target.value)))}
+              className="border rounded px-2 py-1 w-16 text-center"
+              disabled={selectedOrder.customers.payment_type !== "Credit"}
+            />
+          </div>
+          <div className="flex items-center mt-2">
+            <input
+              type="checkbox"
+              checked={isSalesTaxOn}
+              onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
+              id="sales-tax-toggle"
+              className="mr-2 accent-blue-600"
+            />
+            <label htmlFor="sales-tax-toggle" className="text-base font-semibold">
+              Sales Tax (12%)
+            </label>
+          </div>
+          <div className="text-base text-gray-700 mt-1">
+            <b>Grand Total w/ Interest:</b>{" "}
+            <span className="text-blue-700 font-bold">
+              ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+            <br />
+            <b>Per Term:</b>{" "}
+            <span className="text-blue-700 font-bold">
+              ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
           </div>
         </div>
-      )}
+      </div>
+      {/* Picking List Table */}
+      <div className="rounded-xl overflow-x-auto border mt-3">
+        <table className="w-full text-[15px]">
+          <thead className="bg-[#ffba20] text-black">
+            <tr>
+              <th className="py-2 px-3 text-left">Quantity</th>
+              <th className="py-2 px-3 text-left">Unit</th>
+              <th className="py-2 px-3 text-left">Description</th>
+              <th className="py-2 px-3 text-right">Unit Price</th>
+              <th className="py-2 px-3 text-right">Discount/Add (%)</th>
+              <th className="py-2 px-3 text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {selectedOrder.order_items.map((item, idx) => {
+              const qty = editedQuantities[idx] ?? item.quantity;
+              const price = item.price;
+              const percent = editedDiscounts[idx] || 0;
+              const amount = qty * price * (1 + percent / 100);
+              return (
+                <tr key={idx} className="border-t text-[15px]">
+                  <td className="py-2 px-3">
+                    <input
+                      type="number"
+                      min={1}
+                      max={item.inventory.quantity}
+                      value={qty}
+                      onChange={e => {
+                        const val = Number(e.target.value);
+                        setEditedQuantities(prev => prev.map((q, i) => (i === idx ? val : q)));
+                      }}
+                      className="border rounded px-2 py-1 w-14 text-center bg-[#F7FAFC] font-semibold"
+                      title="Quantity"
+                    />
+                  </td>
+                  <td className="py-2 px-3">{item.inventory.unit}</td>
+                  <td className="py-2 px-3 text-left">
+                    <div className="font-semibold">{item.inventory.product_name}</div>
+                    <div className="text-xs text-gray-500">
+                      <span>SKU: {item.inventory.sku}</span>
+                      {item.inventory.category && <span> | {item.inventory.category}</span>}
+                      {item.inventory.subcategory && <span> | {item.inventory.subcategory}</span>}
+                    </div>
+                  </td>
+                  <td className="py-2 px-3 text-right">₱{item.inventory.unit_price?.toLocaleString()}</td>
+                  <td className="py-2 px-3 text-right">
+                    <span className="font-bold">
+                      {percent > 0 ? "+" : percent < 0 ? "-" : ""}
+                      {Math.abs(percent)}%
+                    </span>
+                  </td>
+                  <td className="py-2 px-3 text-right font-semibold">
+                    ₱{amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {/* Totals & Action Buttons */}
+      <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
+        <div className="space-y-2 min-w-[350px]">
+          <div className="flex justify-between font-medium">
+            <span>Subtotal (Before Discount):</span>
+            <span>₱{subtotalBeforeDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+          </div>
+          <div className="flex justify-between font-medium">
+            <span>Less/Add (Discount/Markup):</span>
+            <span className={totalDiscount < 0 ? "text-green-600" : "text-orange-500"}>
+              {totalDiscount < 0 ? "–" : "+"}₱{Math.abs(totalDiscount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span>Sales Tax (12%):</span>
+            <span>₱{salesTaxValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+          </div>
+          <div className="flex justify-between text-xl font-bold border-t pt-2">
+            <span>TOTAL ORDER AMOUNT:</span>
+            <span className="text-green-700">
+              ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+          </div>
+          {selectedOrder.customers.payment_type === "Credit" && (
+            <div className="flex justify-between">
+              <span>Payment per Term:</span>
+              <span className="font-bold text-blue-700">
+                ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+      {/* Action Buttons */}
+      <div className="flex justify-center gap-8 mt-6">
+        <button
+          className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
+          onClick={() => {
+            setShowModal(false);
+            setShowSalesOrderModal(true);
+          }}
+        >
+          Proceed Order
+        </button>
+        <button
+          className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
+          onClick={handleCancelModal}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
 
       {/* SALES ORDER MODAL (Confirmation Layout) */}
-      {showSalesOrderModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl mx-auto flex flex-col gap-6 px-8 py-10 my-10 border text-[15px]">
-            <h2 className="text-xl font-bold mb-2 tracking-wide">SALES ORDER</h2>
-            <div className="flex flex-col md:flex-row md:justify-between mb-2 gap-2">
-              <div>
-                <div>
-                  <span className="font-medium">Sales Order Number: </span>
-                  <span className="text-lg text-blue-700 font-bold">{`TXN-${selectedOrder.id.slice(0, 8).toUpperCase()}`}</span>
-                </div>
-                <div>
-                  <span className="font-medium">Sales Order Date: </span>
-                  {new Date().toISOString().slice(0, 10)}
-                </div>
-              </div>
-              <div className="text-right space-y-1">
-                <div>
-                  <span className="font-medium">PO Number: </span>
-                  <input
-                    type="text"
-                    value={poNumber}
-                    onChange={(e) => setPoNumber(e.target.value)}
-                    className="border-b outline-none px-1"
-                    style={{ minWidth: 100 }}
-                    placeholder="Input PO No"
-                  />
-                </div>
-                <div>
-                  <span className="font-medium">Sales Rep Name: </span>
-                  <input
-                    type="text"
-                    value={repName}
-                    onChange={(e) => setRepName(e.target.value)}
-                    className="border-b outline-none px-1"
-                    style={{ minWidth: 100 }}
-                    placeholder="Input Rep"
-                  />
-                </div>
-                <div>
-  <span className="font-medium">Payment Terms: </span>
-  {selectedOrder.customers.payment_type === "Credit" ? (
-    <>
-      Net {numberOfTerms} Monthly
-      <span className="text-gray-500 ml-2">
-        (Terms: {numberOfTerms})
-      </span>
-    </>
-  ) : (
-    selectedOrder.customers.payment_type
-  )}
-</div>
-
-
-              </div>
-            </div>
-            {/* CUSTOMER DETAILS */}
-            <div className="bg-[#f6f6f9] border rounded-lg px-4 py-3 mb-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 text-[15px]">
-              <div>
-                <div className="font-bold">To:</div>
-                <div>
-                  <b>Name:</b> {selectedOrder.customers.name}
-                </div>
-                <div>
-                  <b>Email:</b> {selectedOrder.customers.email}
-                </div>
-                <div>
-                  <b>Phone:</b> {selectedOrder.customers.phone}
-                </div>
-                <div>
-                  <b>Address:</b> {selectedOrder.customers.address}
-                </div>
-                {selectedOrder.customers.area && (
-                  <div>
-                    <b>Area:</b> {selectedOrder.customers.area}
-                  </div>
-                )}
-              </div>
-              <div>
-                <div className="font-bold">Ship To:</div>
-                <div>
-                  <b>Name:</b> {selectedOrder.customers.name}
-                </div>
-                <div>
-                  <b>Address:</b> {selectedOrder.customers.address}
-                </div>
-                {selectedOrder.customers.area && (
-                  <div>
-                    <b>Area:</b> {selectedOrder.customers.area}
-                  </div>
-                )}
-              </div>
-            </div>
-            {/* Item Table */}
-            <div className="rounded-xl overflow-x-auto border mt-3">
-              <table className="w-full text-[15px]">
-                <thead className="bg-[#ffba20] text-black">
-                  <tr>
-                    <th className="py-2 px-3 text-left">Quantity</th>
-                    <th className="py-2 px-3 text-left">Unit</th>
-                    <th className="py-2 px-3 text-left">Description</th>
-                    <th className="py-2 px-3 text-right">Unit Price</th>
-                    <th className="py-2 px-3 text-right">Discount/Add (%)</th>
-                    <th className="py-2 px-3 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedOrder.order_items.map((item, idx) => {
-                    const qty = editedQuantities[idx] ?? item.quantity;
-                    const price = item.price;
-                    const percent = editedDiscounts[idx] || 0;
-                    const amount = qty * price * (1 + percent / 100);
-                    return (
-                      <tr key={idx} className="border-t text-[15px]">
-                        <td className="py-2 px-3">{qty}</td>
-                        <td className="py-2 px-3">{item.inventory.unit}</td>
-                        <td className="py-2 px-3">
-                          {item.inventory.product_name}
-                          {item.inventory.category ? ` | ${item.inventory.category}` : ""}
-                          {item.inventory.subcategory
-                            ? ` | ${item.inventory.subcategory}`
-                            : ""}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          ₱{item.price.toLocaleString()}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          <span className="font-bold">
-                            {percent > 0 ? "+" : percent < 0 ? "-" : ""}
-                            {Math.abs(percent)}%
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-right font-semibold">
-                          ₱{amount.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                          })}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {/* Totals and Terms */}
-            <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
-  <div className="space-y-2 min-w-[350px]">
-    <div className="flex justify-between font-medium">
-      <span>Subtotal (Before Discount):</span>
-      <span>
-        ₱{subtotalBeforeDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-      </span>
-    </div>
-    <div className="flex justify-between font-medium">
-      <span>Less/Add (Discount/Markup):</span>
-      <span className={totalDiscount < 0 ? "text-green-600" : "text-orange-500"}>
-        {totalDiscount < 0 ? "–" : "+"}₱{Math.abs(totalDiscount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-      </span>
-    </div>
-    <div className="flex justify-between">
-      <span>Sales Tax (12%):</span>
-      <span>
-        ₱{salesTaxValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-      </span>
-    </div>
-    <div className="flex justify-between text-xl font-bold border-t pt-2">
-      <span>TOTAL ORDER AMOUNT:</span>
-      <span className="text-green-700">
-        ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-      </span>
-    </div>
-    {selectedOrder.customers.payment_type === "Credit" && (
-      <div className="flex justify-between">
-        <span>Payment per Term:</span>
-        <span className="font-bold text-blue-700">
-          ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-        </span>
-      </div>
-    )}
-  </div>
-</div>
-
-            {/* Action Buttons */}
-            <div className="flex justify-center gap-8 mt-6">
-              <button
-                className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
-                onClick={handleOrderConfirm}
-              >
-                Confirm
-              </button>
-              <button
-                className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-                onClick={handleBackModal}
-              >
-                Back
-              </button>
-            </div>
+     // ...top of your code stays the same
+{showSalesOrderModal && selectedOrder && (
+  <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
+    <div
+      className="bg-white rounded-xl shadow-2xl w-[96vw] h-[94vh] mx-auto flex flex-col gap-6 px-10 py-8 my-4 text-[15px] max-w-none max-h-[94vh] overflow-y-auto mt-16"
+    >
+      <h2 className="text-3xl font-bold mb-6 tracking-wide text-center text-gray-800" style={{ letterSpacing: '0.07em' }}>
+        SALES ORDER
+      </h2>
+      <div className="flex flex-col md:flex-row md:justify-between mb-2 gap-2">
+        <div>
+          <div>
+            <span className="font-medium">Sales Order Number: </span>
+            <span className="text-lg text-blue-700 font-bold">{`TXN-${selectedOrder.id.slice(0, 8).toUpperCase()}`}</span>
+          </div>
+          <div>
+            <span className="font-medium">Sales Order Date: </span>
+            {new Date().toISOString().slice(0, 10)}
           </div>
         </div>
-      )}
+        <div className="text-right space-y-1">
+          <div>
+            <span className="font-medium">PO Number: </span>
+            <input
+              type="text"
+              value={poNumber}
+              onChange={(e) => setPoNumber(e.target.value)}
+              className="border-b outline-none px-1"
+              style={{ minWidth: 100 }}
+              placeholder="Input PO No"
+            />
+          </div>
+          <div>
+            <span className="font-medium">Sales Rep Name: </span>
+            <input
+              type="text"
+              value={repName}
+              onChange={(e) => setRepName(e.target.value)}
+              className="border-b outline-none px-1"
+              style={{ minWidth: 100 }}
+              placeholder="Input Rep"
+            />
+          </div>
+          <div>
+            <span className="font-medium">Payment Terms: </span>
+            {selectedOrder.customers.payment_type === "Credit" ? (
+              <>
+                Net {numberOfTerms} Monthly
+                <span className="text-gray-500 ml-2">
+                  (Terms: {numberOfTerms})
+                </span>
+              </>
+            ) : (
+              selectedOrder.customers.payment_type
+            )}
+          </div>
+        </div>
+      </div>
+      {/* CUSTOMER DETAILS */}
+      <div className="bg-[#f6f6f9] border rounded-lg px-4 py-3 mb-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 text-[15px]">
+        <div>
+          <div className="font-bold">To:</div>
+          <div>
+            <b>Name:</b> {selectedOrder.customers.name}
+          </div>
+          <div>
+            <b>Email:</b> {selectedOrder.customers.email}
+          </div>
+          <div>
+            <b>Phone:</b> {selectedOrder.customers.phone}
+          </div>
+          <div>
+            <b>Address:</b> {selectedOrder.customers.address}
+          </div>
+          {selectedOrder.customers.area && (
+            <div>
+              <b>Area:</b> {selectedOrder.customers.area}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="font-bold">Ship To:</div>
+          <div>
+            <b>Name:</b> {selectedOrder.customers.name}
+          </div>
+          <div>
+            <b>Address:</b> {selectedOrder.customers.address}
+          </div>
+          {selectedOrder.customers.area && (
+            <div>
+              <b>Area:</b> {selectedOrder.customers.area}
+            </div>
+          )}
+        </div>
+      </div>
+      {/* Item Table */}
+      <div className="rounded-xl border mt-3">
+        <table className="w-full text-[15px]">
+          <thead className="bg-[#ffba20] text-black">
+            <tr>
+              <th className="py-1 px-2 text-left">Quantity</th>
+              <th className="py-1 px-2 text-left">Unit</th>
+              <th className="py-1 px-2 text-left">Description</th>
+              <th className="py-1 px-2 text-right">Unit Price</th>
+              <th className="py-1 px-2 text-right">Discount/Add (%)</th>
+              <th className="py-1 px-2 text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {selectedOrder.order_items.map((item, idx) => {
+              const qty = editedQuantities[idx] ?? item.quantity;
+              const price = item.price;
+              const percent = editedDiscounts[idx] || 0;
+              const amount = qty * price * (1 + percent / 100);
+              return (
+                <tr key={idx} className="border-t text-[14px]">
+                  <td className="py-1 px-2">{qty}</td>
+                  <td className="py-1 px-2">{item.inventory.unit}</td>
+                  <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
+                  <td className="py-1 px-2 text-right">
+                    ₱{price.toLocaleString()}
+                  </td>
+                  <td className="py-1 px-2 text-right">
+                    <span className="font-bold">
+                      {percent > 0 ? "+" : percent < 0 ? "-" : ""}
+                      {Math.abs(percent)}%
+                    </span>
+                  </td>
+                  <td className="py-1 px-2 text-right font-semibold">
+                    ₱{amount.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                    })}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {/* Totals and Terms */}
+      <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
+        <div className="space-y-2 min-w-[350px]">
+          <div className="flex justify-between font-medium">
+            <span>Subtotal (Before Discount):</span>
+            <span>
+              ₱{subtotalBeforeDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div className="flex justify-between font-medium">
+            <span>Less/Add (Discount/Markup):</span>
+            <span className={totalDiscount < 0 ? "text-green-600" : "text-orange-500"}>
+              {totalDiscount < 0 ? "–" : "+"}₱{Math.abs(totalDiscount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span>Sales Tax (12%):</span>
+            <span>
+              ₱{salesTaxValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+          </div>
+          <div className="flex justify-between text-xl font-bold border-t pt-2">
+            <span>TOTAL ORDER AMOUNT:</span>
+            <span className="text-green-700">
+              ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+          </div>
+          {selectedOrder.customers.payment_type === "Credit" && (
+            <div className="flex justify-between">
+              <span>Payment per Term:</span>
+              <span className="font-bold text-blue-700">
+                ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+      {/* Action Buttons */}
+      <div className="flex justify-center gap-8 mt-6">
+        <button
+          className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
+          onClick={handleOrderConfirm}
+        >
+          Confirm
+        </button>
+        <button
+          className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
+          onClick={handleBackModal}
+        >
+          Back
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+
 
       {/* FINAL ADMIN CONFIRMATION MODAL */}
       {showFinalConfirm && selectedOrder && (
