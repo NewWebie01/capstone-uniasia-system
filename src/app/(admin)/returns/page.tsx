@@ -1,22 +1,11 @@
+// src/app/returns/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 
-/* ----------------------------- Utilities ----------------------------- */
-const formatPH = (d?: string | number | Date | null) =>
-  d
-    ? new Intl.DateTimeFormat("en-PH", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-        timeZone: "Asia/Manila",
-      }).format(new Date(d))
-    : "—";
+/* ============== Types & helpers ============== */
 
 type ReturnReason =
   | "Damaged/Defective"
@@ -24,13 +13,6 @@ type ReturnReason =
   | "Missing Item/Part"
   | "Expired"
   | "Other";
-
-type ReturnItemRow = {
-  order_item_id: number;
-  quantity: number;
-  photo_urls: string[] | null;
-  inventory: { product_name: string | null } | null;
-};
 
 type ReturnRow = {
   id: string;
@@ -40,430 +22,375 @@ type ReturnRow = {
   note: string | null;
   created_at: string;
   order_id: string;
-  customer?: {
+
+  customer: {
     name: string | null;
     email: string | null;
     phone: string | null;
     address: string | null;
   } | null;
-  order?: { id: string; status: string | null } | null;
-  return_items: ReturnItemRow[];
+
+  order: {
+    id: string;
+    status: string | null;
+  } | null;
+
+  return_items: Array<{
+    order_item_id: number;
+    quantity: number;
+    photo_urls: string[] | null;
+    inventory: { product_name: string | null } | null;
+  }>;
 };
 
-const STATUS_OPTIONS = [
-  "all",
-  "requested",
-  "approved",
-  "received",
-  "resolved",
-  "rejected",
-] as const;
+const toNum = (v: unknown, fb = 0) =>
+  typeof v === "number" ? v : typeof v === "string" ? Number(v) : fb;
 
-/* ----------------------------- Page ----------------------------- */
+const toStrOrNull = (v: unknown) =>
+  v === null || v === undefined ? null : String(v);
+
+const normalizeAdminReturns = (rows: any[]): ReturnRow[] =>
+  (rows ?? []).map((r) => ({
+    id: String(r.id),
+    code: String(r.code ?? ""),
+    status: String(r.status ?? "requested"),
+    reason: (r.reason ?? "Other") as ReturnReason,
+    note: toStrOrNull(r.note),
+    created_at: r.created_at ?? new Date().toISOString(),
+    order_id: String(r.order_id),
+
+    customer: r.customer
+      ? {
+          name: toStrOrNull(r.customer.name),
+          email: toStrOrNull(r.customer.email),
+          phone: toStrOrNull(r.customer.phone),
+          address: toStrOrNull(r.customer.address),
+        }
+      : null,
+
+    order: r.order
+      ? {
+          id: String(r.order.id),
+          status: toStrOrNull(r.order.status),
+        }
+      : null,
+
+    return_items: (r.return_items ?? []).map((ri: any) => ({
+      order_item_id: toNum(ri.order_item_id),
+      quantity: toNum(ri.quantity, 0),
+      photo_urls: Array.isArray(ri.photo_urls)
+        ? ri.photo_urls.map((x: any) => String(x))
+        : null,
+      inventory: ri.inventory
+        ? { product_name: toStrOrNull(ri.inventory.product_name) }
+        : null,
+    })),
+  }));
+
+const formatPH = (d: string | Date) =>
+  new Intl.DateTimeFormat("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Manila",
+  }).format(new Date(d));
+
+/* ============== Page ============== */
+
 export default function AdminReturnsPage() {
-  const supabase = createClientComponentClient();
-
-  const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ReturnRow[]>([]);
-  const [statusFilter, setStatusFilter] =
-    useState<(typeof STATUS_OPTIONS)[number]>("all");
-  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  // detail modal
-  const [openId, setOpenId] = useState<string | null>(null);
-  const openRow = useMemo(
-    () => rows.find((r) => r.id === openId) || null,
-    [rows, openId]
-  );
+  // table filters
+  const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("");
+
+  // modal
+  const [selected, setSelected] = useState<ReturnRow | null>(null);
 
   const fetchReturns = async () => {
     setLoading(true);
-
-    // NOTE: only selects from existing columns/tables
-    const { data, error } = await supabase
-      .from("returns")
-      .select(
+    try {
+      const { data, error } = await supabase
+        .from("returns")
+        .select(
+          `
+          id, code, status, reason, note, created_at, order_id,
+          customer:customers!returns_customer_id_fkey ( name, email, phone, address ),
+          order:orders!returns_order_id_fkey ( id, status ),
+          return_items (
+            order_item_id,
+            quantity,
+            photo_urls,
+            inventory:inventory_id ( product_name )
+          )
         `
-        id, code, status, reason, note, created_at, order_id, customer_id,
-        customer:customer_id ( name, email, phone, address ),
-        order:order_id ( id, status ),
-        return_items (
-          order_item_id, quantity, photo_urls,
-          inventory:inventory_id ( product_name )
         )
-      `
-      )
-      .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false });
 
-    if (error) {
-      toast.error("Failed to load returns.");
-      setRows([]);
-    } else {
-      setRows((data ?? []) as ReturnRow[]);
+      if (error) {
+        toast.error(error.message);
+        setRows([]);
+      } else {
+        setRows(normalizeAdminReturns((data as any[]) ?? []));
+      }
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   useEffect(() => {
     fetchReturns();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filtered = useMemo(() => {
+    const text = q.trim().toLowerCase();
     let out = rows;
-    if (statusFilter !== "all") {
-      out = out.filter((r) => (r.status ?? "").toLowerCase() === statusFilter);
+
+    if (statusFilter) {
+      out = out.filter((r) => (r.status || "").toLowerCase() === statusFilter);
     }
-    const q = search.trim().toLowerCase();
-    if (q) {
-      out = out.filter(
-        (r) =>
-          r.code.toLowerCase().includes(q) ||
-          (r.customer?.name ?? "").toLowerCase().includes(q) ||
-          (r.customer?.email ?? "").toLowerCase().includes(q) ||
-          (r.customer?.phone ?? "").toLowerCase().includes(q) ||
-          r.return_items.some((ri) =>
-            (ri.inventory?.product_name ?? "").toLowerCase().includes(q)
-          )
-      );
+    if (text) {
+      out = out.filter((r) => {
+        const customer = `${r.customer?.name ?? ""} ${
+          r.customer?.email ?? ""
+        } ${r.customer?.phone ?? ""} ${
+          r.customer?.address ?? ""
+        }`.toLowerCase();
+        return (
+          r.code.toLowerCase().includes(text) ||
+          customer.includes(text) ||
+          (r.order?.id ?? "").toLowerCase().includes(text)
+        );
+      });
     }
     return out;
-  }, [rows, statusFilter, search]);
+  }, [rows, q, statusFilter]);
 
-  /* ----------------------------- Actions (status only) ----------------------------- */
   const updateStatus = async (id: string, status: string) => {
+    const prev = rows;
+    setRows((r) => r.map((x) => (x.id === id ? { ...x, status } : x)));
+    setSelected((s) => (s && s.id === id ? { ...s, status } : s));
     const { error } = await supabase
       .from("returns")
       .update({ status })
       .eq("id", id);
-    if (error) throw error;
-  };
-
-  const approve = async (id: string) => {
-    try {
-      await updateStatus(id, "approved");
-    } catch (e: any) {
-      toast.error(e?.message ?? "Failed to approve.");
-      return;
+    if (error) {
+      setRows(prev);
+      setSelected((s) =>
+        s && s.id === id ? prev.find((p) => p.id === id) || s : s
+      );
+      toast.error(error.message);
+    } else {
+      toast.success(`Status changed to ${status}`);
     }
-    toast.success("Approved.");
-    fetchReturns();
   };
 
-  const reject = async (id: string) => {
-    try {
-      await updateStatus(id, "rejected");
-    } catch (e: any) {
-      toast.error(e?.message ?? "Failed to reject.");
-      return;
-    }
-    toast.success("Rejected.");
-    fetchReturns();
-  };
-
-  const markReceived = async (id: string) => {
-    try {
-      await updateStatus(id, "received");
-    } catch (e: any) {
-      toast.error(e?.message ?? "Failed to mark received.");
-      return;
-    }
-    toast.success("Marked as received.");
-    fetchReturns();
-  };
-
-  const resolve = async (id: string) => {
-    try {
-      await updateStatus(id, "resolved");
-    } catch (e: any) {
-      toast.error(e?.message ?? "Failed to resolve.");
-      return;
-    }
-    toast.success("Resolved.");
-    fetchReturns();
-  };
-
-  /* ----------------------------- UI ----------------------------- */
   return (
-    <div className="p-6 space-y-4">
-      <h1 className="text-2xl font-bold">Returns (Admin)</h1>
+    <div className="p-4">
+      <h1 className="text-3xl font-bold mb-4">Returns</h1>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-600">Status</label>
+      {/* Filters */}
+      <div className="bg-white border rounded-2xl p-4 shadow-sm mb-4">
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+          <input
+            className="border rounded px-3 py-2 w-full sm:max-w-xs"
+            placeholder="Search by return code / name / email / phone"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
           <select
-            className="border rounded px-3 py-2"
+            className="border rounded px-3 py-2 w-full sm:w-auto"
             value={statusFilter}
-            onChange={(e) =>
-              setStatusFilter(e.target.value as (typeof STATUS_OPTIONS)[number])
-            }
+            onChange={(e) => setStatusFilter(e.target.value)}
           >
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {s[0].toUpperCase() + s.slice(1)}
-              </option>
-            ))}
+            <option value="">All statuses</option>
+            <option value="requested">requested</option>
+            <option value="approved">approved</option>
+            <option value="rejected">rejected</option>
+            <option value="received">received</option>
           </select>
         </div>
+      </div>
 
-        <input
-          placeholder="Search by code, customer, item…"
-          className="border rounded px-3 py-2 w-full sm:max-w-md"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+      {/* Table */}
+      <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-[#ffba20] text-black">
+              <tr>
+                <th className="py-2 px-3 text-left">Return code</th>
+                <th className="py-2 px-3 text-left">Status</th>
+                <th className="py-2 px-3 text-left">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && (
+                <tr>
+                  <td className="py-3 px-3" colSpan={3}>
+                    Loading…
+                  </td>
+                </tr>
+              )}
 
-        <button
-          onClick={fetchReturns}
-          className="px-3 py-2 rounded bg-black text-white hover:opacity-90"
+              {!loading && filtered.length === 0 && (
+                <tr>
+                  <td className="py-3 px-3 text-gray-600" colSpan={3}>
+                    No returns found.
+                  </td>
+                </tr>
+              )}
+
+              {!loading &&
+                filtered.map((rtn) => (
+                  <tr key={rtn.id} className="border-t hover:bg-gray-50">
+                    <td className="py-2 px-3">
+                      <button
+                        onClick={() => setSelected(rtn)}
+                        className="text-blue-600 hover:underline font-medium"
+                        title="View details"
+                      >
+                        {rtn.code}
+                      </button>
+                    </td>
+                    <td className="py-2 px-3 capitalize">{rtn.status}</td>
+                    <td className="py-2 px-3">{formatPH(rtn.created_at)}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Modal with full details */}
+      {selected && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setSelected(null)}
         >
-          Refresh
-        </button>
-      </div>
-
-      <div className="border rounded-2xl overflow-hidden bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              <th className="text-left px-3 py-2">Code</th>
-              <th className="text-left px-3 py-2">Customer</th>
-              <th className="text-left px-3 py-2">Reason</th>
-              <th className="text-left px-3 py-2">Status</th>
-              <th className="text-left px-3 py-2">Created</th>
-              <th className="text-right px-3 py-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((r) => (
-              <tr key={r.id} className="border-t hover:bg-gray-50">
-                <td className="px-3 py-2">
-                  <button
-                    className="font-medium text-blue-700 hover:underline"
-                    onClick={() => setOpenId(r.id)}
-                  >
-                    {r.code}
-                  </button>
-                </td>
-                <td className="px-3 py-2">
-                  <div className="truncate max-w-xs">
-                    {r.customer?.name ?? "—"}
-                    {r.customer?.email ? (
-                      <span className="text-gray-500">
-                        {" "}
-                        ({r.customer.email})
-                      </span>
-                    ) : null}
-                  </div>
-                </td>
-                <td className="px-3 py-2">{r.reason}</td>
-                <td className="px-3 py-2 capitalize">{r.status}</td>
-                <td className="px-3 py-2">{formatPH(r.created_at)}</td>
-                <td className="px-3 py-2 text-right">
-                  <div className="flex gap-2 justify-end">
-                    {r.status === "requested" && (
-                      <>
-                        <button
-                          onClick={() => approve(r.id)}
-                          className="px-3 py-1 rounded bg-emerald-600 text-white hover:opacity-90"
-                        >
-                          Approve
-                        </button>
-                        <button
-                          onClick={() => reject(r.id)}
-                          className="px-3 py-1 rounded bg-red-600 text-white hover:opacity-90"
-                        >
-                          Reject
-                        </button>
-                      </>
-                    )}
-                    {r.status === "approved" && (
-                      <button
-                        onClick={() => markReceived(r.id)}
-                        className="px-3 py-1 rounded bg-indigo-600 text-white hover:opacity-90"
-                      >
-                        Mark received
-                      </button>
-                    )}
-                    {r.status === "received" && (
-                      <button
-                        onClick={() => resolve(r.id)}
-                        className="px-3 py-1 rounded bg-sky-600 text-white hover:opacity-90"
-                      >
-                        Resolve
-                      </button>
-                    )}
-                    {r.status === "resolved" && (
-                      <button
-                        onClick={() => setOpenId(r.id)}
-                        className="px-3 py-1 rounded border"
-                      >
-                        Details
-                      </button>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {filtered.length === 0 && !loading && (
-              <tr>
-                <td colSpan={6} className="text-center text-gray-500 py-10">
-                  No results.
-                </td>
-              </tr>
-            )}
-            {loading && (
-              <tr>
-                <td colSpan={6} className="text-center text-gray-500 py-10">
-                  Loading…
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Details modal */}
-      {openRow && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b">
-              <div>
-                <div className="font-semibold">
-                  {openRow.code} <span className="text-gray-400">•</span>{" "}
-                  <span className="capitalize">{openRow.status}</span>
-                </div>
-                <div className="text-sm text-gray-500">
-                  Created: {formatPH(openRow.created_at)}
-                </div>
+          <div
+            className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl ring-1 ring-black/5 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+              <div className="space-x-2">
+                <span className="font-semibold text-lg">{selected.code}</span>
+                <span className="text-gray-400">•</span>
+                <span className="capitalize">{selected.status}</span>
               </div>
-              <button
-                className="text-gray-600 hover:text-black"
-                onClick={() => setOpenId(null)}
-              >
-                ✕
-              </button>
+              <div className="text-sm text-gray-600">
+                Filed: {formatPH(selected.created_at)}
+              </div>
             </div>
 
-            <div className="p-5 space-y-4 max-h-[75vh] overflow-auto">
-              <div className="grid md:grid-cols-2 gap-4">
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <div className="text-xs text-gray-500">Customer</div>
-                  <div className="font-medium">
-                    {openRow.customer?.name ?? "—"}
-                  </div>
-                  <div className="text-sm text-gray-600">
-                    {openRow.customer?.email ?? "—"}
-                  </div>
-                  <div className="text-sm text-gray-600">
-                    {openRow.customer?.phone ?? "—"}
-                  </div>
-                  <div className="text-sm text-gray-600">
-                    {openRow.customer?.address ?? "—"}
-                  </div>
+            {/* Customer + Order + Reason */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4 text-sm">
+              <div className="bg-gray-50 rounded p-3">
+                <div className="text-xs text-gray-500">Customer</div>
+                <div className="font-medium">
+                  {selected.customer?.name ?? "—"}
                 </div>
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <div className="text-xs text-gray-500">Order</div>
-                  <div className="font-medium">{openRow.order?.id ?? "—"}</div>
-                  <div className="text-sm text-gray-600">
-                    Status: {openRow.order?.status ?? "—"}
-                  </div>
+                <div className="text-gray-600">
+                  {selected.customer?.email ?? "—"}
+                </div>
+                <div className="text-gray-600">
+                  {selected.customer?.phone ?? "—"}
+                </div>
+                <div className="text-gray-600">
+                  {selected.customer?.address ?? "—"}
                 </div>
               </div>
 
-              <div className="bg-gray-50 rounded-lg p-3">
+              <div className="bg-gray-50 rounded p-3">
+                <div className="text-xs text-gray-500">Order</div>
+                <div className="font-medium">{selected.order?.id ?? "—"}</div>
+                <div className="text-gray-600">
+                  Status: {selected.order?.status ?? "—"}
+                </div>
+              </div>
+
+              <div className="bg-gray-50 rounded p-3">
                 <div className="text-xs text-gray-500">Reason</div>
-                <div className="font-medium">{openRow.reason}</div>
-                {openRow.note && (
+                <div className="font-medium">{selected.reason}</div>
+                {selected.note && (
                   <>
-                    <div className="text-xs text-gray-500 mt-2">
-                      Customer note
-                    </div>
-                    <div className="text-sm">{openRow.note}</div>
+                    <div className="text-xs text-gray-500 mt-2">Note</div>
+                    <div className="text-gray-700">{selected.note}</div>
                   </>
                 )}
               </div>
+            </div>
 
-              <div className="border rounded overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="text-left px-3 py-2">Product</th>
-                      <th className="text-left px-3 py-2">Qty</th>
-                      <th className="text-left px-3 py-2">Photos</th>
+            {/* Items */}
+            <div className="mt-4 border rounded overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-[#ffba20] text-black">
+                  <tr>
+                    <th className="py-2 px-3 text-left">Product</th>
+                    <th className="py-2 px-3 text-left">Qty</th>
+                    <th className="py-2 px-3 text-left">Photos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selected.return_items.map((ri, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="py-2 px-3">
+                        {ri.inventory?.product_name ?? "—"}
+                      </td>
+                      <td className="py-2 px-3">{ri.quantity}</td>
+                      <td className="py-2 px-3">
+                        {ri.photo_urls && ri.photo_urls.length > 0 ? (
+                          <div className="flex gap-2 flex-wrap">
+                            {ri.photo_urls.map((u, i) => (
+                              <a key={i} href={u} target="_blank">
+                                <img
+                                  src={u}
+                                  alt="evidence"
+                                  className="w-12 h-12 object-cover rounded border"
+                                />
+                              </a>
+                            ))}
+                          </div>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {openRow.return_items.map((ri, i) => (
-                      <tr key={i} className="border-t">
-                        <td className="px-3 py-2">
-                          {ri.inventory?.product_name ?? "—"}
-                        </td>
-                        <td className="px-3 py-2">{ri.quantity}</td>
-                        <td className="px-3 py-2">
-                          {ri.photo_urls?.length ? (
-                            <div className="flex gap-2 flex-wrap">
-                              {ri.photo_urls.map((u, idx) => (
-                                <a key={idx} href={u} target="_blank">
-                                  <img
-                                    src={u}
-                                    alt="evidence"
-                                    className="w-14 h-14 rounded object-cover border"
-                                  />
-                                </a>
-                              ))}
-                            </div>
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-              {/* Quick actions */}
-              <div className="flex flex-wrap gap-2 justify-end">
-                {openRow.status === "requested" && (
-                  <>
-                    <button
-                      onClick={() => approve(openRow.id)}
-                      className="px-3 py-2 rounded bg-emerald-600 text-white"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => reject(openRow.id)}
-                      className="px-3 py-2 rounded bg-red-600 text-white"
-                    >
-                      Reject
-                    </button>
-                  </>
-                )}
-                {openRow.status === "approved" && (
-                  <button
-                    onClick={() => markReceived(openRow.id)}
-                    className="px-3 py-2 rounded bg-indigo-600 text-white"
-                  >
-                    Mark received
-                  </button>
-                )}
-                {openRow.status === "received" && (
-                  <button
-                    onClick={() => resolve(openRow.id)}
-                    className="px-3 py-2 rounded bg-sky-600 text-white"
-                  >
-                    Resolve
-                  </button>
-                )}
-                <button
-                  onClick={() => setOpenId(null)}
-                  className="px-3 py-2 rounded border"
-                >
-                  Close
-                </button>
-              </div>
+            {/* Actions */}
+            <div className="mt-4 flex flex-wrap gap-2 justify-end">
+              <button
+                onClick={() => setSelected(null)}
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => updateStatus(selected.id, "approved")}
+                className="px-4 py-2 rounded-xl bg-green-600 text-white hover:opacity-90"
+              >
+                Approve
+              </button>
+              <button
+                onClick={() => updateStatus(selected.id, "rejected")}
+                className="px-4 py-2 rounded-xl bg-red-600 text-white hover:opacity-90"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => updateStatus(selected.id, "received")}
+                className="px-4 py-2 rounded-xl bg-black text-white hover:opacity-90"
+              >
+                Mark Received
+              </button>
             </div>
           </div>
         </div>
