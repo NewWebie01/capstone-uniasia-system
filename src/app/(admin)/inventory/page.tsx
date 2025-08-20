@@ -124,70 +124,101 @@ export default function InventoryPage() {
     return publicUrlData.publicUrl;
   };
 
-  const handleSubmitItem = async () => {
-    try {
-      const errors = {
-        product_name: !newItem.product_name,
-        category: !newItem.category,
-        subcategory: !newItem.subcategory,
-        unit: !newItem.unit,
-        quantity: newItem.quantity < 0,
-        unit_price: newItem.unit_price <= 0,
-      };
-      setValidationErrors(errors);
-      const hasErrors = Object.values(errors).some(Boolean);
-      if (hasErrors) return;
+const handleSubmitItem = async () => {
+  try {
+    const errors = {
+      product_name: !newItem.product_name,
+      category: !newItem.category,
+      subcategory: !newItem.subcategory,
+      unit: !newItem.unit,
+      quantity: newItem.quantity < 0,
+      unit_price: newItem.unit_price <= 0,
+    };
+    setValidationErrors(errors);
+    const hasErrors = Object.values(errors).some(Boolean);
+    if (hasErrors) return;
 
-      let finalImageUrl = newItem.image_url || null;
-      if (imageFile) {
-        finalImageUrl = await uploadImageAndGetUrl(
-          imageFile,
-          newItem.sku || newItem.product_name
-        );
-      }
+    let finalImageUrl = newItem.image_url || null;
+    if (imageFile) {
+      finalImageUrl = await uploadImageAndGetUrl(
+        imageFile,
+        newItem.sku || newItem.product_name
+      );
+    }
 
-      const dataToSave = {
-        ...newItem,
-        image_url: finalImageUrl,
-        date_created: new Date().toISOString(),
-      };
+    const dataToSave = {
+      ...newItem,
+      image_url: finalImageUrl,
+      date_created: new Date().toISOString(),
+    };
 
-      const { error } =
-        editingItemId !== null
-          ? await supabase
-              .from("inventory")
-              .update(dataToSave)
-              .eq("id", editingItemId)
-          : await supabase.from("inventory").insert([dataToSave]);
-
+    if (editingItemId !== null) {
+      // Update existing item (no log for now)
+      const { error } = await supabase
+        .from("inventory")
+        .update(dataToSave)
+        .eq("id", editingItemId);
+      if (error) throw error;
+    } else {
+      // Add new item
+      const { error } = await supabase
+        .from("inventory")
+        .insert([dataToSave]);
       if (error) throw error;
 
-      // reset
-      setNewItem({
-        sku: "",
-        product_name: "",
-        category: "",
-        quantity: 0,
-        subcategory: "",
-        unit: "",
-        unit_price: 0,
-        amount: 0,
-        date_created: new Date().toISOString(),
-        status: "",
-        image_url: null,
-      });
-      setImageFile(null);
-      setImagePreview(null);
-      setShowForm(false);
-      setEditingItemId(null);
+      // --------- ACTIVITY LOG INSERT START ----------
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser();
+      const userEmail = user?.email || "unknown";
 
-      fetchItems();
-      fetchDropdownOptions();
-    } catch (err: any) {
-      console.error(err);
-      alert("Error saving item: " + err.message);
+      // Insert log to activity_logs
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: userEmail,
+          action: "Add Inventory Item",
+          details: {
+            sku: dataToSave.sku,
+            product_name: dataToSave.product_name,
+            category: dataToSave.category,
+            subcategory: dataToSave.subcategory,
+            unit: dataToSave.unit,
+            quantity: dataToSave.quantity,
+            unit_price: dataToSave.unit_price,
+            status: dataToSave.status,
+          },
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      // --------- ACTIVITY LOG INSERT END ----------
     }
-  };
+
+    // Reset form, modal, and reload items
+    setNewItem({
+      sku: "",
+      product_name: "",
+      category: "",
+      quantity: 0,
+      subcategory: "",
+      unit: "",
+      unit_price: 0,
+      amount: 0,
+      date_created: new Date().toISOString(),
+      status: "",
+      image_url: null,
+    });
+    setImageFile(null);
+    setImagePreview(null);
+    setShowForm(false);
+    setEditingItemId(null);
+
+    fetchItems();
+    fetchDropdownOptions();
+  } catch (err: any) {
+    console.error(err);
+    alert("Error saving item: " + err.message);
+  }
+};
+
 
   const filteredItems = items
     .filter((item) =>
