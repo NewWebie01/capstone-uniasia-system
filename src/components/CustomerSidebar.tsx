@@ -2,7 +2,7 @@
 "use client";
 
 import Image, { StaticImageData } from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Dispatch, SetStateAction } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
@@ -13,7 +13,7 @@ import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import LogoutIcon from "@/assets/power-button.png";
 
 // icons for customer nav
-import { ShoppingBag, ClipboardList, Search } from "lucide-react";
+import { ShoppingBag, ClipboardList } from "lucide-react";
 
 // shared link wrapper (same as admin)
 import NavLink from "@/components/NavLink";
@@ -26,12 +26,10 @@ interface SidebarProps {
 type MenuItem = {
   title: string;
   href: string;
-  // optional image support to match admin API shape
   src?: StaticImageData;
   icon?: React.ComponentType<{ className?: string }>;
 };
 
-// ✅ match admin’s Menus API style
 const Menus: MenuItem[] = [
   {
     title: "Product catalog",
@@ -43,12 +41,19 @@ const Menus: MenuItem[] = [
 
 export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const supabase = createClientComponentClient();
 
   const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) console.error("Logout failed:", error.message);
-    else window.location.href = "/login";
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+    } catch (err) {
+      console.error("Logout failed:", err);
+    } finally {
+      // Always navigate away from protected area
+      router.replace("/login");
+    }
   };
 
   return (
@@ -57,7 +62,7 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
       transition={{ duration: 0.3, type: "spring", damping: 15 }}
       className="h-full bg-white relative flex flex-col"
     >
-      {/* Toggle Button (same look as admin) */}
+      {/* Toggle Button */}
       <Image
         src={arrowcontrol}
         alt="Toggle Sidebar"
@@ -69,7 +74,7 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
         onClick={() => setOpen(!open)}
       />
 
-      {/* Logo Section (same animation as admin) */}
+      {/* Logo */}
       <div className="p-5 pt-8">
         <div className="flex gap-x-4 items-center">
           <motion.div
@@ -101,22 +106,18 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
         </div>
       </div>
 
-      {/* Menu Items (mirrors admin styling) */}
+      {/* Menu Items */}
       <div className="flex-1 overflow-y-auto px-5">
         <ul className="flex flex-col gap-y-4">
           {Menus.map((menu, idx) => {
             const isActive =
               pathname === menu.href || pathname?.startsWith(menu.href + "/");
-
             const IconOrImage = menu.src ? (
               <Image src={menu.src} alt={menu.title} width={20} height={20} />
             ) : menu.icon ? (
               <menu.icon
                 className={`h-5 w-5 ${
-                  // yellow highlight like admin’s important icons
-                  menu.title === "Product catalog" ||
-                  menu.title === "My orders" ||
-                  menu.title === "Track Order"
+                  menu.title === "Product catalog" || menu.title === "My orders"
                     ? "text-[#ffba20]"
                     : "text-black"
                 }`}
@@ -159,10 +160,11 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
         </ul>
       </div>
 
-      {/* Logout Button (same pattern as admin) */}
+      {/* Logout */}
       <div className="p-5">
         {open ? (
           <motion.button
+            type="button"
             onClick={handleLogout}
             className="w-full px-4 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
             initial={{ opacity: 0 }}
@@ -173,21 +175,19 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
             Log out
           </motion.button>
         ) : (
-          <motion.div
+          <motion.button
+            type="button"
+            onClick={handleLogout}
             initial={{ opacity: 0, scale: 0.8 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.8 }}
             transition={{ duration: 0.3 }}
-            className="cursor-pointer hover:scale-110 transition-transform duration-300"
+            className="cursor-pointer hover:scale-110 transition-transform duration-300 p-1 rounded"
+            aria-label="Log out"
+            title="Log out"
           >
-            <Image
-              src={LogoutIcon}
-              alt="Log out"
-              width={24}
-              height={24}
-              onClick={handleLogout}
-            />
-          </motion.div>
+            <Image src={LogoutIcon} alt="Log out" width={24} height={24} />
+          </motion.button>
         )}
       </div>
     </motion.div>
