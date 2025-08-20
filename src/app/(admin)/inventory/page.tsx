@@ -136,7 +136,10 @@ const handleSubmitItem = async () => {
     };
     setValidationErrors(errors);
     const hasErrors = Object.values(errors).some(Boolean);
-    if (hasErrors) return;
+    if (hasErrors) {
+      alert("Please fill in all required fields correctly.");
+      return;
+    }
 
     let finalImageUrl = newItem.image_url || null;
     if (imageFile) {
@@ -153,43 +156,56 @@ const handleSubmitItem = async () => {
     };
 
     if (editingItemId !== null) {
-      // Update existing item (no log for now)
+      // Update existing item
       const { error } = await supabase
         .from("inventory")
         .update(dataToSave)
         .eq("id", editingItemId);
       if (error) throw error;
+
+      // Log update activity
+      const { data: { user } } = await supabase.auth.getUser();
+      const userEmail = user?.email || "unknown";
+      await supabase.from("activity_logs").insert([{
+        user_email: userEmail,
+        action: "Update Inventory Item",
+        details: {
+          sku: dataToSave.sku,
+          product_name: dataToSave.product_name,
+          category: dataToSave.category,
+          subcategory: dataToSave.subcategory,
+          unit: dataToSave.unit,
+          quantity: dataToSave.quantity,
+          unit_price: dataToSave.unit_price,
+          status: dataToSave.status,
+        },
+        created_at: new Date().toISOString(),
+      }]);
     } else {
-      // Add new item
+      // Insert new item
       const { error } = await supabase
         .from("inventory")
         .insert([dataToSave]);
       if (error) throw error;
 
-      // --------- ACTIVITY LOG INSERT START ----------
-      // Get current user
+      // Log add activity
       const { data: { user } } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
-
-      // Insert log to activity_logs
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          action: "Add Inventory Item",
-          details: {
-            sku: dataToSave.sku,
-            product_name: dataToSave.product_name,
-            category: dataToSave.category,
-            subcategory: dataToSave.subcategory,
-            unit: dataToSave.unit,
-            quantity: dataToSave.quantity,
-            unit_price: dataToSave.unit_price,
-            status: dataToSave.status,
-          },
-          created_at: new Date().toISOString(),
+      await supabase.from("activity_logs").insert([{
+        user_email: userEmail,
+        action: "Add Inventory Item",
+        details: {
+          sku: dataToSave.sku,
+          product_name: dataToSave.product_name,
+          category: dataToSave.category,
+          subcategory: dataToSave.subcategory,
+          unit: dataToSave.unit,
+          quantity: dataToSave.quantity,
+          unit_price: dataToSave.unit_price,
+          status: dataToSave.status,
         },
-      ]);
-      // --------- ACTIVITY LOG INSERT END ----------
+        created_at: new Date().toISOString(),
+      }]);
     }
 
     // Reset form, modal, and reload items
@@ -214,10 +230,11 @@ const handleSubmitItem = async () => {
     fetchItems();
     fetchDropdownOptions();
   } catch (err: any) {
-    console.error(err);
-    alert("Error saving item: " + err.message);
+    console.error("Update error:", err);
+    alert("Error saving item: " + (err.message || JSON.stringify(err)));
   }
 };
+
 
 
   const filteredItems = items

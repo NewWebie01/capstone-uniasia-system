@@ -111,6 +111,25 @@ export default function TruckDeliveryPage() {
     newStatus: "",
   });
 
+  // Add after: const supabase = createPagesBrowserClient();
+async function logActivity(action: string, details: any = {}) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    const userEmail = data?.user?.email || "";
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        action,
+        details,
+      },
+    ]);
+  } catch (e) {
+    // For dev only: ignore logging failures
+    console.error("Log activity failed", e);
+  }
+}
+
+
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForDeliveryId, setAssignForDeliveryId] = useState<number | null>(
     null
@@ -411,43 +430,54 @@ setUnassignedOrders((data as OrderWithCustomer[]) || []);
     setUnassignedOrders((data as OrderWithCustomer[]) || []);
   };
 
-  const handleClearInvoices = async (deliveryId: number) => {
-    const delivery = deliveries.find((d) => d.id === deliveryId);
-    const orderIds = delivery?._orders?.map((o) => o.id) || [];
-    if (orderIds.length === 0) {
-      toast.info("No invoices to clear on this truck.");
-      return;
-    }
+const handleClearInvoices = async (deliveryId: number) => {
+  const delivery = deliveries.find((d) => d.id === deliveryId);
+  const orderIds = delivery?._orders?.map((o) => o.id) || [];
+  if (orderIds.length === 0) {
+    toast.info("No invoices to clear on this truck.");
+    return;
+  }
 
-    // Use Sonner toast with action for confirmation (user clicks Confirm in the toast)
-    toast(`Clear all invoices from this truck?`, {
-      action: {
-        label: "Confirm",
-        // onClick may be async; Sonner supports async onClick handlers
-        onClick: async () => {
-          // show a small processing toast
-          const t = toast.loading("Clearing invoices...");
-          const { error } = await supabase
-            .from("orders")
-            .update({ truck_delivery_id: null })
-            .in("id", orderIds);
+  // --------- PASTE UPDATED TOAST HERE ----------
+  toast(`Clear all invoices from this truck?`, {
+    action: {
+      label: "Confirm",
+      onClick: async () => {
+        const t = toast.loading("Clearing invoices...");
+        const { error } = await supabase
+          .from("orders")
+          .update({ truck_delivery_id: null })
+          .in("id", orderIds);
 
-          toast.dismiss(t);
+        toast.dismiss(t);
 
-          if (error) {
-            toast.error("Failed to clear invoices.");
-            console.error("Clear invoices error:", error);
-            return;
-          }
+        if (error) {
+          toast.error("Failed to clear invoices.");
+          console.error("Clear invoices error:", error);
+          return;
+        }
 
-          toast.success("All invoices cleared from this truck.");
-          await fetchDeliveriesAndAssignments();
-        },
+        toast.success("All invoices cleared from this truck.");
+
+        // DEBUG LOG
+        console.log("Will log activity now!");
+
+        // LOG TO ACTIVITY
+        await logActivity("Cleared all invoices from truck", {
+          deliveryId,
+          clearedOrderIds: orderIds,
+        });
+
+        console.log("Activity should be logged now!");
+
+        await fetchDeliveriesAndAssignments();
       },
-      // give user some time to confirm, but not forever; you can adjust duration
-      duration: 12000,
-    });
-  };
+    },
+    duration: 12000,
+  });
+  // ----------------------------------------------
+};
+
 
   /* =========================
      HELPERS
@@ -477,27 +507,23 @@ setUnassignedOrders((data as OrderWithCustomer[]) || []);
     setProvinceCode("");
   };
 
-  const handleAddDelivery = async (e: React.FormEvent) => {
+const handleAddDelivery = async (e: React.FormEvent) => {
   e.preventDefault();
-
-  // Compose destination from region/province; fall back to the text field
   const region = regions.find((r) => r.code === regionCode)?.name || "";
   const province = provinces.find((p) => p.code === provinceCode)?.name || "";
-
   const destinationComposed =
-  newDelivery.destination?.trim() ||
-  [region, province].filter(Boolean).join(", ");
+    newDelivery.destination?.trim() ||
+    [region, province].filter(Boolean).join(", ");
 
   const { error } = await supabase.from("truck_deliveries").insert([
     {
-      destination: destinationComposed,          // <-- use composed value
+      destination: destinationComposed,
       plate_number: newDelivery.plateNumber,
       driver: newDelivery.driver,
       participants: newDelivery.participants,
       status: newDelivery.status,
       schedule_date: newDelivery.scheduleDate,
       arrival_date: newDelivery.arrivalDate || null,
-      // (remove the expense fields if you already dropped them in the DB)
     },
   ]);
 
@@ -508,9 +534,22 @@ setUnassignedOrders((data as OrderWithCustomer[]) || []);
   }
 
   toast.success("Delivery schedule added");
+
+  // 🔥 ADD THIS:
+  await logActivity("Added Delivery Schedule", {
+    destination: destinationComposed,
+    plate_number: newDelivery.plateNumber,
+    driver: newDelivery.driver,
+    participants: newDelivery.participants,
+    status: newDelivery.status,
+    schedule_date: newDelivery.scheduleDate,
+    arrival_date: newDelivery.arrivalDate || null,
+  });
+
   await fetchDeliveriesAndAssignments();
   hideForm();
 };
+
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -609,25 +648,33 @@ setUnassignedOrders((data as OrderWithCustomer[]) || []);
     );
   };
 
-  const assignSelected = async () => {
-    if (!assignForDeliveryId || selectedOrderIds.length === 0) {
-      setAssignOpen(false);
-      return;
-    }
-    const { error } = await supabase
-      .from("orders")
-      .update({ truck_delivery_id: assignForDeliveryId })
-      .in("id", selectedOrderIds);
-
-    if (error) {
-      console.error("Assign error:", error);
-      toast.error("Failed to assign invoices to truck");
-      return;
-    }
-    toast.success("Invoices assigned to truck");
-    await fetchDeliveriesAndAssignments();
+const assignSelected = async () => {
+  if (!assignForDeliveryId || selectedOrderIds.length === 0) {
     setAssignOpen(false);
-  };
+    return;
+  }
+  const { error } = await supabase
+    .from("orders")
+    .update({ truck_delivery_id: assignForDeliveryId })
+    .in("id", selectedOrderIds);
+
+  if (error) {
+    console.error("Assign error:", error);
+    toast.error("Failed to assign invoices to truck");
+    return;
+  }
+  toast.success("Invoices assigned to truck");
+
+  // 🟡 ADD THIS: LOG ACTIVITY!
+  await logActivity("Assigned invoices to truck", {
+    deliveryId: assignForDeliveryId,
+    assignedOrderIds: selectedOrderIds,
+  });
+
+  await fetchDeliveriesAndAssignments();
+  setAssignOpen(false);
+};
+
 
   /* =========================
      INVOICE MODAL HELPERS

@@ -297,71 +297,129 @@ const totalDiscount = selectedOrder
     setInterestPercent(0);
   };
 
-  const handleRejectOrder = async (order: OrderWithDetails) => {
-    setPickingStatus((prev) => [...prev, { orderId: order.id, status: "rejected" }]);
-    await supabase.from("orders").update({ status: "rejected" }).eq("id", order.id);
-    fetchOrders();
-  };
+const handleRejectOrder = async (order: OrderWithDetails) => {
+  setPickingStatus((prev) => [...prev, { orderId: order.id, status: "rejected" }]);
+  await supabase.from("orders").update({ status: "rejected" }).eq("id", order.id);
+
+  // ----------- ACTIVITY LOG FOR ORDER REJECT -----------
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    const userEmail = user?.email || "unknown";
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        action: "Reject Sales Order",
+        details: {
+          order_id: order.id,
+          customer_name: order.customers.name,
+          customer_email: order.customers.email,
+          items: order.order_items.map((oi) => ({
+            product_name: oi.inventory.product_name,
+            ordered_qty: oi.quantity,
+            unit_price: oi.price,
+          })),
+          total_amount: order.total_amount,
+          payment_type: order.customers.payment_type,
+        },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  } catch (err) {
+    console.error("Failed to log activity for order rejection:", err);
+  }
+  // -----------------------------------------------------
+
+  fetchOrders();
+};
+
 
   const handleOrderConfirm = async () => {
     if (!selectedOrder) return;
     setShowFinalConfirm(true);
   };
 
-  const handleOrderComplete = async () => {
-    if (!selectedOrder) return;
-    for (let i = 0; i < selectedOrder.order_items.length; i++) {
-      const oi = selectedOrder.order_items[i];
-      const invId = oi.inventory.id;
-      const remaining = oi.inventory.quantity - editedQuantities[i];
-      if (remaining < 0) {
-        toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
-        setShowFinalConfirm(false);
-        return;
-      }
-      await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
-      await supabase.from("sales").insert([
-        {
-          inventory_id: invId,
-          quantity_sold: editedQuantities[i],
-          amount:
-            editedQuantities[i] *
-            oi.price *
-            (1 + (editedDiscounts[i] || 0) / 100),
-          date: new Date().toISOString(),
+const handleOrderComplete = async () => {
+  if (!selectedOrder) return;
+  for (let i = 0; i < selectedOrder.order_items.length; i++) {
+    const oi = selectedOrder.order_items[i];
+    const invId = oi.inventory.id;
+    const remaining = oi.inventory.quantity - editedQuantities[i];
+    if (remaining < 0) {
+      toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
+      setShowFinalConfirm(false);
+      return;
+    }
+    await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
+    await supabase.from("sales").insert([{
+      inventory_id: invId,
+      quantity_sold: editedQuantities[i],
+      amount: editedQuantities[i] * oi.price * (1 + (editedDiscounts[i] || 0) / 100),
+      date: new Date().toISOString(),
+    }]);
+  }
+
+  // Save order as completed (update with sales_tax, etc)
+  if (selectedOrder.customers.payment_type === "Credit") {
+    await supabase
+      .from("orders")
+      .update({
+        payment_terms: numberOfTerms,
+        interest_percent: interestPercent,
+        grand_total_with_interest: getGrandTotalWithInterest(),
+        per_term_amount: getPerTermAmount(),
+        status: "completed",
+        sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
+      })
+      .eq("id", selectedOrder.id);
+  } else {
+    await supabase
+      .from("orders")
+      .update({
+        status: "completed",
+        sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
+      })
+      .eq("id", selectedOrder.id);
+  }
+
+  // ----------- ACTIVITY LOG FOR SALES ORDER COMPLETE -----------
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    const userEmail = user?.email || "unknown";
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        action: "Complete Sales Order",
+        details: {
+          order_id: selectedOrder.id,
+          customer_name: selectedOrder.customers.name,
+          customer_email: selectedOrder.customers.email,
+          items: selectedOrder.order_items.map((oi, idx) => ({
+            product_name: oi.inventory.product_name,
+            ordered_qty: oi.quantity,
+            fulfilled_qty: editedQuantities[idx],
+            unit_price: oi.price,
+            discount_percent: editedDiscounts[idx] || 0,
+          })),
+          total_amount: getGrandTotalWithInterest(),
+          payment_type: selectedOrder.customers.payment_type,
         },
-      ]);
-    }
-    // Save order as completed (update with sales_tax, etc)
-    if (selectedOrder.customers.payment_type === "Credit") {
-      await supabase
-        .from("orders")
-        .update({
-          payment_terms: numberOfTerms,
-          interest_percent: interestPercent,
-          grand_total_with_interest: getGrandTotalWithInterest(),
-          per_term_amount: getPerTermAmount(),
-          status: "completed",
-          sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
-        })
-        .eq("id", selectedOrder.id);
-    } else {
-      await supabase
-        .from("orders")
-        .update({
-          status: "completed",
-          sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
-        })
-        .eq("id", selectedOrder.id);
-    }
-    setShowSalesOrderModal(false);
-    setShowModal(false);
-    setShowFinalConfirm(false);
-    setSelectedOrder(null);
-    fetchOrders();
-    fetchItems();
-    toast.success("Order successfully completed!");
-  };
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  } catch (err) {
+    console.error("Failed to log activity for sales order completion:", err);
+  }
+  // -------------------------------------------------------------
+
+  setShowSalesOrderModal(false);
+  setShowModal(false);
+  setShowFinalConfirm(false);
+  setSelectedOrder(null);
+  fetchOrders();
+  fetchItems();
+  toast.success("Order successfully completed!");
+};
+
 
   const handleBackModal = () => {
     setShowSalesOrderModal(false);
