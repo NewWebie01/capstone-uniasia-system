@@ -1,7 +1,12 @@
 // src/app/customer/layout.tsx
+"use client";
+
+import { useState, useEffect } from "react";
 import { DM_Sans } from "next/font/google";
-import "@/STYLES/globals.css";
 import { Toaster } from "sonner";
+import CustomerSidebar from "@/components/CustomerSidebar";
+import GlobalRouteLoader from "@/components/GlobalRouteLoader";
+import supabase from "@/config/supabaseClient"; // ✅
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -14,30 +19,56 @@ export default function CustomerLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(true);
+  const [userName, setUserName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const getUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        setUserName(user.user_metadata?.name || user.email || "Guest");
+      }
+    };
+
+    getUser();
+  }, []);
+
   return (
     <div
-      className={`${dmSans.className} min-h-screen`}
-      style={{
-        // Inline radial gradient — guarantees it shows up without Tailwind escaping headaches
-        background: "radial-gradient(ellipse 200% 100% at bottom left, #ffba20, #dadada 100%)",
-      }}
-      /* If you still want the Tailwind arbitrary class, swap the two lines below:
-      className={`${dmSans.className} min-h-screen bg-[radial-gradient(ellipse_200%25_100%25_at_bottom_left,_#ffba20,_#dadada_100%25)]`}
-      style={{}} 
-      */
+      className={`min-h-screen bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)] ${dmSans.className}`}
     >
-      {/* Toast container */}
       <Toaster richColors position="top-center" />
 
       {/* Sticky Header */}
-      <header className="sticky top-0 z-30 backdrop-blur-sm w-full h-12">
-        <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
+      <header className="sticky top-0 z-20 backdrop-blur-sm w-full h-12">
+        <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3 h-full">
           <p>UNIASIA - Reliable Hardware Supplier in the Philippines</p>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="p-6">{children}</main>
+      {/* Layout */}
+      <div className="flex h-[calc(100vh-3rem)] overflow-hidden">
+        <CustomerSidebar open={open} setOpen={setOpen} />
+        <main className="flex-1 overflow-y-auto p-6 relative">
+          {/* 👋 Modern greeting */}
+          <div className="flex justify-end mb-2">
+            <div className="bg-white shadow-md rounded-xl px-4 py-2 text-gray-700 mr-6">
+              <span className="font-semibold">Hi,</span>{" "}
+              <span className="text-[#ffba20] font-bold">
+                {userName || "Guest"}
+              </span>
+              👋
+            </div>
+          </div>
+
+          {children}
+        </main>
+      </div>
+
+      <GlobalRouteLoader />
     </div>
   );
 }
