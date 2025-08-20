@@ -1,7 +1,7 @@
 // src/app/customer/track/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import supabase from "@/config/supabaseClient";
 
 /* ----------------------------- Date formatter ----------------------------- */
@@ -19,8 +19,39 @@ const formatPH = (d?: string | number | Date | null) =>
     : "—";
 
 /* ---------------------------------- Types --------------------------------- */
+type ItemRow = {
+  quantity: number;
+  price: number;
+  inventory?: {
+    product_name?: string | null;
+    category?: string | null;
+    subcategory?: string | null;
+    status?: string | null;
+  } | null;
+};
+
+type OrderRow = {
+  id: number;
+  total_amount: number | null;
+  status: string | null;
+  truck_delivery_id?: number | null;
+  order_items?: ItemRow[];
+};
+
+type CustomerTx = {
+  id: number;
+  name: string | null;
+  code: string | null; // TXN
+  contact_person?: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  date: string | null;
+  orders?: OrderRow[];
+};
+
 type Delivery = {
-  id: string | number;
+  id: number;
   status: string | null;
   schedule_date: string | null;
   date_received?: string | null;
@@ -29,207 +60,270 @@ type Delivery = {
 };
 
 export default function TrackPage() {
-  const [txn, setTxn] = useState("");
-  const [trackingResult, setTrackingResult] = useState<any | null>(null);
-  const [delivery, setDelivery] = useState<Delivery | null>(null);
-  const [trackError, setTrackError] = useState<string | null>(null);
-  const [trackingLoading, setTrackingLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [authEmail, setAuthEmail] = useState<string | null>(null);
 
-  const handleTrack = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setTrackError(null);
-    setTrackingResult(null);
-    setDelivery(null);
-    setTrackingLoading(true);
+  // all transactions (each is one “purchase” a.k.a customers row)
+  const [txns, setTxns] = useState<CustomerTx[]>([]);
+  // deliveries indexed by id
+  const [deliveriesById, setDeliveriesById] = useState<
+    Record<number, Delivery>
+  >({});
 
-    try {
-      // 1) Get customer by TXN and include latest order with TRUCK delivery id
-      const { data, error } = await supabase
-        .from("customers")
-        .select(
-          `
-          id,
-          name,
-          code,
-          contact_person,
-          email,
-          phone,
-          address,
-          date,
-          orders (
+  const hasData = useMemo(() => txns.length > 0, [txns.length]);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const email = user?.email ?? null;
+        setAuthEmail(email);
+
+        if (!email) {
+          setTxns([]);
+          setDeliveriesById({});
+          return;
+        }
+
+        // 1) Fetch ALL customer transactions for this email
+        const { data: customers, error } = await supabase
+          .from("customers")
+          .select(
+            `
             id,
-            total_amount,
-            status,
-            truck_delivery_id,
-            order_items (
-              quantity,
-              price,
-              inventory:inventory_id (
-                product_name,
-                category,
-                subcategory,
-                status
+            name,
+            code,
+            contact_person,
+            email,
+            phone,
+            address,
+            date,
+            orders (
+              id,
+              total_amount,
+              status,
+              truck_delivery_id,
+              order_items (
+                quantity,
+                price,
+                inventory:inventory_id (
+                  product_name,
+                  category,
+                  subcategory,
+                  status
+                )
               )
             )
+          `
           )
-        `
-        )
-        .eq("code", txn.trim().toUpperCase())
-        .maybeSingle();
+          .eq("email", email)
+          .order("date", { ascending: false });
 
-      if (error || !data) {
-        setTrackError("Transaction code not found.");
-        setTrackingLoading(false);
-        return;
+        if (error || !customers) {
+          setTxns([]);
+          setDeliveriesById({});
+          return;
+        }
+
+        const txList = customers as CustomerTx[];
+        setTxns(txList);
+
+        // 2) Collect unique truck_delivery_ids across all orders
+        const ids = new Set<number>();
+        for (const t of txList) {
+          for (const o of t.orders ?? []) {
+            if (o?.truck_delivery_id != null) {
+              ids.add(o.truck_delivery_id as number);
+            }
+          }
+        }
+
+        // 3) Fetch deliveries in one go
+        if (ids.size > 0) {
+          const idArray = Array.from(ids);
+          const { data: delivs, error: dErr } = await supabase
+            .from("truck_deliveries")
+            .select(
+              "id, status, schedule_date, date_received, driver, participants"
+            )
+            .in("id", idArray);
+
+          if (!dErr && delivs) {
+            const map: Record<number, Delivery> = {};
+            for (const d of delivs as Delivery[]) map[d.id] = d;
+            setDeliveriesById(map);
+          } else {
+            setDeliveriesById({});
+          }
+        } else {
+          setDeliveriesById({});
+        }
+      } finally {
+        setLoading(false);
       }
-
-      setTrackingResult(data);
-
-      // 2) Follow truck_delivery_id to the truck_deliveries table
-      const firstOrder = (data.orders ?? [])[0];
-      const truckDeliveryId = firstOrder?.truck_delivery_id as
-        | string
-        | number
-        | undefined;
-
-      if (truckDeliveryId != null) {
-        const { data: deliv, error: delivErr } = await supabase
-          .from("truck_deliveries")
-          .select(
-            "id, status, schedule_date, date_received, driver, participants"
-          )
-          .eq("id", truckDeliveryId)
-          .maybeSingle();
-
-        if (!delivErr && deliv) setDelivery(deliv as Delivery);
-      }
-    } catch {
-      setTrackError("Error while fetching. Please try again.");
-    } finally {
-      setTrackingLoading(false);
-    }
-  };
+    })();
+  }, []);
 
   return (
     <div className="p-4">
       <h1 className="text-3xl font-bold mb-4">Track Your Delivery</h1>
 
-      {/* TXN Input */}
-      <div className="bg-white border rounded p-4 mb-6 shadow-sm">
-        <form
-          onSubmit={handleTrack}
-          className="flex flex-col sm:flex-row gap-3 items-start sm:items-end"
-        >
-          <input
-            value={txn}
-            onChange={(e) => {
-              setTxn(e.target.value);
-              setTrackingResult(null);
-              setDelivery(null);
-              setTrackError(null);
-            }}
-            placeholder="Enter TXN code (e.g., TXN-20250819-ABC123)"
-            className="w-full border px-3 py-2 rounded text-sm tracking-wider uppercase"
-            required
-          />
-          <button
-            type="submit"
-            disabled={trackingLoading}
-            className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
-          >
-            {trackingLoading ? "Checking..." : "Track"}
-          </button>
-        </form>
-        {trackError && (
-          <p className="text-red-600 mt-2 text-sm">{trackError}</p>
-        )}
-      </div>
-
-      {/* Customer + Order Info */}
-      {trackingResult && (
-        <div className="bg-gray-50 border rounded p-4 mb-6">
-          <h3 className="font-semibold text-md mb-2">Customer & Order Info</h3>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-            <p>
-              <span className="font-medium">Name:</span> {trackingResult.name}
-            </p>
-            <p>
-              <span className="font-medium">TXN Code:</span>{" "}
-              {trackingResult.code}
-            </p>
-
-            {/* 👇 Show TRUCK DELIVERY STATUS (fallback to order status, then em dash) */}
-            <p>
-              <span className="font-medium">Delivery Status:</span>{" "}
-              {delivery?.status ??
-                trackingResult.orders?.[0]?.status ??
-                "—"}
-            </p>
-
-            <p>
-              <span className="font-medium">Date:</span>{" "}
-              {formatPH(trackingResult.date)}
-            </p>
-            <p className="md:col-span-2">
-              <span className="font-medium">Address:</span>{" "}
-              {trackingResult.address}
-            </p>
-            <p>
-              <span className="font-medium">Contact:</span>{" "}
-              {trackingResult.phone}
-            </p>
-            <p>
-              <span className="font-medium">Email:</span> {trackingResult.email}
-            </p>
-          </div>
-
-          <h4 className="mt-4 font-semibold">Items Ordered</h4>
-          <ul className="list-disc ml-6 text-sm">
-            {trackingResult.orders?.[0]?.order_items?.map(
-              (item: any, index: number) => (
-                <li key={index}>
-                  {item.inventory?.product_name} – {item.quantity} pcs (
-                  {item.inventory?.category}/{item.inventory?.subcategory}) —{" "}
-                  {item.inventory?.status}
-                </li>
-              )
-            )}
-          </ul>
-        </div>
-      )}
-
-      {/* Delivery Status Card */}
-      {delivery && (
+      {/* States */}
+      {!authEmail && !loading && (
         <div className="bg-white border rounded p-4 shadow-sm">
-          <h3 className="font-semibold text-md mb-3">Delivery Details</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-            <p>
-              <span className="font-medium">Status:</span>{" "}
-              {delivery.status || "—"}
-            </p>
-            <p>
-              <span className="font-medium">Schedule Date:</span>{" "}
-              {formatPH(delivery.schedule_date)}
-            </p>
-            <p>
-              <span className="font-medium">Date Received:</span>{" "}
-              {formatPH(delivery.date_received ?? null)}
-            </p>
-            <p>
-              <span className="font-medium">Driver:</span>{" "}
-              {delivery.driver || "—"}
-            </p>
-            <p className="md:col-span-2">
-              <span className="font-medium">Participants:</span>{" "}
-              {Array.isArray(delivery.participants) &&
-              delivery.participants.length > 0
-                ? delivery.participants.join(", ")
-                : "—"}
-            </p>
-          </div>
+          <p>Please sign in to view your orders.</p>
         </div>
       )}
+
+      {loading && (
+        <div className="bg-white border rounded p-4 shadow-sm">
+          <p>Loading your orders…</p>
+        </div>
+      )}
+
+      {!loading && authEmail && !hasData && (
+        <div className="bg-white border rounded p-4 shadow-sm">
+          <p>
+            No orders found for <span className="font-medium">{authEmail}</span>
+            .
+          </p>
+        </div>
+      )}
+
+      {/* All transactions for this user */}
+      {!loading &&
+        hasData &&
+        txns.map((t) => {
+          const orderList = t.orders ?? [];
+          // If there’s exactly one order per transaction (your create flow), this array is length 1;
+          // still render generically in case you add multi-order later.
+          return (
+            <div key={t.id} className="bg-gray-50 border rounded p-4 mb-6">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                <h3 className="font-semibold text-md">TXN: {t.code ?? "—"}</h3>
+                <div className="text-sm text-gray-600">
+                  Date: {formatPH(t.date)}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm mt-2">
+                <p>
+                  <span className="font-medium">Name:</span> {t.name ?? "—"}
+                </p>
+                <p>
+                  <span className="font-medium">Delivery Status:</span>{" "}
+                  {/* show first order’s delivery status if present; otherwise order status */}
+                  {(() => {
+                    const o = orderList[0];
+                    const d = o?.truck_delivery_id
+                      ? deliveriesById[o.truck_delivery_id]
+                      : undefined;
+                    return d?.status ?? o?.status ?? "—";
+                  })()}
+                </p>
+                <p className="md:col-span-2">
+                  <span className="font-medium">Address:</span>{" "}
+                  {t.address ?? "—"}
+                </p>
+                <p>
+                  <span className="font-medium">Contact:</span> {t.phone ?? "—"}
+                </p>
+                <p>
+                  <span className="font-medium">Email:</span> {t.email ?? "—"}
+                </p>
+              </div>
+
+              {/* Orders within the transaction */}
+              {orderList.map((o) => {
+                const deliv = o.truck_delivery_id
+                  ? deliveriesById[o.truck_delivery_id]
+                  : undefined;
+
+                return (
+                  <div key={o.id} className="mt-4">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between">
+                      <h4 className="font-semibold">Order #{o.id}</h4>
+                      <div className="text-sm">
+                        <span className="font-medium">Status:</span>{" "}
+                        {deliv?.status ?? o.status ?? "—"}
+                      </div>
+                    </div>
+
+                    {/* Items */}
+                    <div className="mt-2 border rounded bg-white overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-200">
+                          <tr>
+                            <th className="py-2 px-3 text-left">Product</th>
+                            <th className="py-2 px-3 text-left">Category</th>
+                            <th className="py-2 px-3 text-left">Subcategory</th>
+                            <th className="py-2 px-3 text-left">Qty</th>
+                            <th className="py-2 px-3 text-left">Inv. Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(o.order_items ?? []).map((it, idx) => (
+                            <tr key={idx} className="border-t">
+                              <td className="py-2 px-3">
+                                {it.inventory?.product_name ?? "—"}
+                              </td>
+                              <td className="py-2 px-3">
+                                {it.inventory?.category ?? "—"}
+                              </td>
+                              <td className="py-2 px-3">
+                                {it.inventory?.subcategory ?? "—"}
+                              </td>
+                              <td className="py-2 px-3">{it.quantity}</td>
+                              <td className="py-2 px-3">
+                                {it.inventory?.status ?? "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Delivery card (if available) */}
+                    {deliv && (
+                      <div className="mt-3 bg-white border rounded p-3 shadow-sm text-sm">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <p>
+                            <span className="font-medium">
+                              Delivery Status:
+                            </span>{" "}
+                            {deliv.status ?? "—"}
+                          </p>
+                          <p>
+                            <span className="font-medium">Schedule Date:</span>{" "}
+                            {formatPH(deliv.schedule_date)}
+                          </p>
+                          <p>
+                            <span className="font-medium">Date Received:</span>{" "}
+                            {formatPH(deliv.date_received ?? null)}
+                          </p>
+                          <p>
+                            <span className="font-medium">Driver:</span>{" "}
+                            {deliv.driver ?? "—"}
+                          </p>
+                          <p className="md:col-span-2">
+                            <span className="font-medium">Participants:</span>{" "}
+                            {Array.isArray(deliv.participants) &&
+                            deliv.participants.length > 0
+                              ? deliv.participants.join(", ")
+                              : "—"}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
     </div>
   );
 }
