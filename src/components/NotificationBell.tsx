@@ -134,7 +134,7 @@ export default function NotificationBell() {
               <div className="text-gray-500">No new orders</div>
             ) : (
               <div className="space-y-4">
-                {orders.map((order, index) => (
+                {orders.map((order) => (
                   <div
                     key={order.id}
                     className="border border-gray-200 rounded p-4"
@@ -151,23 +151,41 @@ export default function NotificationBell() {
                     <div className="mb-2">
                       <strong>Address:</strong> {order.address}
                     </div>
+
                     <h3 className="font-medium mb-1">📦 Items:</h3>
                     <ul className="list-disc list-inside text-sm space-y-1 mb-2">
                       {order.items.map((item, idx) => (
                         <li key={idx}>
-                          <strong>{item.product_name}</strong> — {item.quantity} pcs (
-                          {item.category} / {item.subcategory})
+                          <strong>{item.product_name}</strong> — {item.quantity}{" "}
+                          pcs ({item.category} / {item.subcategory})
                         </li>
                       ))}
                     </ul>
-                    <label className="inline-flex items-center mt-2 text-sm">
-                      <input
-                        type="checkbox"
-                        className="mr-2"
-                        onChange={() => handleMarkAsRead(order.id)}
-                      />
-                      Mark as Read
-                    </label>
+
+                    <div className="flex justify-between items-center mt-3">
+                      <label className="inline-flex items-center text-sm">
+                        <input
+                          type="checkbox"
+                          className="mr-2"
+                          onChange={() => handleMarkAsRead(order.id)}
+                        />
+                        Mark as Read
+                      </label>
+
+                      <button
+                        className="text-sm text-blue-600 hover:underline"
+                        onClick={() => {
+                          setIsModalOpen(false);
+                          window.localStorage.setItem(
+                            "view_order_id",
+                            order.id
+                          );
+                          window.location.href = "sales";
+                        }}
+                      >
+                        View in Sales
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
