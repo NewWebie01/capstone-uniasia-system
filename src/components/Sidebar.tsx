@@ -9,7 +9,14 @@ import Sales from "@/assets/Sales.png";
 import LogoutIcon from "@/assets/power-button.png";
 
 import { FaHistory } from "react-icons/fa";
-import { UserPlus, ShoppingCart, Boxes, FileText, Receipt } from "lucide-react";
+import {
+  UserPlus,
+  ShoppingCart,
+  Boxes,
+  FileText,
+  Receipt,
+  RotateCcw,
+} from "lucide-react";
 
 import Image, { StaticImageData } from "next/image";
 import NavLink from "@/components/NavLink";
@@ -34,8 +41,8 @@ const Menus: {
   { title: "Inventory", icon: Boxes, href: "/inventory" },
   { title: "Truck Delivery", src: Logistics, href: "/logistics" },
   { title: "Sales", src: Sales, href: "/sales" },
-  // { title: "Purchase", icon: ShoppingCart, href: "/purchase" },
   { title: "Invoice", icon: FileText, href: "/invoice" },
+  { title: "Returns", icon: RotateCcw, href: "/returns" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
   { title: "Account Creation", icon: UserPlus, href: "/account_creation" },
@@ -46,9 +53,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   const supabase = createClientComponentClient();
 
   const handleLogout = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const userEmail = user?.email || "unknown";
+
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        action: "Logout",
+        details: {},
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
     const { error } = await supabase.auth.signOut();
-    if (error) console.error("Logout failed:", error.message);
-    else window.location.href = "/login";
+    if (error) {
+      console.error("Logout failed:", error.message);
+    } else {
+      window.location.href = "/login";
+    }
   };
 
   return (
@@ -111,13 +135,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
             ) : menu.icon ? (
               <menu.icon
                 className={`h-5 w-5 ${
-                  menu.title === "Activity Log" ||
-                  menu.title === "Account Creation" ||
-                  menu.title === "Purchase" ||
-                  menu.title === "Inventory" ||
-                  menu.title === "Invoice" ||
-                  menu.title === "Transaction History"
-                    ? "text-[#ffba20]" // ✅ all important icons yellow
+                  // highlight these icons in yellow
+                  [
+                    "Activity Log",
+                    "Account Creation",
+                    "Purchase",
+                    "Inventory",
+                    "Invoice",
+                    "Transaction History",
+                    "Returns", // ← NEW
+                  ].includes(menu.title)
+                    ? "text-[#ffba20]"
                     : "text-black"
                 }`}
               />
