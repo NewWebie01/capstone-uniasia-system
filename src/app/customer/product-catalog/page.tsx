@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
@@ -21,17 +20,14 @@ const formatPH = (d?: string | number | Date) =>
   }).format(d ? new Date(d) : new Date());
 
 /* ---------------------- Encoding & PSGC fetch helpers --------------------- */
-// Repairs common UTF‑8 → Latin‑1 mojibake like "PiÃ±as" → "Piñas"
 const fixEncoding = (s: string) => {
   try {
-    // escape() percent-encodes bytes 0–255; decodeURIComponent treats them as UTF‑8
     return decodeURIComponent(escape(s));
   } catch {
     return s;
   }
 };
 
-// Robust JSON fetch with explicit UTF‑8 decode
 async function fetchJSON<T>(url: string): Promise<T> {
   const response = await fetch(url);
   const buffer = await response.arrayBuffer();
@@ -52,7 +48,7 @@ type PSGCCity = {
   name: string;
   code: string;
   province_id?: number;
-  type: string; // 'City' / 'Municipality' etc.
+  type: string;
 };
 type PSGCBarangay = { id: number; name: string; code: string };
 
@@ -96,16 +92,13 @@ function generateTransactionCode(): string {
 function isValidPhone(phone: string) {
   return /^\d{11}$/.test(phone);
 }
-
-// Choose a nice display name from metadata/email
 function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
   const nameFromMeta =
     meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
   if (nameFromMeta && typeof nameFromMeta === "string")
     return nameFromMeta.trim();
-  if (fallbackEmail && fallbackEmail.includes("@")) {
+  if (fallbackEmail && fallbackEmail.includes("@"))
     return fallbackEmail.split("@")[0];
-  }
   return "";
 }
 
@@ -132,6 +125,20 @@ export default function CustomerInventoryPage() {
   const [trackingResult, setTrackingResult] = useState<any | null>(null);
   const [trackError, setTrackError] = useState<string | null>(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
+
+  // cache the logged‑in user’s identity for reuse
+  const [authDefaults, setAuthDefaults] = useState<{
+    name: string;
+    email: string;
+  }>({
+    name: "",
+    email: "",
+  });
+
+  // (optional) show the computed order count
+  const [orderHistoryCount, setOrderHistoryCount] = useState<number | null>(
+    null
+  );
 
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
     name: "",
@@ -176,7 +183,7 @@ export default function CustomerInventoryPage() {
     [barangays, barangayCode]
   );
 
-  // NCR (Region 13 / National Capital Region) has no provinces
+  // NCR (Region 13) has no provinces
   const isNCR = useMemo(
     () =>
       !!regionCode &&
@@ -187,7 +194,7 @@ export default function CustomerInventoryPage() {
     [regionCode, selectedRegion]
   );
 
-  // Full address string (province may be empty for NCR)
+  // Full address string
   const computedAddress = useMemo(() => {
     const parts = [
       houseStreet.trim(),
@@ -212,7 +219,6 @@ export default function CustomerInventoryPage() {
   }, [computedAddress]);
 
   /* ---------------------------- Load PSGC lists --------------------------- */
-  // Regions
   useEffect(() => {
     fetchJSON<PSGCRegion[]>("https://psgc.cloud/api/regions")
       .then((data) =>
@@ -225,7 +231,6 @@ export default function CustomerInventoryPage() {
       .catch(() => toast.error("Failed to load regions"));
   }, []);
 
-  // Children of region: NCR → cities directly; Others → provinces
   useEffect(() => {
     setProvinces([]);
     setProvinceCode("");
@@ -266,7 +271,6 @@ export default function CustomerInventoryPage() {
       .catch(() => toast.error("Failed to load provinces"));
   }, [regionCode, isNCR]);
 
-  // Cities when province changes (skip for NCR)
   useEffect(() => {
     if (isNCR) return;
 
@@ -291,7 +295,6 @@ export default function CustomerInventoryPage() {
       .catch(() => toast.error("Failed to load cities/municipalities"));
   }, [provinceCode, isNCR]);
 
-  // Barangays when city changes (robust for City of Manila / NCR)
   useEffect(() => {
     setBarangays([]);
     setBarangayCode("");
@@ -301,7 +304,6 @@ export default function CustomerInventoryPage() {
       const prefix9 = cityCode.slice(0, 9);
       const prefix6 = cityCode.slice(0, 6);
 
-      // Natural numeric sort so "Barangay 64" < "Barangay 639"
       const fixSort = (list: PSGCBarangay[]) => {
         const collator = new Intl.Collator(undefined, {
           numeric: true,
@@ -312,7 +314,6 @@ export default function CustomerInventoryPage() {
           .sort((a, b) => collator.compare(a.name, b.name));
       };
 
-      // 1) Try CITY endpoint
       try {
         const fromCity = await fetchJSON<PSGCBarangay[]>(
           `https://psgc.cloud/api/cities/${cityCode}/barangays`
@@ -324,7 +325,6 @@ export default function CustomerInventoryPage() {
         }
       } catch {}
 
-      // 2) Try MUNICIPALITY endpoint
       try {
         const fromMunicipality = await fetchJSON<PSGCBarangay[]>(
           `https://psgc.cloud/api/municipalities/${cityCode}/barangays`
@@ -336,7 +336,6 @@ export default function CustomerInventoryPage() {
         }
       } catch {}
 
-      // 3) Fallback: filter ALL barangays by prefix (covers Manila)
       try {
         const all = await fetchJSON<PSGCBarangay[]>(
           "https://psgc.cloud/api/barangays"
@@ -368,7 +367,6 @@ export default function CustomerInventoryPage() {
 
   useEffect(() => {
     fetchInventory();
-
     const channel: RealtimeChannel = supabase
       .channel("public:inventory")
       .on(
@@ -377,32 +375,64 @@ export default function CustomerInventoryPage() {
         () => fetchInventory()
       )
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
     };
   }, [fetchInventory]);
 
-  // Autofill logged-in user name/email (read-only fields)
+  /* -------- Get logged-in user and AUTO‑derive non-editable customer type --- */
+  const setTypeFromHistory = useCallback(async (email: string) => {
+    if (!email) return;
+    // Count orders where related customers.email = this email
+    const { count, error } = await supabase
+      .from("orders")
+      .select("id, customers!inner(email)", { count: "exact", head: true })
+      .eq("customers.email", email);
+
+    if (error) {
+      console.warn("Could not compute order history:", error.message);
+      return;
+    }
+
+    const c = count ?? 0;
+    setOrderHistoryCount(c);
+    // > 3 orders -> Existing, else New
+    const type: CustomerInfo["customer_type"] =
+      c > 3 ? "Existing Customer" : "New Customer";
+
+    setCustomerInfo((prev) => ({
+      ...prev,
+      customer_type: type,
+      payment_type:
+        type === "Existing Customer"
+          ? prev.payment_type === "Credit"
+            ? "Credit"
+            : "Cash"
+          : "Cash",
+    }));
+  }, []);
+
   useEffect(() => {
     (async () => {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-
       if (user) {
         const displayName = getDisplayNameFromMetadata(
           user.user_metadata,
           user.email || undefined
         );
+        const email = user.email || "";
+        setAuthDefaults({ name: displayName || "", email });
         setCustomerInfo((prev) => ({
           ...prev,
           name: prev.name || displayName || "",
-          email: prev.email || user.email || "",
+          email: prev.email || email,
         }));
+        await setTypeFromHistory(email);
       }
     })();
-  }, []);
+  }, [setTypeFromHistory]);
 
   /* ------------------------------ Tracking ------------------------------ */
   const handleTrack = async (e: React.FormEvent) => {
@@ -477,17 +507,14 @@ export default function CustomerInventoryPage() {
 
   const addToCart = () => {
     if (!selectedItem) return;
-
     if (orderQuantity > selectedItem.quantity) {
       toast.error("Cannot order more than available stock");
       return;
     }
-
     if (cart.some((ci) => ci.item.id === selectedItem.id)) {
       toast.error("Item already in cart.");
       return;
     }
-
     setCart((prev) => [
       ...prev,
       { item: selectedItem, quantity: orderQuantity },
@@ -501,14 +528,22 @@ export default function CustomerInventoryPage() {
   };
 
   // Open first confirm modal
-  const handleShowCart = () => {
+  const handleShowCart = async () => {
     if (!customerInfo.code) {
       setCustomerInfo((prev) => ({ ...prev, code: generateTransactionCode() }));
     }
+    // ensure identity present
+    setCustomerInfo((prev) => ({
+      ...prev,
+      name: prev.name || authDefaults.name,
+      email: prev.email || authDefaults.email,
+    }));
+    // refresh type before showing
+    if (authDefaults.email) await setTypeFromHistory(authDefaults.email);
+
     setShowCartPopup(true);
   };
 
-  // First modal "Submit Order" -> open final confirmation
   const handleOpenFinalModal = () => {
     if (!isValidPhone(customerInfo.phone)) {
       toast.error("Phone number must be exactly 11 digits.");
@@ -518,7 +553,7 @@ export default function CustomerInventoryPage() {
       !houseStreet.trim() ||
       !barangayCode ||
       !cityCode ||
-      (!isNCR && !provinceCode) || // province optional for NCR
+      (!isNCR && !provinceCode) ||
       !regionCode
     ) {
       toast.error(
@@ -545,129 +580,121 @@ export default function CustomerInventoryPage() {
   };
 
   // Final modal "Confirm Order" -> insert to DB
-const handleConfirmOrder = async () => {
-  if (!finalOrderDetails) return;
+  const handleConfirmOrder = async () => {
+    if (!finalOrderDetails) return;
 
-  const { customer, items } = finalOrderDetails;
+    const { customer, items } = finalOrderDetails;
 
-  if (!isValidPhone(customer.phone)) {
-    toast.error("Phone number must be exactly 11 digits.");
-    return;
-  }
-  if (!customer.address) {
-    toast.error("Missing address.");
-    return;
-  }
+    if (!isValidPhone(customer.phone)) {
+      toast.error("Phone number must be exactly 11 digits.");
+      return;
+    }
+    if (!customer.address) {
+      toast.error("Missing address.");
+      return;
+    }
 
-  const { data: existing } = await supabase
-    .from("customers")
-    .select("code")
-    .eq("code", customer.code);
-
-  if (existing && existing.length > 0) {
-    toast.error("Duplicate transaction code generated. Please try again.");
-    return;
-  }
-
-  // ✅ Force PH (GMT+8) timestamp
-  const now = new Date();
-const phNow = new Date(
-  now.toLocaleString("en-US", { timeZone: "Asia/Manila" })
-);
-const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
-
-const customerPayload: Partial<CustomerInfo> = {
-  ...customer,
-  date: phTime,
-  status: "pending",
-  transaction: items
-    .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
-    .join(", "),
-};
-
-  try {
-    // Insert customer
-    const { data: cust, error: custErr } = await supabase
+    const { data: existing } = await supabase
       .from("customers")
-      .insert([customerPayload])
-      .select()
-      .single();
-    if (custErr) throw custErr;
+      .select("code")
+      .eq("code", customer.code);
+    if (existing && existing.length > 0) {
+      toast.error("Duplicate transaction code generated. Please try again.");
+      return;
+    }
 
-    const customerId = cust.id;
-    const totalAmount = items.reduce(
-      (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
-      0
-    );
+    const now = new Date();
+    const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
 
-    // Insert order with PH timestamp
-    const { data: ord, error: ordErr } = await supabase
-      .from("orders")
-      .insert([
-        {
-          customer_id: customerId,
-          total_amount: totalAmount,
-          status: "pending",
-          date_created: phTime, 
-        },
-      ])
-      .select()
-      .single();
-    if (ordErr) throw ordErr;
+    const customerPayload: Partial<CustomerInfo> = {
+      ...customer,
+      date: phTime,
+      status: "pending",
+      transaction: items
+        .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
+        .join(", "),
+    };
 
-    const orderId = ord.id;
-    const rows = items.map((ci) => ({
-      order_id: orderId,
-      inventory_id: ci.item.id,
-      quantity: ci.quantity,
-      price: ci.item.unit_price || 0,
-    }));
+    try {
+      const { data: cust, error: custErr } = await supabase
+        .from("customers")
+        .insert([customerPayload])
+        .select()
+        .single();
+      if (custErr) throw custErr;
 
-    // Insert order items
-    const { error: itemsErr } = await supabase
-      .from("order_items")
-      .insert(rows);
-    if (itemsErr) throw itemsErr;
+      const customerId = cust.id;
+      const totalAmount = items.reduce(
+        (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
+        0
+      );
 
-    toast.success("Your order has been submitted successfully!");
+      const { data: ord, error: ordErr } = await supabase
+        .from("orders")
+        .insert([
+          {
+            customer_id: customerId,
+            total_amount: totalAmount,
+            status: "pending",
+            date_created: phTime,
+          },
+        ])
+        .select()
+        .single();
+      if (ordErr) throw ordErr;
 
-    // Reset UI
-    setShowFinalPopup(false);
-    setFinalOrderDetails(null);
-    setCart([]);
+      const orderId = ord.id;
+      const rows = items.map((ci) => ({
+        order_id: orderId,
+        inventory_id: ci.item.id,
+        quantity: ci.quantity,
+        price: ci.item.unit_price || 0,
+      }));
 
-    setCustomerInfo({
-      name: "",
-      email: "",
-      phone: "",
-      address: "",
-      contact_person: "",
-      code: "",
-      area: "",
-      payment_type: "Cash",
-      customer_type: undefined,
-    });
-    setRegionCode("");
-    setProvinceCode("");
-    setCityCode("");
-    setBarangayCode("");
-    setProvinces([]);
-    setCities([]);
-    setBarangays([]);
-    setHouseStreet("");
+      const { error: itemsErr } = await supabase
+        .from("order_items")
+        .insert(rows);
+      if (itemsErr) throw itemsErr;
 
-    await fetchInventory();
-  } catch (e: any) {
-    console.error("Order submission error:", e.message);
-    toast.error("Something went wrong. Please try again.");
-  }
-};
+      toast.success("Your order has been submitted successfully!");
 
+      // Reset UI but keep identity; type will be recomputed below
+      setShowFinalPopup(false);
+      setFinalOrderDetails(null);
+      setCart([]);
 
+      setCustomerInfo({
+        name: authDefaults.name,
+        email: authDefaults.email,
+        phone: "",
+        address: "",
+        contact_person: "",
+        code: "",
+        area: "",
+        payment_type: "Cash",
+        customer_type: undefined,
+      });
+      setRegionCode("");
+      setProvinceCode("");
+      setCityCode("");
+      setBarangayCode("");
+      setProvinces([]);
+      setCities([]);
+      setBarangays([]);
+      setHouseStreet("");
+
+      await fetchInventory();
+
+      // Recompute type (order count increased)
+      if (authDefaults.email) await setTypeFromHistory(authDefaults.email);
+    } catch (e: any) {
+      console.error("Order submission error:", e.message);
+      toast.error("Something went wrong. Please try again.");
+    }
+  };
 
   /* ------------------------------ Derived ------------------------------ */
   const totalItems = cart.reduce((sum, ci) => sum + ci.quantity, 0);
-
   const categoriesList = useMemo(
     () => Array.from(new Set(inventory.map((i) => i.category))).sort(),
     [inventory]
@@ -741,40 +768,43 @@ const customerPayload: Partial<CustomerInfo> = {
               </tr>
             </thead>
             <tbody>
-  {filteredInventory.map((item) => (
-    <tr key={item.id} className="border-b hover:bg-gray-100">
-      <td className="py-2 px-4 pl-6 text-left">
-        <button
-          className="text-[#2f63b7] hover:underline font-normal text-left"
-          onClick={() => openImageModal(item)}
-          title={item.image_url ? "View product image" : "No image available"}
-          style={{ wordBreak: "break-word" }}
-        >
-          {item.product_name}
-        </button>
-      </td>
-      <td className="py-2 px-4 text-left">{item.category}</td>
-      <td className="py-2 px-4 text-left">{item.subcategory}</td>
-      <td className="py-2 px-4 text-left">{item.status}</td>
-      <td className="py-2 px-4">
-        <button
-          className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
-          onClick={() => handleAddToCartClick(item)}
-        >
-          Add to Cart
-        </button>
-      </td>
-    </tr>
-  ))}
-  {filteredInventory.length === 0 && (
-    <tr>
-      <td colSpan={5} className="text-center py-6 text-gray-500">
-        No products found.
-      </td>
-    </tr>
-  )}
-</tbody>
-
+              {filteredInventory.map((item) => (
+                <tr key={item.id} className="border-b hover:bg-gray-100">
+                  <td className="py-2 px-4 pl-6 text-left">
+                    <button
+                      className="text-[#2f63b7] hover:underline font-normal text-left"
+                      onClick={() => openImageModal(item)}
+                      title={
+                        item.image_url
+                          ? "View product image"
+                          : "No image available"
+                      }
+                      style={{ wordBreak: "break-word" }}
+                    >
+                      {item.product_name}
+                    </button>
+                  </td>
+                  <td className="py-2 px-4 text-left">{item.category}</td>
+                  <td className="py-2 px-4 text-left">{item.subcategory}</td>
+                  <td className="py-2 px-4 text-left">{item.status}</td>
+                  <td className="py-2 px-4">
+                    <button
+                      className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
+                      onClick={() => handleAddToCartClick(item)}
+                    >
+                      Add to Cart
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {filteredInventory.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="text-center py-6 text-gray-500">
+                    No products found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
           </table>
         </div>
       )}
@@ -878,7 +908,6 @@ const customerPayload: Partial<CustomerInfo> = {
             <thead className="bg-[#ffba20] text-black text-left">
               <tr>
                 <th className="py-2 px-4 pl-6 text-left">Product Name</th>
-
                 <th className="py-2 px-4">Category</th>
                 <th className="py-2 px-4">Subcategory</th>
                 <th className="py-2 px-4">Qty</th>
@@ -1078,28 +1107,22 @@ const customerPayload: Partial<CustomerInfo> = {
                   readOnly
                 />
 
+                {/* NON‑EDITABLE: Customer Type */}
                 <div className="col-span-2">
                   <label className="block mb-1">Customer Type</label>
-                  <select
-                    className="border px-3 py-2 rounded w-full"
+                  <input
+                    className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
                     value={customerInfo.customer_type || ""}
-                    onChange={(e) =>
-                      setCustomerInfo({
-                        ...customerInfo,
-                        customer_type: e.target.value as
-                          | "New Customer"
-                          | "Existing Customer",
-                      })
-                    }
-                  >
-                    <option value="" disabled>
-                      Select customer type
-                    </option>
-                    <option value="New Customer">New Customer</option>
-                    <option value="Existing Customer">Existing Customer</option>
-                  </select>
+                    readOnly
+                  />
+                  {orderHistoryCount !== null && (
+                    <div className="text-xs text-gray-500 mt-1">
+                      Past orders under this email: {orderHistoryCount}
+                    </div>
+                  )}
                 </div>
 
+                {/* Payment Type (options depend on computed type) */}
                 <div className="col-span-2">
                   <label className="block mb-1">Payment Type</label>
                   <div className="flex gap-4">
