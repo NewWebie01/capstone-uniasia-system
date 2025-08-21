@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DM_Sans } from "next/font/google";
 import "@/styles/globals.css";
 import splashImage from "@/assets/tools-log-in-splash.jpg";
@@ -19,6 +19,8 @@ const dmSans = DM_Sans({
 });
 
 export default function LoginPage() {
+  const router = useRouter();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -26,15 +28,50 @@ export default function LoginPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  const router = useRouter();
+  // prevents double navigation
+  const didNavigate = useRef(false);
+
+  // gate rendering if a session already exists (prevents flicker)
+  const [checking, setChecking] = useState(true);
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) return;
+
+      const sess = data.session;
+      if (sess && !didNavigate.current) {
+        didNavigate.current = true;
+        const role: string | undefined = sess.user.user_metadata?.role;
+
+        if (role === "admin") {
+          router.replace("/dashboard");
+        } else if (role === "customer") {
+          router.replace("/customer/product-catalog");
+        } else {
+          // unknown role → sign out & show login
+          await supabase.auth.signOut();
+          setChecking(false);
+        }
+      } else {
+        setChecking(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading || didNavigate.current) return;
+
     setIsLoading(true);
     setErrorMessage("");
 
     const { data, error } = await supabase.auth.signInWithPassword({
-      email,
+      email: email.trim(),
       password,
     });
 
@@ -45,34 +82,45 @@ export default function LoginPage() {
       return;
     }
 
+    // Ensure we have a fresh session on the client before redirecting
+    await supabase.auth.getSession();
+
     const user = data?.user;
-    const role = user?.user_metadata?.role;
+    const role = user?.user_metadata?.role as string | undefined;
 
-    // Activity Log (Only once, with details: {})
-    const { error: logError } = await supabase.from("activity_logs").insert([
-      {
-        user_email: user.email,
-        action: "Login",
-        details: {}, // must NOT be null
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    if (logError) {
-      console.error("Failed to insert activity log:", logError);
-    }
+    // Fire-and-forget activity log (don't block navigation)
+    supabase
+      .from("activity_logs")
+      .insert([
+        {
+          user_email: user?.email ?? null,
+          action: "Login",
+          details: {}, // must NOT be null
+          created_at: new Date().toISOString(),
+        },
+      ])
+      .then(({ error: logError }) => {
+        if (logError) console.error("Failed to insert activity log:", logError);
+      });
 
-    if (role === "admin") {
-      router.push("/dashboard");
-    } else if (role === "customer") {
-      router.push("/customer/product-catalog");
-    } else {
-      setErrorMessage("Access denied: No role found for this account.");
-      await supabase.auth.signOut();
-      setIsLoading(false);
-      return;
+    if (!didNavigate.current) {
+      didNavigate.current = true;
+      if (role === "admin") {
+        router.replace("/dashboard");
+      } else if (role === "customer") {
+        router.replace("/customer/product-catalog");
+      } else {
+        setErrorMessage("Access denied: No role found for this account.");
+        await supabase.auth.signOut();
+        didNavigate.current = false;
+        setIsLoading(false);
+      }
     }
-    setIsLoading(false); // You may remove this after redirect if you want
+    // no setIsLoading(false) here; allow unmount after replace()
   };
+
+  // While checking existing session, render nothing to avoid the flash
+  if (checking) return null;
 
   return (
     <div className={`min-h-screen flex flex-col relative ${dmSans.className}`}>
@@ -185,9 +233,10 @@ export default function LoginPage() {
                 </label>
                 <input
                   id="username"
-                  type="text"
+                  type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="username"
                   className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 disabled:opacity-60"
                   required
                   disabled={isLoading}
@@ -205,7 +254,7 @@ export default function LoginPage() {
                 <input
                   id="password"
                   type={showPassword ? "text" : "password"}
-                  autoComplete="new-password"
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 pr-10 disabled:opacity-60"
@@ -214,7 +263,7 @@ export default function LoginPage() {
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
+                  onClick={() => setShowPassword((v) => !v)}
                   className="absolute right-2 top-9"
                   aria-label={showPassword ? "Hide password" : "Show password"}
                   disabled={isLoading}
