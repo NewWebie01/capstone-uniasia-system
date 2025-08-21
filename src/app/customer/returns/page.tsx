@@ -1,7 +1,7 @@
 // src/app/customer/returns/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 
@@ -43,14 +43,13 @@ type ReturnRow = {
   created_at: string;
   order_id: string;
   return_items: Array<{
-    order_item_id: number; // <- integer in your DB
+    order_item_id: number;
     quantity: number;
     photo_urls: string[] | null;
     inventory: { product_name: string | null } | null;
   }>;
 };
 
-// small helpers
 const toNum = (v: unknown, fallback = 0) =>
   typeof v === "number" ? v : typeof v === "string" ? Number(v) : fallback;
 
@@ -80,7 +79,7 @@ const normalizeReturns = (rows: any[]): ReturnRow[] =>
 
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
-  id: number; // <- order_items.id is integer in your DB
+  id: number; // order_items.id is integer
   quantity: number;
   price: number | null;
   inventory_id: number | null;
@@ -93,19 +92,20 @@ type ItemRow = {
 };
 
 type OrderRow = {
-  id: string; // orders.id can be uuid/int; we don't do math on it
+  id: string;
   status: string | null;
+  truck_delivery_id?: string | number | null;
   order_items?: ItemRow[];
 };
 
 type CustomerTx = {
-  id: string; // customers.id
-  code: string | null;
+  id: string;
+  code: string | null; // <-- TXN code
   email: string | null;
   name: string | null;
   phone: string | null;
   address: string | null;
-  date: string | null; // saved order date on customers table
+  date: string | null;
   orders?: OrderRow[];
 };
 
@@ -114,12 +114,23 @@ export default function CustomerReturnsPage() {
   const [loading, setLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState<string | null>(null);
 
-  // Source data
+  // Data
   const [txns, setTxns] = useState<CustomerTx[]>([]);
   const [returnsList, setReturnsList] = useState<ReturnRow[]>([]);
   const [returnedItemIds, setReturnedItemIds] = useState<Set<number>>(
     new Set()
   );
+
+  // Delivery status per truck_delivery_id
+  const [deliveryStatusById, setDeliveryStatusById] = useState<
+    Record<string, string>
+  >({});
+  // Map order_id -> TXN code (for grouping returns)
+  const [orderIdToTxn, setOrderIdToTxn] = useState<Record<string, string>>({});
+
+  // Keep ids around for subscriptions
+  const deliveryIdsRef = useRef<Set<string>>(new Set());
+  const orderIdsRef = useRef<Set<string>>(new Set());
 
   // Modal state
   const [open, setOpen] = useState(false);
@@ -134,7 +145,7 @@ export default function CustomerReturnsPage() {
   const [note, setNote] = useState("");
   const [files, setFiles] = useState<FileList | null>(null);
 
-  // --------------------- Load everything for the user ---------------------
+  /* -------------------------- Initial load (user) ------------------------- */
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -149,10 +160,14 @@ export default function CustomerReturnsPage() {
           setTxns([]);
           setReturnsList([]);
           setReturnedItemIds(new Set());
+          setDeliveryStatusById({});
+          deliveryIdsRef.current = new Set();
+          orderIdsRef.current = new Set();
+          setOrderIdToTxn({});
           return;
         }
 
-        // Fetch transactions + orders + items (include inventory info and inventory_id)
+        // 1) customers -> orders -> items (also truck_delivery_id)
         const { data: customers, error } = await supabase
           .from("customers")
           .select(
@@ -167,6 +182,7 @@ export default function CustomerReturnsPage() {
             orders (
               id,
               status,
+              truck_delivery_id,
               order_items (
                 id,
                 quantity,
@@ -187,72 +203,171 @@ export default function CustomerReturnsPage() {
 
         if (error || !customers) {
           setTxns([]);
+          deliveryIdsRef.current = new Set();
+          orderIdsRef.current = new Set();
+          setOrderIdToTxn({});
         } else {
-          setTxns(customers as CustomerTx[]);
+          const list = customers as CustomerTx[];
+          setTxns(list);
+
+          // gather ids + build order->TXN map
+          const dIds = new Set<string>();
+          const oIds = new Set<string>();
+          const orderToTxn: Record<string, string> = {};
+
+          for (const t of list) {
+            for (const o of t.orders ?? []) {
+              const orderId = String(o.id);
+              oIds.add(orderId);
+              orderToTxn[orderId] = String(t.code ?? "—");
+              if (o.truck_delivery_id != null)
+                dIds.add(String(o.truck_delivery_id));
+            }
+          }
+          deliveryIdsRef.current = dIds;
+          orderIdsRef.current = oIds;
+          setOrderIdToTxn(orderToTxn);
+
+          // 2) fetch delivery statuses
+          if (dIds.size > 0) {
+            const { data: deliveries } = await supabase
+              .from("truck_deliveries")
+              .select("id, status")
+              .in("id", Array.from(dIds));
+
+            const map: Record<string, string> = {};
+            (deliveries ?? []).forEach((d: any) => {
+              map[String(d.id)] = String(d.status ?? "");
+            });
+            setDeliveryStatusById(map);
+          } else {
+            setDeliveryStatusById({});
+          }
+
+          // 3) load returns for the user’s orders
+          await refreshReturns();
         }
 
-        // Gather order_ids
-        const orderIds = new Set<string>();
-        for (const t of (customers as CustomerTx[]) ?? []) {
-          for (const o of t.orders ?? []) orderIds.add(o.id);
-        }
-
-        // Fetch returns for these orders
-        if (orderIds.size > 0) {
-          const { data: rtns } = await supabase
-            .from("returns")
-            .select(
-              `
-              id,
-              code,
-              status,
-              reason,
-              note,
-              created_at,
-              order_id,
-              return_items (
-                order_item_id,
-                quantity,
-                photo_urls,
-                inventory:inventory_id ( product_name )
-              )
-            `
-            )
-            .in("order_id", Array.from(orderIds))
-            .order("created_at", { ascending: false });
-
-          const normalized = normalizeReturns(rtns ?? []);
-          setReturnsList(normalized);
-
-          // Mark items that already have a return
-          const s = new Set<number>();
-          normalized.forEach((r) =>
-            r.return_items.forEach((ri) => {
-              if (typeof ri.order_item_id === "number") {
-                s.add(ri.order_item_id);
-              }
-            })
-          );
-          setReturnedItemIds(s);
-        } else {
-          setReturnsList([]);
-          setReturnedItemIds(new Set());
-        }
+        // 4) realtime
+        setupRealtime();
       } finally {
         setLoading(false);
       }
     })();
+
+    return () => {
+      supabase.removeAllChannels();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --------------------- Derived: eligible items ---------------------
+  /* ------------------------- realtime subscriptions ----------------------- */
+  const setupRealtime = () => {
+    const ch1 = supabase
+      .channel("cust-returns")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "returns" },
+        (payload) => {
+          const row: any = payload.new ?? payload.old;
+          if (row && orderIdsRef.current.has(String(row.order_id))) {
+            refreshReturns();
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "return_items" },
+        () => {
+          refreshReturns();
+        }
+      )
+      .subscribe();
+
+    const ch2 = supabase
+      .channel("cust-truck-deliveries")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "truck_deliveries" },
+        (payload) => {
+          const row: any = payload.new ?? payload.old;
+          const id = row?.id != null ? String(row.id) : null;
+          if (id && deliveryIdsRef.current.has(id)) {
+            setDeliveryStatusById((prev) => ({
+              ...prev,
+              [id]: String((payload.new as any)?.status ?? row?.status ?? ""),
+            }));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      try {
+        supabase.removeChannel(ch1);
+        supabase.removeChannel(ch2);
+      } catch {}
+    };
+  };
+
+  const refreshReturns = async () => {
+    const orderIds = Array.from(orderIdsRef.current);
+    if (orderIds.length === 0) {
+      setReturnsList([]);
+      setReturnedItemIds(new Set());
+      return;
+    }
+
+    const { data: rtns } = await supabase
+      .from("returns")
+      .select(
+        `
+        id,
+        code,
+        status,
+        reason,
+        note,
+        created_at,
+        order_id,
+        return_items (
+          order_item_id,
+          quantity,
+          photo_urls,
+          inventory:inventory_id ( product_name )
+        )
+      `
+      )
+      .in("order_id", orderIds)
+      .order("created_at", { ascending: false });
+
+    const normalized = normalizeReturns(rtns ?? []);
+    setReturnsList(normalized);
+
+    const s = new Set<number>();
+    normalized.forEach((r) =>
+      r.return_items.forEach((ri) => {
+        if (typeof ri.order_item_id === "number") s.add(ri.order_item_id);
+      })
+    );
+    setReturnedItemIds(s);
+  };
+
+  /* --------------------- Derived: eligible items --------------------- */
   const eligibleRows = useMemo(() => {
     const out: Array<{ txn: CustomerTx; order: OrderRow; item: ItemRow }> = [];
     const now = new Date();
+
     for (const t of txns) {
       for (const o of t.orders ?? []) {
-        const completed = (o.status ?? "").toLowerCase() === "completed";
+        const delivId =
+          o.truck_delivery_id != null ? String(o.truck_delivery_id) : null;
+        const delivStatus = delivId
+          ? (deliveryStatusById[delivId] || "").toLowerCase()
+          : "";
+        const delivered = delivStatus === "delivered";
         const within7 = daysBetween(t.date, now) <= 7;
-        if (!completed || !within7) continue;
+        if (!delivered || !within7) continue;
+
         for (const it of o.order_items ?? []) {
           if (returnedItemIds.has(it.id)) continue;
           out.push({ txn: t, order: o, item: it });
@@ -260,9 +375,31 @@ export default function CustomerReturnsPage() {
       }
     }
     return out;
-  }, [txns, returnedItemIds]);
+  }, [txns, returnedItemIds, deliveryStatusById]);
 
-  // --------------------- Modal helpers ---------------------
+  /* -------- Group by TXN code -------- */
+  const eligibleByTxn = useMemo(() => {
+    const groups: Record<
+      string,
+      Array<{ txn: CustomerTx; order: OrderRow; item: ItemRow }>
+    > = {};
+    for (const row of eligibleRows) {
+      const key = row.txn.code ?? "—";
+      (groups[key] ||= []).push(row);
+    }
+    return groups;
+  }, [eligibleRows]);
+
+  const returnsByTxn = useMemo(() => {
+    const groups: Record<string, ReturnRow[]> = {};
+    for (const r of returnsList) {
+      const key = orderIdToTxn[r.order_id] ?? "—";
+      (groups[key] ||= []).push(r);
+    }
+    return groups;
+  }, [returnsList, orderIdToTxn]);
+
+  /* --------------------- Modal helpers --------------------- */
   const openModal = (row: {
     txn: CustomerTx;
     order: OrderRow;
@@ -283,10 +420,8 @@ export default function CustomerReturnsPage() {
   };
 
   const submitReturn = async () => {
-    // runtime guard
     if (!sel.txn || !sel.order || !sel.item) return;
 
-    // ✅ Narrow to non-optional locals so TS stops complaining
     const { txn, order, item } = sel as {
       txn: CustomerTx;
       order: OrderRow;
@@ -337,8 +472,8 @@ export default function CustomerReturnsPage() {
       const { error: e2 } = await supabase.from("return_items").insert([
         {
           return_id: rtn.id,
-          order_item_id: item.id, // use narrowed locals
-          inventory_id: item.inventory_id, // use narrowed locals
+          order_item_id: item.id,
+          inventory_id: item.inventory_id,
           quantity: qty,
           photo_urls: urls,
         },
@@ -347,10 +482,8 @@ export default function CustomerReturnsPage() {
 
       toast.success("Return submitted. We’ll review it shortly.");
 
-      // Mark this item as returned locally
+      // Optimistic UI
       setReturnedItemIds((prev) => new Set(prev).add(item.id));
-
-      // Prepend to "My Return Requests"
       setReturnsList((prev) => [
         {
           id: String(rtn.id),
@@ -399,145 +532,175 @@ export default function CustomerReturnsPage() {
 
       {!loading && authEmail && (
         <>
-          {/* Eligible Items */}
-          <div className="bg-white border rounded-2xl p-4 shadow-sm mb-6">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold text-lg">
-                Eligible for Return (7-day window)
-              </h2>
-              <span className="text-sm text-gray-500">
-                {eligibleRows.length} item(s)
-              </span>
-            </div>
-
-            {eligibleRows.length === 0 ? (
+          {/* -------- Eligible by TXN -------- */}
+          {Object.keys(eligibleByTxn).length === 0 ? (
+            <div className="bg-white border rounded-2xl p-4 shadow-sm mb-6">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold text-lg">
+                  Eligible for Return (delivery delivered, within 7 days)
+                </h2>
+              </div>
               <p className="text-sm text-gray-600 mt-2">
                 No items are currently eligible.
               </p>
-            ) : (
-              <div className="mt-3 border rounded overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="py-2 px-3 text-left">Product</th>
-                      <th className="py-2 px-3 text-left">Order Date</th>
-                      <th className="py-2 px-3 text-left">Qty</th>
-                      <th className="py-2 px-3 text-left">Order Status</th>
-                      <th className="py-2 px-3 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {eligibleRows.map((row) => (
-                      <tr key={row.item.id} className="border-t">
-                        <td className="py-2 px-3">
-                          {row.item.inventory?.product_name ?? "—"}
-                        </td>
-                        <td className="py-2 px-3">{formatPH(row.txn.date)}</td>
-                        <td className="py-2 px-3">{row.item.quantity}</td>
-                        <td className="py-2 px-3">{row.order.status ?? "—"}</td>
-                        <td className="py-2 px-3 text-right">
-                          <button
-                            className="px-3 py-1 rounded-xl bg-black text-white hover:opacity-90"
-                            onClick={() => openModal(row)}
-                          >
-                            Return / Report issue
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* My Returns */}
-          <div className="bg-white border rounded-2xl p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold text-lg">My Return Requests</h2>
-              <span className="text-sm text-gray-500">
-                {returnsList.length} ticket(s)
-              </span>
             </div>
+          ) : (
+            Object.entries(eligibleByTxn).map(([txnCode, rows]) => (
+              <div
+                key={txnCode}
+                className="bg-white border rounded-2xl p-4 shadow-sm mb-6"
+              >
+                <div className="flex items-center justify-between">
+                  <h2 className="font-semibold text-lg">
+                    Eligible for Return • TXN:{" "}
+                    <span className="tracking-wider">{txnCode}</span>
+                  </h2>
+                  <span className="text-sm text-gray-500">
+                    {rows.length} item(s)
+                  </span>
+                </div>
 
-            {returnsList.length === 0 ? (
+                <div className="mt-3 border rounded overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="py-2 px-3 text-left">Product</th>
+                        <th className="py-2 px-3 text-left">Order Date</th>
+                        <th className="py-2 px-3 text-left">Qty</th>
+                        <th className="py-2 px-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(({ txn, order, item }) => (
+                        <tr key={item.id} className="border-t">
+                          <td className="py-2 px-3">
+                            {item.inventory?.product_name ?? "—"}
+                          </td>
+                          <td className="py-2 px-3">{formatPH(txn.date)}</td>
+                          <td className="py-2 px-3">{item.quantity}</td>
+                          <td className="py-2 px-3 text-right">
+                            <button
+                              className="px-3 py-1 rounded-xl bg-black text-white hover:opacity-90"
+                              onClick={() => openModal({ txn, order, item })}
+                            >
+                              Return / Report issue
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))
+          )}
+
+          {/* -------- My Returns grouped by TXN -------- */}
+          <div className="bg-white border rounded-2xl p-4 shadow-sm">
+            <h2 className="font-semibold text-lg mb-2">My Return Requests</h2>
+
+            {Object.keys(returnsByTxn).length === 0 ? (
               <p className="text-sm text-gray-600 mt-2">
                 You have no return requests yet.
               </p>
             ) : (
-              <div className="mt-3 space-y-4">
-                {returnsList.map((rtn) => (
-                  <div
-                    key={rtn.id}
-                    className="border rounded-lg p-3 bg-gray-50"
-                  >
-                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                      <div className="font-medium">
-                        {rtn.code} <span className="text-gray-400">•</span>{" "}
-                        <span className="capitalize">{rtn.status}</span>
-                      </div>
-                      <div className="text-sm text-gray-600">
-                        Filed: {formatPH(rtn.created_at)}
-                      </div>
-                    </div>
-                    <div className="text-sm text-gray-700 mt-1">
-                      <div>
-                        <span className="font-medium">Reason:</span>{" "}
-                        {rtn.reason}
-                      </div>
-                      {rtn.note && (
-                        <div>
-                          <span className="font-medium">Note:</span> {rtn.note}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="mt-2 border rounded bg-white overflow-hidden">
-                      <table className="w-full text-sm">
-                        <thead className="bg-gray-100">
-                          <tr>
-                            <th className="py-2 px-3 text-left">Product</th>
-                            <th className="py-2 px-3 text-left">Qty</th>
-                            <th className="py-2 px-3 text-left">Photos</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rtn.return_items.map((ri, idx) => (
-                            <tr key={idx} className="border-t">
-                              <td className="py-2 px-3">
-                                {ri.inventory?.product_name ?? "—"}
-                              </td>
-                              <td className="py-2 px-3">{ri.quantity}</td>
-                              <td className="py-2 px-3">
-                                {ri.photo_urls && ri.photo_urls.length > 0 ? (
-                                  <div className="flex gap-2 flex-wrap">
-                                    {ri.photo_urls.map((u, i) => (
-                                      <a
-                                        key={i}
-                                        href={u}
-                                        target="_blank"
-                                        className="inline-block"
-                                      >
-                                        <img
-                                          src={u}
-                                          alt="evidence"
-                                          className="w-12 h-12 object-cover rounded border"
-                                        />
-                                      </a>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  "—"
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+              Object.entries(returnsByTxn).map(([txnCode, list]) => (
+                <div key={txnCode} className="mb-5 last:mb-0">
+                  <div className="text-sm font-medium text-gray-700 mb-2">
+                    TXN: <span className="tracking-wider">{txnCode}</span>
                   </div>
-                ))}
-              </div>
+
+                  <div className="border rounded bg-white overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="py-2 px-3 text-left">Return Code</th>
+                          <th className="py-2 px-3 text-left">Status</th>
+                          <th className="py-2 px-3 text-left">Filed</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {list.map((rtn) => (
+                          <tr key={rtn.id} className="border-t align-top">
+                            <td className="py-2 px-3 font-medium tracking-wider">
+                              {rtn.code}
+                            </td>
+                            <td className="py-2 px-3 capitalize">
+                              {rtn.status}
+                            </td>
+                            <td className="py-2 px-3">
+                              {formatPH(rtn.created_at)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Detailed items for each return (optional; keep existing layout) */}
+                  <div className="mt-2 space-y-3">
+                    {list.map((rtn) => (
+                      <div key={rtn.id} className="border rounded bg-gray-50">
+                        <div className="px-3 py-2 text-sm text-gray-700">
+                          <span className="font-medium">Reason:</span>{" "}
+                          {rtn.reason}
+                          {rtn.note ? (
+                            <>
+                              {" "}
+                              • <span className="font-medium">Note:</span>{" "}
+                              {rtn.note}
+                            </>
+                          ) : null}
+                        </div>
+                        <div className="border-t overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-100">
+                              <tr>
+                                <th className="py-2 px-3 text-left">Product</th>
+                                <th className="py-2 px-3 text-left">Qty</th>
+                                <th className="py-2 px-3 text-left">Photos</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rtn.return_items.map((ri, idx) => (
+                                <tr key={idx} className="border-t">
+                                  <td className="py-2 px-3">
+                                    {ri.inventory?.product_name ?? "—"}
+                                  </td>
+                                  <td className="py-2 px-3">{ri.quantity}</td>
+                                  <td className="py-2 px-3">
+                                    {ri.photo_urls &&
+                                    ri.photo_urls.length > 0 ? (
+                                      <div className="flex gap-2 flex-wrap">
+                                        {ri.photo_urls.map((u, i) => (
+                                          <a
+                                            key={i}
+                                            href={u}
+                                            target="_blank"
+                                            className="inline-block"
+                                          >
+                                            <img
+                                              src={u}
+                                              alt="evidence"
+                                              className="w-12 h-12 object-cover rounded border"
+                                            />
+                                          </a>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
             )}
           </div>
         </>
@@ -635,7 +798,7 @@ export default function CustomerReturnsPage() {
             </div>
 
             <p className="text-xs text-gray-500 mt-3">
-              Returns are accepted within 7 days of purchase for completed
+              Returns are accepted within 7 days of purchase for delivered
               orders. We’ll review your request and contact you with the next
               steps.
             </p>
