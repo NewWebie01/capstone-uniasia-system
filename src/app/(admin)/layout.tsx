@@ -43,9 +43,7 @@ export default function DashboardLayout({
         <Sidebar open={open} setOpen={setOpen} />
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto p-6 relative">
-          {children}
-        </main>
+        <main className="flex-1 overflow-y-auto p-6 relative">{children}</main>
       </div>
 
       {/* Global route loader (always mounted) */}

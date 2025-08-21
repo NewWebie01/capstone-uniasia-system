@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import React, { useEffect, useState } from 'react';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
-import { v4 as uuidv4 } from 'uuid';
-import { toast } from 'sonner';
+import React, { useEffect, useState } from "react";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { v4 as uuidv4 } from "uuid";
+import { toast } from "sonner";
 
 type PurchaseImage = {
   id: string;
@@ -16,11 +16,13 @@ export default function PurchasePage() {
   const supabase = createClientComponentClient();
   const [images, setImages] = useState<PurchaseImage[]>([]);
   const [filteredImages, setFilteredImages] = useState<PurchaseImage[]>([]);
-  const [selectedImage, setSelectedImage] = useState<PurchaseImage | null>(null);
-  const [search, setSearch] = useState('');
+  const [selectedImage, setSelectedImage] = useState<PurchaseImage | null>(
+    null
+  );
+  const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [photoName, setPhotoName] = useState('');
+  const [photoName, setPhotoName] = useState("");
 
   useEffect(() => {
     fetchImages();
@@ -28,12 +30,12 @@ export default function PurchasePage() {
 
   const fetchImages = async () => {
     const { data, error } = await supabase
-      .from('purchase_images')
-      .select('*')
-      .order('created_at', { ascending: false });
+      .from("purchase_images")
+      .select("*")
+      .order("created_at", { ascending: false });
 
     if (error) {
-      console.error('Error fetching images:', error.message);
+      console.error("Error fetching images:", error.message);
     } else {
       setImages(data as PurchaseImage[]);
       setFilteredImages(data as PurchaseImage[]);
@@ -51,39 +53,39 @@ export default function PurchasePage() {
 
   const handleUpload = async () => {
     if (!uploadFile || !photoName.trim()) {
-      toast.error('Please provide a photo name and file.');
+      toast.error("Please provide a photo name and file.");
       return;
     }
 
-    const fileExt = uploadFile.name.split('.').pop();
+    const fileExt = uploadFile.name.split(".").pop();
     const fileName = `${Date.now()}-${uuidv4()}.${fileExt}`;
     const filePath = `uploads/${fileName}`;
 
     const { error: uploadError } = await supabase.storage
-      .from('purchase-images')
+      .from("purchase-images")
       .upload(filePath, uploadFile);
 
     if (uploadError) {
-      toast.error('Upload failed.');
+      toast.error("Upload failed.");
       console.error(uploadError.message);
       return;
     }
 
     const {
       data: { publicUrl },
-    } = supabase.storage.from('purchase-images').getPublicUrl(filePath);
+    } = supabase.storage.from("purchase-images").getPublicUrl(filePath);
 
     const { error: dbError } = await supabase
-      .from('purchase_images')
+      .from("purchase_images")
       .insert([{ image_url: publicUrl, name: photoName }]);
 
     if (dbError) {
-      toast.error('Failed to save record.');
+      toast.error("Failed to save record.");
       console.error(dbError.message);
     } else {
-      toast.success('Image uploaded successfully');
+      toast.success("Image uploaded successfully");
       setUploadFile(null);
-      setPhotoName('');
+      setPhotoName("");
       setShowModal(false);
       fetchImages();
     }
@@ -92,7 +94,9 @@ export default function PurchasePage() {
   return (
     <div className="min-h-screen py-4 px-6">
       {/* Title */}
-      <h1 className="text-3xl font-bold mb-4 font-sans">Purchase Image Upload</h1>
+      <h1 className="text-3xl font-bold mb-4 font-sans">
+        Purchase Image Upload
+      </h1>
 
       {/* Search + Upload Button */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -116,7 +120,9 @@ export default function PurchasePage() {
         <table className="min-w-full table-auto">
           <thead className="bg-yellow-400">
             <tr>
-              <th className="px-4 py-3 text-left text-sm font-semibold text-black">#</th>
+              <th className="px-4 py-3 text-left text-sm font-semibold text-black">
+                #
+              </th>
               <th className="px-4 py-3 text-left text-sm font-semibold text-black">
                 Photo of Purchase
               </th>
@@ -134,7 +140,10 @@ export default function PurchasePage() {
               </tr>
             ) : (
               filteredImages.map((img, idx) => (
-                <tr key={img.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                <tr
+                  key={img.id}
+                  className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                >
                   <td className="px-4 py-3 text-sm">{idx + 1}</td>
                   <td className="px-4 py-3 text-sm">
                     <button
@@ -146,8 +155,8 @@ export default function PurchasePage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700">
                     {new Date(img.created_at).toLocaleTimeString([], {
-                      hour: 'numeric',
-                      minute: '2-digit',
+                      hour: "numeric",
+                      minute: "2-digit",
                     })}
                   </td>
                 </tr>
@@ -161,7 +170,9 @@ export default function PurchasePage() {
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
           <div className="bg-white p-6 rounded-xl max-w-md w-full shadow-lg relative">
-            <h2 className="text-xl font-semibold mb-4">Upload Purchase Image</h2>
+            <h2 className="text-xl font-semibold mb-4">
+              Upload Purchase Image
+            </h2>
             <input
               type="text"
               placeholder="Enter photo name"

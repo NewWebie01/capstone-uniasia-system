@@ -16,7 +16,10 @@ const DashboardPage = () => {
   useEffect(() => {
     // On mount, check user session and role
     (async () => {
-      const { data: { session }, error } = await supabase.auth.getSession();
+      const {
+        data: { session },
+        error,
+      } = await supabase.auth.getSession();
 
       if (error || !session) {
         router.replace("/login"); // Not logged in, redirect to login
@@ -33,7 +36,8 @@ const DashboardPage = () => {
     })();
   }, [router]);
 
-  if (loading) return <p className="text-center mt-10">Checking permissions...</p>;
+  if (loading)
+    return <p className="text-center mt-10">Checking permissions...</p>;
 
   return (
     <>

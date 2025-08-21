@@ -569,9 +569,15 @@ export default function CustomerInventoryPage() {
       return;
     }
 
+    // ✅ Force PH (GMT+8) timestamp
+    const now = new Date();
+    const phNow = new Date(
+      now.toLocaleString("en-US", { timeZone: "Asia/Manila" })
+    );
+    const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
     const customerPayload: Partial<CustomerInfo> = {
       ...customer,
-      date: new Date().toISOString(), // UTC
+      date: phTime,
       status: "pending",
       transaction: items
         .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
@@ -579,6 +585,7 @@ export default function CustomerInventoryPage() {
     };
 
     try {
+      // Insert customer
       const { data: cust, error: custErr } = await supabase
         .from("customers")
         .insert([customerPayload])
@@ -592,6 +599,7 @@ export default function CustomerInventoryPage() {
         0
       );
 
+      // Insert order with PH timestamp
       const { data: ord, error: ordErr } = await supabase
         .from("orders")
         .insert([
@@ -599,6 +607,7 @@ export default function CustomerInventoryPage() {
             customer_id: customerId,
             total_amount: totalAmount,
             status: "pending",
+            date_created: phTime,
           },
         ])
         .select()
@@ -612,6 +621,8 @@ export default function CustomerInventoryPage() {
         quantity: ci.quantity,
         price: ci.item.unit_price || 0,
       }));
+
+      // Insert order items
       const { error: itemsErr } = await supabase
         .from("order_items")
         .insert(rows);
@@ -619,6 +630,7 @@ export default function CustomerInventoryPage() {
 
       toast.success("Your order has been submitted successfully!");
 
+      // Reset UI
       setShowFinalPopup(false);
       setFinalOrderDetails(null);
       setCart([]);
