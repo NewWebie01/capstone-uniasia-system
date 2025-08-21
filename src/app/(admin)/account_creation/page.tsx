@@ -73,12 +73,15 @@ export default function Page() {
       if (res.ok) {
         // (2) Log the activity to Supabase
         try {
-          // Get current admin's email (the one creating the account)
+          // --- Get current admin's email & role from Supabase Auth ---
           const { data: { user } } = await supabase.auth.getUser();
           const adminEmail = user?.email || "unknown";
+          const adminRole = user?.user_metadata?.role || "unknown"; // <-- CRUCIAL!
+
           await supabase.from("activity_logs").insert([
             {
               user_email: adminEmail,
+              user_role: adminRole, // <-- Save the CURRENT LOGGED IN USER's role
               action: `Created ${role === "admin" ? "Admin" : "Customer"} Account`,
               details: {
                 created_name: formData.name,

@@ -398,6 +398,7 @@ export default function SalesPage() {
         .update({
           payment_terms: numberOfTerms,
           interest_percent: interestPercent,
+          terms: numberOfTerms,
           grand_total_with_interest: getGrandTotalWithInterest(),
           per_term_amount: getPerTermAmount(),
           status: "completed",
