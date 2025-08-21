@@ -13,16 +13,11 @@ const dmSans = DM_Sans({
 type Activity = {
   id: number;
   user_email: string | null;
+  user_role: string | null; // <-- Use the DB role!
   action: string;
   details: any | null;
   created_at: string;
 };
-
-// ---- SET ALL ADMIN EMAILS HERE ----
-const adminEmails = [
-  "admin@gmail.com", // <--- Add all your admin emails here!
-  // "secondadmin@yourdomain.com",
-];
 
 // PH time helper (+8 hours from UTC)
 function add8HoursToUTC(dateString: string): string {
@@ -39,16 +34,24 @@ function add8HoursToUTC(dateString: string): string {
   });
 }
 
-// Color chip for account type (Admin/Customer)
-function accountLabel(email: string | null) {
-  if (!email) return null;
-  const isAdmin = adminEmails.includes(email);
-  const color = isAdmin
-    ? "bg-[#e0f2fe] text-blue-800 border border-blue-200"
-    : "bg-[#f0fdf4] text-green-800 border border-green-200";
+// --- Use role column for badge color ---
+function accountLabel(role: string | null) {
+  if (!role) return null;
+  let color = "";
+  let text = "";
+  if (role === "admin") {
+    color = "bg-[#e0f2fe] text-blue-800 border border-blue-200";
+    text = "Admin";
+  } else if (role === "customer") {
+    color = "bg-[#f0fdf4] text-green-800 border border-green-200";
+    text = "Customer";
+  } else {
+    color = "bg-gray-100 text-gray-600 border border-gray-200";
+    text = role;
+  }
   return (
     <span className={`ml-2 px-3 py-1 text-xs font-bold rounded-full align-middle ${color}`}>
-      {isAdmin ? "Admin" : "Customer"}
+      {text}
     </span>
   );
 }
@@ -85,7 +88,7 @@ export default function ActivityLogPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from("activity_logs")
-      .select("id, user_email, action, details, created_at")
+      .select("id, user_email, user_role, action, details, created_at")
       .order("created_at", { ascending: false });
     if (error) {
       console.error("Error loading activity logs:", error);
@@ -131,6 +134,7 @@ export default function ActivityLogPage() {
         : "";
       return (
         (a.user_email ?? "").toLowerCase().includes(q) ||
+        (a.user_role ?? "").toLowerCase().includes(q) ||
         a.action.toLowerCase().includes(q) ||
         detailsText.includes(q)
       );
@@ -197,7 +201,7 @@ export default function ActivityLogPage() {
                   >
                     <td className="px-8 py-1 font-medium">
                       {act.user_email ?? <span className="text-gray-400">—</span>}
-                      {accountLabel(act.user_email)}
+                      {accountLabel(act.user_role)}
                     </td>
                     <td className="px-8 py-1">{activityChip(act.action)}</td>
                     <td className="px-8 py-1 whitespace-nowrap text-[#222] font-bold tracking-wide">

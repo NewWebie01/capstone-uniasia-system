@@ -94,6 +94,7 @@ export default function LoginPage() {
       .insert([
         {
           user_email: user?.email ?? null,
+          user_role: role ?? null, // <-- Set role in log!
           action: "Login",
           details: {}, // must NOT be null
           created_at: new Date().toISOString(),
