@@ -889,9 +889,8 @@ export default function SalesPage() {
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-bold text-xl">
                     Transaction ID:{" "}
-                    <span className="text-blue-700">{`TXN-${order.id
-                      .slice(0, 8)
-                      .toUpperCase()}`}</span>
+<span className="text-blue-700">{order.customers.code}</span>
+
                   </span>
                   <span
                     className={`font-bold px-3 py-1 rounded text-base ml-4 ${
@@ -1287,9 +1286,8 @@ export default function SalesPage() {
               <div>
                 <div>
                   <span className="font-medium">Sales Order Number: </span>
-                  <span className="text-lg text-blue-700 font-bold">{`TXN-${selectedOrder.id
-                    .slice(0, 8)
-                    .toUpperCase()}`}</span>
+<span className="text-lg text-blue-700 font-bold">{selectedOrder.customers.code}</span>
+
                 </div>
                 <div>
                   <span className="font-medium">Sales Order Date: </span>

@@ -2,6 +2,15 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
+import supabase from "@/config/supabaseClient"; // <- import your supabase client
+
+// --- PH Time Helper ---
+function getPHISOString() {
+  const now = new Date();
+  // +8 hours in ms
+  const ph = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return ph.toISOString().replace("T", " ").slice(0, 19);
+}
 
 export default function Page() {
   const [formData, setFormData] = useState({
@@ -10,10 +19,7 @@ export default function Page() {
     password: "",
     confirmPassword: "",
   });
-
-  // 👇 NEW: Role state
   const [role, setRole] = useState<"admin" | "customer">("customer");
-
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
 
@@ -24,13 +30,12 @@ export default function Page() {
 
   const handleReset = () => {
     setFormData({ name: "", email: "", password: "", confirmPassword: "" });
-    setRole("customer"); // 👈 Reset to default
+    setRole("customer");
     setErrors({});
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
     const newErrors: Record<string, string> = {};
     if (!formData.name.trim()) newErrors.name = "Name is required";
     if (!/\S+@\S+\.\S+/.test(formData.email))
@@ -39,14 +44,13 @@ export default function Page() {
       newErrors.password = "Password must be at least 6 characters";
     if (formData.password !== formData.confirmPassword)
       newErrors.confirmPassword = "Passwords do not match";
-
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
     }
-
     setIsLoading(true);
     try {
+      // (1) Create the account (your original logic)
       const res = await fetch("/api/setup-admin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -54,7 +58,7 @@ export default function Page() {
           name: formData.name,
           email: formData.email,
           password: formData.password,
-          role, // 👈 Send selected role!
+          role,
         }),
       });
 
@@ -67,6 +71,27 @@ export default function Page() {
       }
 
       if (res.ok) {
+        // (2) Log the activity to Supabase
+        try {
+          // Get current admin's email (the one creating the account)
+          const { data: { user } } = await supabase.auth.getUser();
+          const adminEmail = user?.email || "unknown";
+          await supabase.from("activity_logs").insert([
+            {
+              user_email: adminEmail,
+              action: `Created ${role === "admin" ? "Admin" : "Customer"} Account`,
+              details: {
+                created_name: formData.name,
+                created_email: formData.email,
+                created_role: role,
+              },
+              created_at: getPHISOString(),
+            },
+          ]);
+        } catch (err) {
+          // Logging error (don't block UI)
+          console.error("Failed to log activity:", err);
+        }
         alert("Account created successfully!");
         handleReset();
       } else {

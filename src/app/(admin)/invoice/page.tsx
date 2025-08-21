@@ -145,12 +145,36 @@ export default function InvoicePage() {
     return await generatePDFBlobById(nodeId);
   }
 
-  const handlePreviewPDF = async (orderId: string) => {
-    const blob = await generatePDFBlob(`invoice-capture-${orderId}`);
-    if (!blob) return alert("Failed to generate PDF.");
-    const url = URL.createObjectURL(blob);
-    setPdfUrl(url);
-  };
+ const handlePreviewPDF = async (orderId: string) => {
+  const blob = await generatePDFBlob(`invoice-capture-${orderId}`);
+  if (!blob) return alert("Failed to generate PDF.");
+  const url = URL.createObjectURL(blob);
+  setPdfUrl(url);
+
+  // --- LOG ACTION TO ACTIVITY LOG ---
+  try {
+    // Fetch user (optional: if you want to log which admin previewed)
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const userEmail = user?.email || "unknown";
+
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        action: "Previewed Sales Invoice PDF",
+        details: {
+          order_id: orderId,
+        },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  } catch (err) {
+    // Optionally handle log errors (fail silently)
+    console.error("Failed to log PDF preview action", err);
+  }
+};
+
 
   return (
     <motion.div className="p-6 space-y-6 from-amber-50 to-amber-200/40 min-h-screen">

@@ -741,43 +741,40 @@ const customerPayload: Partial<CustomerInfo> = {
               </tr>
             </thead>
             <tbody>
-              {filteredInventory.map((item) => (
-                <tr key={item.id} className="border-b hover:bg-gray-100">
-                  <td className="py-2 px-4">
-                    <button
-                      className="text-blue-600 hover:underline font-medium"
-                      onClick={() => openImageModal(item)}
-                      title={
-                        item.image_url
-                          ? "View product image"
-                          : "No image available"
-                      }
-                    >
-                      {item.product_name}
-                    </button>
-                  </td>
-                  <td className="py-2 px-4">{item.category}</td>
-                  <td className="py-2 px-4">{item.subcategory}</td>
-                  <td className="py-2 px-4">{item.status}</td>
-                  <td className="py-2 px-4">
-                    <button
-                      className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
-                      onClick={() => handleAddToCartClick(item)}
-                    >
-                      Add to Cart
-                    </button>
-                  </td>
-                </tr>
-              ))}
+  {filteredInventory.map((item) => (
+    <tr key={item.id} className="border-b hover:bg-gray-100">
+      <td className="py-2 px-4 pl-6 text-left">
+        <button
+          className="text-[#2f63b7] hover:underline font-normal text-left"
+          onClick={() => openImageModal(item)}
+          title={item.image_url ? "View product image" : "No image available"}
+          style={{ wordBreak: "break-word" }}
+        >
+          {item.product_name}
+        </button>
+      </td>
+      <td className="py-2 px-4 text-left">{item.category}</td>
+      <td className="py-2 px-4 text-left">{item.subcategory}</td>
+      <td className="py-2 px-4 text-left">{item.status}</td>
+      <td className="py-2 px-4">
+        <button
+          className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
+          onClick={() => handleAddToCartClick(item)}
+        >
+          Add to Cart
+        </button>
+      </td>
+    </tr>
+  ))}
+  {filteredInventory.length === 0 && (
+    <tr>
+      <td colSpan={5} className="text-center py-6 text-gray-500">
+        No products found.
+      </td>
+    </tr>
+  )}
+</tbody>
 
-              {filteredInventory.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="text-center py-6 text-gray-500">
-                    No products found.
-                  </td>
-                </tr>
-              )}
-            </tbody>
           </table>
         </div>
       )}
@@ -880,7 +877,8 @@ const customerPayload: Partial<CustomerInfo> = {
           <table className="w-full bg-white text-sm mb-4">
             <thead className="bg-[#ffba20] text-black text-left">
               <tr>
-                <th className="py-2 px-4">Product</th>
+                <th className="py-2 px-4 pl-6 text-left">Product Name</th>
+
                 <th className="py-2 px-4">Category</th>
                 <th className="py-2 px-4">Subcategory</th>
                 <th className="py-2 px-4">Qty</th>
