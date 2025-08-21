@@ -40,7 +40,6 @@ export default function DeliveryReceiptLikeInvoice({
   const [dateStr, setDateStr] = useState(
     initialDate ?? new Date().toISOString().slice(0, 10)
   );
-  const [lessPct, setLessPct] = useState<number>(0);
   const [items, setItems] = useState<InvoiceItem[]>(
     initialItems?.length
       ? initialItems
@@ -56,18 +55,28 @@ export default function DeliveryReceiptLikeInvoice({
         ]
   );
 
-  const totals = useMemo(() => {
-    let totalBeforeLess = 0;
-    items.forEach(
-      (it) => (totalBeforeLess += it.qty * it.unitPrice - (it.discount || 0))
+  // --- Compute Totals ---
+  const subtotal = useMemo(() => {
+    return items.reduce(
+      (sum, it) => sum + it.qty * it.unitPrice,
+      0
     );
-    const lessValue = (totalBeforeLess * (Number(lessPct) || 0)) / 100;
-    return {
-      totalBeforeLess,
-      lessValue,
-      amountDue: totalBeforeLess - lessValue,
-    };
-  }, [items, lessPct]);
+  }, [items]);
+
+  const totalDiscount = useMemo(() => {
+    return items.reduce(
+      (sum, it) => sum + (it.discount || 0),
+      0
+    );
+  }, [items]);
+
+  const salesTax = useMemo(() => {
+    return (subtotal - totalDiscount) * 0.12;
+  }, [subtotal, totalDiscount]);
+
+  const grandTotal = useMemo(() => {
+    return subtotal - totalDiscount + salesTax;
+  }, [subtotal, totalDiscount, salesTax]);
 
   const updateItem = <K extends keyof InvoiceItem>(
     id: string,
@@ -234,7 +243,7 @@ export default function DeliveryReceiptLikeInvoice({
         </table>
       </div>
 
-      {/* Notes + totals */}
+      {/* Notes + NEW Totals */}
       <div className="grid grid-cols-2 mt-4">
         <div className="pr-4">
           <div className="text-[11px] leading-snug mt-2">
@@ -245,31 +254,31 @@ export default function DeliveryReceiptLikeInvoice({
                 received and signed.
               </li>
               <li>Cash advances to salesman not allowed.</li>
-              <li>All checks payable to By‑Grace Trading only.</li>
+              <li>All checks payable to By-Grace Trading only.</li>
             </ol>
           </div>
         </div>
         <div className="pl-6">
           <div className="w-full border border-neutral-300">
             <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-300">
-              <span className="font-semibold">TOTAL AMOUNT</span>
-              <span className="font-bold">{peso(totals.totalBeforeLess)}</span>
+              <span className="font-semibold">Subtotal (Before Discount)</span>
+              <span className="font-bold">{peso(subtotal)}</span>
             </div>
             <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-300">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold">LESS %</span>
-                <input
-                  type="number"
-                  className="w-16 text-right border-b border-neutral-300 outline-none"
-                  value={lessPct}
-                  onChange={(e) => setLessPct(Number(e.target.value || 0))}
-                />
-              </div>
-              <span className="font-bold">({peso(totals.lessValue)})</span>
+              <span className="font-semibold">Less/Add (Discount/Markup)</span>
+              <span className="font-bold text-orange-500">
+                – {peso(totalDiscount)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-300">
+              <span className="font-semibold">Sales Tax (12%)</span>
+              <span className="font-bold">{peso(salesTax)}</span>
             </div>
             <div className="flex items-center justify-between px-3 py-2 bg-neutral-100">
-              <span className="font-extrabold">AMOUNT DUE</span>
-              <span className="font-extrabold">{peso(totals.amountDue)}</span>
+              <span className="font-extrabold">TOTAL ORDER AMOUNT</span>
+              <span className="font-extrabold text-green-700">
+                {peso(grandTotal)}
+              </span>
             </div>
           </div>
           <div className="text-[11px] mt-3">

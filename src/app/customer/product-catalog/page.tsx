@@ -545,122 +545,125 @@ export default function CustomerInventoryPage() {
   };
 
   // Final modal "Confirm Order" -> insert to DB
-  const handleConfirmOrder = async () => {
-    if (!finalOrderDetails) return;
+const handleConfirmOrder = async () => {
+  if (!finalOrderDetails) return;
 
-    const { customer, items } = finalOrderDetails;
+  const { customer, items } = finalOrderDetails;
 
-    if (!isValidPhone(customer.phone)) {
-      toast.error("Phone number must be exactly 11 digits.");
-      return;
-    }
-    if (!customer.address) {
-      toast.error("Missing address.");
-      return;
-    }
+  if (!isValidPhone(customer.phone)) {
+    toast.error("Phone number must be exactly 11 digits.");
+    return;
+  }
+  if (!customer.address) {
+    toast.error("Missing address.");
+    return;
+  }
 
-    const { data: existing } = await supabase
+  const { data: existing } = await supabase
+    .from("customers")
+    .select("code")
+    .eq("code", customer.code);
+
+  if (existing && existing.length > 0) {
+    toast.error("Duplicate transaction code generated. Please try again.");
+    return;
+  }
+
+  // ✅ Force PH (GMT+8) timestamp
+  const now = new Date();
+const phNow = new Date(
+  now.toLocaleString("en-US", { timeZone: "Asia/Manila" })
+);
+const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
+
+const customerPayload: Partial<CustomerInfo> = {
+  ...customer,
+  date: phTime,
+  status: "pending",
+  transaction: items
+    .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
+    .join(", "),
+};
+
+  try {
+    // Insert customer
+    const { data: cust, error: custErr } = await supabase
       .from("customers")
-      .select("code")
-      .eq("code", customer.code);
+      .insert([customerPayload])
+      .select()
+      .single();
+    if (custErr) throw custErr;
 
-    if (existing && existing.length > 0) {
-      toast.error("Duplicate transaction code generated. Please try again.");
-      return;
-    }
-
-    // ✅ Force PH (GMT+8) timestamp
-    const now = new Date();
-    const phNow = new Date(
-      now.toLocaleString("en-US", { timeZone: "Asia/Manila" })
+    const customerId = cust.id;
+    const totalAmount = items.reduce(
+      (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
+      0
     );
-    const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
-    const customerPayload: Partial<CustomerInfo> = {
-      ...customer,
-      date: phTime,
-      status: "pending",
-      transaction: items
-        .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
-        .join(", "),
-    };
 
-    try {
-      // Insert customer
-      const { data: cust, error: custErr } = await supabase
-        .from("customers")
-        .insert([customerPayload])
-        .select()
-        .single();
-      if (custErr) throw custErr;
+    // Insert order with PH timestamp
+    const { data: ord, error: ordErr } = await supabase
+      .from("orders")
+      .insert([
+        {
+          customer_id: customerId,
+          total_amount: totalAmount,
+          status: "pending",
+          date_created: phTime, 
+        },
+      ])
+      .select()
+      .single();
+    if (ordErr) throw ordErr;
 
-      const customerId = cust.id;
-      const totalAmount = items.reduce(
-        (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
-        0
-      );
+    const orderId = ord.id;
+    const rows = items.map((ci) => ({
+      order_id: orderId,
+      inventory_id: ci.item.id,
+      quantity: ci.quantity,
+      price: ci.item.unit_price || 0,
+    }));
 
-      // Insert order with PH timestamp
-      const { data: ord, error: ordErr } = await supabase
-        .from("orders")
-        .insert([
-          {
-            customer_id: customerId,
-            total_amount: totalAmount,
-            status: "pending",
-            date_created: phTime,
-          },
-        ])
-        .select()
-        .single();
-      if (ordErr) throw ordErr;
+    // Insert order items
+    const { error: itemsErr } = await supabase
+      .from("order_items")
+      .insert(rows);
+    if (itemsErr) throw itemsErr;
 
-      const orderId = ord.id;
-      const rows = items.map((ci) => ({
-        order_id: orderId,
-        inventory_id: ci.item.id,
-        quantity: ci.quantity,
-        price: ci.item.unit_price || 0,
-      }));
+    toast.success("Your order has been submitted successfully!");
 
-      // Insert order items
-      const { error: itemsErr } = await supabase
-        .from("order_items")
-        .insert(rows);
-      if (itemsErr) throw itemsErr;
+    // Reset UI
+    setShowFinalPopup(false);
+    setFinalOrderDetails(null);
+    setCart([]);
 
-      toast.success("Your order has been submitted successfully!");
+    setCustomerInfo({
+      name: "",
+      email: "",
+      phone: "",
+      address: "",
+      contact_person: "",
+      code: "",
+      area: "",
+      payment_type: "Cash",
+      customer_type: undefined,
+    });
+    setRegionCode("");
+    setProvinceCode("");
+    setCityCode("");
+    setBarangayCode("");
+    setProvinces([]);
+    setCities([]);
+    setBarangays([]);
+    setHouseStreet("");
 
-      // Reset UI
-      setShowFinalPopup(false);
-      setFinalOrderDetails(null);
-      setCart([]);
+    await fetchInventory();
+  } catch (e: any) {
+    console.error("Order submission error:", e.message);
+    toast.error("Something went wrong. Please try again.");
+  }
+};
 
-      setCustomerInfo({
-        name: "",
-        email: "",
-        phone: "",
-        address: "",
-        contact_person: "",
-        code: "",
-        area: "",
-        payment_type: "Cash",
-        customer_type: undefined,
-      });
-      setRegionCode("");
-      setProvinceCode("");
-      setCityCode("");
-      setBarangayCode("");
-      setProvinces([]);
-      setCities([]);
-      setBarangays([]);
-      setHouseStreet("");
 
-      await fetchInventory();
-    } catch (e: any) {
-      console.error("Order submission error:", e.message);
-      toast.error("Something went wrong. Please try again.");
-    }
-  };
 
   /* ------------------------------ Derived ------------------------------ */
   const totalItems = cart.reduce((sum, ci) => sum + ci.quantity, 0);
