@@ -105,10 +105,12 @@ export default function InvoicePage() {
 
     const { data: rows, error } = await supabase
       .from("order_items")
-      .select(`
+      .select(
+        `
         id, order_id, inventory_id, quantity, price,
         inventory:inventory_id ( product_name, unit, unit_price )
-      `)
+      `
+      )
       .eq("order_id", order.id);
 
     if (!error) {
@@ -165,88 +167,87 @@ export default function InvoicePage() {
       </div>
 
       {/* Table View */}
-<div className="overflow-x-auto rounded-lg shadow bg-white">
-  <table className="min-w-full text-sm">
-    <thead className="bg-[#ffba20] text-black text-left">
-      <tr>
-        <th className="px-4 py-2">Sales Invoice (TXN)</th>
-        <th className="px-4 py-2">Customer Name</th>
-        <th className="px-4 py-2 text-center">Action</th>
-      </tr>
-    </thead>
-    <tbody className="divide-y divide-gray-200">
-      {filteredOrders.map((order) => {
-        const c = customerMap.get(order.customer_id);
-        const txn = c?.code || order.id;
-        return (
-          <Dialog
-            key={order.id}
-            open={openId === order.id}
-            onOpenChange={(open) => {
-              if (!open) {
-                setOpenId(null);
-                setSelectedOrder(null);
-                setItems(null);
-              } else {
-                openInvoice(order);
-              }
-            }}
-          >
-            <tr className="hover:bg-gray-50 transition">
-              <td className="px-4 py-2">{txn}</td>
-              <td className="px-4 py-2">{c?.name ?? "Unknown"}</td>
-              <td className="px-4 py-2 text-center">
-                <DialogTrigger asChild>
-                  <button
-                    className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                    onClick={() => openInvoice(order)} // ✅ keep this so data loads
-                  >
-                    View
-                  </button>
-                </DialogTrigger>
-              </td>
+      <div className="overflow-x-auto rounded-lg shadow bg-white">
+        <table className="min-w-full text-sm">
+          <thead className="bg-[#ffba20] text-black text-left">
+            <tr>
+              <th className="px-4 py-2">Sales Invoice (TXN)</th>
+              <th className="px-4 py-2">Customer Name</th>
+              <th className="px-4 py-2 text-center">Action</th>
             </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {filteredOrders.map((order) => {
+              const c = customerMap.get(order.customer_id);
+              const txn = c?.code || order.id;
+              return (
+                <Dialog
+                  key={order.id}
+                  open={openId === order.id}
+                  onOpenChange={(open) => {
+                    if (!open) {
+                      setOpenId(null);
+                      setSelectedOrder(null);
+                      setItems(null);
+                    } else {
+                      openInvoice(order);
+                    }
+                  }}
+                >
+                  <tr className="hover:bg-gray-50 transition">
+                    <td className="px-4 py-2">{txn}</td>
+                    <td className="px-4 py-2">{c?.name ?? "Unknown"}</td>
+                    <td className="px-4 py-2 text-center">
+                      <DialogTrigger asChild>
+                        <button
+                          className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                          onClick={() => openInvoice(order)} // ✅ keep this so data loads
+                        >
+                          View
+                        </button>
+                      </DialogTrigger>
+                    </td>
+                  </tr>
 
-            <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
-              {!selectedOrder || openId !== order.id ? (
-                <div className="p-6 text-sm">Loading…</div>
-              ) : loadingItems || !items || !customerForOrder ? (
-                <div className="p-6 text-sm">Fetching items…</div>
-              ) : (
-                <div>
-                  <div className="flex items-center justify-between px-2 pt-2 pb-1">
-                    <div className="text-sm">TXN: {txn}</div>
-                    <button
-                      className="bg-blue-600 text-white px-3 py-1.5 rounded"
-                      onClick={() => handlePreviewPDF(order.id)}
-                    >
-                      Preview PDF
-                    </button>
-                  </div>
-                  <div id={`invoice-capture-${order.id}`} className="p-2">
-                    <DeliveryReceiptLikeInvoice
-                      customer={customerForOrder}
-                      initialItems={items}
-                      initialDate={initialDate}
-                    />
-                  </div>
-                </div>
-              )}
-            </DialogContent>
-          </Dialog>
-        );
-      })}
-      {!filteredOrders.length && (
-        <tr>
-          <td colSpan={3} className="text-center py-4 text-neutral-500">
-            No invoices found.
-          </td>
-        </tr>
-      )}
-    </tbody>
-  </table>
-</div>
-
+                  <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
+                    {!selectedOrder || openId !== order.id ? (
+                      <div className="p-6 text-sm">Loading…</div>
+                    ) : loadingItems || !items || !customerForOrder ? (
+                      <div className="p-6 text-sm">Fetching items…</div>
+                    ) : (
+                      <div>
+                        <div className="flex items-center justify-between px-2 pt-2 pb-1">
+                          <div className="text-sm">TXN: {txn}</div>
+                          <button
+                            className="bg-blue-600 text-white px-3 py-1.5 rounded"
+                            onClick={() => handlePreviewPDF(order.id)}
+                          >
+                            Preview PDF
+                          </button>
+                        </div>
+                        <div id={`invoice-capture-${order.id}`} className="p-2">
+                          <DeliveryReceiptLikeInvoice
+                            customer={customerForOrder}
+                            initialItems={items}
+                            initialDate={initialDate}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </DialogContent>
+                </Dialog>
+              );
+            })}
+            {!filteredOrders.length && (
+              <tr>
+                <td colSpan={3} className="text-center py-4 text-neutral-500">
+                  No invoices found.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {/* PDF Preview Modal */}
       <AnimatePresence>
@@ -266,7 +267,7 @@ export default function InvoicePage() {
                 }}
                 className="absolute top-3 right-4 px-3 py-1.5 bg-neutral-200 hover:bg-neutral-300"
               >
-                <X className="w-4 h-4" /> 
+                <X className="w-4 h-4" />
               </button>
             </div>
           </motion.div>

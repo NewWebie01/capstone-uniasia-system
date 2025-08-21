@@ -86,8 +86,8 @@ export default function ActivityLogPage() {
     <div className="max-w-5xl mx-auto px-4 py-10">
       <div className="flex flex-col sm:flex-row items-center justify-between mb-6 gap-4">
         <h1 className="text-3xl font-bold text-[#181918] tracking-tight">
-  Activity Log
-</h1>
+          Activity Log
+        </h1>
 
         <button
           onClick={loadOnce}
@@ -117,22 +117,32 @@ export default function ActivityLogPage() {
         <table className="min-w-[700px] w-full text-sm">
           <thead className="bg-gradient-to-r from-[#ffba20] to-yellow-200 text-[#181918] sticky top-0 z-10">
             <tr>
-              <th className="px-6 py-4 text-left font-bold rounded-tl-2xl">User</th>
+              <th className="px-6 py-4 text-left font-bold rounded-tl-2xl">
+                User
+              </th>
               <th className="px-6 py-4 text-left font-bold">Activity</th>
-              <th className="px-6 py-4 text-left font-bold rounded-tr-2xl">Timestamp</th>
+              <th className="px-6 py-4 text-left font-bold rounded-tr-2xl">
+                Timestamp
+              </th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={3} className="px-6 py-10 text-center text-gray-500">
+                <td
+                  colSpan={3}
+                  className="px-6 py-10 text-center text-gray-500"
+                >
                   <Loader2 className="mx-auto animate-spin" size={28} />
                   <div className="mt-2">Loading…</div>
                 </td>
               </tr>
             ) : paged.length === 0 ? (
               <tr>
-                <td colSpan={3} className="px-6 py-10 text-center text-gray-400">
+                <td
+                  colSpan={3}
+                  className="px-6 py-10 text-center text-gray-400"
+                >
                   No activities found.
                 </td>
               </tr>
@@ -170,7 +180,8 @@ export default function ActivityLogPage() {
           ← Prev
         </button>
         <span className="text-sm text-gray-600">
-          Page <span className="font-bold">{currentPage}</span> of <span className="font-bold">{totalPages}</span>
+          Page <span className="font-bold">{currentPage}</span> of{" "}
+          <span className="font-bold">{totalPages}</span>
         </span>
         <button
           onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
