@@ -1,8 +1,17 @@
 // src/app/customer/track/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
+import {
+  Truck,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  MapPin,
+  Phone,
+  Mail,
+} from "lucide-react";
 
 /* ----------------------------- Date formatter ----------------------------- */
 const formatPH = (d?: string | number | Date | null) =>
@@ -33,7 +42,7 @@ type ItemRow = {
 type OrderRow = {
   id: number;
   total_amount: number | null;
-  status: string | null;
+  status: string | null; // fallback only; prefer truck_deliveries.status
   truck_delivery_id?: number | null;
   order_items?: ItemRow[];
 };
@@ -59,19 +68,87 @@ type Delivery = {
   participants?: string[] | null;
 };
 
+/* ------------------------------- UI helpers ------------------------------- */
+const DeliveryBadge = ({ status }: { status?: string | null }) => {
+  const s = (status || "").trim().toLowerCase();
+
+  if (s === "delivered")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-green-200 text-green-900">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        Delivered
+      </span>
+    );
+  if (s === "ongoing" || s === "on going" || s === "in transit")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-amber-200 text-amber-900">
+        <Truck className="h-3.5 w-3.5" />
+        Ongoing
+      </span>
+    );
+  if (s === "scheduled" || s === "schedule")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-blue-200 text-blue-900">
+        <Clock className="h-3.5 w-3.5" />
+        Scheduled
+      </span>
+    );
+  if (s === "accepted")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-blue-200 text-blue-900">
+        Accepted
+      </span>
+    );
+  if (s === "rejected")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-red-200 text-red-900">
+        <XCircle className="h-3.5 w-3.5" />
+        Rejected
+      </span>
+    );
+
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-yellow-200 text-yellow-900">
+      Pending
+    </span>
+  );
+};
+
 export default function TrackPage() {
   const [loading, setLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState<string | null>(null);
 
-  // all transactions (each is one “purchase” a.k.a customers row)
   const [txns, setTxns] = useState<CustomerTx[]>([]);
-  // deliveries indexed by id
   const [deliveriesById, setDeliveriesById] = useState<
     Record<number, Delivery>
   >({});
 
+  // For realtime subscriptions
+  const [orderIds, setOrderIds] = useState<number[]>([]);
+  const [deliveryIds, setDeliveryIds] = useState<number[]>([]);
+  const ordersSubKey = useRef<string>("");
+  const deliveriesSubKey = useRef<string>("");
+
   const hasData = useMemo(() => txns.length > 0, [txns.length]);
 
+  /* -------------------------- Helper: fetch deliveries --------------------- */
+  const fetchDeliveriesByIds = async (ids: number[]) => {
+    if (!ids.length) return;
+    const { data, error } = await supabase
+      .from("truck_deliveries")
+      .select("id, status, schedule_date, date_received, driver, participants")
+      .in("id", ids);
+    if (!error && data) {
+      setDeliveriesById((prev) => {
+        const next = { ...prev };
+        for (const d of data as Delivery[])
+          next[d.id] = { ...(next[d.id] ?? {}), ...d };
+        return next;
+      });
+    }
+  };
+
+  /* ------------------------------- Initial load ---------------------------- */
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -85,10 +162,11 @@ export default function TrackPage() {
         if (!email) {
           setTxns([]);
           setDeliveriesById({});
+          setOrderIds([]);
+          setDeliveryIds([]);
           return;
         }
 
-        // 1) Fetch ALL customer transactions for this email
         const { data: customers, error } = await supabase
           .from("customers")
           .select(
@@ -125,205 +203,329 @@ export default function TrackPage() {
         if (error || !customers) {
           setTxns([]);
           setDeliveriesById({});
+          setOrderIds([]);
+          setDeliveryIds([]);
           return;
         }
 
         const txList = customers as CustomerTx[];
         setTxns(txList);
 
-        // 2) Collect unique truck_delivery_ids across all orders
-        const ids = new Set<number>();
+        // Collect order IDs and delivery IDs
+        const oset = new Set<number>();
+        const dset = new Set<number>();
         for (const t of txList) {
           for (const o of t.orders ?? []) {
-            if (o?.truck_delivery_id != null) {
-              ids.add(o.truck_delivery_id as number);
-            }
+            oset.add(o.id);
+            if (o.truck_delivery_id != null) dset.add(o.truck_delivery_id);
           }
         }
+        const oids = Array.from(oset);
+        const dids = Array.from(dset);
+        setOrderIds(oids);
+        setDeliveryIds(dids);
 
-        // 3) Fetch deliveries in one go
-        if (ids.size > 0) {
-          const idArray = Array.from(ids);
-          const { data: delivs, error: dErr } = await supabase
-            .from("truck_deliveries")
-            .select(
-              "id, status, schedule_date, date_received, driver, participants"
-            )
-            .in("id", idArray);
-
-          if (!dErr && delivs) {
-            const map: Record<number, Delivery> = {};
-            for (const d of delivs as Delivery[]) map[d.id] = d;
-            setDeliveriesById(map);
-          } else {
-            setDeliveriesById({});
-          }
-        } else {
-          setDeliveriesById({});
-        }
+        // Fetch initial delivery rows
+        if (dids.length) await fetchDeliveriesByIds(dids);
       } finally {
         setLoading(false);
       }
     })();
   }, []);
 
+  /* ----------------------- Realtime: truck_deliveries ---------------------- */
+  useEffect(() => {
+    const key = deliveryIds
+      .slice()
+      .sort((a, b) => a - b)
+      .join(",");
+    if (!key || key === deliveriesSubKey.current) return;
+    deliveriesSubKey.current = key;
+
+    const channel = supabase.channel("realtime-truck-deliveries");
+    channel.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "truck_deliveries",
+        filter: `id=in.(${key})`,
+      },
+      (payload) => {
+        const n = payload.new as Delivery | undefined;
+        const o = payload.old as Delivery | undefined;
+        const row = n ?? o;
+        if (!row?.id) return;
+
+        setDeliveriesById((prev) => {
+          const next = { ...prev };
+          if (payload.eventType === "DELETE") {
+            delete next[row.id];
+          } else if (n) {
+            next[row.id] = { ...(next[row.id] ?? {}), ...n };
+          }
+          return next;
+        });
+      }
+    );
+    channel.subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [deliveryIds]);
+
+  /* ----------------------------- Realtime: orders -------------------------- */
+  useEffect(() => {
+    const key = orderIds
+      .slice()
+      .sort((a, b) => a - b)
+      .join(",");
+    if (!key || key === ordersSubKey.current) return;
+    ordersSubKey.current = key;
+
+    const channel = supabase.channel("realtime-orders");
+    channel.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "orders",
+        filter: `id=in.(${key})`,
+      },
+      async (payload) => {
+        const newRow = payload.new as {
+          id: number;
+          status: string | null;
+          truck_delivery_id: number | null;
+        };
+
+        const changedOrderId = newRow?.id;
+
+        // Update local orders (status + delivery link)
+        setTxns((prev) =>
+          prev.map((cust) => ({
+            ...cust,
+            orders: (cust.orders ?? []).map((o) =>
+              o.id === changedOrderId
+                ? {
+                    ...o,
+                    status: newRow?.status ?? o.status,
+                    truck_delivery_id:
+                      newRow?.truck_delivery_id ?? o.truck_delivery_id,
+                  }
+                : o
+            ),
+          }))
+        );
+
+        // If order got linked to a delivery, fetch & subscribe that delivery
+        if (newRow && newRow.truck_delivery_id != null) {
+          const id: number = newRow.truck_delivery_id;
+          setDeliveryIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+          await fetchDeliveriesByIds([id]);
+        }
+      }
+    );
+    channel.subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [orderIds]);
+
   return (
-    <div className="p-4">
-      <h1 className="text-3xl font-bold mb-4">Track Your Delivery</h1>
+    <div className="min-h-[calc(100vh-80px)] ">
+      <div className="mx-auto w-full max-w-6xl px-6 py-6">
+        <h1 className="text-3xl font-extrabold tracking-tight mb-5">
+          Track Your Delivery
+        </h1>
 
-      {/* States */}
-      {!authEmail && !loading && (
-        <div className="bg-white border rounded p-4 shadow-sm">
-          <p>Please sign in to view your orders.</p>
-        </div>
-      )}
-
-      {loading && (
-        <div className="bg-white border rounded p-4 shadow-sm">
-          <p>Loading your orders…</p>
-        </div>
-      )}
-
-      {!loading && authEmail && !hasData && (
-        <div className="bg-white border rounded p-4 shadow-sm">
-          <p>
+        {!authEmail && !loading && (
+          <p className="text-gray-700">Please sign in to view your orders.</p>
+        )}
+        {loading && <p className="text-gray-700">Loading your orders…</p>}
+        {!loading && authEmail && txns.length === 0 && (
+          <p className="text-gray-700">
             No orders found for <span className="font-medium">{authEmail}</span>
             .
           </p>
-        </div>
-      )}
+        )}
 
-      {/* All transactions for this user */}
-      {!loading &&
-        hasData &&
-        txns.map((t) => {
-          const orderList = t.orders ?? [];
-          // If there’s exactly one order per transaction (your create flow), this array is length 1;
-          // still render generically in case you add multi-order later.
-          return (
-            <div key={t.id} className="bg-gray-50 border rounded p-4 mb-6">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                <h3 className="font-semibold text-md">TXN: {t.code ?? "—"}</h3>
-                <div className="text-sm text-gray-600">
-                  Date: {formatPH(t.date)}
-                </div>
-              </div>
+        <div className="w-full space-y-6">
+          {!loading &&
+            txns.map((t) => {
+              const orderList = t.orders ?? [];
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm mt-2">
-                <p>
-                  <span className="font-medium">Name:</span> {t.name ?? "—"}
-                </p>
-                <p>
-                  <span className="font-medium">Delivery Status:</span>{" "}
-                  {/* show first order’s delivery status if present; otherwise order status */}
-                  {(() => {
-                    const o = orderList[0];
-                    const d = o?.truck_delivery_id
+              // Header badge: prefer first order's delivery.status, fallback to order.status
+              const firstOrder = orderList[0];
+              const firstDelivery =
+                firstOrder?.truck_delivery_id != null
+                  ? deliveriesById[firstOrder.truck_delivery_id]
+                  : undefined;
+              const headerStatus =
+                firstDelivery?.status ?? firstOrder?.status ?? "Pending";
+
+              return (
+                <div
+                  key={t.id}
+                  className="w-full bg-white rounded-2xl shadow-sm border border-gray-200"
+                >
+                  {/* Header */}
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-5 py-4 border-b">
+                    <div className="space-y-1">
+                      <div className="text-xs text-gray-500">TXN</div>
+                      <div className="font-semibold tracking-wide">
+                        {t.code ?? "—"}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-600">Delivery:</span>
+                      <DeliveryBadge status={headerStatus} />
+                      <div className="text-xs text-gray-500">
+                        Placed: {formatPH(t.date)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Customer */}
+                  <div className="px-5 pt-4 pb-2 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    <div className="space-y-1">
+                      <div className="text-xs text-gray-500">Name</div>
+                      <div className="font-medium">{t.name ?? "—"}</div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="text-xs text-gray-500">Address</div>
+                      <div className="flex items-start gap-2">
+                        <MapPin className="h-4 w-4 mt-[2px] text-gray-500" />
+                        <span>{t.address ?? "—"}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="text-xs text-gray-500">Contact</div>
+                      <div className="flex items-center gap-2">
+                        <Phone className="h-4 w-4 text-gray-500" />
+                        <span>{t.phone ?? "—"}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="text-xs text-gray-500">Email</div>
+                      <div className="flex items-center gap-2">
+                        <Mail className="h-4 w-4 text-gray-500" />
+                        <span>{t.email ?? "—"}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Orders */}
+                  {orderList.map((o) => {
+                    const deliv = o.truck_delivery_id
                       ? deliveriesById[o.truck_delivery_id]
                       : undefined;
-                    return d?.status ?? o?.status ?? "—";
-                  })()}
-                </p>
-                <p className="md:col-span-2">
-                  <span className="font-medium">Address:</span>{" "}
-                  {t.address ?? "—"}
-                </p>
-                <p>
-                  <span className="font-medium">Contact:</span> {t.phone ?? "—"}
-                </p>
-                <p>
-                  <span className="font-medium">Email:</span> {t.email ?? "—"}
-                </p>
-              </div>
 
-              {/* Orders within the transaction */}
-              {orderList.map((o) => {
-                const deliv = o.truck_delivery_id
-                  ? deliveriesById[o.truck_delivery_id]
-                  : undefined;
+                    const rowStatus = deliv?.status ?? o.status ?? "Pending";
 
-                return (
-                  <div key={o.id} className="mt-4">
-                    <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-                      <h4 className="font-semibold">Order #{o.id}</h4>
-                      <div className="text-sm">
-                        <span className="font-medium">Status:</span>{" "}
-                        {deliv?.status ?? o.status ?? "—"}
-                      </div>
-                    </div>
-
-                    {/* Items */}
-                    <div className="mt-2 border rounded bg-white overflow-hidden">
-                      <table className="w-full text-sm">
-                        <thead className="bg-gray-200">
-                          <tr>
-                            <th className="py-2 px-3 text-left">Product</th>
-                            <th className="py-2 px-3 text-left">Category</th>
-                            <th className="py-2 px-3 text-left">Subcategory</th>
-                            <th className="py-2 px-3 text-left">Qty</th>
-                            <th className="py-2 px-3 text-left">Inv. Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(o.order_items ?? []).map((it, idx) => (
-                            <tr key={idx} className="border-t">
-                              <td className="py-2 px-3">
-                                {it.inventory?.product_name ?? "—"}
-                              </td>
-                              <td className="py-2 px-3">
-                                {it.inventory?.category ?? "—"}
-                              </td>
-                              <td className="py-2 px-3">
-                                {it.inventory?.subcategory ?? "—"}
-                              </td>
-                              <td className="py-2 px-3">{it.quantity}</td>
-                              <td className="py-2 px-3">
-                                {it.inventory?.status ?? "—"}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Delivery card (if available) */}
-                    {deliv && (
-                      <div className="mt-3 bg-white border rounded p-3 shadow-sm text-sm">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <p>
-                            <span className="font-medium">
-                              Delivery Status:
-                            </span>{" "}
-                            {deliv.status ?? "—"}
-                          </p>
-                          <p>
-                            <span className="font-medium">Schedule Date:</span>{" "}
-                            {formatPH(deliv.schedule_date)}
-                          </p>
-                          <p>
-                            <span className="font-medium">Date Received:</span>{" "}
-                            {formatPH(deliv.date_received ?? null)}
-                          </p>
-                          <p>
-                            <span className="font-medium">Driver:</span>{" "}
-                            {deliv.driver ?? "—"}
-                          </p>
-                          <p className="md:col-span-2">
-                            <span className="font-medium">Participants:</span>{" "}
-                            {Array.isArray(deliv.participants) &&
-                            deliv.participants.length > 0
-                              ? deliv.participants.join(", ")
-                              : "—"}
-                          </p>
+                    return (
+                      <div key={o.id} className="px-5 pb-5">
+                        <div className="mt-3 mb-2 flex items-center justify-between">
+                          <div className="text-sm font-semibold text-gray-800">
+                            Order Summary
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-600">
+                              Delivery:
+                            </span>
+                            <DeliveryBadge status={rowStatus} />
+                          </div>
                         </div>
+
+                        {/* Items */}
+                        <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-100">
+                              <tr className="text-gray-700">
+                                <th className="py-2.5 px-3 text-left font-semibold">
+                                  Product
+                                </th>
+                                <th className="py-2.5 px-3 text-left font-semibold">
+                                  Category
+                                </th>
+                                <th className="py-2.5 px-3 text-left font-semibold">
+                                  Subcategory
+                                </th>
+                                <th className="py-2.5 px-3 text-left font-semibold">
+                                  Qty
+                                </th>
+                                <th className="py-2.5 px-3 text-left font-semibold">
+                                  Inv. Status
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(o.order_items ?? []).map((it, idx) => (
+                                <tr
+                                  key={idx}
+                                  className="border-t hover:bg-gray-50/60"
+                                >
+                                  <td className="py-2.5 px-3">
+                                    {it.inventory?.product_name ?? "—"}
+                                  </td>
+                                  <td className="py-2.5 px-3">
+                                    {it.inventory?.category ?? "—"}
+                                  </td>
+                                  <td className="py-2.5 px-3">
+                                    {it.inventory?.subcategory ?? "—"}
+                                  </td>
+                                  <td className="py-2.5 px-3">{it.quantity}</td>
+                                  <td className="py-2.5 px-3">
+                                    {it.inventory?.status ?? "—"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Delivery details */}
+                        {deliv && (
+                          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                            <p>
+                              <span className="text-gray-500">Schedule:</span>{" "}
+                              {formatPH(deliv.schedule_date)}
+                            </p>
+                            <p>
+                              <span className="text-gray-500">Received:</span>{" "}
+                              {deliv.date_received
+                                ? formatPH(deliv.date_received)
+                                : "Not yet received"}
+                            </p>
+                            <p>
+                              <span className="text-gray-500">Driver:</span>{" "}
+                              {deliv.driver ?? "—"}
+                            </p>
+                            <p className="md:col-span-2">
+                              <span className="text-gray-500">
+                                Participants:
+                              </span>{" "}
+                              {Array.isArray(deliv.participants) &&
+                              deliv.participants.length > 0
+                                ? deliv.participants.join(", ")
+                                : "—"}
+                            </p>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
+                    );
+                  })}
+                </div>
+              );
+            })}
+        </div>
+      </div>
     </div>
   );
 }
