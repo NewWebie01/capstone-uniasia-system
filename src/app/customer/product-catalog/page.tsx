@@ -126,19 +126,19 @@ export default function CustomerInventoryPage() {
   const [trackError, setTrackError] = useState<string | null>(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
 
-  // cache the logged‑in user’s identity for reuse
+  // identity defaults from auth (if any)
   const [authDefaults, setAuthDefaults] = useState<{
     name: string;
     email: string;
-  }>({
-    name: "",
-    email: "",
-  });
+  }>({ name: "", email: "" });
 
-  // (optional) show the computed order count
+  // order history counter (for display)
   const [orderHistoryCount, setOrderHistoryCount] = useState<number | null>(
     null
   );
+
+  // loader while placing the final order
+  const [placingOrder, setPlacingOrder] = useState(false);
 
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
     name: "",
@@ -157,12 +157,10 @@ export default function CustomerInventoryPage() {
   const [provinces, setProvinces] = useState<PSGCProvince[]>([]);
   const [cities, setCities] = useState<PSGCCity[]>([]);
   const [barangays, setBarangays] = useState<PSGCBarangay[]>([]);
-
   const [regionCode, setRegionCode] = useState("");
   const [provinceCode, setProvinceCode] = useState("");
   const [cityCode, setCityCode] = useState("");
   const [barangayCode, setBarangayCode] = useState("");
-
   const [houseStreet, setHouseStreet] = useState("");
 
   // Derived selected objects
@@ -238,7 +236,6 @@ export default function CustomerInventoryPage() {
     setCityCode("");
     setBarangays([]);
     setBarangayCode("");
-
     if (!regionCode) return;
 
     if (isNCR) {
@@ -303,7 +300,6 @@ export default function CustomerInventoryPage() {
     const loadBarangays = async () => {
       const prefix9 = cityCode.slice(0, 9);
       const prefix6 = cityCode.slice(0, 6);
-
       const fixSort = (list: PSGCBarangay[]) => {
         const collator = new Intl.Collator(undefined, {
           numeric: true,
@@ -319,10 +315,7 @@ export default function CustomerInventoryPage() {
           `https://psgc.cloud/api/cities/${cityCode}/barangays`
         );
         const cleaned = fixSort(fromCity);
-        if (cleaned.length > 0) {
-          setBarangays(cleaned);
-          return;
-        }
+        if (cleaned.length > 0) return setBarangays(cleaned);
       } catch {}
 
       try {
@@ -330,10 +323,7 @@ export default function CustomerInventoryPage() {
           `https://psgc.cloud/api/municipalities/${cityCode}/barangays`
         );
         const cleaned = fixSort(fromMunicipality);
-        if (cleaned.length > 0) {
-          setBarangays(cleaned);
-          return;
-        }
+        if (cleaned.length > 0) return setBarangays(cleaned);
       } catch {}
 
       try {
@@ -375,19 +365,18 @@ export default function CustomerInventoryPage() {
         () => fetchInventory()
       )
       .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => void supabase.removeChannel(channel);
   }, [fetchInventory]);
 
-  /* -------- Get logged-in user and AUTO‑derive non-editable customer type --- */
+  /* -------- Compute type from order history (by email, always) ---------- */
   const setTypeFromHistory = useCallback(async (email: string) => {
-    if (!email) return;
-    // Count orders where related customers.email = this email
+    const cleanEmail = (email || "").trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) return;
+
     const { count, error } = await supabase
       .from("orders")
       .select("id, customers!inner(email)", { count: "exact", head: true })
-      .eq("customers.email", email);
+      .ilike("customers.email", cleanEmail);
 
     if (error) {
       console.warn("Could not compute order history:", error.message);
@@ -396,9 +385,8 @@ export default function CustomerInventoryPage() {
 
     const c = count ?? 0;
     setOrderHistoryCount(c);
-    // > 3 orders -> Existing, else New
     const type: CustomerInfo["customer_type"] =
-      c > 3 ? "Existing Customer" : "New Customer";
+      c > 0 ? "Existing Customer" : "New Customer";
 
     setCustomerInfo((prev) => ({
       ...prev,
@@ -407,11 +395,14 @@ export default function CustomerInventoryPage() {
         type === "Existing Customer"
           ? prev.payment_type === "Credit"
             ? "Credit"
+            : prev.payment_type === "Balance"
+            ? "Balance"
             : "Cash"
           : "Cash",
     }));
   }, []);
 
+  // Pre-fill name/email if logged in and compute type once
   useEffect(() => {
     (async () => {
       const {
@@ -434,6 +425,14 @@ export default function CustomerInventoryPage() {
     })();
   }, [setTypeFromHistory]);
 
+  // Debounce re-check if email ever changes elsewhere (kept for safety)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (customerInfo.email) setTypeFromHistory(customerInfo.email);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [customerInfo.email, setTypeFromHistory]);
+
   /* ------------------------------ Tracking ------------------------------ */
   const handleTrack = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -446,28 +445,12 @@ export default function CustomerInventoryPage() {
         .from("customers")
         .select(
           `
-          id,
-          name,
-          code,
-          contact_person,
-          email,
-          phone,
-          address,
-          status,
-          date,
+          id, name, code, contact_person, email, phone, address, status, date,
           orders (
-            id,
-            total_amount,
-            status,
+            id, total_amount, status,
             order_items (
-              quantity,
-              price,
-              inventory:inventory_id (
-                product_name,
-                category,
-                subcategory,
-                status
-              )
+              quantity, price,
+              inventory:inventory_id (product_name, category, subcategory, status)
             )
           )
         `
@@ -475,11 +458,8 @@ export default function CustomerInventoryPage() {
         .eq("code", txn.trim().toUpperCase())
         .maybeSingle();
 
-      if (error || !data) {
-        setTrackError("Transaction code not found.");
-      } else {
-        setTrackingResult(data);
-      }
+      if (error || !data) setTrackError("Transaction code not found.");
+      else setTrackingResult(data);
     } catch {
       setTrackError("Error while fetching. Please try again.");
     } finally {
@@ -494,7 +474,12 @@ export default function CustomerInventoryPage() {
     } else if (customerInfo.customer_type === "Existing Customer") {
       setCustomerInfo((prev) => ({
         ...prev,
-        payment_type: prev.payment_type === "Credit" ? "Credit" : "Cash",
+        payment_type:
+          prev.payment_type === "Credit"
+            ? "Credit"
+            : prev.payment_type === "Balance"
+            ? "Balance"
+            : "Cash",
       }));
     }
   }, [customerInfo.customer_type]);
@@ -507,40 +492,43 @@ export default function CustomerInventoryPage() {
 
   const addToCart = () => {
     if (!selectedItem) return;
-    if (orderQuantity > selectedItem.quantity) {
-      toast.error("Cannot order more than available stock");
-      return;
-    }
+    const qty = Math.max(1, Math.min(50000, Math.floor(orderQuantity) || 1));
     if (cart.some((ci) => ci.item.id === selectedItem.id)) {
       toast.error("Item already in cart.");
       return;
     }
-    setCart((prev) => [
-      ...prev,
-      { item: selectedItem, quantity: orderQuantity },
-    ]);
+    setCart((prev) => [...prev, { item: selectedItem, quantity: qty }]);
     setSelectedItem(null);
     setOrderQuantity(1);
   };
 
-  const removeFromCart = (itemId: number) => {
+  const removeFromCart = (itemId: number) =>
     setCart((prev) => prev.filter((ci) => ci.item.id !== itemId));
+
+  const updateCartQuantity = (itemId: number, nextQtyRaw: number) => {
+    setCart((prev) => {
+      const parsed = Math.floor(Number.isFinite(nextQtyRaw) ? nextQtyRaw : 1);
+      const nextQty = Math.max(1, Math.min(50000, isNaN(parsed) ? 1 : parsed));
+      return prev.map((ci) =>
+        ci.item.id === itemId ? { ...ci, quantity: nextQty } : ci
+      );
+    });
   };
 
-  // Open first confirm modal
   const handleShowCart = async () => {
     if (!customerInfo.code) {
       setCustomerInfo((prev) => ({ ...prev, code: generateTransactionCode() }));
     }
-    // ensure identity present
+    // ensure identity present from auth defaults
     setCustomerInfo((prev) => ({
       ...prev,
       name: prev.name || authDefaults.name,
       email: prev.email || authDefaults.email,
     }));
-    // refresh type before showing
-    if (authDefaults.email) await setTypeFromHistory(authDefaults.email);
-
+    // refresh type using current email
+    const emailToCheck =
+      (customerInfo.email && customerInfo.email.trim()) || authDefaults.email;
+    if (emailToCheck) await setTypeFromHistory(emailToCheck);
     setShowCartPopup(true);
   };
 
@@ -561,6 +549,10 @@ export default function CustomerInventoryPage() {
       );
       return;
     }
+    if (cart.some((ci) => ci.quantity < 1 || ci.quantity > 50000)) {
+      toast.error("All quantities must be between 1 and 50,000.");
+      return;
+    }
     if (
       !customerInfo.name ||
       !customerInfo.email ||
@@ -573,24 +565,25 @@ export default function CustomerInventoryPage() {
       toast.error("Please complete all required customer fields.");
       return;
     }
-
     setFinalOrderDetails({ customer: customerInfo, items: cart });
     setShowCartPopup(false);
     setShowFinalPopup(true);
   };
 
-  // Final modal "Confirm Order" -> insert to DB
   const handleConfirmOrder = async () => {
-    if (!finalOrderDetails) return;
+    if (!finalOrderDetails || placingOrder) return;
+    setPlacingOrder(true);
 
     const { customer, items } = finalOrderDetails;
 
     if (!isValidPhone(customer.phone)) {
       toast.error("Phone number must be exactly 11 digits.");
+      setPlacingOrder(false);
       return;
     }
     if (!customer.address) {
       toast.error("Missing address.");
+      setPlacingOrder(false);
       return;
     }
 
@@ -600,6 +593,7 @@ export default function CustomerInventoryPage() {
       .eq("code", customer.code);
     if (existing && existing.length > 0) {
       toast.error("Duplicate transaction code generated. Please try again.");
+      setPlacingOrder(false);
       return;
     }
 
@@ -650,7 +644,6 @@ export default function CustomerInventoryPage() {
         quantity: ci.quantity,
         price: ci.item.unit_price || 0,
       }));
-
       const { error: itemsErr } = await supabase
         .from("order_items")
         .insert(rows);
@@ -658,7 +651,7 @@ export default function CustomerInventoryPage() {
 
       toast.success("Your order has been submitted successfully!");
 
-      // Reset UI but keep identity; type will be recomputed below
+      // Reset UI but keep identity
       setShowFinalPopup(false);
       setFinalOrderDetails(null);
       setCart([]);
@@ -685,11 +678,13 @@ export default function CustomerInventoryPage() {
 
       await fetchInventory();
 
-      // Recompute type (order count increased)
-      if (authDefaults.email) await setTypeFromHistory(authDefaults.email);
+      const emailUsed = customer.email || authDefaults.email;
+      if (emailUsed) await setTypeFromHistory(emailUsed);
     } catch (e: any) {
       console.error("Order submission error:", e.message);
       toast.error("Something went wrong. Please try again.");
+    } finally {
+      setPlacingOrder(false);
     }
   };
 
@@ -809,7 +804,7 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* View-only IMAGE MODAL */}
+      {/* Image Modal */}
       {showImageModal && imageModalItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl ring-1 ring-black/5">
@@ -877,9 +872,16 @@ export default function CustomerInventoryPage() {
                 type="number"
                 className="w-full border px-3 py-2 rounded"
                 min={1}
-                max={selectedItem.quantity}
+                max={50000}
                 value={orderQuantity}
-                onChange={(e) => setOrderQuantity(Number(e.target.value))}
+                onChange={(e) =>
+                  setOrderQuantity(
+                    Math.max(
+                      1,
+                      Math.min(50000, Math.floor(Number(e.target.value) || 1))
+                    )
+                  )
+                }
               />
             </div>
             <div className="mt-4 flex justify-end gap-2">
@@ -900,7 +902,7 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* Cart Preview */}
+      {/* Cart (editable qty) */}
       {cart.length > 0 && (
         <div className="mt-10 bg-gray-100 p-4 rounded shadow">
           <h2 className="text-xl font-bold mb-4">Cart</h2>
@@ -921,7 +923,52 @@ export default function CustomerInventoryPage() {
                   <td className="py-2 px-4">{ci.item.product_name}</td>
                   <td className="py-2 px-4">{ci.item.category}</td>
                   <td className="py-2 px-4">{ci.item.subcategory}</td>
-                  <td className="py-2 px-4">{ci.quantity}</td>
+                  <td className="py-2 px-4">
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="px-2 py-1 rounded border hover:bg-gray-100"
+                        onClick={() =>
+                          updateCartQuantity(ci.item.id, ci.quantity - 1)
+                        }
+                        title="Decrease"
+                      >
+                        −
+                      </button>
+                      <input
+                        type="number"
+                        className="w-20 border rounded px-2 py-1 text-center"
+                        min={1}
+                        max={50000}
+                        value={ci.quantity}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          updateCartQuantity(
+                            ci.item.id,
+                            Math.max(1, Math.min(50000, isNaN(v) ? 1 : v))
+                          );
+                        }}
+                        onBlur={(e) => {
+                          const v = Number(e.target.value);
+                          updateCartQuantity(
+                            ci.item.id,
+                            Math.max(1, Math.min(50000, isNaN(v) ? 1 : v))
+                          );
+                        }}
+                      />
+                      <button
+                        className="px-2 py-1 rounded border hover:bg-gray-100"
+                        onClick={() =>
+                          updateCartQuantity(
+                            ci.item.id,
+                            ci.quantity + 1 > 50000 ? 50000 : ci.quantity + 1
+                          )
+                        }
+                        title="Increase"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </td>
                   <td className="py-2 px-4">{ci.item.status}</td>
                   <td className="py-2 px-4">
                     <button
@@ -948,7 +995,7 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* First Confirm Order Modal (modern) */}
+      {/* First Confirm Order Modal (name/email are READ-ONLY) */}
       {showCartPopup && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -957,14 +1004,13 @@ export default function CustomerInventoryPage() {
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
             className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
-            {/* Header */}
             <h2 className="text-2xl font-semibold tracking-tight shrink-0">
               Confirm Order
             </h2>
 
-            {/* Body (scrolls) */}
             <div className="flex-1 overflow-auto mt-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* READ-ONLY name & email */}
                 <input
                   placeholder="Customer Name"
                   className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
@@ -978,6 +1024,7 @@ export default function CustomerInventoryPage() {
                   value={customerInfo.email}
                   readOnly
                 />
+                {/* Editable phone & contact */}
                 <input
                   type="tel"
                   placeholder="Phone (11 digits)"
@@ -1004,7 +1051,7 @@ export default function CustomerInventoryPage() {
                   }
                 />
 
-                {/* Location Pickers + House/Street */}
+                {/* Address pickers */}
                 <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
                   <div>
                     <label className="block text-sm mb-1">Region</label>
@@ -1021,7 +1068,6 @@ export default function CustomerInventoryPage() {
                       ))}
                     </select>
                   </div>
-
                   <div>
                     <label className="block text-sm mb-1">Province</label>
                     <select
@@ -1045,7 +1091,6 @@ export default function CustomerInventoryPage() {
                         ))}
                     </select>
                   </div>
-
                   <div>
                     <label className="block text-sm mb-1">
                       City / Municipality
@@ -1072,7 +1117,6 @@ export default function CustomerInventoryPage() {
                       ))}
                     </select>
                   </div>
-
                   <div>
                     <label className="block text-sm mb-1">Barangay</label>
                     <select
@@ -1099,7 +1143,6 @@ export default function CustomerInventoryPage() {
                   value={houseStreet}
                   onChange={(e) => setHouseStreet(e.target.value)}
                 />
-
                 <input
                   className="border px-3 py-2 rounded col-span-2 bg-gray-50"
                   value={customerInfo.address || ""}
@@ -1107,7 +1150,7 @@ export default function CustomerInventoryPage() {
                   readOnly
                 />
 
-                {/* NON‑EDITABLE: Customer Type */}
+                {/* Customer Type (derived) */}
                 <div className="col-span-2">
                   <label className="block mb-1">Customer Type</label>
                   <input
@@ -1122,7 +1165,7 @@ export default function CustomerInventoryPage() {
                   )}
                 </div>
 
-                {/* Payment Type (options depend on computed type) */}
+                {/* Payment Type */}
                 <div className="col-span-2">
                   <label className="block mb-1">Payment Type</label>
                   <div className="flex gap-4">
@@ -1180,7 +1223,6 @@ export default function CustomerInventoryPage() {
               </div>
             </div>
 
-            {/* Footer */}
             <div className="shrink-0 flex justify-end gap-2 mt-4">
               <button
                 onClick={() => setShowCartPopup(false)}
@@ -1199,7 +1241,7 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* Final Confirmation Modal (modern) */}
+      {/* Final Confirmation Modal */}
       {showFinalPopup && finalOrderDetails && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -1208,12 +1250,10 @@ export default function CustomerInventoryPage() {
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
             className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
-            {/* Header */}
             <h2 className="text-2xl font-semibold tracking-tight shrink-0">
               Order Confirmation
             </h2>
 
-            {/* Body */}
             <div className="flex-1 overflow-auto mt-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
@@ -1289,19 +1329,31 @@ export default function CustomerInventoryPage() {
               </div>
             </div>
 
-            {/* Footer */}
             <div className="shrink-0 flex justify-end gap-2 mt-4">
               <button
-                onClick={() => setShowFinalPopup(false)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
+                onClick={() => !placingOrder && setShowFinalPopup(false)}
+                disabled={placingOrder}
+                className={`px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition ${
+                  placingOrder ? "opacity-60 cursor-not-allowed" : ""
+                }`}
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmOrder}
-                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition"
+                disabled={placingOrder}
+                className={`px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition inline-flex items-center gap-2 ${
+                  placingOrder ? "opacity-70 cursor-not-allowed" : ""
+                }`}
               >
-                Confirm Order
+                {placingOrder ? (
+                  <>
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-black/40 border-t-black" />
+                    Submitting…
+                  </>
+                ) : (
+                  "Confirm Order"
+                )}
               </button>
             </div>
           </motion.div>
