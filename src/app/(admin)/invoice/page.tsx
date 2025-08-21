@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -10,6 +9,7 @@ import DeliveryReceiptLikeInvoice, {
   type CustomerInfo,
 } from "@/components/DeliveryReceiptLikeInvoice";
 import { generatePDFBlob as generatePDFBlobById } from "@/utils/exportInvoice";
+import supabase from "@/config/supabaseClient";
 
 type Customer = {
   id: string;
@@ -91,11 +91,46 @@ export default function InvoicePage() {
     );
   }, [orders, customerMap, search]);
 
+  // --- openInvoice with debug and fallback ---
   const openInvoice = async (order: Order) => {
     setSelectedOrder(order);
     setOpenId(order.id);
     setLoadingItems(true);
 
+    // -- Fetch user email and role with debug and session fallback --
+    let userEmail = "unknown";
+    let userRole = "admin";
+
+    try {
+      // Try getUser() first
+      const { data: { user }, error } = await supabase.auth.getUser();
+      console.log("Fetched user from getUser():", user, error);
+      if (user && user.email) {
+        userEmail = user.email;
+      } else {
+        // Fallback to getSession() if getUser() fails
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        console.log("Fetched session from getSession():", session, sessionError);
+        if (session && session.user && session.user.email) {
+          userEmail = session.user.email;
+        }
+      }
+    } catch (e) {
+      console.error("User fetch error:", e);
+    }
+
+    // -- Log to activity_logs --
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        action: "Viewed Sales Invoice",
+        details: { order_id: order.id },
+        user_role: userRole,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    // -- The rest of your original code --
     const cust = customerMap.get(order.customer_id);
     setCustomerForOrder({
       name: cust?.name ?? "—",
@@ -145,36 +180,44 @@ export default function InvoicePage() {
     return await generatePDFBlobById(nodeId);
   }
 
- const handlePreviewPDF = async (orderId: string) => {
-  const blob = await generatePDFBlob(`invoice-capture-${orderId}`);
-  if (!blob) return alert("Failed to generate PDF.");
-  const url = URL.createObjectURL(blob);
-  setPdfUrl(url);
+  // --- PRINT PDF logging, fallback, label ---
+  const handlePrintPDF = async (orderId: string) => {
+    const blob = await generatePDFBlob(`invoice-capture-${orderId}`);
+    if (!blob) return alert("Failed to generate PDF.");
+    const url = URL.createObjectURL(blob);
+    setPdfUrl(url);
 
-  // --- LOG ACTION TO ACTIVITY LOG ---
-  try {
-    // Fetch user (optional: if you want to log which admin previewed)
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const userEmail = user?.email || "unknown";
+    // --- LOG ACTION TO ACTIVITY LOG ---
+    try {
+      let userEmail = "unknown";
+      // Try getUser() first
+      const { data: { user }, error } = await supabase.auth.getUser();
+      console.log("Fetched user from getUser() (Print):", user, error);
+      if (user && user.email) {
+        userEmail = user.email;
+      } else {
+        // Fallback to getSession() if getUser() fails
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        console.log("Fetched session from getSession() (Print):", session, sessionError);
+        if (session && session.user && session.user.email) {
+          userEmail = session.user.email;
+        }
+      }
 
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        action: "Previewed Sales Invoice PDF",
-        details: {
-          order_id: orderId,
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: userEmail,
+          action: "Printed Sales Invoice PDF",
+          details: { order_id: orderId },
+          user_role: "admin",
+          created_at: new Date().toISOString(),
         },
-        created_at: new Date().toISOString(),
-      },
-    ]);
-  } catch (err) {
-    // Optionally handle log errors (fail silently)
-    console.error("Failed to log PDF preview action", err);
-  }
-};
-
+      ]);
+    } catch (err) {
+      // Optionally handle log errors (fail silently)
+      console.error("Failed to log PDF print action", err);
+    }
+  };
 
   return (
     <motion.div className="p-6 space-y-6 from-amber-50 to-amber-200/40 min-h-screen">
@@ -225,7 +268,7 @@ export default function InvoicePage() {
                       <DialogTrigger asChild>
                         <button
                           className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                          onClick={() => openInvoice(order)} // ✅ keep this so data loads
+                          onClick={() => openInvoice(order)}
                         >
                           View
                         </button>
@@ -244,9 +287,9 @@ export default function InvoicePage() {
                           <div className="text-sm">TXN: {txn}</div>
                           <button
                             className="bg-blue-600 text-white px-3 py-1.5 rounded"
-                            onClick={() => handlePreviewPDF(order.id)}
+                            onClick={() => handlePrintPDF(order.id)}
                           >
-                            Preview PDF
+                            PRINT PDF
                           </button>
                         </div>
                         <div id={`invoice-capture-${order.id}`} className="p-2">

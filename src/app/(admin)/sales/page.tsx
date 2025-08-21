@@ -302,18 +302,63 @@ export default function SalesPage() {
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
-  const handleAcceptOrder = (order: OrderWithDetails) => {
-    setEditedDiscounts(order.order_items.map(() => 0));
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "accepted" },
+ const handleAcceptOrder = async (order: OrderWithDetails) => {
+  // 1. Update order status in Supabase
+  const { error } = await supabase
+    .from("orders")
+    .update({ status: "accepted" })
+    .eq("id", order.id);
+
+  if (error) {
+    toast.error("Failed to accept order: " + error.message);
+    return;
+  }
+
+  // 2. Log the activity (PASTE YOUR CODE HERE)
+  try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const userEmail = user?.email || "unknown";
+    const userRole = user?.user_metadata?.role || "unknown";
+
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        user_role: userRole,
+        action: "Accept Sales Order",
+        details: {
+          order_id: order.id,
+          customer_name: order.customers.name,
+          customer_email: order.customers.email,
+          items: order.order_items.map((oi) => ({
+            product_name: oi.inventory.product_name,
+            ordered_qty: oi.quantity,
+            unit_price: oi.price,
+          })),
+          total_amount: order.total_amount,
+          payment_type: order.customers.payment_type,
+        },
+        created_at: new Date().toISOString(),
+      },
     ]);
-    setEditedQuantities(order.order_items.map((item) => item.quantity));
-    setSelectedOrder(order);
-    setShowModal(true);
-    setNumberOfTerms(1);
-    setInterestPercent(0);
-  };
+  } catch (err) {
+    console.error("Failed to log activity for order acceptance:", err);
+  }
+
+  // 3. Update state/UI as usual
+  setEditedDiscounts(order.order_items.map(() => 0));
+  setPickingStatus((prev) => [
+    ...prev,
+    { orderId: order.id, status: "accepted" },
+  ]);
+  setEditedQuantities(order.order_items.map((item) => item.quantity));
+  setSelectedOrder(order);
+  setShowModal(true);
+  setNumberOfTerms(1);
+  setInterestPercent(0);
+};
+
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
     setPickingStatus((prev) => [
@@ -326,33 +371,39 @@ export default function SalesPage() {
       .eq("id", order.id);
 
     // ----------- ACTIVITY LOG FOR ORDER REJECT -----------
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const userEmail = user?.email || "unknown";
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          action: "Reject Sales Order",
-          details: {
-            order_id: order.id,
-            customer_name: order.customers.name,
-            customer_email: order.customers.email,
-            items: order.order_items.map((oi) => ({
-              product_name: oi.inventory.product_name,
-              ordered_qty: oi.quantity,
-              unit_price: oi.price,
-            })),
-            total_amount: order.total_amount,
-            payment_type: order.customers.payment_type,
-          },
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    } catch (err) {
-      console.error("Failed to log activity for order rejection:", err);
-    }
+    // ----------- ACTIVITY LOG FOR ORDER REJECT -----------
+try {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const userEmail = user?.email || "unknown";
+  const userRole = user?.user_metadata?.role || "unknown"; // <-- LOG ROLE
+
+  await supabase.from("activity_logs").insert([
+    {
+      user_email: userEmail,
+      user_role: userRole, // <-- LOG ROLE
+      action: "Reject Sales Order",
+      details: {
+        order_id: order.id,
+        customer_name: order.customers.name,
+        customer_email: order.customers.email,
+        items: order.order_items.map((oi) => ({
+          product_name: oi.inventory.product_name,
+          ordered_qty: oi.quantity,
+          unit_price: oi.price,
+        })),
+        total_amount: order.total_amount,
+        payment_type: order.customers.payment_type,
+      },
+      created_at: new Date().toISOString(),
+    },
+  ]);
+} catch (err) {
+  console.error("Failed to log activity for order rejection:", err);
+}
+// -----------------------------------------------------
+
     // -----------------------------------------------------
 
     fetchOrders();
@@ -416,35 +467,41 @@ export default function SalesPage() {
     }
 
     // ----------- ACTIVITY LOG FOR SALES ORDER COMPLETE -----------
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const userEmail = user?.email || "unknown";
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          action: "Complete Sales Order",
-          details: {
-            order_id: selectedOrder.id,
-            customer_name: selectedOrder.customers.name,
-            customer_email: selectedOrder.customers.email,
-            items: selectedOrder.order_items.map((oi, idx) => ({
-              product_name: oi.inventory.product_name,
-              ordered_qty: oi.quantity,
-              fulfilled_qty: editedQuantities[idx],
-              unit_price: oi.price,
-              discount_percent: editedDiscounts[idx] || 0,
-            })),
-            total_amount: getGrandTotalWithInterest(),
-            payment_type: selectedOrder.customers.payment_type,
-          },
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    } catch (err) {
-      console.error("Failed to log activity for sales order completion:", err);
-    }
+    // ----------- ACTIVITY LOG FOR SALES ORDER COMPLETE -----------
+try {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const userEmail = user?.email || "unknown";
+  const userRole = user?.user_metadata?.role || "unknown"; // <-- LOG ROLE
+
+  await supabase.from("activity_logs").insert([
+    {
+      user_email: userEmail,
+      user_role: userRole, // <-- LOG ROLE
+      action: "Complete Sales Order",
+      details: {
+        order_id: selectedOrder.id,
+        customer_name: selectedOrder.customers.name,
+        customer_email: selectedOrder.customers.email,
+        items: selectedOrder.order_items.map((oi, idx) => ({
+          product_name: oi.inventory.product_name,
+          ordered_qty: oi.quantity,
+          fulfilled_qty: editedQuantities[idx],
+          unit_price: oi.price,
+          discount_percent: editedDiscounts[idx] || 0,
+        })),
+        total_amount: getGrandTotalWithInterest(),
+        payment_type: selectedOrder.customers.payment_type,
+      },
+      created_at: new Date().toISOString(),
+    },
+  ]);
+} catch (err) {
+  console.error("Failed to log activity for sales order completion:", err);
+}
+// -------------------------------------------------------------
+
     // -------------------------------------------------------------
 
     setShowSalesOrderModal(false);

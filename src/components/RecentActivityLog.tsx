@@ -142,31 +142,32 @@ export default function RecentActivityLog() {
           ) : activities.length === 0 ? (
             <p className="text-gray-400 text-sm mt-2">No recent activity.</p>
           ) : (
-            <ul className="divide-y divide-gray-100 pointer-events-none">
-              {activities.map((act) => (
-                <li
-                  key={act.id}
-                  className="py-3 px-2 hover:bg-gray-50 rounded-xl transition flex flex-col gap-0.5"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm text-[#222]">
-                      {act.user_email || <span className="italic text-gray-400">unknown</span>}
-                    </span>
-                    <span className="ml-2 px-2 py-0.5 text-xs rounded-full border bg-gray-50 text-gray-600 font-bold capitalize">
-                      {act.user_role || "User"}
-                    </span>
-                  </div>
-                  <span
-                    className={`inline-block font-medium ${activityLabel(act.action)} px-2 py-0.5 text-xs rounded-full mt-1 mb-0.5`}
-                  >
-                    {act.action}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    {add8HoursToUTC(act.created_at)}
-                  </span>
-                </li>
-              ))}
-            </ul>
+           <ul className="divide-y divide-gray-100 pointer-events-none">
+  {activities.map((act) => (
+    <li
+      key={act.id}
+      className="py-3 px-2 hover:bg-gray-50 rounded-xl transition flex flex-col gap-0.5"
+    >
+      <div className="flex items-center gap-2">
+        <span className="font-semibold text-[16px] text-[#222]">
+          {act.user_email || <span className="italic text-gray-400">unknown</span>}
+        </span>
+        <span className="ml-2 px-2 py-0.5 text-[14px] rounded-full border bg-gray-50 text-gray-600 font-bold capitalize">
+          {act.user_role || "User"}
+        </span>
+      </div>
+      <span
+        className={`inline-block font-medium ${activityLabel(act.action)} px-2 py-1 text-[15px] rounded-full mt-1 mb-0.5`}
+      >
+        {act.action}
+      </span>
+      <span className="text-xs text-gray-500">
+        {add8HoursToUTC(act.created_at)}
+      </span>
+    </li>
+  ))}
+</ul>
+
           )}
           <span className="text-xs text-center text-gray-400 mt-3 pointer-events-none">
             Click card to view more

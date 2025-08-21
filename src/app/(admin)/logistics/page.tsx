@@ -112,22 +112,25 @@ export default function TruckDeliveryPage() {
   });
 
   // Add after: const supabase = createPagesBrowserClient();
-  async function logActivity(action: string, details: any = {}) {
-    try {
-      const { data } = await supabase.auth.getUser();
-      const userEmail = data?.user?.email || "";
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          action,
-          details,
-        },
-      ]);
-    } catch (e) {
-      // For dev only: ignore logging failures
-      console.error("Log activity failed", e);
-    }
+async function logActivity(action: string, details: any = {}) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    const userEmail = data?.user?.email || "";
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        action,
+        details,
+        user_role: "admin",             // Always log as admin
+        created_at: new Date().toISOString(), // Always log timestamp
+      },
+    ]);
+  } catch (e) {
+    console.error("Log activity failed", e);
   }
+}
+
+
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForDeliveryId, setAssignForDeliveryId] = useState<number | null>(
@@ -357,7 +360,16 @@ export default function TruckDeliveryPage() {
       setUnassignedOrders(sorted);
     }
 
-    setUnassignedOrders((data as OrderWithCustomer[]) || []);
+    setUnassignedOrders(
+      (data as any[]).map((oRaw) => ({
+        id: oRaw.id,
+        total_amount: oRaw.total_amount,
+        status: oRaw.status,
+        truck_delivery_id: oRaw.truck_delivery_id,
+        customer: Array.isArray(oRaw.customer) ? oRaw.customer[0] : oRaw.customer,
+        order_items: oRaw.order_items ?? [],
+      })) || []
+    );
 
     const assignSelected = async () => {
       if (!assignForDeliveryId || selectedOrderIds.length === 0) {
@@ -441,7 +453,16 @@ export default function TruckDeliveryPage() {
       await fetchDeliveriesAndAssignments();
     };
 
-    setUnassignedOrders((data as OrderWithCustomer[]) || []);
+    setUnassignedOrders(
+      (data as any[]).map((oRaw) => ({
+        id: oRaw.id,
+        total_amount: oRaw.total_amount,
+        status: oRaw.status,
+        truck_delivery_id: oRaw.truck_delivery_id,
+        customer: Array.isArray(oRaw.customer) ? oRaw.customer[0] : oRaw.customer,
+        order_items: oRaw.order_items ?? [],
+      })) || []
+    );
   };
 
   const handleClearInvoices = async (deliveryId: number) => {
