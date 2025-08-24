@@ -63,6 +63,7 @@ type OrderDetailRow = {
   per_term_amount: number | null;
   interest_percent: number | null;
   sales_tax: number | null;
+  status?: string | null;
   customers: { name: string | null; address: string | null } | null;
   order_items: OrderItemRow[];
 };
@@ -89,14 +90,25 @@ function formatDate(date?: string | null) {
 }
 const TAX_RATE = 0.12;
 
+function statusColor(status?: string | null) {
+  const v = (status || "").toLowerCase();
+  if (v === "completed") return "bg-green-100 text-green-700 border-green-300";
+  if (v === "pending") return "bg-yellow-100 text-yellow-700 border-yellow-300";
+  if (v === "accepted") return "bg-blue-100 text-blue-700 border-blue-300";
+  if (v === "rejected" || v === "cancelled")
+    return "bg-red-100 text-red-700 border-red-300";
+  return "bg-gray-100 text-gray-600 border-gray-300";
+}
+
 // ---------- PDF Export Helper (html2canvas + jsPDF) ----------
 type PaperKey = "a4" | "letter" | "legal";
-
-// paper sizes in points (1pt = 1/72in)
-const PAPER_SPECS: Record<PaperKey, { width: number; height: number; margin: number; filename: string }> = {
-  a4:     { width: 595.28,  height: 841.89,  margin: 28.35, filename: "A4" },      // 210×297mm
-  letter: { width: 612,     height: 792,     margin: 36,    filename: "Letter" },  // 8.5×11in
-  legal:  { width: 612,     height: 936,     margin: 36,    filename: "Legal" },   // 8.5×13in
+const PAPER_SPECS: Record<
+  PaperKey,
+  { width: number; height: number; margin: number; filename: string }
+> = {
+  a4: { width: 595.28, height: 841.89, margin: 28.35, filename: "A4" },
+  letter: { width: 612, height: 792, margin: 36, filename: "Letter" },
+  legal: { width: 612, height: 936, margin: 36, filename: "Legal" },
 };
 
 async function exportNodeToPDF(
@@ -106,14 +118,12 @@ async function exportNodeToPDF(
 ) {
   const [{ jsPDF }, html2canvas] = await Promise.all([
     import("jspdf"),
-    import("html2canvas")
+    import("html2canvas"),
   ]);
-
-  // Render the node to a canvas
   const canvas = await html2canvas.default(node, {
-    scale: 2,            // sharper text
+    scale: 2,
     backgroundColor: "#ffffff",
-    useCORS: true,       // allows external images if CORS-enabled
+    useCORS: true,
     logging: false,
     windowWidth: document.documentElement.scrollWidth,
   });
@@ -123,38 +133,29 @@ async function exportNodeToPDF(
     unit: "pt",
     format: [spec.width, spec.height],
     compress: true,
-    hotfixes: ["px_scaling"]
+    hotfixes: ["px_scaling"],
   });
 
   const pageW = spec.width - spec.margin * 2;
   const pageH = spec.height - spec.margin * 2;
-
-  // Scale the canvas to fit page width, then paginate vertically if needed
   const imgW = pageW;
   const imgH = (canvas.height * imgW) / canvas.width;
-
   const imgData = canvas.toDataURL("image/png", 1.0);
 
   let remaining = imgH;
   let y = spec.margin;
-
-  // First page
   pdf.addImage(imgData, "PNG", spec.margin, y, imgW, imgH, undefined, "FAST");
 
-  // If content is taller than one page, add extra pages by shifting the source
   if (imgH > pageH) {
-    // Create a temp canvas we can "window" through the big image with
     const pageCanvas = document.createElement("canvas");
     pageCanvas.width = canvas.width;
     pageCanvas.height = Math.floor((pageH / imgH) * canvas.height);
     const ctx = pageCanvas.getContext("2d")!;
     const sliceH = pageCanvas.height;
-
-    let sY = Math.floor((pageH / imgH) * canvas.height); // source Y start for 2nd page
+    let sY = Math.floor((pageH / imgH) * canvas.height);
 
     while (remaining > pageH) {
       pdf.addPage([spec.width, spec.height]);
-      // draw slice
       ctx.clearRect(0, 0, pageCanvas.width, pageCanvas.height);
       ctx.drawImage(
         canvas,
@@ -167,22 +168,27 @@ async function exportNodeToPDF(
         pageCanvas.width,
         Math.min(sliceH, canvas.height - sY)
       );
-
       const sliceData = pageCanvas.toDataURL("image/png", 1.0);
-      pdf.addImage(sliceData, "PNG", spec.margin, spec.margin, imgW, pageH, undefined, "FAST");
-
+      pdf.addImage(
+        sliceData,
+        "PNG",
+        spec.margin,
+        spec.margin,
+        imgW,
+        pageH,
+        undefined,
+        "FAST"
+      );
       sY += sliceH;
       remaining -= pageH;
     }
   }
-
   const safeName = filenameBase.replace(/[^\w\-]+/g, "_");
   pdf.save(`${safeName}_${PAPER_SPECS[paper].filename}.pdf`);
 }
 
-
-/* -------------------- Delivery Receipt -------------------- */
-function DeliveryReceiptLikeInvoice({
+/* -------------------- Modern Delivery Receipt -------------------- */
+function DeliveryReceiptModern({
   customer,
   initialItems,
   initialDate,
@@ -190,6 +196,8 @@ function DeliveryReceiptLikeInvoice({
   salesman,
   poNo,
   totals,
+  txn,
+  status,
 }: {
   customer: CustomerInfo;
   initialItems: InvoiceItem[];
@@ -202,7 +210,9 @@ function DeliveryReceiptLikeInvoice({
     grandTotalWithInterest?: number;
     perTermAmount?: number;
   };
-}) {
+  txn?: string;
+  status?: string | null;
+  }) {
   const rows = initialItems || [];
 
   const subtotal = rows.reduce((s, i) => s + i.qty * i.unitPrice, 0);
@@ -224,92 +234,116 @@ function DeliveryReceiptLikeInvoice({
     typeof totals?.perTermAmount === "number" ? totals!.perTermAmount : 0;
 
   return (
-    <div className="w-full max-w-4xl mx-auto bg-white p-6 rounded shadow print:shadow-none print:p-8 print:max-w-none print:w-[100%] text-black">
-      {/* Header */}
-      <div className="flex flex-col items-center justify-center mb-2">
-        <h2 className="text-xl font-bold tracking-tight">UNIASIA</h2>
-        <div className="text-xs font-medium">JASON S. TO – Proprietor</div>
-        <div className="my-2">
-          <span className="px-2 py-1 border rounded border-neutral-400 font-semibold text-sm bg-neutral-50">
-            DELIVERY RECEIPT
-          </span>
-        </div>
-      </div>
+    <div className="w-full max-w-4xl mx-auto bg-white p-7 rounded-xl shadow print:shadow-none print:p-8 print:max-w-none print:w-[100%] text-black">
+    
+  <div className="relative mb-10">
+
+ 
+
+  
+
+  {/* Centered Title */}
+  <div className="flex flex-col items-center justify-center text-center">
+   <h2 className="text-4xl font-extrabold tracking-tight text-neutral-900 mb-1 -mt-3">
+  UNIASIA
+</h2>
+
+    <div className="text-base font-small text-neutral-500 mb-2">
+      SITIO II MANGGAHAN BAHAY PARE, MEYCAUAYAN CITY BULACAN
+    </div>
+    <div className="text-x2 font-bold text-yellow-600 tracking-widest mb-1">
+      DELIVERY RECEIPT
+    </div>
+  </div>
+ </div>
 
       {/* Details */}
-      <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs mb-2">
-        <div>
-          <div>
-            <b>CUSTOMER:</b> {customer?.name || "—"}
-          </div>
-          <div>
-            <b>ADDRESS:</b> {customer?.address || "—"}
-          </div>
-          <div>
-            <b>FORWARDER:</b>
-          </div>
-          <div>
-            <b>SALESMAN:</b> {salesman || "—"}
-          </div>
-        </div>
-        <div>
-          <div>
-            <b>DATE:</b> {initialDate ? initialDate : "—"}
-          </div>
-          <div>
-            <b>TERMS:</b> {terms || "—"}
-          </div>
-          <div>
-            <b>P.O NO:</b> {poNo || "—"}
-          </div>
-        </div>
+      <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs mb-4 border border-neutral-300 rounded-lg p-3">
+  <div>
+    <div><b>CUSTOMER:</b> {customer?.name || "—"}</div>
+    <div><b>ADDRESS:</b> {customer?.address || "—"}</div>
+    <div><b>FORWARDER:</b></div>
+    <div><b>SALESMAN:</b> {salesman || "—"}</div>
+  </div>
+  <div>
+    <div><b>DATE:</b> {initialDate ? initialDate : "—"}</div>
+    <div><b>TERMS:</b> {terms || "—"}</div>
+    <div><b>P.O NO:</b> {poNo || "—"}</div>
+    {status?.toLowerCase() === "completed" && (
+      <div>
+        <b>STATUS:</b>{" "}
+        <span className="text-green-700 font-bold px-2 py-0.5">Completed</span>
       </div>
+    )}
+  </div>
+</div>
 
       {/* Items */}
-      <div className="border border-gray-300 rounded mt-2 overflow-x-auto">
-        <table className="min-w-full text-xs">
+      <div className="border border-neutral-300 rounded-lg overflow-x-auto mt-2 mb-2">
+        <table className="min-w-full text-xs align-middle">
           <thead>
-            <tr style={{ background: "#ffba20" }} className="text-black">
-              <th className="px-2 py-1 text-left">QTY</th>
-              <th className="px-2 py-1 text-left">UNIT</th>
-              <th className="px-2 py-1 text-left">ITEM DESCRIPTION</th>
-              <th className="px-2 py-1 text-right">UNIT PRICE</th>
-              <th className="px-2 py-1 text-right">DISCOUNT/ADD (%)</th>
-              <th className="px-2 py-1 text-right">AMOUNT</th>
+            <tr
+              className="text-black uppercase tracking-wider text-[11px]"
+              style={{ background: "#ffba20" }}
+            >
+      <th className="px-2.5 py-1.5 text-center font-bold align-middle">QTY</th>
+<th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT</th>
+<th className="px-2.5 py-1.5 text-center font-bold align-middle">ITEM DESCRIPTION</th>
+<th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT PRICE</th>
+<th className="px-2.5 py-1.5 text-center font-bold align-middle">DISCOUNT/ADD (%)</th>
+<th className="px-2.5 py-1.5 text-center font-bold align-middle">AMOUNT</th>
+
+
             </tr>
           </thead>
           <tbody>
-            {rows.map((item) => {
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={6} className="text-center py-8 text-neutral-400">
+                  No items found.
+                </td>
+              </tr>
+            )}
+            {rows.map((item, idx) => {
               const line = item.qty * item.unitPrice;
               const lineAfter = line - (line * (item.discount || 0)) / 100;
               return (
-                <tr key={item.id} className="border-t last:border-b">
-                  <td className="px-2 py-1">{item.qty}</td>
-                  <td className="px-2 py-1">{item.unit}</td>
-                  <td className="px-2 py-1">
-                    <span className="font-semibold">{item.description}</span>
-                  </td>
-                  <td className="px-2 py-1 text-right">
-                    {formatCurrency(item.unitPrice)}
-                  </td>
-                  <td className="px-2 py-1 text-right">
-                    {item.discount || 0}%
-                  </td>
-                  <td className="px-2 py-1 text-right">
-                    {formatCurrency(lineAfter)}
-                  </td>
+              <tr
+  key={item.id}
+  className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
+>
+
+ <td className="px-2.5 py-1.5 font-mono text-center align-middle">
+  {item.qty}
+</td>
+<td className="px-2.5 py-1.5 font-mono text-center align-middle">
+  {item.unit}
+</td>
+<td className="px-2.5 py-1.5 text-left align-middle">
+  <span className="font-semibold">{item.description}</span>
+</td>
+<td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
+  {formatCurrency(item.unitPrice)}
+</td>
+<td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
+  {item.discount && item.discount !== 0 ? `${item.discount}%` : ""}
+</td>
+<td className="px-2.5 py-1.5 text-center font-mono font-bold align-middle whitespace-nowrap">
+  {formatCurrency(lineAfter)}
+</td>
+
+
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-
       {/* Notes + Summary */}
-      <div className="flex flex-row gap-4 mt-4 print:gap-2">
-        <div className="w-2/3 text-xs">
+      <div className="flex flex-row gap-4 mt-5 print:gap-2">
+        <div className="w-2/3 text-xs pr-4">
           <b>NOTE:</b>
-          <ul className="list-decimal ml-6 space-y-0.5">
+          <ul className="list-decimal ml-6 space-y-0.5 mt-1">
             <li>
               All goods are checked in good condition and complete after
               received and signed.
@@ -318,36 +352,37 @@ function DeliveryReceiptLikeInvoice({
             <li>All checks payable to By–Grace Trading only.</li>
           </ul>
         </div>
-
-        <div className="flex flex-col items-end text-xs mt-4 w-1/3">
+        <div className="flex flex-col items-end text-xs mt-1 w-1/3">
           <table className="text-right w-full">
             <tbody>
               <tr>
                 <td className="font-semibold py-0.5">
                   Subtotal (Before Discount):
                 </td>
-                <td className="pl-2">{formatCurrency(subtotal)}</td>
+                <td className="pl-2 font-mono">{formatCurrency(subtotal)}</td>
               </tr>
               <tr>
                 <td className="font-semibold py-0.5">
                   Less/Add (Discount/Markup):
                 </td>
-                <td className="pl-2">{formatCurrency(totalDiscount)}</td>
+                <td className="pl-2 font-mono">
+                  {formatCurrency(totalDiscount)}
+                </td>
               </tr>
               <tr>
                 <td className="font-semibold py-0.5">Sales Tax (12%):</td>
-                <td className="pl-2">{formatCurrency(salesTaxOut)}</td>
+                <td className="pl-2 font-mono">{formatCurrency(salesTaxOut)}</td>
               </tr>
               <tr>
                 <td className="font-bold py-1.5">Grand Total:</td>
-                <td className="pl-2 font-bold text-green-700">
+                <td className="pl-2 font-bold text-green-700 font-mono">
                   {formatCurrency(grandTotalOut)}
                 </td>
               </tr>
               {perTermOut > 0 && (
                 <tr>
                   <td className="font-semibold py-0.5">Per Term:</td>
-                  <td className="pl-2 font-bold text-blue-700">
+                  <td className="pl-2 font-bold text-blue-700 font-mono">
                     {formatCurrency(perTermOut)}
                   </td>
                 </tr>
@@ -360,17 +395,13 @@ function DeliveryReceiptLikeInvoice({
   );
 }
 
-/* -------------------- Page -------------------- */
+/* -------------------- Main Page (with Modal) -------------------- */
 export default function InvoiceMergedPage() {
   const params = useParams<{ id?: string }>();
   const router = useRouter();
   const orderId = params?.id;
 
-  // print state
-  const [paperSize, setPaperSize] =
-    useState<"a4" | "letter" | "legal">("a4");
-
-  // list state
+  const [paperSize, setPaperSize] = useState<"a4" | "letter" | "legal">("a4");
   const [orders, setOrders] = useState<OrderForList[]>([]);
   const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -385,6 +416,7 @@ export default function InvoiceMergedPage() {
   const [currentPoNumber, setCurrentPoNumber] = useState<string | null>(null);
   const [currentDateCompleted, setCurrentDateCompleted] =
     useState<string | null>(null);
+  const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [loadingItems, setLoadingItems] = useState(false);
 
   // detail route state
@@ -397,6 +429,7 @@ export default function InvoiceMergedPage() {
   const [detailPoNumber, setDetailPoNumber] = useState<string | null>(null);
   const [detailDateCompleted, setDetailDateCompleted] =
     useState<string | null>(null);
+  const [detailStatus, setDetailStatus] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(true);
 
   // saved totals (for both modal & detail)
@@ -405,7 +438,6 @@ export default function InvoiceMergedPage() {
   const [perTermAmount, setPerTermAmount] = useState<number>(0);
   const [salesTaxSaved, setSalesTaxSaved] = useState<number>(0);
 
-  /* -------- Global print cleanups -------- */
   const GlobalPrintCSS = () => (
     <style jsx global>{`
       @media print {
@@ -421,7 +453,7 @@ export default function InvoiceMergedPage() {
     `}</style>
   );
 
-  /* -------- Fetch list of orders (with customer) -------- */
+  // -------- Fetch list of orders (with customer) --------
   useEffect(() => {
     if (orderId) return;
     (async () => {
@@ -445,11 +477,7 @@ export default function InvoiceMergedPage() {
         .order("date_created", { ascending: false });
 
       if (error) {
-        console.error("Invoice list fetch error:", {
-          message: (error as any).message,
-          details: (error as any).details,
-          hint: (error as any).hint,
-        });
+        console.error("Invoice list fetch error:", error);
         setOrders([]);
         return;
       }
@@ -457,7 +485,7 @@ export default function InvoiceMergedPage() {
     })();
   }, [orderId]);
 
-  /* -------- Search / filter (show completed only) -------- */
+  // -------- Search / filter (show completed only) --------
   const filteredOrders = useMemo(() => {
     const q = search.trim().toLowerCase();
     const completed = orders.filter(
@@ -469,12 +497,11 @@ export default function InvoiceMergedPage() {
     );
   }, [orders, search]);
 
-  /* -------- Open invoice from list (modal) -------- */
+  // -------- Open invoice from list (modal) --------
   const openInvoice = async (order: OrderForList) => {
     setOpenId(order.id);
     setLoadingItems(true);
 
-    // header info
     setCustomerForOrder({
       name: order.customer?.name || "—",
       address: order.customer?.address || "",
@@ -485,11 +512,13 @@ export default function InvoiceMergedPage() {
     setCurrentSalesman(order.salesman || null);
     setCurrentPoNumber(order.po_number || null);
     setCurrentDateCompleted(order.date_completed || null);
+    setCurrentStatus(order.status || null);
 
     // fetch items
     const { data: rows, error } = await supabase
       .from("order_items")
-      .select(`
+      .select(
+        `
         id,
         order_id,
         inventory_id,
@@ -500,24 +529,26 @@ export default function InvoiceMergedPage() {
           unit,
           unit_price
         )
-      `)
+      `
+      )
       .eq("order_id", order.id);
 
     // fetch saved totals (same row as order)
     const { data: orderRow, error: orderErr } = await supabase
       .from("orders")
-      .select(`
+      .select(
+        `
         grand_total_with_interest,
         per_term_amount,
         sales_tax
-      `)
+      `
+      )
       .eq("id", order.id)
       .single();
 
     if (orderErr) {
       console.error("Invoice order totals fetch error:", orderErr);
     }
-
     setGrandTotalWithInterest(Number(orderRow?.grand_total_with_interest || 0));
     setPerTermAmount(Number(orderRow?.per_term_amount || 0));
     setSalesTaxSaved(Number(orderRow?.sales_tax || 0));
@@ -530,7 +561,7 @@ export default function InvoiceMergedPage() {
           unit: r.inventory?.unit || "pcs",
           description: r.inventory?.product_name || "",
           unitPrice: Number(r.price ?? r.inventory?.unit_price ?? 0),
-          discount: 0, // change when you add a discount column
+          discount: 0,
         })
       );
       setItems(mapped);
@@ -550,15 +581,17 @@ export default function InvoiceMergedPage() {
     setLoadingItems(false);
   };
 
-  /* -------- Detail route (/invoice/[id]) -------- */
+  // -------- Detail route (/invoice/[id]) --------
   useEffect(() => {
     if (!orderId) return;
     setLoadingDetail(true);
     (async () => {
       const { data, error } = await supabase
         .from("orders")
-        .select(`
+        .select(
+          `
           id,
+          status,
           date_created,
           date_completed,
           terms,
@@ -575,7 +608,8 @@ export default function InvoiceMergedPage() {
             price,
             inventory:inventory_id ( product_name, unit, unit_price )
           )
-        `)
+        `
+        )
         .eq("id", orderId)
         .single();
 
@@ -591,6 +625,7 @@ export default function InvoiceMergedPage() {
         setDetailSalesman(row.salesman || null);
         setDetailPoNumber(row.po_number || null);
         setDetailDateCompleted(row.date_completed || null);
+        setDetailStatus(row.status || null);
 
         const mapped: InvoiceItem[] = (row.order_items || []).map((it) => ({
           id: it.id,
@@ -635,6 +670,7 @@ export default function InvoiceMergedPage() {
         setDetailSalesman(null);
         setDetailPoNumber(null);
         setDetailDateCompleted(null);
+        setDetailStatus(null);
         setGrandTotalWithInterest(0);
         setPerTermAmount(0);
         setSalesTaxSaved(0);
@@ -671,7 +707,7 @@ export default function InvoiceMergedPage() {
               </div>
             </div>
           </div>
-          <DeliveryReceiptLikeInvoice
+          <DeliveryReceiptModern
             customer={detailCustomer}
             initialItems={detailItems}
             initialDate={detailDate}
@@ -683,6 +719,8 @@ export default function InvoiceMergedPage() {
               grandTotalWithInterest,
               perTermAmount,
             }}
+            txn={orderId}
+            status={detailStatus}
           />
         </div>
       </div>
@@ -730,7 +768,13 @@ export default function InvoiceMergedPage() {
             />
           </div>
         </div>
-
+<style jsx>{`
+  /* Force vertical middle in all table cells inside this invoice only */
+  .invoice table th,
+  .invoice table td {
+    vertical-align: middle !important;
+  }
+`}</style>
         <motion.div
           className="overflow-x-auto rounded-2xl shadow-lg bg-white/90"
           initial={{ opacity: 0, y: 16 }}
@@ -801,7 +845,6 @@ export default function InvoiceMergedPage() {
                         </DialogTrigger>
                       </td>
                     </tr>
-
                     <DialogContent className="max-w-4xl max-h-[80vh] bg-white/95 rounded-xl shadow-2xl overflow-y-auto border border-neutral-100 p-0">
                       {!items || !customerForOrder ? (
                         <div className="p-8 text-sm">Fetching items…</div>
@@ -809,15 +852,20 @@ export default function InvoiceMergedPage() {
                         <div>
                           {/* Modal header with TXN, paper size, print */}
                           <div className="flex items-center justify-between px-4 pt-4 pb-2 border-b border-neutral-100">
-                            <div className="text-sm text-neutral-600">
-                              <span className="font-bold text-neutral-800">
-                                TXN:
-                              </span>{" "}
-                              {order.customer?.code || order.id}
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <label className="text-[11px] text-neutral-500">
+                            
+                            <div className="flex items-center gap-3">
+                              <span
+                                className={`text-xs font-bold px-2 py-1 border rounded-lg ${statusColor(
+                                  order.status
+                                )} shadow-sm`}
+                              >
+                                Status:{" "}
+                                {order.status
+                                  ? order.status.charAt(0).toUpperCase() +
+                                    order.status.slice(1)
+                                  : "—"}
+                              </span>
+                              <label className="text-[11px] text-neutral-500 ml-3">
                                 Paper:
                               </label>
                               <select
@@ -828,9 +876,7 @@ export default function InvoiceMergedPage() {
                                 className="border rounded px-2 py-1 text-xs"
                                 title="Paper size for printing"
                               >
-                                <option value="a4">
-                                  A4 (210×297mm)
-                                </option>
+                                <option value="a4">A4 (210×297mm)</option>
                                 <option value="letter">
                                   Short / Letter (8.5×11in)
                                 </option>
@@ -838,33 +884,35 @@ export default function InvoiceMergedPage() {
                                   Long / Legal (8.5×13in)
                                 </option>
                               </select>
-
                               <button
-  className="bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-  onClick={async () => {
-    const node = document.getElementById(`invoice-capture-${order.id}`);
-    if (!node) return;
-    const txn = (order.customer?.code || order.id || "invoice").toString();
-    await exportNodeToPDF(node, paperSize, `UNIASIA_${txn}`);
-  }}
->
-  PRINT PDF
-</button>
+                                className="bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+                                onClick={async () => {
+                                  const node = document.getElementById(
+                                    `invoice-capture-${order.id}`
+                                  );
+                                  if (!node) return;
+                                  await exportNodeToPDF(
+                                    node,
+                                    paperSize,
+                                    `UNIASIA_${txn}`
+                                  );
+                                }}
+                              >
+                                PRINT PDF
+                              </button>
                             </div>
-                          </div>
-
-                          <div className="px-4 pt-2 pb-4 text-xs text-right text-neutral-700">
+                           </div>
+                           <div className="px-4 pt-2 pb-4 text-xs text-right text-neutral-700">
                             <span>
                               <b>Date Completed:</b>{" "}
                               {formatDate(currentDateCompleted)}
                             </span>
-                          </div>
-
-                          <div
+                           </div>
+                           <div
                             id={`invoice-capture-${order.id}`}
                             className="p-4"
-                          >
-                            <DeliveryReceiptLikeInvoice
+                           >
+                            <DeliveryReceiptModern
                               customer={customerForOrder}
                               initialItems={items}
                               initialDate={initialDate}
@@ -876,35 +924,36 @@ export default function InvoiceMergedPage() {
                                 grandTotalWithInterest,
                                 perTermAmount,
                               }}
+                              txn={txn}
+                              status={order.status}
                             />
-                          </div>
-
-                          {/* Dynamic @page for print */}
-                          {paperSize === "a4" && (
+                           </div>
+                           {/* Dynamic @page for print */}
+                           {paperSize === "a4" && (
                             <style>{`
                               @media print {
                                 @page { size: A4; margin: 12mm; }
                                 html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                               }
                             `}</style>
-                          )}
-                          {paperSize === "letter" && (
+                           )}
+                           {paperSize === "letter" && (
                             <style>{`
                               @media print {
                                 @page { size: 8.5in 11in; margin: 0.5in; }
                                 html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                               }
                             `}</style>
-                          )}
-                          {paperSize === "legal" && (
+                           )}
+                           {paperSize === "legal" && (
                             <style>{`
                               @media print {
                                 @page { size: 8.5in 13in; margin: 0.5in; }
                                 html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                               }
                             `}</style>
-                          )}
-                        </div>
+                           )}
+                           </div>
                       )}
                     </DialogContent>
                   </Dialog>
