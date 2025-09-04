@@ -164,64 +164,68 @@ export default function InventoryPage() {
         if (error) throw error;
 
         // Log update activity
-       // Log activity (for both Add and Update)
-const {
-  data: { user },
-} = await supabase.auth.getUser();
-const userEmail = user?.email || "unknown";
-const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
+        // Log activity (for both Add and Update)
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const userEmail = user?.email || "unknown";
+        const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
 
-await supabase.from("activity_logs").insert([
-  {
-    user_email: userEmail,
-    user_role: userRole,            // <-- LOG THE ROLE!
-    action: editingItemId !== null ? "Update Inventory Item" : "Add Inventory Item",
-    details: {
-      sku: dataToSave.sku,
-      product_name: dataToSave.product_name,
-      category: dataToSave.category,
-      subcategory: dataToSave.subcategory,
-      unit: dataToSave.unit,
-      quantity: dataToSave.quantity,
-      unit_price: dataToSave.unit_price,
-      status: dataToSave.status,
-    },
-    created_at: new Date().toISOString(),
-  },
-]);
-
+        await supabase.from("activity_logs").insert([
+          {
+            user_email: userEmail,
+            user_role: userRole, // <-- LOG THE ROLE!
+            action:
+              editingItemId !== null
+                ? "Update Inventory Item"
+                : "Add Inventory Item",
+            details: {
+              sku: dataToSave.sku,
+              product_name: dataToSave.product_name,
+              category: dataToSave.category,
+              subcategory: dataToSave.subcategory,
+              unit: dataToSave.unit,
+              quantity: dataToSave.quantity,
+              unit_price: dataToSave.unit_price,
+              status: dataToSave.status,
+            },
+            created_at: new Date().toISOString(),
+          },
+        ]);
       } else {
         // Insert new item
         const { error } = await supabase.from("inventory").insert([dataToSave]);
         if (error) throw error;
 
         // Log add activity
-      // Log activity (for both Add and Update)
-const {
-  data: { user },
-} = await supabase.auth.getUser();
-const userEmail = user?.email || "unknown";
-const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
+        // Log activity (for both Add and Update)
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const userEmail = user?.email || "unknown";
+        const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
 
-await supabase.from("activity_logs").insert([
-  {
-    user_email: userEmail,
-    user_role: userRole,            // <-- LOG THE ROLE!
-    action: editingItemId !== null ? "Update Inventory Item" : "Add Inventory Item",
-    details: {
-      sku: dataToSave.sku,
-      product_name: dataToSave.product_name,
-      category: dataToSave.category,
-      subcategory: dataToSave.subcategory,
-      unit: dataToSave.unit,
-      quantity: dataToSave.quantity,
-      unit_price: dataToSave.unit_price,
-      status: dataToSave.status,
-    },
-    created_at: new Date().toISOString(),
-  },
-]);
-
+        await supabase.from("activity_logs").insert([
+          {
+            user_email: userEmail,
+            user_role: userRole, // <-- LOG THE ROLE!
+            action:
+              editingItemId !== null
+                ? "Update Inventory Item"
+                : "Add Inventory Item",
+            details: {
+              sku: dataToSave.sku,
+              product_name: dataToSave.product_name,
+              category: dataToSave.category,
+              subcategory: dataToSave.subcategory,
+              unit: dataToSave.unit,
+              quantity: dataToSave.quantity,
+              unit_price: dataToSave.unit_price,
+              status: dataToSave.status,
+            },
+            created_at: new Date().toISOString(),
+          },
+        ]);
       }
 
       // Reset form, modal, and reload items
@@ -279,8 +283,11 @@ await supabase.from("activity_logs").insert([
   const cellNowrap = `${cell} whitespace-nowrap`;
 
   return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold mb-6">Inventory</h1>
+    <div className="px-4 pb-4 pt-1">
+      <h1 className="text-3xl font-bold mt-1">Inventory</h1>
+      <p className="text-neutral-500 text-sm mb-4">
+        Manage and view all inventory items, categories, and stock levels.
+      </p>
 
       <div className="flex gap-4 mb-4">
         <input

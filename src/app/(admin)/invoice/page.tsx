@@ -212,7 +212,7 @@ function DeliveryReceiptModern({
   };
   txn?: string;
   status?: string | null;
-  }) {
+}) {
   const rows = initialItems || [];
 
   const subtotal = rows.reduce((s, i) => s + i.qty * i.unitPrice, 0);
@@ -235,48 +235,58 @@ function DeliveryReceiptModern({
 
   return (
     <div className="w-full max-w-4xl mx-auto bg-white p-7 rounded-xl shadow print:shadow-none print:p-8 print:max-w-none print:w-[100%] text-black">
-    
-  <div className="relative mb-10">
+      <div className="relative mb-10">
+        {/* Centered Title */}
+        <div className="flex flex-col items-center justify-center text-center">
+          <h2 className="text-4xl font-extrabold tracking-tight text-neutral-900 mb-1 -mt-3">
+            UNIASIA
+          </h2>
 
- 
-
-  
-
-  {/* Centered Title */}
-  <div className="flex flex-col items-center justify-center text-center">
-   <h2 className="text-4xl font-extrabold tracking-tight text-neutral-900 mb-1 -mt-3">
-  UNIASIA
-</h2>
-
-    <div className="text-base font-small text-neutral-500 mb-2">
-      SITIO II MANGGAHAN BAHAY PARE, MEYCAUAYAN CITY BULACAN
-    </div>
-    <div className="text-x2 font-bold text-yellow-600 tracking-widest mb-1">
-      DELIVERY RECEIPT
-    </div>
-  </div>
- </div>
+          <div className="text-base font-small text-neutral-500 mb-2">
+            SITIO II MANGGAHAN BAHAY PARE, MEYCAUAYAN CITY BULACAN
+          </div>
+          <div className="text-x2 font-bold text-yellow-600 tracking-widest mb-1">
+            DELIVERY RECEIPT
+          </div>
+        </div>
+      </div>
 
       {/* Details */}
       <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs mb-4 border border-neutral-300 rounded-lg p-3">
-  <div>
-    <div><b>CUSTOMER:</b> {customer?.name || "—"}</div>
-    <div><b>ADDRESS:</b> {customer?.address || "—"}</div>
-    <div><b>FORWARDER:</b></div>
-    <div><b>SALESMAN:</b> {salesman || "—"}</div>
-  </div>
-  <div>
-    <div><b>DATE:</b> {initialDate ? initialDate : "—"}</div>
-    <div><b>TERMS:</b> {terms || "—"}</div>
-    <div><b>P.O NO:</b> {poNo || "—"}</div>
-    {status?.toLowerCase() === "completed" && (
-      <div>
-        <b>STATUS:</b>{" "}
-        <span className="text-green-700 font-bold px-2 py-0.5">Completed</span>
+        <div>
+          <div>
+            <b>CUSTOMER:</b> {customer?.name || "—"}
+          </div>
+          <div>
+            <b>ADDRESS:</b> {customer?.address || "—"}
+          </div>
+          <div>
+            <b>FORWARDER:</b>
+          </div>
+          <div>
+            <b>SALESMAN:</b> {salesman || "—"}
+          </div>
+        </div>
+        <div>
+          <div>
+            <b>DATE:</b> {initialDate ? initialDate : "—"}
+          </div>
+          <div>
+            <b>TERMS:</b> {terms || "—"}
+          </div>
+          <div>
+            <b>P.O NO:</b> {poNo || "—"}
+          </div>
+          {status?.toLowerCase() === "completed" && (
+            <div>
+              <b>STATUS:</b>{" "}
+              <span className="text-green-700 font-bold px-2 py-0.5">
+                Completed
+              </span>
+            </div>
+          )}
+        </div>
       </div>
-    )}
-  </div>
-</div>
 
       {/* Items */}
       <div className="border border-neutral-300 rounded-lg overflow-x-auto mt-2 mb-2">
@@ -286,14 +296,24 @@ function DeliveryReceiptModern({
               className="text-black uppercase tracking-wider text-[11px]"
               style={{ background: "#ffba20" }}
             >
-      <th className="px-2.5 py-1.5 text-center font-bold align-middle">QTY</th>
-<th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT</th>
-<th className="px-2.5 py-1.5 text-center font-bold align-middle">ITEM DESCRIPTION</th>
-<th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT PRICE</th>
-<th className="px-2.5 py-1.5 text-center font-bold align-middle">DISCOUNT/ADD (%)</th>
-<th className="px-2.5 py-1.5 text-center font-bold align-middle">AMOUNT</th>
-
-
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                QTY
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                UNIT
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                ITEM DESCRIPTION
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                UNIT PRICE
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                DISCOUNT/ADD (%)
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                AMOUNT
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -308,31 +328,30 @@ function DeliveryReceiptModern({
               const line = item.qty * item.unitPrice;
               const lineAfter = line - (line * (item.discount || 0)) / 100;
               return (
-              <tr
-  key={item.id}
-  className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
->
-
- <td className="px-2.5 py-1.5 font-mono text-center align-middle">
-  {item.qty}
-</td>
-<td className="px-2.5 py-1.5 font-mono text-center align-middle">
-  {item.unit}
-</td>
-<td className="px-2.5 py-1.5 text-left align-middle">
-  <span className="font-semibold">{item.description}</span>
-</td>
-<td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
-  {formatCurrency(item.unitPrice)}
-</td>
-<td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
-  {item.discount && item.discount !== 0 ? `${item.discount}%` : ""}
-</td>
-<td className="px-2.5 py-1.5 text-center font-mono font-bold align-middle whitespace-nowrap">
-  {formatCurrency(lineAfter)}
-</td>
-
-
+                <tr
+                  key={item.id}
+                  className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
+                >
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
+                    {item.qty}
+                  </td>
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
+                    {item.unit}
+                  </td>
+                  <td className="px-2.5 py-1.5 text-left align-middle">
+                    <span className="font-semibold">{item.description}</span>
+                  </td>
+                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
+                    {formatCurrency(item.unitPrice)}
+                  </td>
+                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
+                    {item.discount && item.discount !== 0
+                      ? `${item.discount}%`
+                      : ""}
+                  </td>
+                  <td className="px-2.5 py-1.5 text-center font-mono font-bold align-middle whitespace-nowrap">
+                    {formatCurrency(lineAfter)}
+                  </td>
                 </tr>
               );
             })}
@@ -371,7 +390,9 @@ function DeliveryReceiptModern({
               </tr>
               <tr>
                 <td className="font-semibold py-0.5">Sales Tax (12%):</td>
-                <td className="pl-2 font-mono">{formatCurrency(salesTaxOut)}</td>
+                <td className="pl-2 font-mono">
+                  {formatCurrency(salesTaxOut)}
+                </td>
               </tr>
               <tr>
                 <td className="font-bold py-1.5">Grand Total:</td>
@@ -408,27 +429,31 @@ export default function InvoiceMergedPage() {
 
   // modal header state
   const [items, setItems] = useState<InvoiceItem[] | null>(null);
-  const [customerForOrder, setCustomerForOrder] =
-    useState<CustomerInfo | null>(null);
+  const [customerForOrder, setCustomerForOrder] = useState<CustomerInfo | null>(
+    null
+  );
   const [initialDate, setInitialDate] = useState<string | null>(null);
   const [currentTerms, setCurrentTerms] = useState<string | null>(null);
   const [currentSalesman, setCurrentSalesman] = useState<string | null>(null);
   const [currentPoNumber, setCurrentPoNumber] = useState<string | null>(null);
-  const [currentDateCompleted, setCurrentDateCompleted] =
-    useState<string | null>(null);
+  const [currentDateCompleted, setCurrentDateCompleted] = useState<
+    string | null
+  >(null);
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [loadingItems, setLoadingItems] = useState(false);
 
   // detail route state
-  const [detailCustomer, setDetailCustomer] =
-    useState<CustomerInfo | null>(null);
+  const [detailCustomer, setDetailCustomer] = useState<CustomerInfo | null>(
+    null
+  );
   const [detailItems, setDetailItems] = useState<InvoiceItem[] | null>(null);
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const [detailTerms, setDetailTerms] = useState<string | null>(null);
   const [detailSalesman, setDetailSalesman] = useState<string | null>(null);
   const [detailPoNumber, setDetailPoNumber] = useState<string | null>(null);
-  const [detailDateCompleted, setDetailDateCompleted] =
-    useState<string | null>(null);
+  const [detailDateCompleted, setDetailDateCompleted] = useState<string | null>(
+    null
+  );
   const [detailStatus, setDetailStatus] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(true);
 
@@ -442,7 +467,7 @@ export default function InvoiceMergedPage() {
     <style jsx global>{`
       @media print {
         button,
-        [role='dialog'] header .close,
+        [role="dialog"] header .close,
         .no-print {
           display: none !important;
         }
@@ -459,7 +484,8 @@ export default function InvoiceMergedPage() {
     (async () => {
       const { data, error } = await supabase
         .from("orders")
-        .select(`
+        .select(
+          `
           id,
           status,
           date_created,
@@ -473,7 +499,8 @@ export default function InvoiceMergedPage() {
             address,
             code
           )
-        `)
+        `
+        )
         .order("date_created", { ascending: false });
 
       if (error) {
@@ -730,13 +757,13 @@ export default function InvoiceMergedPage() {
   // Default: list + modal
   return (
     <motion.div
-      className="relative min-h-screen bg-gradient-to-br from-amber-50 via-white to-yellow-100 py-10 px-4"
+      className="relative min-h-screen py-10 px-4"
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: "easeOut" }}
     >
       <GlobalPrintCSS />
-      <div className="max-w-5xl mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         <div className="mb-4">
           <h1 className="text-3xl font-extrabold text-neutral-800 tracking-tight mb-2">
             Sales Invoices
@@ -744,21 +771,7 @@ export default function InvoiceMergedPage() {
           <p className="text-neutral-500 mb-4 text-sm">
             Manage and view all issued sales invoices.
           </p>
-          <div className="flex items-center gap-2 max-w-xs">
-            <span className="text-neutral-400">
-              <svg
-                width="18"
-                height="18"
-                fill="none"
-                className="inline mr-1"
-                viewBox="0 0 20 20"
-              >
-                <path
-                  d="M9 16a7 7 0 1 0 0-14 7 7 0 0 0 0 14Zm8.293 2.293-3.387-3.387A8.966 8.966 0 0 1 9 18C4.03 18 0 13.97 0 9S4.03 0 9 0s9 4.03 9 9a8.966 8.966 0 0 1-1.32 4.906l3.387 3.387a1 1 0 0 1-1.414 1.414ZM2 9a7 7 0 1 1 14 0A7 7 0 0 1 2 9Z"
-                  fill="currentColor"
-                />
-              </svg>
-            </span>
+          <div className="w-full max-w-3xl">
             <input
               type="text"
               placeholder="Search by customer name…"
@@ -768,13 +781,13 @@ export default function InvoiceMergedPage() {
             />
           </div>
         </div>
-<style jsx>{`
-  /* Force vertical middle in all table cells inside this invoice only */
-  .invoice table th,
-  .invoice table td {
-    vertical-align: middle !important;
-  }
-`}</style>
+        <style jsx>{`
+          /* Force vertical middle in all table cells inside this invoice only */
+          .invoice table th,
+          .invoice table td {
+            vertical-align: middle !important;
+          }
+        `}</style>
         <motion.div
           className="overflow-x-auto rounded-2xl shadow-lg bg-white/90"
           initial={{ opacity: 0, y: 16 }}
@@ -824,12 +837,8 @@ export default function InvoiceMergedPage() {
                       <td className="px-6 py-3">
                         {order.customer?.name ?? "Unknown"}
                       </td>
-                      <td className="px-6 py-3">
-                        {order.salesman || "—"}
-                      </td>
-                      <td className="px-6 py-3">
-                        {order.po_number || "—"}
-                      </td>
+                      <td className="px-6 py-3">{order.salesman || "—"}</td>
+                      <td className="px-6 py-3">{order.po_number || "—"}</td>
                       <td className="px-6 py-3">
                         {formatDate(order.date_completed)}
                       </td>
@@ -852,7 +861,6 @@ export default function InvoiceMergedPage() {
                         <div>
                           {/* Modal header with TXN, paper size, print */}
                           <div className="flex items-center justify-between px-4 pt-4 pb-2 border-b border-neutral-100">
-                            
                             <div className="flex items-center gap-3">
                               <span
                                 className={`text-xs font-bold px-2 py-1 border rounded-lg ${statusColor(
@@ -901,17 +909,17 @@ export default function InvoiceMergedPage() {
                                 PRINT PDF
                               </button>
                             </div>
-                           </div>
-                           <div className="px-4 pt-2 pb-4 text-xs text-right text-neutral-700">
+                          </div>
+                          <div className="px-4 pt-2 pb-4 text-xs text-right text-neutral-700">
                             <span>
                               <b>Date Completed:</b>{" "}
                               {formatDate(currentDateCompleted)}
                             </span>
-                           </div>
-                           <div
+                          </div>
+                          <div
                             id={`invoice-capture-${order.id}`}
                             className="p-4"
-                           >
+                          >
                             <DeliveryReceiptModern
                               customer={customerForOrder}
                               initialItems={items}
@@ -927,33 +935,33 @@ export default function InvoiceMergedPage() {
                               txn={txn}
                               status={order.status}
                             />
-                           </div>
-                           {/* Dynamic @page for print */}
-                           {paperSize === "a4" && (
+                          </div>
+                          {/* Dynamic @page for print */}
+                          {paperSize === "a4" && (
                             <style>{`
                               @media print {
                                 @page { size: A4; margin: 12mm; }
                                 html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                               }
                             `}</style>
-                           )}
-                           {paperSize === "letter" && (
+                          )}
+                          {paperSize === "letter" && (
                             <style>{`
                               @media print {
                                 @page { size: 8.5in 11in; margin: 0.5in; }
                                 html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                               }
                             `}</style>
-                           )}
-                           {paperSize === "legal" && (
+                          )}
+                          {paperSize === "legal" && (
                             <style>{`
                               @media print {
                                 @page { size: 8.5in 13in; margin: 0.5in; }
                                 html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                               }
                             `}</style>
-                           )}
-                           </div>
+                          )}
+                        </div>
                       )}
                     </DialogContent>
                   </Dialog>

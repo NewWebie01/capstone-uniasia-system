@@ -3,6 +3,7 @@ import { DM_Sans } from "next/font/google";
 import "@/styles/globals.css"; // ✅ correct place & casing
 import clsx from "clsx";
 import { Toaster } from "sonner";
+import { Analytics } from "@vercel/analytics/next"
 
 const dmSans = DM_Sans({ subsets: ["latin"] });
 
@@ -18,7 +19,7 @@ export default function RootLayout({
     <html lang="en" className="relative">
       <body className={clsx(dmSans.className, "antialiased bg-[#dadada]")}>
         {children}
-        
+        <Analytics />
       </body>
     </html>
   );
