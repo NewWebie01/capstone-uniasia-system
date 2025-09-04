@@ -28,6 +28,9 @@ type Order = {
   date_created?: string;
   salesman?: string;
   terms?: string;
+  customers?: {
+    payment_type?: string;
+  };
 };
 
 type OrderItemRow = {
@@ -67,15 +70,27 @@ export default function InvoicePage() {
       });
   }, []);
 
-  useEffect(() => {
-    supabase
-      .from("orders")
-      .select("*")
-      .order("date_created", { ascending: false })
-      .then(({ data, error }) => {
-        if (!error && data) setOrders(data);
-      });
-  }, []);
+useEffect(() => {
+supabase
+  .from("orders")
+  .select(`
+    id,
+    customer_id,
+    total_amount,
+    status,
+    date_created,
+    salesman,
+    terms,
+    customers (
+      payment_type
+    )
+  `)
+  .order("date_created", { ascending: false })
+  .then(({ data, error }) => {
+    if (!error && data) setOrders(data as Order[]);
+  });
+}, []);
+
 
   const customerMap = useMemo(() => {
     const map = new Map<string, Customer>();
@@ -92,6 +107,8 @@ export default function InvoicePage() {
   }, [orders, customerMap, search]);
 
   const openInvoice = async (order: Order) => {
+    console.log("Selected Order Terms:", order.terms);
+    console.log("Selected Order Payment Type:", order.payment_type);
     setSelectedOrder(order);
     setOpenId(order.id);
     setLoadingItems(true);
@@ -139,42 +156,39 @@ export default function InvoicePage() {
     }
 
     setLoadingItems(false);
+    console.log("Selected Order Terms:", selectedOrder?.terms);
+    console.log("Selected Order Payment Type:", selectedOrder?.payment_type);
   };
 
   async function generatePDFBlob(nodeId: string): Promise<Blob | null> {
     return await generatePDFBlobById(nodeId);
   }
 
- const handlePreviewPDF = async (orderId: string) => {
-  const blob = await generatePDFBlob(`invoice-capture-${orderId}`);
-  if (!blob) return alert("Failed to generate PDF.");
-  const url = URL.createObjectURL(blob);
-  setPdfUrl(url);
+  const handlePreviewPDF = async (orderId: string) => {
+    const blob = await generatePDFBlob(`invoice-capture-${orderId}`);
+    if (!blob) return alert("Failed to generate PDF.");
+    const url = URL.createObjectURL(blob);
+    setPdfUrl(url);
 
-  // --- LOG ACTION TO ACTIVITY LOG ---
-  try {
-    // Fetch user (optional: if you want to log which admin previewed)
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const userEmail = user?.email || "unknown";
+    // --- LOG ACTION TO ACTIVITY LOG ---
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const userEmail = user?.email || "unknown";
 
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        action: "Previewed Sales Invoice PDF",
-        details: {
-          order_id: orderId,
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: userEmail,
+          action: "Previewed Sales Invoice PDF",
+          details: { order_id: orderId },
+          created_at: new Date().toISOString(),
         },
-        created_at: new Date().toISOString(),
-      },
-    ]);
-  } catch (err) {
-    // Optionally handle log errors (fail silently)
-    console.error("Failed to log PDF preview action", err);
-  }
-};
-
+      ]);
+    } catch (err) {
+      console.error("Failed to log PDF preview action", err);
+    }
+  };
 
   return (
     <motion.div className="p-6 space-y-6 from-amber-50 to-amber-200/40 min-h-screen">
@@ -204,6 +218,13 @@ export default function InvoicePage() {
             {filteredOrders.map((order) => {
               const c = customerMap.get(order.customer_id);
               const txn = c?.code || order.id;
+
+              // 👇 Compute terms string based on order
+              const termsString =
+                order.payment_type === "Credit"
+                  ? `Net ${order.terms || 0}`
+                  : order.payment_type || "Cash";
+
               return (
                 <Dialog
                   key={order.id}
@@ -225,7 +246,7 @@ export default function InvoicePage() {
                       <DialogTrigger asChild>
                         <button
                           className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                          onClick={() => openInvoice(order)} // ✅ keep this so data loads
+                          onClick={() => openInvoice(order)}
                         >
                           View
                         </button>
@@ -254,6 +275,11 @@ export default function InvoicePage() {
                             customer={customerForOrder}
                             initialItems={items}
                             initialDate={initialDate}
+                            initialTerms={
+                              selectedOrder?.customers?.payment_type === "Credit" && selectedOrder?.terms
+                                ? `Credit - ${selectedOrder.terms} terms`
+                                : selectedOrder?.customers?.payment_type || "Cash"
+                            }
                           />
                         </div>
                       </div>
