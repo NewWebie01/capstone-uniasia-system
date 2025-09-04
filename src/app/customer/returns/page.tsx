@@ -613,7 +613,13 @@ export default function CustomerReturnsPage() {
   /* --------------------------------- UI --------------------------------- */
   return (
     <div className="p-4">
-      <h1 className="text-3xl font-bold mb-4">Returns &amp; Issues</h1>
+      <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
+        Returns &amp; Issues
+      </h1>
+      <p className="text-sm text-gray-600 mt-1 mb-4">
+        Manage your return requests, report issues with delivered items, and
+        track the status of your submissions.
+      </p>
 
       {!authEmail && !loading && (
         <div className="bg-white border rounded p-4 shadow-sm">

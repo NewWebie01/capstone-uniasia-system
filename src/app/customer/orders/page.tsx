@@ -129,6 +129,11 @@ export default function TrackPage() {
   const ordersSubKey = useRef<string>("");
   const deliveriesSubKey = useRef<string>("");
 
+  // Expandable orders (orderId -> open?)
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const toggleExpanded = (id: number) =>
+    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+
   const hasData = useMemo(() => txns.length > 0, [txns.length]);
 
   /* -------------------------- Helper: fetch deliveries --------------------- */
@@ -335,24 +340,32 @@ export default function TrackPage() {
   }, [orderIds]);
 
   return (
-    <div className="min-h-[calc(100vh-80px)] ">
+    <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
-        <h1 className="text-3xl font-extrabold tracking-tight mb-5">
+        {/* Title + subtitle (matches Product Catalog style) */}
+        <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
           Track Your Delivery
         </h1>
+        <p className="text-sm text-gray-600 mt-1">
+          Review your orders, check item details and totals, and track the
+          latest delivery status.
+        </p>
 
         {!authEmail && !loading && (
-          <p className="text-gray-700">Please sign in to view your orders.</p>
+          <p className="mt-4 text-gray-700">
+            Please sign in to view your orders.
+          </p>
         )}
-        {loading && <p className="text-gray-700">Loading your orders…</p>}
-        {!loading && authEmail && txns.length === 0 && (
-          <p className="text-gray-700">
+        {loading && <p className="mt-4 text-gray-700">Loading your orders…</p>}
+        {!loading && authEmail && !hasData && (
+          <p className="mt-4 text-gray-700">
             No orders found for <span className="font-medium">{authEmail}</span>
             .
           </p>
         )}
 
-        <div className="w-full space-y-6">
+        {/* Orders list */}
+        <div className="w-full space-y-4 mt-4">
           {!loading &&
             txns.map((t) => {
               const orderList = t.orders ?? [];
@@ -369,12 +382,14 @@ export default function TrackPage() {
               return (
                 <div
                   key={t.id}
-                  className="w-full bg-white rounded-2xl shadow-sm border border-gray-200"
+                  className="w-full bg-white rounded-xl shadow border border-gray-200"
                 >
-                  {/* Header */}
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-5 py-4 border-b">
-                    <div className="space-y-1">
-                      <div className="text-xs text-gray-500">TXN</div>
+                  {/* Card header */}
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-5 py-3 border-b">
+                    <div className="space-y-0.5">
+                      <div className="text-[10px] uppercase tracking-wide text-gray-500">
+                        TXN
+                      </div>
                       <div className="font-semibold tracking-wide">
                         {t.code ?? "—"}
                       </div>
@@ -389,14 +404,14 @@ export default function TrackPage() {
                     </div>
                   </div>
 
-                  {/* Customer */}
-                  <div className="px-5 pt-4 pb-2 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                    <div className="space-y-1">
+                  {/* Customer block */}
+                  <div className="px-5 pt-3 pb-2 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div className="space-y-0.5">
                       <div className="text-xs text-gray-500">Name</div>
                       <div className="font-medium">{t.name ?? "—"}</div>
                     </div>
 
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       <div className="text-xs text-gray-500">Address</div>
                       <div className="flex items-start gap-2">
                         <MapPin className="h-4 w-4 mt-[2px] text-gray-500" />
@@ -404,7 +419,7 @@ export default function TrackPage() {
                       </div>
                     </div>
 
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       <div className="text-xs text-gray-500">Contact</div>
                       <div className="flex items-center gap-2">
                         <Phone className="h-4 w-4 text-gray-500" />
@@ -412,7 +427,7 @@ export default function TrackPage() {
                       </div>
                     </div>
 
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       <div className="text-xs text-gray-500">Email</div>
                       <div className="flex items-center gap-2">
                         <Mail className="h-4 w-4 text-gray-500" />
@@ -421,101 +436,118 @@ export default function TrackPage() {
                     </div>
                   </div>
 
-                  {/* Orders */}
+                  {/* Orders (expandables) */}
                   {orderList.map((o) => {
                     const deliv = o.truck_delivery_id
                       ? deliveriesById[o.truck_delivery_id]
                       : undefined;
-
                     const rowStatus = deliv?.status ?? o.status ?? "Pending";
 
                     return (
-                      <div key={o.id} className="px-5 pb-5">
-                        <div className="mt-3 mb-2 flex items-center justify-between">
+                      <div key={o.id} className="px-5 pb-4">
+                        {/* Clickable header to toggle details */}
+                        <div
+                          className="mt-2 flex items-center justify-between cursor-pointer hover:bg-gray-50 rounded-lg px-3 py-2"
+                          onClick={() => toggleExpanded(o.id)}
+                        >
                           <div className="text-sm font-semibold text-gray-800">
-                            Order Summary
+                            Order #{o.id}
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-gray-600">
                               Delivery:
                             </span>
                             <DeliveryBadge status={rowStatus} />
+                            <span className="text-xs text-gray-500 select-none">
+                              {expanded[o.id] ? "▲" : "▼"}
+                            </span>
                           </div>
                         </div>
 
-                        {/* Items */}
-                        <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
-                          <table className="w-full text-sm">
-                            <thead className="bg-gray-100">
-                              <tr className="text-gray-700">
-                                <th className="py-2.5 px-3 text-left font-semibold">
-                                  Product
-                                </th>
-                                <th className="py-2.5 px-3 text-left font-semibold">
-                                  Category
-                                </th>
-                                <th className="py-2.5 px-3 text-left font-semibold">
-                                  Subcategory
-                                </th>
-                                <th className="py-2.5 px-3 text-left font-semibold">
-                                  Qty
-                                </th>
-                                <th className="py-2.5 px-3 text-left font-semibold">
-                                  Inv. Status
-                                </th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {(o.order_items ?? []).map((it, idx) => (
-                                <tr
-                                  key={idx}
-                                  className="border-t hover:bg-gray-50/60"
-                                >
-                                  <td className="py-2.5 px-3">
-                                    {it.inventory?.product_name ?? "—"}
-                                  </td>
-                                  <td className="py-2.5 px-3">
-                                    {it.inventory?.category ?? "—"}
-                                  </td>
-                                  <td className="py-2.5 px-3">
-                                    {it.inventory?.subcategory ?? "—"}
-                                  </td>
-                                  <td className="py-2.5 px-3">{it.quantity}</td>
-                                  <td className="py-2.5 px-3">
-                                    {it.inventory?.status ?? "—"}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                        {/* Expandable body */}
+                        {expanded[o.id] && (
+                          <div className="mt-2">
+                            {/* Items table */}
+                            <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
+                              <table className="w-full text-sm">
+                                <thead className="bg-gray-100">
+                                  <tr className="text-gray-700">
+                                    <th className="py-2.5 px-3 text-left font-semibold">
+                                      Product
+                                    </th>
+                                    <th className="py-2.5 px-3 text-left font-semibold">
+                                      Category
+                                    </th>
+                                    <th className="py-2.5 px-3 text-left font-semibold">
+                                      Subcategory
+                                    </th>
+                                    <th className="py-2.5 px-3 text-left font-semibold">
+                                      Qty
+                                    </th>
+                                    <th className="py-2.5 px-3 text-left font-semibold">
+                                      Inv. Status
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(o.order_items ?? []).map((it, idx) => (
+                                    <tr
+                                      key={idx}
+                                      className="border-t hover:bg-gray-50/60"
+                                    >
+                                      <td className="py-2.5 px-3">
+                                        {it.inventory?.product_name ?? "—"}
+                                      </td>
+                                      <td className="py-2.5 px-3">
+                                        {it.inventory?.category ?? "—"}
+                                      </td>
+                                      <td className="py-2.5 px-3">
+                                        {it.inventory?.subcategory ?? "—"}
+                                      </td>
+                                      <td className="py-2.5 px-3">
+                                        {it.quantity}
+                                      </td>
+                                      <td className="py-2.5 px-3">
+                                        {it.inventory?.status ?? "—"}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
 
-                        {/* Delivery details */}
-                        {deliv && (
-                          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                            <p>
-                              <span className="text-gray-500">Schedule:</span>{" "}
-                              {formatPH(deliv.schedule_date)}
-                            </p>
-                            <p>
-                              <span className="text-gray-500">Received:</span>{" "}
-                              {deliv.date_received
-                                ? formatPH(deliv.date_received)
-                                : "Not yet received"}
-                            </p>
-                            <p>
-                              <span className="text-gray-500">Driver:</span>{" "}
-                              {deliv.driver ?? "—"}
-                            </p>
-                            <p className="md:col-span-2">
-                              <span className="text-gray-500">
-                                Participants:
-                              </span>{" "}
-                              {Array.isArray(deliv.participants) &&
-                              deliv.participants.length > 0
-                                ? deliv.participants.join(", ")
-                                : "—"}
-                            </p>
+                            {/* Delivery details */}
+                            {deliv && (
+                              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                                <p>
+                                  <span className="text-gray-500">
+                                    Schedule:
+                                  </span>{" "}
+                                  {formatPH(deliv.schedule_date)}
+                                </p>
+                                <p>
+                                  <span className="text-gray-500">
+                                    Received:
+                                  </span>{" "}
+                                  {deliv.date_received
+                                    ? formatPH(deliv.date_received)
+                                    : "Not yet received"}
+                                </p>
+                                <p>
+                                  <span className="text-gray-500">Driver:</span>{" "}
+                                  {deliv.driver ?? "—"}
+                                </p>
+                                <p className="md:col-span-2">
+                                  <span className="text-gray-500">
+                                    Participants:
+                                  </span>{" "}
+                                  {Array.isArray(deliv.participants) &&
+                                  deliv.participants.length > 0
+                                    ? deliv.participants.join(", ")
+                                    : "—"}
+                                </p>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

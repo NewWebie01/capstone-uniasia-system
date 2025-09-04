@@ -792,7 +792,22 @@ export default function CustomerInventoryPage() {
   /* --------------------------------- UI --------------------------------- */
   return (
     <div className="p-4">
-      <motion.h1 className="text-3xl font-bold mb-4">Product Catalog</motion.h1>
+      {/* Page Title */}
+      <header className="h-14 flex items-center gap-3">
+        <motion.h1
+          className="text-3xl font-bold tracking-tight text-neutral-800"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.25 }}
+        >
+          Product Catalog
+        </motion.h1>
+      </header>
+
+      <p className="text-neutral-500 mb-4 text-sm">
+        Browse available products, check categories, and add items to your cart
+        for ordering.
+      </p>
 
       {/* Controls: Search + Category Filter */}
       <div className="mb-4 flex flex-col sm:flex-row gap-3 sm:items-center">
@@ -886,7 +901,7 @@ export default function CustomerInventoryPage() {
                 ✕
               </button>
             </div>
-            <div className="p-4">
+            <div className="pl-0 pr-4 pt-0">
               {imageModalItem.image_url ? (
                 <img
                   src={imageModalItem.image_url}
