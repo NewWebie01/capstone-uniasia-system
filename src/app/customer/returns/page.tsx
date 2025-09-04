@@ -1,7 +1,7 @@
 // src/app/customer/returns/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 
@@ -80,7 +80,7 @@ const normalizeReturns = (rows: any[]): ReturnRow[] =>
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
   id: number; // order_items.id is integer
-  quantity: number;
+  quantity: number; // original ordered quantity
   price: number | null;
   inventory_id: number | null;
   inventory?: {
@@ -117,9 +117,35 @@ export default function CustomerReturnsPage() {
   // Data
   const [txns, setTxns] = useState<CustomerTx[]>([]);
   const [returnsList, setReturnsList] = useState<ReturnRow[]>([]);
-  const [returnedItemIds, setReturnedItemIds] = useState<Set<number>>(
-    new Set()
-  );
+
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const toggleExpanded = (id: string) =>
+    setExpanded((p) => ({ ...p, [id]: !p[id] }));
+
+  const StatusChip = ({ status }: { status: string }) => {
+    const s = (status || "").toLowerCase();
+    const styles =
+      s === "approved"
+        ? "bg-green-100 text-green-700 border-green-200"
+        : s === "rejected"
+        ? "bg-red-100 text-red-700 border-red-200"
+        : s === "processing" || s === "review"
+        ? "bg-blue-100 text-blue-700 border-blue-200"
+        : "bg-gray-100 text-gray-700 border-gray-200"; // requested, etc.
+    return (
+      <span
+        className={`inline-block px-2 py-0.5 rounded-full text-xs border ${styles}`}
+      >
+        {status || "—"}
+      </span>
+    );
+  };
+
+  // Track how many units already returned per order_item_id
+  const [returnedQtyByItem, setReturnedQtyByItem] = useState<
+    Record<number, number>
+  >({});
 
   // Delivery status per truck_delivery_id
   const [deliveryStatusById, setDeliveryStatusById] = useState<
@@ -134,6 +160,7 @@ export default function CustomerReturnsPage() {
 
   // Modal state
   const [open, setOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [sel, setSel] = useState<{
     txn?: CustomerTx;
@@ -144,6 +171,26 @@ export default function CustomerReturnsPage() {
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
   const [files, setFiles] = useState<FileList | null>(null);
+
+  // Local previews for confirmation modal (object URLs)
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  useEffect(() => {
+    previewUrls.forEach((u) => URL.revokeObjectURL(u));
+    if (files && files.length > 0) {
+      const urls = Array.from(files)
+        .slice(0, 5)
+        .map((f) => URL.createObjectURL(f));
+      setPreviewUrls(urls);
+    } else {
+      setPreviewUrls([]);
+    }
+    return () => {
+      try {
+        previewUrls.forEach((u) => URL.revokeObjectURL(u));
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files]);
 
   /* -------------------------- Initial load (user) ------------------------- */
   useEffect(() => {
@@ -159,7 +206,7 @@ export default function CustomerReturnsPage() {
         if (!email) {
           setTxns([]);
           setReturnsList([]);
-          setReturnedItemIds(new Set());
+          setReturnedQtyByItem({});
           setDeliveryStatusById({});
           deliveryIdsRef.current = new Set();
           orderIdsRef.current = new Set();
@@ -314,7 +361,7 @@ export default function CustomerReturnsPage() {
     const orderIds = Array.from(orderIdsRef.current);
     if (orderIds.length === 0) {
       setReturnsList([]);
-      setReturnedItemIds(new Set());
+      setReturnedQtyByItem({});
       return;
     }
 
@@ -343,13 +390,17 @@ export default function CustomerReturnsPage() {
     const normalized = normalizeReturns(rtns ?? []);
     setReturnsList(normalized);
 
-    const s = new Set<number>();
-    normalized.forEach((r) =>
+    // Build returned quantity map per order_item_id
+    const qtyMap: Record<number, number> = {};
+    normalized.forEach((r) => {
       r.return_items.forEach((ri) => {
-        if (typeof ri.order_item_id === "number") s.add(ri.order_item_id);
-      })
-    );
-    setReturnedItemIds(s);
+        if (typeof ri.order_item_id === "number") {
+          qtyMap[ri.order_item_id] =
+            (qtyMap[ri.order_item_id] || 0) + (ri.quantity || 0);
+        }
+      });
+    });
+    setReturnedQtyByItem(qtyMap);
   };
 
   /* --------------------- Derived: eligible items --------------------- */
@@ -369,13 +420,17 @@ export default function CustomerReturnsPage() {
         if (!delivered || !within7) continue;
 
         for (const it of o.order_items ?? []) {
-          if (returnedItemIds.has(it.id)) continue;
-          out.push({ txn: t, order: o, item: it });
+          const alreadyReturned = returnedQtyByItem[it.id] || 0;
+          const remaining = Math.max(0, (it.quantity || 0) - alreadyReturned);
+          if (remaining <= 0) continue;
+
+          // Push a copy where quantity reflects the remaining eligible qty
+          out.push({ txn: t, order: o, item: { ...it, quantity: remaining } });
         }
       }
     }
     return out;
-  }, [txns, returnedItemIds, deliveryStatusById]);
+  }, [txns, returnedQtyByItem, deliveryStatusById]);
 
   /* -------- Group by TXN code -------- */
   const eligibleByTxn = useMemo(() => {
@@ -411,12 +466,41 @@ export default function CustomerReturnsPage() {
     setNote("");
     setFiles(null);
     setOpen(true);
+    setConfirmOpen(false);
   };
 
   const generateReturnCode = () => {
     const yyyymmdd = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     const rnd = Math.random().toString(36).slice(2, 8).toUpperCase();
     return `RTN-${yyyymmdd}-${rnd}`;
+  };
+
+  // First-step validation + open confirmation
+  const openConfirmModal = () => {
+    if (!sel.item) return;
+
+    const maxQty = sel.item.quantity ?? 1; // remaining qty shown in modal
+    const q = Number(qty) || 0;
+
+    // REQUIRED: reason, qty within bounds, note non-empty, at least 1 photo
+    if (!reason) {
+      toast.error("Please select a reason for the return.");
+      return;
+    }
+    if (q < 1 || q > maxQty) {
+      toast.error(`Quantity must be between 1 and ${maxQty}.`);
+      return;
+    }
+    if (!note || !note.trim()) {
+      toast.error("Please provide notes describing the issue.");
+      return;
+    }
+    if (!files || files.length === 0) {
+      toast.error("Please upload at least one photo (up to 5).");
+      return;
+    }
+
+    setConfirmOpen(true);
   };
 
   const submitReturn = async () => {
@@ -450,7 +534,7 @@ export default function CustomerReturnsPage() {
         .single();
       if (e1 || !rtn) throw e1 || new Error("Failed to create return");
 
-      // 2) upload photos (optional)
+      // 2) upload photos (required ≥1, up to 5)
       let urls: string[] = [];
       if (files && files.length > 0) {
         const bucket = supabase.storage.from("returns");
@@ -467,6 +551,11 @@ export default function CustomerReturnsPage() {
         }
         urls = uploaded;
       }
+      if (urls.length === 0) {
+        throw new Error(
+          "Photo upload failed. Please attach at least one image."
+        );
+      }
 
       // 3) return_items
       const { error: e2 } = await supabase.from("return_items").insert([
@@ -482,8 +571,14 @@ export default function CustomerReturnsPage() {
 
       toast.success("Return submitted. We’ll review it shortly.");
 
-      // Optimistic UI
-      setReturnedItemIds((prev) => new Set(prev).add(item.id));
+      // Optimistic updates:
+      // - update returned qty map for this order_item
+      setReturnedQtyByItem((prev) => ({
+        ...prev,
+        [item.id]: (prev[item.id] || 0) + qty,
+      }));
+
+      // - add to returns list (so history shows immediately)
       setReturnsList((prev) => [
         {
           id: String(rtn.id),
@@ -505,6 +600,8 @@ export default function CustomerReturnsPage() {
         ...prev,
       ]);
 
+      // Close both modals
+      setConfirmOpen(false);
       setOpen(false);
     } catch (e: any) {
       toast.error(e?.message ?? "Failed to submit return.");
@@ -566,7 +663,7 @@ export default function CustomerReturnsPage() {
                       <tr>
                         <th className="py-2 px-3 text-left">Product</th>
                         <th className="py-2 px-3 text-left">Order Date</th>
-                        <th className="py-2 px-3 text-left">Qty</th>
+                        <th className="py-2 px-3 text-left">Remaining Qty</th>
                         <th className="py-2 px-3 text-right">Action</th>
                       </tr>
                     </thead>
@@ -580,7 +677,8 @@ export default function CustomerReturnsPage() {
                           <td className="py-2 px-3">{item.quantity}</td>
                           <td className="py-2 px-3 text-right">
                             <button
-                              className="px-3 py-1 rounded-xl bg-black text-white hover:opacity-90"
+                              className="px-3 py-1 rounded-xl text-white hover:opacity-90"
+                              style={{ background: "#000" }}
                               onClick={() => openModal({ txn, order, item })}
                             >
                               Return / Report issue
@@ -595,7 +693,7 @@ export default function CustomerReturnsPage() {
             ))
           )}
 
-          {/* -------- My Returns grouped by TXN -------- */}
+          {/* -------- My Returns grouped by TXN (clean, per-TXN tables) -------- */}
           <div className="bg-white border rounded-2xl p-4 shadow-sm">
             <h2 className="font-semibold text-lg mb-2">My Return Requests</h2>
 
@@ -605,99 +703,140 @@ export default function CustomerReturnsPage() {
               </p>
             ) : (
               Object.entries(returnsByTxn).map(([txnCode, list]) => (
-                <div key={txnCode} className="mb-5 last:mb-0">
-                  <div className="text-sm font-medium text-gray-700 mb-2">
-                    TXN: <span className="tracking-wider">{txnCode}</span>
+                <div
+                  key={txnCode}
+                  className="mb-6 last:mb-0 rounded-xl border bg-white overflow-hidden"
+                >
+                  <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+                    <div className="text-sm">
+                      <span className="text-gray-600 mr-1">TXN:</span>
+                      <span className="tracking-wider font-medium">
+                        {txnCode}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {list.length} return(s)
+                    </div>
                   </div>
 
-                  <div className="border rounded bg-white overflow-hidden">
+                  <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-100">
-                        <tr>
-                          <th className="py-2 px-3 text-left">Return Code</th>
-                          <th className="py-2 px-3 text-left">Status</th>
-                          <th className="py-2 px-3 text-left">Filed</th>
+                        <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
+                          <th>Return Code</th>
+                          <th>Filed</th>
+                          <th>Status</th>
+                          <th className="text-center">Items</th>
+                          <th className="text-right">Details</th>
                         </tr>
                       </thead>
-                      <tbody>
-                        {list.map((rtn) => (
-                          <tr key={rtn.id} className="border-t align-top">
-                            <td className="py-2 px-3 font-medium tracking-wider">
-                              {rtn.code}
-                            </td>
-                            <td className="py-2 px-3 capitalize">
-                              {rtn.status}
-                            </td>
-                            <td className="py-2 px-3">
-                              {formatPH(rtn.created_at)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Detailed items for each return (optional; keep existing layout) */}
-                  <div className="mt-2 space-y-3">
-                    {list.map((rtn) => (
-                      <div key={rtn.id} className="border rounded bg-gray-50">
-                        <div className="px-3 py-2 text-sm text-gray-700">
-                          <span className="font-medium">Reason:</span>{" "}
-                          {rtn.reason}
-                          {rtn.note ? (
-                            <>
-                              {" "}
-                              • <span className="font-medium">Note:</span>{" "}
-                              {rtn.note}
-                            </>
-                          ) : null}
-                        </div>
-                        <div className="border-t overflow-x-auto">
-                          <table className="w-full text-sm">
-                            <thead className="bg-gray-100">
-                              <tr>
-                                <th className="py-2 px-3 text-left">Product</th>
-                                <th className="py-2 px-3 text-left">Qty</th>
-                                <th className="py-2 px-3 text-left">Photos</th>
+                      <tbody className="divide-y">
+                        {list.map((rtn) => {
+                          const isOpen = !!expanded[rtn.id];
+                          const totalItems = rtn.return_items?.length ?? 0;
+                          return (
+                            <React.Fragment key={rtn.id}>
+                              <tr className="hover:bg-gray-50">
+                                <td className="py-2 px-3 font-medium tracking-wider">
+                                  {rtn.code}
+                                </td>
+                                <td className="py-2 px-3">
+                                  {formatPH(rtn.created_at)}
+                                </td>
+                                <td className="py-2 px-3">
+                                  <StatusChip status={rtn.status} />
+                                </td>
+                                <td className="py-2 px-3 text-center">
+                                  {totalItems}
+                                </td>
+                                <td className="py-2 px-3 text-right">
+                                  <button
+                                    onClick={() => toggleExpanded(rtn.id)}
+                                    className="text-xs px-2 py-1 rounded-lg border hover:bg-gray-50"
+                                  >
+                                    {isOpen ? "Hide" : "View"}
+                                  </button>
+                                </td>
                               </tr>
-                            </thead>
-                            <tbody>
-                              {rtn.return_items.map((ri, idx) => (
-                                <tr key={idx} className="border-t">
-                                  <td className="py-2 px-3">
-                                    {ri.inventory?.product_name ?? "—"}
-                                  </td>
-                                  <td className="py-2 px-3">{ri.quantity}</td>
-                                  <td className="py-2 px-3">
-                                    {ri.photo_urls &&
-                                    ri.photo_urls.length > 0 ? (
-                                      <div className="flex gap-2 flex-wrap">
-                                        {ri.photo_urls.map((u, i) => (
-                                          <a
-                                            key={i}
-                                            href={u}
-                                            target="_blank"
-                                            className="inline-block"
-                                          >
-                                            <img
-                                              src={u}
-                                              alt="evidence"
-                                              className="w-12 h-12 object-cover rounded border"
-                                            />
-                                          </a>
-                                        ))}
-                                      </div>
-                                    ) : (
-                                      "—"
-                                    )}
+
+                              {/* Row details */}
+                              {isOpen && (
+                                <tr className="bg-gray-50">
+                                  <td colSpan={5} className="px-3 py-3">
+                                    <div className="rounded-lg border bg-white overflow-x-auto">
+                                      <table className="w-full text-sm">
+                                        <thead className="bg-gray-100">
+                                          <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
+                                            <th>Product</th>
+                                            <th className="w-24">Qty</th>
+                                            <th>Photos</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y">
+                                          {rtn.return_items.map((ri, idx) => (
+                                            <tr key={idx} className="align-top">
+                                              <td className="py-2 px-3">
+                                                {ri.inventory?.product_name ??
+                                                  "—"}
+                                              </td>
+                                              <td className="py-2 px-3">
+                                                {ri.quantity}
+                                              </td>
+                                              <td className="py-2 px-3">
+                                                {ri.photo_urls?.length ? (
+                                                  <div className="flex gap-2 flex-wrap">
+                                                    {ri.photo_urls.map(
+                                                      (u, i) => (
+                                                        <a
+                                                          key={i}
+                                                          href={u}
+                                                          target="_blank"
+                                                          className="inline-block"
+                                                        >
+                                                          <img
+                                                            src={u}
+                                                            alt="evidence"
+                                                            className="w-12 h-12 object-cover rounded border"
+                                                          />
+                                                        </a>
+                                                      )
+                                                    )}
+                                                  </div>
+                                                ) : (
+                                                  "—"
+                                                )}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+
+                                    {/* reason / note row */}
+                                    <div className="text-xs text-gray-600 mt-2">
+                                      <span className="font-medium">
+                                        Reason:
+                                      </span>{" "}
+                                      {rtn.reason}
+                                      {rtn.note ? (
+                                        <>
+                                          {" "}
+                                          &middot;{" "}
+                                          <span className="font-medium">
+                                            Note:
+                                          </span>{" "}
+                                          {rtn.note}
+                                        </>
+                                      ) : null}
+                                    </div>
                                   </td>
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    ))}
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               ))
@@ -706,7 +845,7 @@ export default function CustomerReturnsPage() {
         </>
       )}
 
-      {/* Modal */}
+      {/* Modal: Create Return */}
       {open && sel.item && sel.order && sel.txn && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl ring-1 ring-black/5 p-6">
@@ -717,7 +856,9 @@ export default function CustomerReturnsPage() {
 
             <div className="mt-4 space-y-3">
               <div>
-                <label className="block text-sm mb-1">Reason</label>
+                <label className="block text-sm mb-1">
+                  Reason <span className="text-red-500">*</span>
+                </label>
                 <select
                   className="border px-3 py-2 rounded w-full"
                   value={reason}
@@ -733,7 +874,8 @@ export default function CustomerReturnsPage() {
 
               <div>
                 <label className="block text-sm mb-1">
-                  Quantity (max {sel.item.quantity})
+                  Quantity (max {sel.item.quantity}){" "}
+                  <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="number"
@@ -756,7 +898,9 @@ export default function CustomerReturnsPage() {
               </div>
 
               <div>
-                <label className="block text-sm mb-1">Notes (optional)</label>
+                <label className="block text-sm mb-1">
+                  Notes <span className="text-red-500">*</span>
+                </label>
                 <textarea
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
@@ -768,7 +912,8 @@ export default function CustomerReturnsPage() {
 
               <div>
                 <label className="block text-sm mb-1">
-                  Photos (optional, up to 5)
+                  Photos (required, up to 5){" "}
+                  <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="file"
@@ -789,11 +934,11 @@ export default function CustomerReturnsPage() {
                 Cancel
               </button>
               <button
-                onClick={submitReturn}
+                onClick={openConfirmModal}
                 className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition"
                 disabled={submitting}
               >
-                {submitting ? "Submitting..." : "Submit return"}
+                Review & Submit
               </button>
             </div>
 
@@ -801,6 +946,83 @@ export default function CustomerReturnsPage() {
               Returns are accepted within 7 days of purchase for delivered
               orders. We’ll review your request and contact you with the next
               steps.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirmation (second step) */}
+      {confirmOpen && sel.item && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl ring-1 ring-black/5 p-6">
+            <h3 className="text-xl font-semibold">Confirm Return Details</h3>
+
+            <div className="mt-4 space-y-2 text-sm">
+              <div className="flex justify-between gap-4">
+                <span className="text-gray-600">Product</span>
+                <span className="font-medium text-right">
+                  {sel.item.inventory?.product_name ?? "—"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-gray-600">Reason</span>
+                <span className="font-medium text-right">{reason}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-gray-600">Quantity</span>
+                <span className="font-medium text-right">{qty}</span>
+              </div>
+              {note ? (
+                <div className="flex justify-between gap-4">
+                  <span className="text-gray-600">Note</span>
+                  <span className="font-medium text-right whitespace-pre-wrap">
+                    {note}
+                  </span>
+                </div>
+              ) : null}
+              <div className="flex justify-between gap-4">
+                <span className="text-gray-600">Photos</span>
+                <span className="font-medium text-right">
+                  {files ? Math.min(files.length, 5) : 0}
+                </span>
+              </div>
+
+              {previewUrls.length > 0 && (
+                <div className="pt-2">
+                  <div className="text-gray-600 mb-2">Preview</div>
+                  <div className="flex gap-2 flex-wrap">
+                    {previewUrls.map((u, i) => (
+                      <img
+                        key={i}
+                        src={u}
+                        alt={`preview-${i}`}
+                        className="w-14 h-14 object-cover rounded border"
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => setConfirmOpen(false)}
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
+                disabled={submitting}
+              >
+                Back
+              </button>
+              <button
+                onClick={submitReturn}
+                className="px-4 py-2 rounded-xl bg-black text-white shadow-lg hover:opacity-90 active:translate-y-px transition"
+                disabled={submitting}
+              >
+                {submitting ? "Submitting..." : "Confirm & Submit"}
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 mt-3">
+              By confirming, you’ll submit this return request for review.
             </p>
           </div>
         </div>
