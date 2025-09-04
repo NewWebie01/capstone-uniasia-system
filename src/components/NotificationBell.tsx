@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { BellIcon } from "@heroicons/react/24/solid";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
@@ -30,7 +30,9 @@ export default function NotificationBell() {
   const supabase = createClientComponentClient();
   const router = useRouter();
 
-  // --- Realtime for new orders ---
+  // ✅ Deduplication guard
+  const lastOrderId = useRef<string | null>(null);
+
   useEffect(() => {
     const channel = supabase
       .channel("orders_channel")
@@ -42,6 +44,10 @@ export default function NotificationBell() {
           table: "orders",
         },
         async (payload) => {
+          // 🚫 Skip duplicate events
+          if (payload.new.id === lastOrderId.current) return;
+          lastOrderId.current = payload.new.id;
+
           const { data, error } = await supabase
             .from("orders")
             .select(
@@ -102,7 +108,6 @@ export default function NotificationBell() {
     setIsModalOpen(true);
   };
 
-  // --- Click card: mark as read & go to sales page for order ---
   const handleGoToSales = (orderId: string) => {
     setOrders((prev) =>
       prev.map((order) =>
@@ -111,7 +116,6 @@ export default function NotificationBell() {
     );
     setIsModalOpen(false);
     router.push(`/sales?order=${orderId}`);
-    // For new tab: window.open(`/sales?order=${orderId}`, "_blank");
   };
 
   return (
