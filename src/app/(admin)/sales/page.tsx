@@ -5,10 +5,8 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
-import PageLoader from "@/components/PageLoader"; 
+import PageLoader from "@/components/PageLoader";
 import { toast } from "sonner";
-
-
 
 type InventoryItem = {
   id: number;
@@ -85,7 +83,7 @@ function SalesPageContent() {
   const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
     null
   );
-  
+
   const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
@@ -100,7 +98,9 @@ function SalesPageContent() {
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
-  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null);
+  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(
+    null
+  );
   const [salesman, setSalesman] = useState("");
   const [forwarder, setForwarder] = useState("");
   const resetSalesForm = () => {
@@ -299,20 +299,19 @@ function SalesPageContent() {
       `
       )
       .order("date_created", { ascending: false });
-   if (!error && data) {
-  const formatted = data.map((o: any) => ({
-    ...o,
-    customers: Array.isArray(o.customer) ? o.customer[0] : o.customer,
-    order_items: o.order_items.map((item: any) => ({
-      ...item,
-      inventory: Array.isArray(item.inventory)
-        ? item.inventory[0]
-        : item.inventory,
-    })),
-  }));
-  setOrders(formatted);
-}
-
+    if (!error && data) {
+      const formatted = data.map((o: any) => ({
+        ...o,
+        customers: Array.isArray(o.customer) ? o.customer[0] : o.customer,
+        order_items: o.order_items.map((item: any) => ({
+          ...item,
+          inventory: Array.isArray(item.inventory)
+            ? item.inventory[0]
+            : item.inventory,
+        })),
+      }));
+      setOrders(formatted);
+    }
   };
 
   // Fetch Fast & Slow Moving Products from VIEW
@@ -373,7 +372,6 @@ function SalesPageContent() {
       resetSalesForm();
     }
   }, [showModal, showSalesOrderModal]);
-
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
@@ -519,13 +517,19 @@ function SalesPageContent() {
           throw new Error("Insufficient stock");
         }
 
-        await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
+        await supabase
+          .from("inventory")
+          .update({ quantity: remaining })
+          .eq("id", invId);
 
         await supabase.from("sales").insert([
           {
             inventory_id: invId,
             quantity_sold: editedQuantities[i],
-            amount: editedQuantities[i] * oi.price * (1 + (editedDiscounts[i] || 0) / 100),
+            amount:
+              editedQuantities[i] *
+              oi.price *
+              (1 + (editedDiscounts[i] || 0) / 100),
             date: new Date().toISOString(),
           },
         ]);
@@ -538,10 +542,14 @@ function SalesPageContent() {
         sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
         po_number: poNumber,
         salesman: repName,
-        terms: isCredit ? `Net ${numberOfTerms} Monthly` : selectedOrder.customers.payment_type,
+        terms: isCredit
+          ? `Net ${numberOfTerms} Monthly`
+          : selectedOrder.customers.payment_type,
         payment_terms: isCredit ? numberOfTerms : null,
         interest_percent: isCredit ? interestPercent : null,
-        grand_total_with_interest: isCredit ? getGrandTotalWithInterest() : null,
+        grand_total_with_interest: isCredit
+          ? getGrandTotalWithInterest()
+          : null,
         per_term_amount: isCredit ? getPerTermAmount() : null,
         forwarder,
         processed_by_email: processor?.email ?? "unknown",
@@ -550,7 +558,10 @@ function SalesPageContent() {
         processed_at: new Date().toISOString(),
       } as const;
 
-      const { error: ordersErr } = await supabase.from("orders").update(updateFields).eq("id", selectedOrder.id);
+      const { error: ordersErr } = await supabase
+        .from("orders")
+        .update(updateFields)
+        .eq("id", selectedOrder.id);
       if (ordersErr) throw ordersErr;
 
       try {
@@ -583,7 +594,10 @@ function SalesPageContent() {
           },
         ]);
       } catch (err) {
-        console.error("Failed to log activity for sales order completion:", err);
+        console.error(
+          "Failed to log activity for sales order completion:",
+          err
+        );
       }
 
       setShowSalesOrderModal(false);
@@ -591,14 +605,17 @@ function SalesPageContent() {
       setShowFinalConfirm(false);
       resetSalesForm();
       setSelectedOrder(null);
-      setPickingStatus(prev => prev.filter(p => p.orderId !== selectedOrder.id));
+      setPickingStatus((prev) =>
+        prev.filter((p) => p.orderId !== selectedOrder.id)
+      );
 
       await Promise.all([fetchOrders(), fetchItems()]);
       toast.success("Order successfully completed!");
-
     } catch (err: any) {
       console.error("Failed completing order:", err);
-      toast.error(`Failed to complete order: ${err?.message ?? "Unexpected error"}`);
+      toast.error(
+        `Failed to complete order: ${err?.message ?? "Unexpected error"}`
+      );
     } finally {
       setIsCompletingOrder(false);
     }
@@ -620,8 +637,8 @@ function SalesPageContent() {
     setShowFinalConfirm(false);
     resetSalesForm();
     setSelectedOrder(null);
-    setPickingStatus(prev =>
-      selectedOrder ? prev.filter(p => p.orderId !== selectedOrder.id) : prev
+    setPickingStatus((prev) =>
+      selectedOrder ? prev.filter((p) => p.orderId !== selectedOrder.id) : prev
     );
   };
 
@@ -651,14 +668,20 @@ function SalesPageContent() {
 
   const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
 
-
   // --- RENDER ---
   return (
     <div className="p-6">
       {isCompletingOrder && <PageLoader label="Completing order…" />}
-      <motion.h1 className="text-3xl font-bold mb-4">
-        Sales Processing
-      </motion.h1>
+      {/* Header */}
+      <div className="mb-6 -mt-4">
+        <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
+          Sales Processing
+        </h1>
+        <p className="text-sm text-gray-500 mt-2">
+          Manage customer orders, picking lists, and sales confirmations.
+        </p>
+      </div>
+
       <input
         type="text"
         placeholder="Search products..."
@@ -995,36 +1018,37 @@ function SalesPageContent() {
             </tr>
           </thead>
           <tbody>
-  {items
-    .filter((it) =>
-      it.product_name
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase())
-    )
-    .map((it) => (
-      <tr
-        key={it.id}
-        className={
-          "border-b hover:bg-gray-100 " +
-          (it.quantity === 0 ? "bg-red-100 text-red-700 font-semibold" : "")
-        }
-      >
-        <td className="py-2 px-4">{it.sku}</td>
-        <td className="py-2 px-4">{it.product_name}</td>
-        <td className="py-2 px-4">{it.category}</td>
-        <td className="py-2 px-4">{it.subcategory}</td>
-        <td className="py-2 px-4">{it.unit}</td>
-        <td className="py-2 px-4 text-right">{it.quantity}</td>
-        <td className="py-2 px-4 text-right">
-          ₱{it.unit_price?.toLocaleString()}
-        </td>
-        <td className="py-2 px-4 text-right">
-          ₱{(it.unit_price * it.quantity).toLocaleString()}
-        </td>
-      </tr>
-    ))}
-</tbody>
-
+            {items
+              .filter((it) =>
+                it.product_name
+                  .toLowerCase()
+                  .includes(searchQuery.toLowerCase())
+              )
+              .map((it) => (
+                <tr
+                  key={it.id}
+                  className={
+                    "border-b hover:bg-gray-100 " +
+                    (it.quantity === 0
+                      ? "bg-red-100 text-red-700 font-semibold"
+                      : "")
+                  }
+                >
+                  <td className="py-2 px-4">{it.sku}</td>
+                  <td className="py-2 px-4">{it.product_name}</td>
+                  <td className="py-2 px-4">{it.category}</td>
+                  <td className="py-2 px-4">{it.subcategory}</td>
+                  <td className="py-2 px-4">{it.unit}</td>
+                  <td className="py-2 px-4 text-right">{it.quantity}</td>
+                  <td className="py-2 px-4 text-right">
+                    ₱{it.unit_price?.toLocaleString()}
+                  </td>
+                  <td className="py-2 px-4 text-right">
+                    ₱{(it.unit_price * it.quantity).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+          </tbody>
         </table>
       </div>
 
@@ -1045,18 +1069,21 @@ function SalesPageContent() {
             );
             return (
               <div
-  key={order.id}
-  id={`order-card-${order.id}`} 
-  ref={el => { orderRefs.current[order.id] = el; }}
-  className={`border p-4 mb-4 rounded shadow bg-white text-base transition-all duration-500 ${
-    isAccepted ? "border-blue-600 border-2" : ""
-  }`}
->
+                key={order.id}
+                id={`order-card-${order.id}`}
+                ref={(el) => {
+                  orderRefs.current[order.id] = el;
+                }}
+                className={`border p-4 mb-4 rounded shadow bg-white text-base transition-all duration-500 ${
+                  isAccepted ? "border-blue-600 border-2" : ""
+                }`}
+              >
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-bold text-xl">
                     Transaction ID:{" "}
-                  <span className="text-blue-700">{order.customers.code}</span>
-
+                    <span className="text-blue-700">
+                      {order.customers.code}
+                    </span>
                   </span>
                   <span
                     className={`font-bold px-3 py-1 rounded text-base ml-4 ${
@@ -1118,14 +1145,14 @@ function SalesPageContent() {
                             Accept Order
                           </button>
                           <button
-                         onClick={() => {
-                     setShowRejectConfirm(true);
-                        setOrderToReject(order);
-                        }}
-                           className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
-                      >
+                            onClick={() => {
+                              setShowRejectConfirm(true);
+                              setOrderToReject(order);
+                            }}
+                            className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
+                          >
                             Reject Order
-                        </button>
+                          </button>
                         </>
                       )}
                       {isAccepted && (
@@ -1211,303 +1238,357 @@ function SalesPageContent() {
       {/* --- MODALS: Picking List, Sales Order, Final Confirmation --- */}
 
       {/* Picking List Modal */}
-     {showModal && selectedOrder && (() => {
-  // 👇 Place hasZeroStock here (inside your function component, before return is fine too)
-  const hasZeroStock = selectedOrder.order_items.some(
-    (item) => item.inventory.quantity === 0
-  );
+      {showModal &&
+        selectedOrder &&
+        (() => {
+          // 👇 Place hasZeroStock here (inside your function component, before return is fine too)
+          const hasZeroStock = selectedOrder.order_items.some(
+            (item) => item.inventory.quantity === 0
+          );
 
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
-      <div className="bg-white rounded-xl shadow-2xl w-[96vw] max-w-[1800px] mx-auto flex flex-col px-10 py-8 text-[15px] mt-16">
-        {/* PICKING LIST MODAL CONTENT */}
-        <h2 className="text-3xl font-bold mb-6 text-center text-gray-900 tracking-wide">
-          Picking List
-        </h2>
+          return (
+            <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
+              <div className="bg-white rounded-xl shadow-2xl w-[96vw] max-w-[1800px] mx-auto flex flex-col px-10 py-8 text-[15px] mt-16">
+                {/* PICKING LIST MODAL CONTENT */}
+                <h2 className="text-3xl font-bold mb-6 text-center text-gray-900 tracking-wide">
+                  Picking List
+                </h2>
 
-        {/* Customer & Payment Info */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-          <div className="bg-gray-50 border rounded-xl p-5 shadow-sm">
-            <h3 className="text-lg font-semibold text-gray-700 mb-3">
-              Customer Details
-            </h3>
-            <p><span className="font-bold">Name:</span> {selectedOrder.customers.name}</p>
-            <p><span className="font-bold">Email:</span> {selectedOrder.customers.email}</p>
-            <p><span className="font-bold">Phone:</span> {selectedOrder.customers.phone}</p>
-            <p><span className="font-bold">Address:</span> {selectedOrder.customers.address}</p>
-            {selectedOrder.customers.area && (
-              <p><span className="font-bold">Area:</span> {selectedOrder.customers.area}</p>
-            )}
-          </div>
-          <div className="bg-gray-50 border rounded-xl p-5 shadow-sm flex flex-col gap-3">
-            <h3 className="text-lg font-semibold text-gray-700">
-              Payment & Totals
-            </h3>
-            <div>
-              <span className="font-semibold">Total: </span>
-              <span className="text-2xl font-bold text-green-700">
-                ₱{computedOrderTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-              </span>
-            </div>
-            <div>
-              <span className="font-semibold">Payment Type:</span>{" "}
-              <span className={
-                selectedOrder.customers.payment_type === "Credit"
-                  ? "font-bold text-blue-600"
-                  : selectedOrder.customers.payment_type === "Cash"
-                  ? "font-bold text-green-600"
-                  : "font-bold text-orange-500"
-              }>
-                {selectedOrder.customers.payment_type || "N/A"}
-              </span>
-            </div>
-            {selectedOrder.customers.payment_type === "Credit" && (
-              <>
-                <div>
-                  <label className="font-semibold mr-2">Terms:</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={numberOfTerms}
-                    onChange={e => setNumberOfTerms(Math.max(1, Number(e.target.value)))}
-                    className="border rounded px-2 py-1 w-20 text-center"
-                  />
+                {/* Customer & Payment Info */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                  <div className="bg-gray-50 border rounded-xl p-5 shadow-sm">
+                    <h3 className="text-lg font-semibold text-gray-700 mb-3">
+                      Customer Details
+                    </h3>
+                    <p>
+                      <span className="font-bold">Name:</span>{" "}
+                      {selectedOrder.customers.name}
+                    </p>
+                    <p>
+                      <span className="font-bold">Email:</span>{" "}
+                      {selectedOrder.customers.email}
+                    </p>
+                    <p>
+                      <span className="font-bold">Phone:</span>{" "}
+                      {selectedOrder.customers.phone}
+                    </p>
+                    <p>
+                      <span className="font-bold">Address:</span>{" "}
+                      {selectedOrder.customers.address}
+                    </p>
+                    {selectedOrder.customers.area && (
+                      <p>
+                        <span className="font-bold">Area:</span>{" "}
+                        {selectedOrder.customers.area}
+                      </p>
+                    )}
+                  </div>
+                  <div className="bg-gray-50 border rounded-xl p-5 shadow-sm flex flex-col gap-3">
+                    <h3 className="text-lg font-semibold text-gray-700">
+                      Payment & Totals
+                    </h3>
+                    <div>
+                      <span className="font-semibold">Total: </span>
+                      <span className="text-2xl font-bold text-green-700">
+                        ₱
+                        {computedOrderTotal.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="font-semibold">Payment Type:</span>{" "}
+                      <span
+                        className={
+                          selectedOrder.customers.payment_type === "Credit"
+                            ? "font-bold text-blue-600"
+                            : selectedOrder.customers.payment_type === "Cash"
+                            ? "font-bold text-green-600"
+                            : "font-bold text-orange-500"
+                        }
+                      >
+                        {selectedOrder.customers.payment_type || "N/A"}
+                      </span>
+                    </div>
+                    {selectedOrder.customers.payment_type === "Credit" && (
+                      <>
+                        <div>
+                          <label className="font-semibold mr-2">Terms:</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={numberOfTerms}
+                            onChange={(e) =>
+                              setNumberOfTerms(
+                                Math.max(1, Number(e.target.value))
+                              )
+                            }
+                            className="border rounded px-2 py-1 w-20 text-center"
+                          />
+                        </div>
+                        <div>
+                          <label className="font-semibold mr-2">
+                            Interest %:
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={interestPercent}
+                            onChange={(e) =>
+                              setInterestPercent(
+                                Math.max(0, Number(e.target.value))
+                              )
+                            }
+                            className="border rounded px-2 py-1 w-20 text-center"
+                          />
+                        </div>
+                      </>
+                    )}
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={isSalesTaxOn}
+                        onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
+                        id="sales-tax-toggle"
+                        className="mr-2 accent-blue-600"
+                      />
+                      <label
+                        htmlFor="sales-tax-toggle"
+                        className="font-semibold"
+                      >
+                        Include Sales Tax (12%)
+                      </label>
+                    </div>
+                    <div className="border-t pt-3 text-sm">
+                      <p>
+                        <b>Grand Total w/ Interest:</b>{" "}
+                        <span className="font-bold text-blue-700">
+                          ₱
+                          {getGrandTotalWithInterest().toLocaleString(
+                            undefined,
+                            { minimumFractionDigits: 2 }
+                          )}
+                        </span>
+                      </p>
+                      <p>
+                        <b>Per Term:</b>{" "}
+                        <span className="font-bold text-blue-700">
+                          ₱
+                          {getPerTermAmount().toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                          })}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="font-semibold mr-2">Interest %:</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={interestPercent}
-                    onChange={e => setInterestPercent(Math.max(0, Number(e.target.value)))}
-                    className="border rounded px-2 py-1 w-20 text-center"
-                  />
+
+                {/* Picking List Table */}
+                <div className="overflow-x-auto rounded-xl border shadow-sm">
+                  <table className="w-full text-sm">
+                    <thead className="bg-[#ffba20] text-black">
+                      <tr>
+                        <th className="py-2 px-3 text-left">Quantity</th>
+                        <th className="py-2 px-3 text-left">Unit</th>
+                        <th className="py-2 px-3 text-left">Description</th>
+                        <th className="py-2 px-3 text-right">Unit Price</th>
+                        <th className="py-2 px-3 text-right">
+                          Discount/Add (%)
+                        </th>
+                        <th className="py-2 px-3 text-right">Amount</th>
+                        <th className="py-2 px-3 text-right"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedOrder.order_items.map((item, idx) => {
+                        const qty = editedQuantities[idx] ?? item.quantity;
+                        const price = item.price;
+                        const percent = editedDiscounts[idx] || 0;
+                        const amount = qty * price * (1 + percent / 100);
+
+                        // Remove handler for zero-stock row
+                        const handleRemove = () => {
+                          // Remove the item at idx from all arrays/states
+                          setEditedQuantities((prev) =>
+                            prev.filter((_, i) => i !== idx)
+                          );
+                          setEditedDiscounts((prev) =>
+                            prev.filter((_, i) => i !== idx)
+                          );
+                          setSelectedOrder((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  order_items: prev.order_items.filter(
+                                    (_, i) => i !== idx
+                                  ),
+                                }
+                              : prev
+                          );
+                        };
+
+                        return (
+                          <tr
+                            key={idx}
+                            className={
+                              "border-t hover:bg-gray-50 " +
+                              (item.inventory.quantity === 0
+                                ? "bg-red-100 text-red-700 font-semibold"
+                                : "")
+                            }
+                          >
+                            {/* Quantity */}
+                            <td className="py-2 px-3">
+                              <input
+                                type="number"
+                                min={1}
+                                max={item.inventory.quantity}
+                                value={qty}
+                                onChange={(e) => {
+                                  const val = Number(e.target.value);
+                                  setEditedQuantities((prev) =>
+                                    prev.map((q, i) => (i === idx ? val : q))
+                                  );
+                                }}
+                                className="border rounded px-2 py-1 w-16 text-center bg-gray-100 font-medium"
+                              />
+                            </td>
+                            {/* Unit */}
+                            <td className="py-2 px-3">{item.inventory.unit}</td>
+                            {/* Description */}
+                            <td className="py-2 px-3">
+                              <div className="font-semibold">
+                                {item.inventory.product_name}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                SKU: {item.inventory.sku}
+                              </div>
+                            </td>
+                            {/* Unit Price */}
+                            <td className="py-2 px-3 text-right">
+                              ₱{price.toLocaleString()}
+                            </td>
+                            {/* Discount/Add (%) */}
+                            <td className="py-2 px-3 text-right">
+                              <div className="flex flex-col items-center gap-1">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
+                                    onClick={() => handleDecrement(idx)}
+                                    type="button"
+                                    tabIndex={-1}
+                                    aria-label="Decrease"
+                                  >
+                                    –
+                                  </button>
+                                  <input
+                                    type="number"
+                                    value={percent}
+                                    onChange={(e) =>
+                                      handleDiscountInput(idx, e.target.value)
+                                    }
+                                    className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
+                                    min={-100}
+                                    max={100}
+                                    step={1}
+                                    style={{
+                                      fontWeight: 600,
+                                      color:
+                                        percent > 0
+                                          ? "#f59e42"
+                                          : percent < 0
+                                          ? "#059669"
+                                          : "#222",
+                                    }}
+                                  />
+                                  <span className="ml-1">%</span>
+                                  <button
+                                    className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
+                                    onClick={() => handleIncrement(idx)}
+                                    type="button"
+                                    tabIndex={-1}
+                                    aria-label="Increase"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                                <button
+                                  className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
+                                  style={{ fontSize: "11px" }}
+                                  onClick={() => handleResetDiscount(idx)}
+                                  type="button"
+                                >
+                                  Reset
+                                </button>
+                              </div>
+                            </td>
+                            {/* Amount */}
+                            <td className="py-2 px-3 text-right font-semibold">
+                              ₱
+                              {amount.toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                              })}
+                            </td>
+                            {/* Remove button for zero-stock rows */}
+                            <td className="py-2 px-3 text-right">
+                              {item.inventory.quantity === 0 && (
+                                <button
+                                  onClick={handleRemove}
+                                  className="bg-red-500 hover:bg-red-700 text-white px-3 py-1 rounded shadow"
+                                  title="Remove this item"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              </>
-            )}
-            <div className="flex items-center">
-              <input
-                type="checkbox"
-                checked={isSalesTaxOn}
-                onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
-                id="sales-tax-toggle"
-                className="mr-2 accent-blue-600"
-              />
-              <label htmlFor="sales-tax-toggle" className="font-semibold">
-                Include Sales Tax (12%)
-              </label>
+
+                {/* Action Buttons */}
+                <div className="flex justify-center gap-8 mt-6">
+                  <button
+                    className={`bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition ${
+                      hasZeroStock ? "opacity-50 cursor-not-allowed" : ""
+                    }`}
+                    onClick={() => {
+                      if (!hasZeroStock) {
+                        setShowModal(false);
+                        setShowSalesOrderModal(true);
+                      }
+                    }}
+                    disabled={hasZeroStock}
+                  >
+                    Proceed Order
+                  </button>
+                  <button
+                    className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
+                    onClick={() => {
+                      // Reset states back to default
+                      setShowModal(false);
+                      setShowSalesOrderModal(false);
+                      setShowFinalConfirm(false);
+                      setSelectedOrder(null);
+                      setEditedQuantities([]);
+                      setEditedDiscounts([]);
+                      setPickingStatus([]);
+                      setPoNumber("");
+                      setRepName("");
+                      setNumberOfTerms(1);
+                      setInterestPercent(0);
+                      setIsSalesTaxOn(true);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="border-t pt-3 text-sm">
-              <p>
-                <b>Grand Total w/ Interest:</b>{" "}
-                <span className="font-bold text-blue-700">
-                  ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </span>
-              </p>
-              <p>
-                <b>Per Term:</b>{" "}
-                <span className="font-bold text-blue-700">
-                  ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </span>
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Picking List Table */}
-        <div className="overflow-x-auto rounded-xl border shadow-sm">
-          <table className="w-full text-sm">
-            <thead className="bg-[#ffba20] text-black">
-              <tr>
-                <th className="py-2 px-3 text-left">Quantity</th>
-                <th className="py-2 px-3 text-left">Unit</th>
-                <th className="py-2 px-3 text-left">Description</th>
-                <th className="py-2 px-3 text-right">Unit Price</th>
-                <th className="py-2 px-3 text-right">Discount/Add (%)</th>
-                <th className="py-2 px-3 text-right">Amount</th>
-                <th className="py-2 px-3 text-right"></th>
-              </tr>
-            </thead>
-          <tbody>
-  {selectedOrder.order_items.map((item, idx) => {
-    const qty = editedQuantities[idx] ?? item.quantity;
-    const price = item.price;
-    const percent = editedDiscounts[idx] || 0;
-    const amount = qty * price * (1 + percent / 100);
-
-    // Remove handler for zero-stock row
-    const handleRemove = () => {
-      // Remove the item at idx from all arrays/states
-      setEditedQuantities(prev => prev.filter((_, i) => i !== idx));
-      setEditedDiscounts(prev => prev.filter((_, i) => i !== idx));
-      setSelectedOrder(prev =>
-        prev
-          ? {
-              ...prev,
-              order_items: prev.order_items.filter((_, i) => i !== idx),
-            }
-          : prev
-      );
-    };
-
-    return (
-      <tr
-        key={idx}
-        className={
-          "border-t hover:bg-gray-50 " +
-          (item.inventory.quantity === 0
-            ? "bg-red-100 text-red-700 font-semibold"
-            : "")
-        }
-      >
-        {/* Quantity */}
-        <td className="py-2 px-3">
-          <input
-            type="number"
-            min={1}
-            max={item.inventory.quantity}
-            value={qty}
-            onChange={(e) => {
-              const val = Number(e.target.value);
-              setEditedQuantities((prev) =>
-                prev.map((q, i) => (i === idx ? val : q))
-              );
-            }}
-            className="border rounded px-2 py-1 w-16 text-center bg-gray-100 font-medium"
-          />
-        </td>
-        {/* Unit */}
-        <td className="py-2 px-3">{item.inventory.unit}</td>
-        {/* Description */}
-        <td className="py-2 px-3">
-          <div className="font-semibold">{item.inventory.product_name}</div>
-          <div className="text-xs text-gray-500">
-            SKU: {item.inventory.sku}
-          </div>
-        </td>
-        {/* Unit Price */}
-        <td className="py-2 px-3 text-right">
-          ₱{price.toLocaleString()}
-        </td>
-        {/* Discount/Add (%) */}
-        <td className="py-2 px-3 text-right">
-          <div className="flex flex-col items-center gap-1">
-            <div className="flex items-center justify-end gap-1">
-              <button
-                className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
-                onClick={() => handleDecrement(idx)}
-                type="button"
-                tabIndex={-1}
-                aria-label="Decrease"
-              >
-                –
-              </button>
-              <input
-                type="number"
-                value={percent}
-                onChange={e => handleDiscountInput(idx, e.target.value)}
-                className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
-                min={-100}
-                max={100}
-                step={1}
-                style={{
-                  fontWeight: 600,
-                  color:
-                    percent > 0
-                      ? "#f59e42"
-                      : percent < 0
-                      ? "#059669"
-                      : "#222",
-                }}
-              />
-              <span className="ml-1">%</span>
-              <button
-                className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
-                onClick={() => handleIncrement(idx)}
-                type="button"
-                tabIndex={-1}
-                aria-label="Increase"
-              >
-                +
-              </button>
-            </div>
-            <button
-              className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
-              style={{ fontSize: "11px" }}
-              onClick={() => handleResetDiscount(idx)}
-              type="button"
-            >
-              Reset
-            </button>
-          </div>
-        </td>
-        {/* Amount */}
-        <td className="py-2 px-3 text-right font-semibold">
-          ₱{amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-        </td>
-        {/* Remove button for zero-stock rows */}
-        <td className="py-2 px-3 text-right">
-          {item.inventory.quantity === 0 && (
-            <button
-              onClick={handleRemove}
-              className="bg-red-500 hover:bg-red-700 text-white px-3 py-1 rounded shadow"
-              title="Remove this item"
-            >
-              Remove
-            </button>
-          )}
-        </td>
-      </tr>
-    );
-  })}
-</tbody>
-
-
-          </table>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex justify-center gap-8 mt-6">
-          <button
-            className={`bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition ${
-              hasZeroStock ? "opacity-50 cursor-not-allowed" : ""
-            }`}
-            onClick={() => {
-              if (!hasZeroStock) {
-                setShowModal(false);
-                setShowSalesOrderModal(true);
-              }
-            }}
-            disabled={hasZeroStock}
-          >
-            Proceed Order
-          </button>
-          <button
-            className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-            onClick={() => {
-              // Reset states back to default
-              setShowModal(false);
-              setShowSalesOrderModal(false);
-              setShowFinalConfirm(false);
-              setSelectedOrder(null);
-              setEditedQuantities([]);
-              setEditedDiscounts([]);
-              setPickingStatus([]);
-              setPoNumber("");
-              setRepName("");
-              setNumberOfTerms(1);
-              setInterestPercent(0);
-              setIsSalesTaxOn(true);
-            }}
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-})()}
-
+          );
+        })()}
 
       {/* SALES ORDER MODAL (Confirmation Layout) */}
       {showSalesOrderModal && selectedOrder && (
@@ -1523,8 +1604,9 @@ function SalesPageContent() {
               <div>
                 <div>
                   <span className="font-medium">Sales Order Number: </span>
-                    <span className="text-lg text-blue-700 font-bold">{selectedOrder.customers.code}</span>
-
+                  <span className="text-lg text-blue-700 font-bold">
+                    {selectedOrder.customers.code}
+                  </span>
                 </div>
                 <div>
                   <span className="font-medium">Sales Order Date: </span>
@@ -1533,63 +1615,72 @@ function SalesPageContent() {
               </div>
               <div className="text-right space-y-1">
                 <div className="text-right space-y-1">
-  
-  {/* Payment Terms display stays here */}
-  
-</div>
+                  {/* Payment Terms display stays here */}
+                </div>
 
                 <div>
-  <span className="font-medium">PO Number: </span>
-  <input
-    type="text"
-    value={poNumber}
-    onChange={e => {
-      setPoNumber(e.target.value);
-      if (fieldErrors.poNumber) setFieldErrors(f => ({ ...f, poNumber: false }));
-    }}
-    className={`border-b outline-none px-1 transition-all duration-150 ${
-      fieldErrors.poNumber
-        ? "border-red-500 bg-red-50 animate-shake"
-        : "border-gray-300"
-    }`}
-    style={{ minWidth: 100 }}
-    placeholder="Input PO No"
-  />
-  {fieldErrors.poNumber && (
-    <div className="text-xs text-red-600 mt-1">PO Number is required</div>
-  )}
-</div>
+                  <span className="font-medium">PO Number: </span>
+                  <input
+                    type="text"
+                    value={poNumber}
+                    onChange={(e) => {
+                      setPoNumber(e.target.value);
+                      if (fieldErrors.poNumber)
+                        setFieldErrors((f) => ({ ...f, poNumber: false }));
+                    }}
+                    className={`border-b outline-none px-1 transition-all duration-150 ${
+                      fieldErrors.poNumber
+                        ? "border-red-500 bg-red-50 animate-shake"
+                        : "border-gray-300"
+                    }`}
+                    style={{ minWidth: 100 }}
+                    placeholder="Input PO No"
+                  />
+                  {fieldErrors.poNumber && (
+                    <div className="text-xs text-red-600 mt-1">
+                      PO Number is required
+                    </div>
+                  )}
+                </div>
                 <div>
-    <span className="font-medium">Processed By: </span>
-    <span className="font-semibold">{processor?.name || "Unknown"}</span>
-    <span className="text-gray-500"> ({processor?.email || "-"})</span>
-    {processor?.role && (
-      <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-100">
-        {processor.role}
-      </span>
-    )}
-  </div>
-              <div>
-  <span className="font-medium">Sales Rep Name: </span>
-  <input
-    type="text"
-    value={repName}
-    onChange={e => {
-      setRepName(e.target.value);
-      if (fieldErrors.repName) setFieldErrors(f => ({ ...f, repName: false }));
-    }}
-    className={`border-b outline-none px-1 transition-all duration-150 ${
-      fieldErrors.repName
-        ? "border-red-500 bg-red-50 animate-shake"
-        : "border-gray-300"
-    }`}
-    style={{ minWidth: 100 }}
-    placeholder="Input Rep"
-  />
-  {fieldErrors.repName && (
-    <div className="text-xs text-red-600 mt-1">Sales Rep Name is required</div>
-  )}
-</div>
+                  <span className="font-medium">Processed By: </span>
+                  <span className="font-semibold">
+                    {processor?.name || "Unknown"}
+                  </span>
+                  <span className="text-gray-500">
+                    {" "}
+                    ({processor?.email || "-"})
+                  </span>
+                  {processor?.role && (
+                    <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-100">
+                      {processor.role}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <span className="font-medium">Sales Rep Name: </span>
+                  <input
+                    type="text"
+                    value={repName}
+                    onChange={(e) => {
+                      setRepName(e.target.value);
+                      if (fieldErrors.repName)
+                        setFieldErrors((f) => ({ ...f, repName: false }));
+                    }}
+                    className={`border-b outline-none px-1 transition-all duration-150 ${
+                      fieldErrors.repName
+                        ? "border-red-500 bg-red-50 animate-shake"
+                        : "border-gray-300"
+                    }`}
+                    style={{ minWidth: 100 }}
+                    placeholder="Input Rep"
+                  />
+                  {fieldErrors.repName && (
+                    <div className="text-xs text-red-600 mt-1">
+                      Sales Rep Name is required
+                    </div>
+                  )}
+                </div>
                 <div>
                   <span className="font-medium">Payment Terms: </span>
                   {selectedOrder.customers.payment_type === "Credit" ? (
@@ -1663,19 +1754,22 @@ function SalesPageContent() {
                     const amount = qty * price * (1 + percent / 100);
                     return (
                       <tr key={idx} className="border-t text-[14px]">
-  <td className="py-1 px-2">{qty}</td>
-  <td className="py-1 px-2">{item.inventory.unit}</td>
-  <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
-  <td className="py-1 px-2 text-right">₱{price.toLocaleString()}</td>
-  {/* Removed Discount/Add column */}
-  <td className="py-1 px-2 text-right font-semibold">
-    ₱
-    {amount.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-    })}
-  </td>
-</tr>
-
+                        <td className="py-1 px-2">{qty}</td>
+                        <td className="py-1 px-2">{item.inventory.unit}</td>
+                        <td className="py-1 px-2 font-semibold">
+                          {item.inventory.product_name}
+                        </td>
+                        <td className="py-1 px-2 text-right">
+                          ₱{price.toLocaleString()}
+                        </td>
+                        {/* Removed Discount/Add column */}
+                        <td className="py-1 px-2 text-right font-semibold">
+                          ₱
+                          {amount.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                          })}
+                        </td>
+                      </tr>
                     );
                   })}
                 </tbody>
@@ -1693,7 +1787,7 @@ function SalesPageContent() {
                     })}
                   </span>
                 </div>
-                
+
                 <div className="flex justify-between">
                   <span>Sales Tax (12%):</span>
                   <span>
@@ -1757,75 +1851,75 @@ function SalesPageContent() {
               completed, and record the sales transaction.
             </div>
             <div className="flex justify-center gap-10 mt-4">
-  <button
-    className={`bg-green-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition flex items-center justify-center ${
-      isCompletingOrder ? "opacity-75 cursor-not-allowed" : ""
-    }`}
-    onClick={handleOrderComplete}
-    disabled={isCompletingOrder}
-    aria-busy={isCompletingOrder}
-  >
-    {isCompletingOrder ? (
-      <>
-        <span className="inline-block h-5 w-5 rounded-full border-2 border-white/70 border-t-transparent animate-spin mr-2" />
-        Processing…
-      </>
-    ) : (
-      "Yes, Confirm Order"
-    )}
-  </button>
+              <button
+                className={`bg-green-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition flex items-center justify-center ${
+                  isCompletingOrder ? "opacity-75 cursor-not-allowed" : ""
+                }`}
+                onClick={handleOrderComplete}
+                disabled={isCompletingOrder}
+                aria-busy={isCompletingOrder}
+              >
+                {isCompletingOrder ? (
+                  <>
+                    <span className="inline-block h-5 w-5 rounded-full border-2 border-white/70 border-t-transparent animate-spin mr-2" />
+                    Processing…
+                  </>
+                ) : (
+                  "Yes, Confirm Order"
+                )}
+              </button>
 
-  <button
-    className={`bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow transition ${
-      isCompletingOrder ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-500"
-    }`}
-    onClick={() => setShowFinalConfirm(false)}
-    disabled={isCompletingOrder}
-  >
-    Cancel
-  </button>
-</div>
-
+              <button
+                className={`bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow transition ${
+                  isCompletingOrder
+                    ? "opacity-50 cursor-not-allowed"
+                    : "hover:bg-gray-500"
+                }`}
+                onClick={() => setShowFinalConfirm(false)}
+                disabled={isCompletingOrder}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
       {/* --- REJECT CONFIRMATION MODAL --- */}
-{showRejectConfirm && orderToReject && (
-  <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
-    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-auto p-8 text-center">
-      <div className="text-xl font-bold mb-6 text-gray-800">
-        Are you sure you want to <span className="text-red-600">REJECT</span> this order?
-      </div>
-      <div className="text-base mb-6">
-        This will permanently reject the order and notify the customer.
-      </div>
-      <div className="flex justify-center gap-8 mt-4">
-        <button
-          className="bg-red-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-red-700 transition"
-          onClick={async () => {
-            await handleRejectOrder(orderToReject);
-            setShowRejectConfirm(false);
-            setOrderToReject(null);
-          }}
-        >
-          Yes, Reject Order
-        </button>
-        <button
-          className="bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-          onClick={() => {
-            setShowRejectConfirm(false);
-            setOrderToReject(null);
-          }}
-        >
-          Cancel
-        </button>
-      </div>
+      {showRejectConfirm && orderToReject && (
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-auto p-8 text-center">
+            <div className="text-xl font-bold mb-6 text-gray-800">
+              Are you sure you want to{" "}
+              <span className="text-red-600">REJECT</span> this order?
+            </div>
+            <div className="text-base mb-6">
+              This will permanently reject the order and notify the customer.
+            </div>
+            <div className="flex justify-center gap-8 mt-4">
+              <button
+                className="bg-red-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-red-700 transition"
+                onClick={async () => {
+                  await handleRejectOrder(orderToReject);
+                  setShowRejectConfirm(false);
+                  setOrderToReject(null);
+                }}
+              >
+                Yes, Reject Order
+              </button>
+              <button
+                className="bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
+                onClick={() => {
+                  setShowRejectConfirm(false);
+                  setOrderToReject(null);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
-  </div>
-)}
-
-    </div>
-    
   );
 }
 export default function SalesPage() {
