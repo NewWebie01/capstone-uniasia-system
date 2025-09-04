@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { BellIcon } from "@heroicons/react/24/solid";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { toast } from "sonner";
@@ -19,6 +20,7 @@ type Order = {
   phone: string;
   address: string;
   items: OrderItem[];
+  read?: boolean;
 };
 
 export default function NotificationBell() {
@@ -26,7 +28,9 @@ export default function NotificationBell() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const supabase = createClientComponentClient();
+  const router = useRouter();
 
+  // --- Realtime for new orders ---
   useEffect(() => {
     const channel = supabase
       .channel("orders_channel")
@@ -38,8 +42,6 @@ export default function NotificationBell() {
           table: "orders",
         },
         async (payload) => {
-          console.log("🔔 New order received:", payload);
-
           const { data, error } = await supabase
             .from("orders")
             .select(
@@ -82,6 +84,7 @@ export default function NotificationBell() {
             phone: customer?.phone,
             address: customer?.address,
             items,
+            read: false,
           };
 
           setOrders((prev) => [newOrder, ...prev.slice(0, 4)]);
@@ -99,8 +102,16 @@ export default function NotificationBell() {
     setIsModalOpen(true);
   };
 
-  const handleMarkAsRead = (orderId: string) => {
-    setOrders((prev) => prev.filter((order) => order.id !== orderId));
+  // --- Click card: mark as read & go to sales page for order ---
+  const handleGoToSales = (orderId: string) => {
+    setOrders((prev) =>
+      prev.map((order) =>
+        order.id === orderId ? { ...order, read: true } : order
+      )
+    );
+    setIsModalOpen(false);
+    router.push(`/sales?order=${orderId}`);
+    // For new tab: window.open(`/sales?order=${orderId}`, "_blank");
   };
 
   return (
@@ -117,9 +128,9 @@ export default function NotificationBell() {
           className="h-5 w-5 transition-colors duration-200"
           style={{ color: isHovered ? "#ffba20" : "#181918" }}
         />
-        {orders.length > 0 && (
+        {orders.some((o) => !o.read) && (
           <span className="absolute top-1 right-1 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold leading-none text-white bg-red-600 rounded-full">
-            {orders.length}
+            {orders.filter((o) => !o.read).length}
           </span>
         )}
       </div>
@@ -137,7 +148,13 @@ export default function NotificationBell() {
                 {orders.map((order) => (
                   <div
                     key={order.id}
-                    className="border border-gray-200 rounded p-4"
+                    onClick={() => handleGoToSales(order.id)}
+                    className={`border border-gray-200 rounded p-4 transition-colors duration-300 cursor-pointer shadow-sm ${
+                      order.read
+                        ? "bg-white hover:bg-gray-50"
+                        : "bg-blue-100 hover:bg-blue-200"
+                    }`}
+                    title="Click to go to Sales"
                   >
                     <div className="mb-1">
                       <strong>Name:</strong> {order.customer_name}
@@ -151,7 +168,6 @@ export default function NotificationBell() {
                     <div className="mb-2">
                       <strong>Address:</strong> {order.address}
                     </div>
-
                     <h3 className="font-medium mb-1">📦 Items:</h3>
                     <ul className="list-disc list-inside text-sm space-y-1 mb-2">
                       {order.items.map((item, idx) => (
@@ -161,31 +177,6 @@ export default function NotificationBell() {
                         </li>
                       ))}
                     </ul>
-
-                    <div className="flex justify-between items-center mt-3">
-                      <label className="inline-flex items-center text-sm">
-                        <input
-                          type="checkbox"
-                          className="mr-2"
-                          onChange={() => handleMarkAsRead(order.id)}
-                        />
-                        Mark as Read
-                      </label>
-
-                      <button
-                        className="text-sm text-blue-600 hover:underline"
-                        onClick={() => {
-                          setIsModalOpen(false);
-                          window.localStorage.setItem(
-                            "view_order_id",
-                            order.id
-                          );
-                          window.location.href = "sales";
-                        }}
-                      >
-                        View in Sales
-                      </button>
-                    </div>
                   </div>
                 ))}
               </div>
