@@ -1,4 +1,5 @@
 "use client";
+import { Suspense } from "react";
 
 import { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -76,7 +77,7 @@ type PickingOrder = {
   status: "accepted" | "rejected";
 };
 
-export default function SalesPage() {
+function SalesPageContent() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1825,5 +1826,12 @@ export default function SalesPage() {
 
     </div>
     
+  );
+}
+export default function SalesPage() {
+  return (
+    <Suspense fallback={<PageLoader label="Loading sales…" />}>
+      <SalesPageContent />
+    </Suspense>
   );
 }
