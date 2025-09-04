@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
+import PageLoader from "@/components/PageLoader"; 
 import { toast } from "sonner";
 
 type InventoryItem = {
@@ -92,6 +93,75 @@ export default function SalesPage() {
   const [poNumber, setPoNumber] = useState("");
   const [repName, setRepName] = useState("");
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
+  
+
+const [isCompletingOrder, setIsCompletingOrder] = useState(false);
+  const [salesman, setSalesman] = useState("");
+const [forwarder, setForwarder] = useState("");
+// Clears PO/Rep/terms/discount edits & toggles
+const resetSalesForm = () => {
+  setPoNumber("");
+  setRepName("");
+  setForwarder("");
+  setNumberOfTerms(1);
+  setInterestPercent(0);
+  setIsSalesTaxOn(true);
+  setEditedQuantities([]);
+  setEditedDiscounts([]);
+};
+
+
+// --- Activity Logs Modal State ---
+const [showLogsModal, setShowLogsModal] = useState(false);
+const [logsLoading, setLogsLoading] = useState(false);
+const [activityLogs, setActivityLogs] = useState<any[]>([]);
+const [logOrderId, setLogOrderId] = useState<string | null>(null);
+
+  // 👇 Add this here
+  type Processor = { name: string; email: string; role: string | null };
+  const [processor, setProcessor] = useState<Processor | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: userRow } = await supabase
+        .from("users")
+        .select("display_name, role")
+        .eq("email", user.email ?? "")
+        .maybeSingle();
+
+      const friendly =
+        userRow?.display_name ||
+        user.user_metadata?.display_name ||
+        user.user_metadata?.full_name ||
+        (user.email ? user.email.split("@")[0] : "User");
+
+      setProcessor({
+        name: friendly,
+        email: user.email ?? "unknown",
+        role: userRow?.role ?? user.user_metadata?.role ?? null,
+      });
+    })();
+  }, []);
+
+async function fetchActivityLogs(orderId: string) {
+  setLogsLoading(true);
+  setLogOrderId(orderId);
+  setShowLogsModal(true);
+  // Fetch logs for this orderId, most recent first
+  const { data, error } = await supabase
+    .from("activity_logs")
+    .select("*")
+    .eq("details->>order_id", orderId)
+    .order("created_at", { ascending: false });
+  if (!error && data) setActivityLogs(data);
+  else toast.error("Failed to fetch activity logs.");
+  setLogsLoading(false);
+}
 
   const [fastMovingProducts, setFastMovingProducts] = useState<
     FastMovingProduct[]
@@ -292,28 +362,88 @@ export default function SalesPage() {
   }, []);
 
   useEffect(() => {
-    // Only reset when BOTH modals are closed
-    if (!showModal && !showSalesOrderModal) {
-      setNumberOfTerms(1);
-      setInterestPercent(0);
-    }
-  }, [showModal, showSalesOrderModal]);
+  // When both modals are closed, clear the form for the next order
+  if (!showModal && !showSalesOrderModal) {
+    resetSalesForm();
+  }
+}, [showModal, showSalesOrderModal]);
+
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
-  const handleAcceptOrder = (order: OrderWithDetails) => {
-    setEditedDiscounts(order.order_items.map(() => 0));
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "accepted" },
+const handleAcceptOrder = async (order: OrderWithDetails) => {
+  // 1. Update order status in Supabase
+  const { error } = await supabase
+    .from("orders")
+    .update({ status: "accepted" })
+    .eq("id", order.id);
+
+  if (error) {
+    toast.error("Failed to accept order: " + error.message);
+    return;
+  }
+
+  // ✅ 2. Save who accepted the order into orders table
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  await supabase
+    .from("orders")
+    .update({
+      accepted_by_auth_id: user?.id ?? null,
+      accepted_by_email: user?.email ?? null,
+      accepted_by_name:
+        processor?.name ?? (user?.email ? user.email.split("@")[0] : null),
+      accepted_by_role: processor?.role ?? user?.user_metadata?.role ?? null,
+      accepted_at: new Date().toISOString(),
+    })
+    .eq("id", order.id);
+
+  // 3. Log the activity (your existing code stays here)
+  try {
+    const userEmail = user?.email || "unknown";
+    const userRole = user?.user_metadata?.role || "unknown";
+
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        user_role: userRole,
+        action: "Accept Sales Order",
+        details: {
+          order_id: order.id,
+          customer_name: order.customers.name,
+          customer_email: order.customers.email,
+          items: order.order_items.map((oi) => ({
+            product_name: oi.inventory.product_name,
+            ordered_qty: oi.quantity,
+            unit_price: oi.price,
+          })),
+          total_amount: order.total_amount,
+          payment_type: order.customers.payment_type,
+        },
+        created_at: new Date().toISOString(),
+      },
     ]);
-    setEditedQuantities(order.order_items.map((item) => item.quantity));
-    setSelectedOrder(order);
-    setShowModal(true);
-    setNumberOfTerms(1);
-    setInterestPercent(0);
-  };
+  } catch (err) {
+    console.error("Failed to log activity for order acceptance:", err);
+  }
+
+  // 4. Update state/UI as usual
+  setEditedDiscounts(order.order_items.map(() => 0));
+  setPickingStatus((prev) => [
+    ...prev,
+    { orderId: order.id, status: "accepted" },
+  ]);
+  setEditedQuantities(order.order_items.map((item) => item.quantity));
+  setSelectedOrder(order);
+  setShowModal(true);
+  setNumberOfTerms(1);
+  setInterestPercent(0);
+};
+
+
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
     setPickingStatus((prev) => [
@@ -326,103 +456,118 @@ export default function SalesPage() {
       .eq("id", order.id);
 
     // ----------- ACTIVITY LOG FOR ORDER REJECT -----------
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const userEmail = user?.email || "unknown";
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          action: "Reject Sales Order",
-          details: {
-            order_id: order.id,
-            customer_name: order.customers.name,
-            customer_email: order.customers.email,
-            items: order.order_items.map((oi) => ({
-              product_name: oi.inventory.product_name,
-              ordered_qty: oi.quantity,
-              unit_price: oi.price,
-            })),
-            total_amount: order.total_amount,
-            payment_type: order.customers.payment_type,
-          },
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    } catch (err) {
-      console.error("Failed to log activity for order rejection:", err);
-    }
+try {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const userEmail = user?.email || "unknown";
+  const userRole = user?.user_metadata?.role || "unknown"; // <-- LOG ROLE
+
+  await supabase.from("activity_logs").insert([
+    {
+      user_email: userEmail,
+      user_role: userRole, // <-- LOG ROLE
+      action: "Reject Sales Order",
+      details: {
+        order_id: order.id,
+        customer_name: order.customers.name,
+        customer_email: order.customers.email,
+        items: order.order_items.map((oi) => ({
+          product_name: oi.inventory.product_name,
+          ordered_qty: oi.quantity,
+          unit_price: oi.price,
+        })),
+        total_amount: order.total_amount,
+        payment_type: order.customers.payment_type,
+      },
+      created_at: new Date().toISOString(),
+    },
+  ]);
+} catch (err) {
+  console.error("Failed to log activity for order rejection:", err);
+}
+// -----------------------------------------------------
+
     // -----------------------------------------------------
 
     fetchOrders();
+
   };
+  
 
   const handleOrderConfirm = async () => {
     if (!selectedOrder) return;
     setShowFinalConfirm(true);
   };
 
-  const handleOrderComplete = async () => {
-    if (!selectedOrder) return;
+const handleOrderComplete = async () => {
+  if (!selectedOrder || isCompletingOrder) return;
+
+  setIsCompletingOrder(true);
+  try {
+    // --- Stock checks + writes ---
     for (let i = 0; i < selectedOrder.order_items.length; i++) {
       const oi = selectedOrder.order_items[i];
       const invId = oi.inventory.id;
       const remaining = oi.inventory.quantity - editedQuantities[i];
+
       if (remaining < 0) {
         toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
         setShowFinalConfirm(false);
-        return;
+        throw new Error("Insufficient stock");
       }
-      await supabase
-        .from("inventory")
-        .update({ quantity: remaining })
-        .eq("id", invId);
+      if (!poNumber || !poNumber.trim()) {
+        toast.error("PO Number is required to complete the order!");
+        throw new Error("PO required");
+      }
+
+      await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
+
       await supabase.from("sales").insert([
         {
           inventory_id: invId,
           quantity_sold: editedQuantities[i],
-          amount:
-            editedQuantities[i] *
-            oi.price *
-            (1 + (editedDiscounts[i] || 0) / 100),
+          amount: editedQuantities[i] * oi.price * (1 + (editedDiscounts[i] || 0) / 100),
           date: new Date().toISOString(),
         },
       ]);
     }
 
-    // Save order as completed (update with sales_tax, etc)
-    if (selectedOrder.customers.payment_type === "Credit") {
-      await supabase
-        .from("orders")
-        .update({
-          payment_terms: numberOfTerms,
-          interest_percent: interestPercent,
-          grand_total_with_interest: getGrandTotalWithInterest(),
-          per_term_amount: getPerTermAmount(),
-          status: "completed",
-          sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
-        })
-        .eq("id", selectedOrder.id);
-    } else {
-      await supabase
-        .from("orders")
-        .update({
-          status: "completed",
-          sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
-        })
-        .eq("id", selectedOrder.id);
-    }
+    // --- Orders update ---
+    const isCredit = selectedOrder.customers.payment_type === "Credit";
+    const updateFields = {
+      status: "completed",
+      date_completed: new Date().toISOString(),
+      sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
+      po_number: poNumber,
+      salesman: repName,
+      terms: isCredit ? `Net ${numberOfTerms} Monthly` : selectedOrder.customers.payment_type,
+      payment_terms: isCredit ? numberOfTerms : null,
+      interest_percent: isCredit ? interestPercent : null,
+      grand_total_with_interest: isCredit ? getGrandTotalWithInterest() : null,
+      per_term_amount: isCredit ? getPerTermAmount() : null,
+      forwarder,
+      processed_by_email: processor?.email ?? "unknown",
+      processed_by_name: processor?.name ?? "unknown",
+      processed_by_role: processor?.role ?? "unknown",
+      processed_at: new Date().toISOString(),
+    } as const;
 
-    // ----------- ACTIVITY LOG FOR SALES ORDER COMPLETE -----------
+    const { error: ordersErr } = await supabase.from("orders").update(updateFields).eq("id", selectedOrder.id);
+    if (ordersErr) throw ordersErr;
+
+    // --- Activity log (best-effort) ---
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
+      const userRole = user?.user_metadata?.role || "unknown";
+
       await supabase.from("activity_logs").insert([
         {
           user_email: userEmail,
+          user_role: userRole,
           action: "Complete Sales Order",
           details: {
             order_id: selectedOrder.id,
@@ -443,31 +588,46 @@ export default function SalesPage() {
       ]);
     } catch (err) {
       console.error("Failed to log activity for sales order completion:", err);
+      // don't block success UI on log failure
     }
-    // -------------------------------------------------------------
 
-    setShowSalesOrderModal(false);
-    setShowModal(false);
-    setShowFinalConfirm(false);
-    setSelectedOrder(null);
-    fetchOrders();
-    fetchItems();
-    toast.success("Order successfully completed!");
-  };
+    // --- Reset UI ---
+   // --- Reset UI ---
+setShowSalesOrderModal(false);
+setShowModal(false);
+setShowFinalConfirm(false);
+resetSalesForm(); // << clear inputs & edits
+setSelectedOrder(null);
+setPickingStatus(prev => prev.filter(p => p.orderId !== selectedOrder.id));
+
+await Promise.all([fetchOrders(), fetchItems()]);
+toast.success("Order successfully completed!");
+
+  } catch (err: any) {
+    console.error("Failed completing order:", err);
+    toast.error(`Failed to complete order: ${err?.message ?? "Unexpected error"}`);
+  } finally {
+    setIsCompletingOrder(false);
+  }
+};
+
 
   const handleBackModal = () => {
     setShowSalesOrderModal(false);
     setShowModal(true);
   };
 
-  const handleCancelModal = () => {
-    setShowModal(false);
-    setSelectedOrder(null);
-    setShowSalesOrderModal(false);
-    setShowFinalConfirm(false);
-    setPoNumber("");
-    setRepName("");
-  };
+ const handleCancelModal = () => {
+  setShowModal(false);
+  setShowSalesOrderModal(false);
+  setShowFinalConfirm(false);
+  resetSalesForm();
+  setSelectedOrder(null);
+  setPickingStatus(prev =>
+    selectedOrder ? prev.filter(p => p.orderId !== selectedOrder.id) : prev
+  );
+};
+
 
   const handleResetDiscount = (idx: number) => {
     setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
@@ -499,6 +659,7 @@ export default function SalesPage() {
   // --- RENDER ---
   return (
     <div className="p-6">
+      {isCompletingOrder && <PageLoader label="Completing order…" />}
       <motion.h1 className="text-3xl font-bold mb-4">
         Sales Processing
       </motion.h1>
@@ -838,29 +999,36 @@ export default function SalesPage() {
             </tr>
           </thead>
           <tbody>
-            {items
-              .filter((it) =>
-                it.product_name
-                  .toLowerCase()
-                  .includes(searchQuery.toLowerCase())
-              )
-              .map((it) => (
-                <tr key={it.id} className="border-b hover:bg-gray-100">
-                  <td className="py-2 px-4">{it.sku}</td>
-                  <td className="py-2 px-4">{it.product_name}</td>
-                  <td className="py-2 px-4">{it.category}</td>
-                  <td className="py-2 px-4">{it.subcategory}</td>
-                  <td className="py-2 px-4">{it.unit}</td>
-                  <td className="py-2 px-4 text-right">{it.quantity}</td>
-                  <td className="py-2 px-4 text-right">
-                    ₱{it.unit_price?.toLocaleString()}
-                  </td>
-                  <td className="py-2 px-4 text-right">
-                    ₱{(it.unit_price * it.quantity).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-          </tbody>
+  {items
+    .filter((it) =>
+      it.product_name
+        .toLowerCase()
+        .includes(searchQuery.toLowerCase())
+    )
+    .map((it) => (
+      <tr
+        key={it.id}
+        className={
+          "border-b hover:bg-gray-100 " +
+          (it.quantity === 0 ? "bg-red-100 text-red-700 font-semibold" : "")
+        }
+      >
+        <td className="py-2 px-4">{it.sku}</td>
+        <td className="py-2 px-4">{it.product_name}</td>
+        <td className="py-2 px-4">{it.category}</td>
+        <td className="py-2 px-4">{it.subcategory}</td>
+        <td className="py-2 px-4">{it.unit}</td>
+        <td className="py-2 px-4 text-right">{it.quantity}</td>
+        <td className="py-2 px-4 text-right">
+          ₱{it.unit_price?.toLocaleString()}
+        </td>
+        <td className="py-2 px-4 text-right">
+          ₱{(it.unit_price * it.quantity).toLocaleString()}
+        </td>
+      </tr>
+    ))}
+</tbody>
+
         </table>
       </div>
 
@@ -1042,235 +1210,303 @@ export default function SalesPage() {
       {/* --- MODALS: Picking List, Sales Order, Final Confirmation --- */}
 
       {/* Picking List Modal */}
-      {showModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
-          <div className="bg-white rounded-xl shadow-2xl w-[96vw] max-w-[1800px] mx-auto flex flex-col px-10 py-8 text-[15px] mt-16">
-            {/* PICKING LIST MODAL CONTENT */}
-            <h2 className="text-3xl font-bold mb-6 text-center text-gray-900 tracking-wide">
-              Picking List
-            </h2>
+     {showModal && selectedOrder && (() => {
+  // 👇 Place hasZeroStock here (inside your function component, before return is fine too)
+  const hasZeroStock = selectedOrder.order_items.some(
+    (item) => item.inventory.quantity === 0
+  );
 
-            {/* Customer & Payment Info */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-              {/* Customer Info */}
-              <div className="bg-gray-50 border rounded-xl p-5 shadow-sm">
-                <h3 className="text-lg font-semibold text-gray-700 mb-3">
-                  Customer Details
-                </h3>
-                <p>
-                  <span className="font-bold">Name:</span>{" "}
-                  {selectedOrder.customers.name}
-                </p>
-                <p>
-                  <span className="font-bold">Email:</span>{" "}
-                  {selectedOrder.customers.email}
-                </p>
-                <p>
-                  <span className="font-bold">Phone:</span>{" "}
-                  {selectedOrder.customers.phone}
-                </p>
-                <p>
-                  <span className="font-bold">Address:</span>{" "}
-                  {selectedOrder.customers.address}
-                </p>
-                {selectedOrder.customers.area && (
-                  <p>
-                    <span className="font-bold">Area:</span>{" "}
-                    {selectedOrder.customers.area}
-                  </p>
-                )}
-              </div>
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-2xl w-[96vw] max-w-[1800px] mx-auto flex flex-col px-10 py-8 text-[15px] mt-16">
+        {/* PICKING LIST MODAL CONTENT */}
+        <h2 className="text-3xl font-bold mb-6 text-center text-gray-900 tracking-wide">
+          Picking List
+        </h2>
 
-              {/* Payment Info */}
-              <div className="bg-gray-50 border rounded-xl p-5 shadow-sm flex flex-col gap-3">
-                <h3 className="text-lg font-semibold text-gray-700">
-                  Payment & Totals
-                </h3>
+        {/* Customer & Payment Info */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+          <div className="bg-gray-50 border rounded-xl p-5 shadow-sm">
+            <h3 className="text-lg font-semibold text-gray-700 mb-3">
+              Customer Details
+            </h3>
+            <p><span className="font-bold">Name:</span> {selectedOrder.customers.name}</p>
+            <p><span className="font-bold">Email:</span> {selectedOrder.customers.email}</p>
+            <p><span className="font-bold">Phone:</span> {selectedOrder.customers.phone}</p>
+            <p><span className="font-bold">Address:</span> {selectedOrder.customers.address}</p>
+            {selectedOrder.customers.area && (
+              <p><span className="font-bold">Area:</span> {selectedOrder.customers.area}</p>
+            )}
+          </div>
+          <div className="bg-gray-50 border rounded-xl p-5 shadow-sm flex flex-col gap-3">
+            <h3 className="text-lg font-semibold text-gray-700">
+              Payment & Totals
+            </h3>
+            <div>
+              <span className="font-semibold">Total: </span>
+              <span className="text-2xl font-bold text-green-700">
+                ₱{computedOrderTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div>
+              <span className="font-semibold">Payment Type:</span>{" "}
+              <span className={
+                selectedOrder.customers.payment_type === "Credit"
+                  ? "font-bold text-blue-600"
+                  : selectedOrder.customers.payment_type === "Cash"
+                  ? "font-bold text-green-600"
+                  : "font-bold text-orange-500"
+              }>
+                {selectedOrder.customers.payment_type || "N/A"}
+              </span>
+            </div>
+            {selectedOrder.customers.payment_type === "Credit" && (
+              <>
                 <div>
-                  <span className="font-semibold">Total: </span>
-                  <span className="text-2xl font-bold text-green-700">
-                    ₱
-                    {computedOrderTotal.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-                <div>
-                  <span className="font-semibold">Payment Type:</span>{" "}
-                  <span
-                    className={
-                      selectedOrder.customers.payment_type === "Credit"
-                        ? "font-bold text-blue-600"
-                        : selectedOrder.customers.payment_type === "Cash"
-                        ? "font-bold text-green-600"
-                        : "font-bold text-orange-500"
-                    }
-                  >
-                    {selectedOrder.customers.payment_type || "N/A"}
-                  </span>
-                </div>
-                {selectedOrder.customers.payment_type === "Credit" && (
-                  <>
-                    <div>
-                      <label className="font-semibold mr-2">Terms:</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={numberOfTerms}
-                        onChange={(e) =>
-                          setNumberOfTerms(Math.max(1, Number(e.target.value)))
-                        }
-                        className="border rounded px-2 py-1 w-20 text-center"
-                      />
-                    </div>
-                    <div>
-                      <label className="font-semibold mr-2">Interest %:</label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={interestPercent}
-                        onChange={(e) =>
-                          setInterestPercent(
-                            Math.max(0, Number(e.target.value))
-                          )
-                        }
-                        className="border rounded px-2 py-1 w-20 text-center"
-                      />
-                    </div>
-                  </>
-                )}
-                <div className="flex items-center">
+                  <label className="font-semibold mr-2">Terms:</label>
                   <input
-                    type="checkbox"
-                    checked={isSalesTaxOn}
-                    onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
-                    id="sales-tax-toggle"
-                    className="mr-2 accent-blue-600"
+                    type="number"
+                    min={1}
+                    value={numberOfTerms}
+                    onChange={e => setNumberOfTerms(Math.max(1, Number(e.target.value)))}
+                    className="border rounded px-2 py-1 w-20 text-center"
                   />
-                  <label htmlFor="sales-tax-toggle" className="font-semibold">
-                    Include Sales Tax (12%)
-                  </label>
                 </div>
-                <div className="border-t pt-3 text-sm">
-                  <p>
-                    <b>Grand Total w/ Interest:</b>{" "}
-                    <span className="font-bold text-blue-700">
-                      ₱
-                      {getGrandTotalWithInterest().toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
-                  </p>
-                  <p>
-                    <b>Per Term:</b>{" "}
-                    <span className="font-bold text-blue-700">
-                      ₱
-                      {getPerTermAmount().toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
-                  </p>
+                <div>
+                  <label className="font-semibold mr-2">Interest %:</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={interestPercent}
+                    onChange={e => setInterestPercent(Math.max(0, Number(e.target.value)))}
+                    className="border rounded px-2 py-1 w-20 text-center"
+                  />
                 </div>
-              </div>
+              </>
+            )}
+            <div className="flex items-center">
+              <input
+                type="checkbox"
+                checked={isSalesTaxOn}
+                onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
+                id="sales-tax-toggle"
+                className="mr-2 accent-blue-600"
+              />
+              <label htmlFor="sales-tax-toggle" className="font-semibold">
+                Include Sales Tax (12%)
+              </label>
             </div>
-
-            {/* Picking List Table */}
-            <div className="overflow-x-auto rounded-xl border shadow-sm">
-              <table className="w-full text-sm">
-                <thead className="bg-[#ffba20] text-black">
-                  <tr>
-                    <th className="py-2 px-3 text-left">Quantity</th>
-                    <th className="py-2 px-3 text-left">Unit</th>
-                    <th className="py-2 px-3 text-left">Description</th>
-                    <th className="py-2 px-3 text-right">Unit Price</th>
-                    <th className="py-2 px-3 text-right">Discount/Add (%)</th>
-                    <th className="py-2 px-3 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedOrder.order_items.map((item, idx) => {
-                    const qty = editedQuantities[idx] ?? item.quantity;
-                    const price = item.price;
-                    const percent = editedDiscounts[idx] || 0;
-                    const amount = qty * price * (1 + percent / 100);
-                    return (
-                      <tr key={idx} className="border-t hover:bg-gray-50">
-                        <td className="py-2 px-3">
-                          <input
-                            type="number"
-                            min={1}
-                            max={item.inventory.quantity}
-                            value={qty}
-                            onChange={(e) => {
-                              const val = Number(e.target.value);
-                              setEditedQuantities((prev) =>
-                                prev.map((q, i) => (i === idx ? val : q))
-                              );
-                            }}
-                            className="border rounded px-2 py-1 w-16 text-center bg-gray-100 font-medium"
-                          />
-                        </td>
-                        <td className="py-2 px-3">{item.inventory.unit}</td>
-                        <td className="py-2 px-3">
-                          <div className="font-semibold">
-                            {item.inventory.product_name}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            SKU: {item.inventory.sku}
-                          </div>
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          ₱{price.toLocaleString()}
-                        </td>
-                        <td className="py-2 px-3 text-right">{percent}%</td>
-                        <td className="py-2 px-3 text-right font-semibold">
-                          ₱
-                          {amount.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                          })}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex justify-center gap-8 mt-6">
-              <button
-                className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
-                onClick={() => {
-                  setShowModal(false);
-                  setShowSalesOrderModal(true);
-                }}
-              >
-                Proceed Order
-              </button>
-              <button
-                className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-                onClick={() => {
-                  // Reset states back to default
-                  setShowModal(false);
-                  setShowSalesOrderModal(false);
-                  setShowFinalConfirm(false);
-                  setSelectedOrder(null);
-                  setEditedQuantities([]);
-                  setEditedDiscounts([]);
-                  setPickingStatus([]);
-                  setPoNumber("");
-                  setRepName("");
-                  setNumberOfTerms(1);
-                  setInterestPercent(0);
-                  setIsSalesTaxOn(true);
-                }}
-              >
-                Cancel
-              </button>
+            <div className="border-t pt-3 text-sm">
+              <p>
+                <b>Grand Total w/ Interest:</b>{" "}
+                <span className="font-bold text-blue-700">
+                  ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </span>
+              </p>
+              <p>
+                <b>Per Term:</b>{" "}
+                <span className="font-bold text-blue-700">
+                  ₱{getPerTermAmount().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </span>
+              </p>
             </div>
           </div>
         </div>
-      )}
+
+        {/* Picking List Table */}
+        <div className="overflow-x-auto rounded-xl border shadow-sm">
+          <table className="w-full text-sm">
+            <thead className="bg-[#ffba20] text-black">
+              <tr>
+                <th className="py-2 px-3 text-left">Quantity</th>
+                <th className="py-2 px-3 text-left">Unit</th>
+                <th className="py-2 px-3 text-left">Description</th>
+                <th className="py-2 px-3 text-right">Unit Price</th>
+                <th className="py-2 px-3 text-right">Discount/Add (%)</th>
+                <th className="py-2 px-3 text-right">Amount</th>
+                <th className="py-2 px-3 text-right"></th>
+              </tr>
+            </thead>
+          <tbody>
+  {selectedOrder.order_items.map((item, idx) => {
+    const qty = editedQuantities[idx] ?? item.quantity;
+    const price = item.price;
+    const percent = editedDiscounts[idx] || 0;
+    const amount = qty * price * (1 + percent / 100);
+
+    // Remove handler for zero-stock row
+    const handleRemove = () => {
+      // Remove the item at idx from all arrays/states
+      setEditedQuantities(prev => prev.filter((_, i) => i !== idx));
+      setEditedDiscounts(prev => prev.filter((_, i) => i !== idx));
+      setSelectedOrder(prev =>
+        prev
+          ? {
+              ...prev,
+              order_items: prev.order_items.filter((_, i) => i !== idx),
+            }
+          : prev
+      );
+    };
+
+    return (
+      <tr
+        key={idx}
+        className={
+          "border-t hover:bg-gray-50 " +
+          (item.inventory.quantity === 0
+            ? "bg-red-100 text-red-700 font-semibold"
+            : "")
+        }
+      >
+        {/* Quantity */}
+        <td className="py-2 px-3">
+          <input
+            type="number"
+            min={1}
+            max={item.inventory.quantity}
+            value={qty}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              setEditedQuantities((prev) =>
+                prev.map((q, i) => (i === idx ? val : q))
+              );
+            }}
+            className="border rounded px-2 py-1 w-16 text-center bg-gray-100 font-medium"
+          />
+        </td>
+        {/* Unit */}
+        <td className="py-2 px-3">{item.inventory.unit}</td>
+        {/* Description */}
+        <td className="py-2 px-3">
+          <div className="font-semibold">{item.inventory.product_name}</div>
+          <div className="text-xs text-gray-500">
+            SKU: {item.inventory.sku}
+          </div>
+        </td>
+        {/* Unit Price */}
+        <td className="py-2 px-3 text-right">
+          ₱{price.toLocaleString()}
+        </td>
+        {/* Discount/Add (%) */}
+        <td className="py-2 px-3 text-right">
+          <div className="flex flex-col items-center gap-1">
+            <div className="flex items-center justify-end gap-1">
+              <button
+                className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
+                onClick={() => handleDecrement(idx)}
+                type="button"
+                tabIndex={-1}
+                aria-label="Decrease"
+              >
+                –
+              </button>
+              <input
+                type="number"
+                value={percent}
+                onChange={e => handleDiscountInput(idx, e.target.value)}
+                className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
+                min={-100}
+                max={100}
+                step={1}
+                style={{
+                  fontWeight: 600,
+                  color:
+                    percent > 0
+                      ? "#f59e42"
+                      : percent < 0
+                      ? "#059669"
+                      : "#222",
+                }}
+              />
+              <span className="ml-1">%</span>
+              <button
+                className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
+                onClick={() => handleIncrement(idx)}
+                type="button"
+                tabIndex={-1}
+                aria-label="Increase"
+              >
+                +
+              </button>
+            </div>
+            <button
+              className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
+              style={{ fontSize: "11px" }}
+              onClick={() => handleResetDiscount(idx)}
+              type="button"
+            >
+              Reset
+            </button>
+          </div>
+        </td>
+        {/* Amount */}
+        <td className="py-2 px-3 text-right font-semibold">
+          ₱{amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+        </td>
+        {/* Remove button for zero-stock rows */}
+        <td className="py-2 px-3 text-right">
+          {item.inventory.quantity === 0 && (
+            <button
+              onClick={handleRemove}
+              className="bg-red-500 hover:bg-red-700 text-white px-3 py-1 rounded shadow"
+              title="Remove this item"
+            >
+              Remove
+            </button>
+          )}
+        </td>
+      </tr>
+    );
+  })}
+</tbody>
+
+
+          </table>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex justify-center gap-8 mt-6">
+          <button
+            className={`bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition ${
+              hasZeroStock ? "opacity-50 cursor-not-allowed" : ""
+            }`}
+            onClick={() => {
+              if (!hasZeroStock) {
+                setShowModal(false);
+                setShowSalesOrderModal(true);
+              }
+            }}
+            disabled={hasZeroStock}
+          >
+            Proceed Order
+          </button>
+          <button
+            className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
+            onClick={() => {
+              // Reset states back to default
+              setShowModal(false);
+              setShowSalesOrderModal(false);
+              setShowFinalConfirm(false);
+              setSelectedOrder(null);
+              setEditedQuantities([]);
+              setEditedDiscounts([]);
+              setPickingStatus([]);
+              setPoNumber("");
+              setRepName("");
+              setNumberOfTerms(1);
+              setInterestPercent(0);
+              setIsSalesTaxOn(true);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+})()}
+
 
       {/* SALES ORDER MODAL (Confirmation Layout) */}
       {showSalesOrderModal && selectedOrder && (
@@ -1286,7 +1522,7 @@ export default function SalesPage() {
               <div>
                 <div>
                   <span className="font-medium">Sales Order Number: </span>
-<span className="text-lg text-blue-700 font-bold">{selectedOrder.customers.code}</span>
+                    <span className="text-lg text-blue-700 font-bold">{selectedOrder.customers.code}</span>
 
                 </div>
                 <div>
@@ -1295,6 +1531,12 @@ export default function SalesPage() {
                 </div>
               </div>
               <div className="text-right space-y-1">
+                <div className="text-right space-y-1">
+  
+  {/* Payment Terms display stays here */}
+  
+</div>
+
                 <div>
                   <span className="font-medium">PO Number: </span>
                   <input
@@ -1306,6 +1548,16 @@ export default function SalesPage() {
                     placeholder="Input PO No"
                   />
                 </div>
+                <div>
+    <span className="font-medium">Processed By: </span>
+    <span className="font-semibold">{processor?.name || "Unknown"}</span>
+    <span className="text-gray-500"> ({processor?.email || "-"})</span>
+    {processor?.role && (
+      <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-100">
+        {processor.role}
+      </span>
+    )}
+  </div>
                 <div>
                   <span className="font-medium">Sales Rep Name: </span>
                   <input
@@ -1378,7 +1630,7 @@ export default function SalesPage() {
                     <th className="py-1 px-2 text-left">Unit</th>
                     <th className="py-1 px-2 text-left">Description</th>
                     <th className="py-1 px-2 text-right">Unit Price</th>
-                    <th className="py-1 px-2 text-right">Discount/Add (%)</th>
+                    {/* /*<th className="py-1 px-2 text-right">Discount/Add (%)</th>*/}
                     <th className="py-1 px-2 text-right">Amount</th>
                   </tr>
                 </thead>
@@ -1390,27 +1642,19 @@ export default function SalesPage() {
                     const amount = qty * price * (1 + percent / 100);
                     return (
                       <tr key={idx} className="border-t text-[14px]">
-                        <td className="py-1 px-2">{qty}</td>
-                        <td className="py-1 px-2">{item.inventory.unit}</td>
-                        <td className="py-1 px-2 font-semibold">
-                          {item.inventory.product_name}
-                        </td>
-                        <td className="py-1 px-2 text-right">
-                          ₱{price.toLocaleString()}
-                        </td>
-                        <td className="py-1 px-2 text-right">
-                          <span className="font-bold">
-                            {percent > 0 ? "+" : percent < 0 ? "-" : ""}
-                            {Math.abs(percent)}%
-                          </span>
-                        </td>
-                        <td className="py-1 px-2 text-right font-semibold">
-                          ₱
-                          {amount.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                          })}
-                        </td>
-                      </tr>
+  <td className="py-1 px-2">{qty}</td>
+  <td className="py-1 px-2">{item.inventory.unit}</td>
+  <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
+  <td className="py-1 px-2 text-right">₱{price.toLocaleString()}</td>
+  {/* Removed Discount/Add column */}
+  <td className="py-1 px-2 text-right font-semibold">
+    ₱
+    {amount.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+    })}
+  </td>
+</tr>
+
                     );
                   })}
                 </tbody>
@@ -1420,7 +1664,7 @@ export default function SalesPage() {
             <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
               <div className="space-y-2 min-w-[350px]">
                 <div className="flex justify-between font-medium">
-                  <span>Subtotal (Before Discount):</span>
+                  <span>Subtotal:</span>
                   <span>
                     ₱
                     {subtotalBeforeDiscount.toLocaleString(undefined, {
@@ -1428,19 +1672,7 @@ export default function SalesPage() {
                     })}
                   </span>
                 </div>
-                <div className="flex justify-between font-medium">
-                  <span>Less/Add (Discount/Markup):</span>
-                  <span
-                    className={
-                      totalDiscount < 0 ? "text-green-600" : "text-orange-500"
-                    }
-                  >
-                    {totalDiscount < 0 ? "–" : "+"}₱
-                    {Math.abs(totalDiscount).toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
+                
                 <div className="flex justify-between">
                   <span>Sales Tax (12%):</span>
                   <span>
@@ -1504,22 +1736,40 @@ export default function SalesPage() {
               completed, and record the sales transaction.
             </div>
             <div className="flex justify-center gap-10 mt-4">
-              <button
-                className="bg-green-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
-                onClick={handleOrderComplete}
-              >
-                Yes, Confirm Order
-              </button>
-              <button
-                className="bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-                onClick={() => setShowFinalConfirm(false)}
-              >
-                Cancel
-              </button>
-            </div>
+  <button
+    className={`bg-green-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition flex items-center justify-center ${
+      isCompletingOrder ? "opacity-75 cursor-not-allowed" : ""
+    }`}
+    onClick={handleOrderComplete}
+    disabled={isCompletingOrder}
+    aria-busy={isCompletingOrder}
+  >
+    {isCompletingOrder ? (
+      <>
+        <span className="inline-block h-5 w-5 rounded-full border-2 border-white/70 border-t-transparent animate-spin mr-2" />
+        Processing…
+      </>
+    ) : (
+      "Yes, Confirm Order"
+    )}
+  </button>
+
+  <button
+    className={`bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow transition ${
+      isCompletingOrder ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-500"
+    }`}
+    onClick={() => setShowFinalConfirm(false)}
+    disabled={isCompletingOrder}
+  >
+    Cancel
+  </button>
+</div>
+
           </div>
         </div>
       )}
+      
     </div>
+    
   );
 }

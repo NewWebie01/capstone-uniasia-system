@@ -12,6 +12,7 @@
     "@heroicons/react": "^2.2.0",
     "@radix-ui/react-dialog": "^1.1.14",
     "@radix-ui/react-slot": "^1.2.0",
+    "@react-pdf/renderer": "^4.3.0",
     "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.54.0",
@@ -23,6 +24,7 @@
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
     "dayjs": "^1.11.13",
+    "file-saver": "^2.0.5",
     "framer-motion": "^11.18.2",
     "html2canvas": "^1.4.1",
     "jspdf": "^3.0.1",
@@ -35,11 +37,13 @@
     "sonner": "^2.0.7",
     "tailwindcss-animate": "^1.0.7",
     "uuid": "^11.1.0",
-    "zustand": "^5.0.7"
+    "xlsx": "^0.18.5",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@svgr/webpack": "^8.1.0",
     "@types/bcrypt": "^5.0.2",
+    "@types/file-saver": "^2.0.7",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",

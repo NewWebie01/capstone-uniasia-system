@@ -33,35 +33,19 @@ export default function LoginPage() {
 
   // gate rendering if a session already exists (prevents flicker)
   const [checking, setChecking] = useState(true);
+
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const { data } = await supabase.auth.getSession();
+      // ✅ Always allow login form to render (don’t redirect automatically)
+      await supabase.auth.getSession();
       if (!mounted) return;
-
-      const sess = data.session;
-      if (sess && !didNavigate.current) {
-        didNavigate.current = true;
-        const role: string | undefined = sess.user.user_metadata?.role;
-
-        if (role === "admin") {
-          router.replace("/dashboard");
-        } else if (role === "customer") {
-          router.replace("/customer/product-catalog");
-        } else {
-          // unknown role → sign out & show login
-          await supabase.auth.signOut();
-          setChecking(false);
-        }
-      } else {
-        setChecking(false);
-      }
+      setChecking(false);
     })();
-
     return () => {
       mounted = false;
     };
-  }, [router]);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,6 +78,7 @@ export default function LoginPage() {
       .insert([
         {
           user_email: user?.email ?? null,
+          user_role: role ?? null, // <-- Set role in log!
           action: "Login",
           details: {}, // must NOT be null
           created_at: new Date().toISOString(),

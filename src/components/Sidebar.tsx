@@ -52,28 +52,33 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   const pathname = usePathname();
   const supabase = createClientComponentClient();
 
-  const handleLogout = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const userEmail = user?.email || "unknown";
+const handleLogout = async () => {
+  // Get user info (role is stored in user_metadata, just like in login)
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const userEmail = user?.email || "unknown";
+  const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
 
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        action: "Logout",
-        details: {},
-        created_at: new Date().toISOString(),
-      },
-    ]);
+  // Log the logout action, with the role!
+  await supabase.from("activity_logs").insert([
+    {
+      user_email: userEmail,
+      user_role: userRole,        // <-- SAVE ROLE!
+      action: "Logout",
+      details: {},
+      created_at: new Date().toISOString(),
+    },
+  ]);
 
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error("Logout failed:", error.message);
-    } else {
-      window.location.href = "/login";
-    }
-  };
+  const { error } = await supabase.auth.signOut();
+  if (error) {
+    console.error("Logout failed:", error.message);
+  } else {
+    window.location.href = "/login";
+  }
+};
+
 
   return (
     <motion.div

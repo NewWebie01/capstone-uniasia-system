@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
@@ -21,17 +20,14 @@ const formatPH = (d?: string | number | Date) =>
   }).format(d ? new Date(d) : new Date());
 
 /* ---------------------- Encoding & PSGC fetch helpers --------------------- */
-// Repairs common UTF‑8 → Latin‑1 mojibake like "PiÃ±as" → "Piñas"
 const fixEncoding = (s: string) => {
   try {
-    // escape() percent-encodes bytes 0–255; decodeURIComponent treats them as UTF‑8
     return decodeURIComponent(escape(s));
   } catch {
     return s;
   }
 };
 
-// Robust JSON fetch with explicit UTF‑8 decode
 async function fetchJSON<T>(url: string): Promise<T> {
   const response = await fetch(url);
   const buffer = await response.arrayBuffer();
@@ -52,7 +48,7 @@ type PSGCCity = {
   name: string;
   code: string;
   province_id?: number;
-  type: string; // 'City' / 'Municipality' etc.
+  type: string;
 };
 type PSGCBarangay = { id: number; name: string; code: string };
 
@@ -96,16 +92,13 @@ function generateTransactionCode(): string {
 function isValidPhone(phone: string) {
   return /^\d{11}$/.test(phone);
 }
-
-// Choose a nice display name from metadata/email
 function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
   const nameFromMeta =
     meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
   if (nameFromMeta && typeof nameFromMeta === "string")
     return nameFromMeta.trim();
-  if (fallbackEmail && fallbackEmail.includes("@")) {
+  if (fallbackEmail && fallbackEmail.includes("@"))
     return fallbackEmail.split("@")[0];
-  }
   return "";
 }
 
@@ -133,6 +126,20 @@ export default function CustomerInventoryPage() {
   const [trackError, setTrackError] = useState<string | null>(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
 
+  // identity defaults from auth (if any)
+  const [authDefaults, setAuthDefaults] = useState<{
+    name: string;
+    email: string;
+  }>({ name: "", email: "" });
+
+  // order history counter (for display)
+  const [orderHistoryCount, setOrderHistoryCount] = useState<number | null>(
+    null
+  );
+
+  // loader while placing the final order
+  const [placingOrder, setPlacingOrder] = useState(false);
+
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
     name: "",
     email: "",
@@ -150,12 +157,10 @@ export default function CustomerInventoryPage() {
   const [provinces, setProvinces] = useState<PSGCProvince[]>([]);
   const [cities, setCities] = useState<PSGCCity[]>([]);
   const [barangays, setBarangays] = useState<PSGCBarangay[]>([]);
-
   const [regionCode, setRegionCode] = useState("");
   const [provinceCode, setProvinceCode] = useState("");
   const [cityCode, setCityCode] = useState("");
   const [barangayCode, setBarangayCode] = useState("");
-
   const [houseStreet, setHouseStreet] = useState("");
 
   // Derived selected objects
@@ -176,7 +181,7 @@ export default function CustomerInventoryPage() {
     [barangays, barangayCode]
   );
 
-  // NCR (Region 13 / National Capital Region) has no provinces
+  // NCR (Region 13) has no provinces
   const isNCR = useMemo(
     () =>
       !!regionCode &&
@@ -187,7 +192,7 @@ export default function CustomerInventoryPage() {
     [regionCode, selectedRegion]
   );
 
-  // Full address string (province may be empty for NCR)
+  // Full address string
   const computedAddress = useMemo(() => {
     const parts = [
       houseStreet.trim(),
@@ -212,7 +217,6 @@ export default function CustomerInventoryPage() {
   }, [computedAddress]);
 
   /* ---------------------------- Load PSGC lists --------------------------- */
-  // Regions
   useEffect(() => {
     fetchJSON<PSGCRegion[]>("https://psgc.cloud/api/regions")
       .then((data) =>
@@ -225,7 +229,6 @@ export default function CustomerInventoryPage() {
       .catch(() => toast.error("Failed to load regions"));
   }, []);
 
-  // Children of region: NCR → cities directly; Others → provinces
   useEffect(() => {
     setProvinces([]);
     setProvinceCode("");
@@ -233,7 +236,6 @@ export default function CustomerInventoryPage() {
     setCityCode("");
     setBarangays([]);
     setBarangayCode("");
-
     if (!regionCode) return;
 
     if (isNCR) {
@@ -266,7 +268,6 @@ export default function CustomerInventoryPage() {
       .catch(() => toast.error("Failed to load provinces"));
   }, [regionCode, isNCR]);
 
-  // Cities when province changes (skip for NCR)
   useEffect(() => {
     if (isNCR) return;
 
@@ -291,7 +292,6 @@ export default function CustomerInventoryPage() {
       .catch(() => toast.error("Failed to load cities/municipalities"));
   }, [provinceCode, isNCR]);
 
-  // Barangays when city changes (robust for City of Manila / NCR)
   useEffect(() => {
     setBarangays([]);
     setBarangayCode("");
@@ -300,8 +300,6 @@ export default function CustomerInventoryPage() {
     const loadBarangays = async () => {
       const prefix9 = cityCode.slice(0, 9);
       const prefix6 = cityCode.slice(0, 6);
-
-      // Natural numeric sort so "Barangay 64" < "Barangay 639"
       const fixSort = (list: PSGCBarangay[]) => {
         const collator = new Intl.Collator(undefined, {
           numeric: true,
@@ -312,31 +310,22 @@ export default function CustomerInventoryPage() {
           .sort((a, b) => collator.compare(a.name, b.name));
       };
 
-      // 1) Try CITY endpoint
       try {
         const fromCity = await fetchJSON<PSGCBarangay[]>(
           `https://psgc.cloud/api/cities/${cityCode}/barangays`
         );
         const cleaned = fixSort(fromCity);
-        if (cleaned.length > 0) {
-          setBarangays(cleaned);
-          return;
-        }
+        if (cleaned.length > 0) return setBarangays(cleaned);
       } catch {}
 
-      // 2) Try MUNICIPALITY endpoint
       try {
         const fromMunicipality = await fetchJSON<PSGCBarangay[]>(
           `https://psgc.cloud/api/municipalities/${cityCode}/barangays`
         );
         const cleaned = fixSort(fromMunicipality);
-        if (cleaned.length > 0) {
-          setBarangays(cleaned);
-          return;
-        }
+        if (cleaned.length > 0) return setBarangays(cleaned);
       } catch {}
 
-      // 3) Fallback: filter ALL barangays by prefix (covers Manila)
       try {
         const all = await fetchJSON<PSGCBarangay[]>(
           "https://psgc.cloud/api/barangays"
@@ -368,7 +357,6 @@ export default function CustomerInventoryPage() {
 
   useEffect(() => {
     fetchInventory();
-
     const channel: RealtimeChannel = supabase
       .channel("public:inventory")
       .on(
@@ -377,32 +365,73 @@ export default function CustomerInventoryPage() {
         () => fetchInventory()
       )
       .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => void supabase.removeChannel(channel);
   }, [fetchInventory]);
 
-  // Autofill logged-in user name/email (read-only fields)
+  /* -------- Compute type from order history (by email, always) ---------- */
+  const setTypeFromHistory = useCallback(async (email: string) => {
+    const cleanEmail = (email || "").trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) return;
+
+    const { count, error } = await supabase
+      .from("orders")
+      .select("id, customers!inner(email)", { count: "exact", head: true })
+      .ilike("customers.email", cleanEmail);
+
+    if (error) {
+      console.warn("Could not compute order history:", error.message);
+      return;
+    }
+
+    const c = count ?? 0;
+    setOrderHistoryCount(c);
+    const type: CustomerInfo["customer_type"] =
+      c > 0 ? "Existing Customer" : "New Customer";
+
+    setCustomerInfo((prev) => ({
+      ...prev,
+      customer_type: type,
+      payment_type:
+        type === "Existing Customer"
+          ? prev.payment_type === "Credit"
+            ? "Credit"
+            : prev.payment_type === "Balance"
+            ? "Balance"
+            : "Cash"
+          : "Cash",
+    }));
+  }, []);
+
+  // Pre-fill name/email if logged in and compute type once
   useEffect(() => {
     (async () => {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-
       if (user) {
         const displayName = getDisplayNameFromMetadata(
           user.user_metadata,
           user.email || undefined
         );
+        const email = user.email || "";
+        setAuthDefaults({ name: displayName || "", email });
         setCustomerInfo((prev) => ({
           ...prev,
           name: prev.name || displayName || "",
-          email: prev.email || user.email || "",
+          email: prev.email || email,
         }));
+        await setTypeFromHistory(email);
       }
     })();
-  }, []);
+  }, [setTypeFromHistory]);
+
+  // Debounce re-check if email ever changes elsewhere (kept for safety)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (customerInfo.email) setTypeFromHistory(customerInfo.email);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [customerInfo.email, setTypeFromHistory]);
 
   /* ------------------------------ Tracking ------------------------------ */
   const handleTrack = async (e: React.FormEvent) => {
@@ -416,28 +445,12 @@ export default function CustomerInventoryPage() {
         .from("customers")
         .select(
           `
-          id,
-          name,
-          code,
-          contact_person,
-          email,
-          phone,
-          address,
-          status,
-          date,
+          id, name, code, contact_person, email, phone, address, status, date,
           orders (
-            id,
-            total_amount,
-            status,
+            id, total_amount, status,
             order_items (
-              quantity,
-              price,
-              inventory:inventory_id (
-                product_name,
-                category,
-                subcategory,
-                status
-              )
+              quantity, price,
+              inventory:inventory_id (product_name, category, subcategory, status)
             )
           )
         `
@@ -445,11 +458,8 @@ export default function CustomerInventoryPage() {
         .eq("code", txn.trim().toUpperCase())
         .maybeSingle();
 
-      if (error || !data) {
-        setTrackError("Transaction code not found.");
-      } else {
-        setTrackingResult(data);
-      }
+      if (error || !data) setTrackError("Transaction code not found.");
+      else setTrackingResult(data);
     } catch {
       setTrackError("Error while fetching. Please try again.");
     } finally {
@@ -464,7 +474,12 @@ export default function CustomerInventoryPage() {
     } else if (customerInfo.customer_type === "Existing Customer") {
       setCustomerInfo((prev) => ({
         ...prev,
-        payment_type: prev.payment_type === "Credit" ? "Credit" : "Cash",
+        payment_type:
+          prev.payment_type === "Credit"
+            ? "Credit"
+            : prev.payment_type === "Balance"
+            ? "Balance"
+            : "Cash",
       }));
     }
   }, [customerInfo.customer_type]);
@@ -477,38 +492,46 @@ export default function CustomerInventoryPage() {
 
   const addToCart = () => {
     if (!selectedItem) return;
-
-    if (orderQuantity > selectedItem.quantity) {
-      toast.error("Cannot order more than available stock");
-      return;
-    }
-
+    const qty = Math.max(1, Math.min(50000, Math.floor(orderQuantity) || 1));
     if (cart.some((ci) => ci.item.id === selectedItem.id)) {
       toast.error("Item already in cart.");
       return;
     }
-
-    setCart((prev) => [
-      ...prev,
-      { item: selectedItem, quantity: orderQuantity },
-    ]);
+    setCart((prev) => [...prev, { item: selectedItem, quantity: qty }]);
     setSelectedItem(null);
     setOrderQuantity(1);
   };
 
-  const removeFromCart = (itemId: number) => {
+  const removeFromCart = (itemId: number) =>
     setCart((prev) => prev.filter((ci) => ci.item.id !== itemId));
+
+  const updateCartQuantity = (itemId: number, nextQtyRaw: number) => {
+    setCart((prev) => {
+      const parsed = Math.floor(Number.isFinite(nextQtyRaw) ? nextQtyRaw : 1);
+      const nextQty = Math.max(1, Math.min(50000, isNaN(parsed) ? 1 : parsed));
+      return prev.map((ci) =>
+        ci.item.id === itemId ? { ...ci, quantity: nextQty } : ci
+      );
+    });
   };
 
-  // Open first confirm modal
-  const handleShowCart = () => {
+  const handleShowCart = async () => {
     if (!customerInfo.code) {
       setCustomerInfo((prev) => ({ ...prev, code: generateTransactionCode() }));
     }
+    // ensure identity present from auth defaults
+    setCustomerInfo((prev) => ({
+      ...prev,
+      name: prev.name || authDefaults.name,
+      email: prev.email || authDefaults.email,
+    }));
+    // refresh type using current email
+    const emailToCheck =
+      (customerInfo.email && customerInfo.email.trim()) || authDefaults.email;
+    if (emailToCheck) await setTypeFromHistory(emailToCheck);
     setShowCartPopup(true);
   };
 
-  // First modal "Submit Order" -> open final confirmation
   const handleOpenFinalModal = () => {
     if (!isValidPhone(customerInfo.phone)) {
       toast.error("Phone number must be exactly 11 digits.");
@@ -518,12 +541,16 @@ export default function CustomerInventoryPage() {
       !houseStreet.trim() ||
       !barangayCode ||
       !cityCode ||
-      (!isNCR && !provinceCode) || // province optional for NCR
+      (!isNCR && !provinceCode) ||
       !regionCode
     ) {
       toast.error(
         "Please complete your full address (House/St., Barangay, City, Province/Region)."
       );
+      return;
+    }
+    if (cart.some((ci) => ci.quantity < 1 || ci.quantity > 50000)) {
+      toast.error("All quantities must be between 1 and 50,000.");
       return;
     }
     if (
@@ -538,136 +565,131 @@ export default function CustomerInventoryPage() {
       toast.error("Please complete all required customer fields.");
       return;
     }
-
     setFinalOrderDetails({ customer: customerInfo, items: cart });
     setShowCartPopup(false);
     setShowFinalPopup(true);
   };
 
-  // Final modal "Confirm Order" -> insert to DB
-const handleConfirmOrder = async () => {
-  if (!finalOrderDetails) return;
+  const handleConfirmOrder = async () => {
+    if (!finalOrderDetails || placingOrder) return;
+    setPlacingOrder(true);
 
-  const { customer, items } = finalOrderDetails;
+    const { customer, items } = finalOrderDetails;
 
-  if (!isValidPhone(customer.phone)) {
-    toast.error("Phone number must be exactly 11 digits.");
-    return;
-  }
-  if (!customer.address) {
-    toast.error("Missing address.");
-    return;
-  }
+    if (!isValidPhone(customer.phone)) {
+      toast.error("Phone number must be exactly 11 digits.");
+      setPlacingOrder(false);
+      return;
+    }
+    if (!customer.address) {
+      toast.error("Missing address.");
+      setPlacingOrder(false);
+      return;
+    }
 
-  const { data: existing } = await supabase
-    .from("customers")
-    .select("code")
-    .eq("code", customer.code);
-
-  if (existing && existing.length > 0) {
-    toast.error("Duplicate transaction code generated. Please try again.");
-    return;
-  }
-
-  // ✅ Force PH (GMT+8) timestamp
-  const now = new Date();
-const phNow = new Date(
-  now.toLocaleString("en-US", { timeZone: "Asia/Manila" })
-);
-const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
-
-const customerPayload: Partial<CustomerInfo> = {
-  ...customer,
-  date: phTime,
-  status: "pending",
-  transaction: items
-    .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
-    .join(", "),
-};
-
-  try {
-    // Insert customer
-    const { data: cust, error: custErr } = await supabase
+    const { data: existing } = await supabase
       .from("customers")
-      .insert([customerPayload])
-      .select()
-      .single();
-    if (custErr) throw custErr;
+      .select("code")
+      .eq("code", customer.code);
+    if (existing && existing.length > 0) {
+      toast.error("Duplicate transaction code generated. Please try again.");
+      setPlacingOrder(false);
+      return;
+    }
 
-    const customerId = cust.id;
-    const totalAmount = items.reduce(
-      (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
-      0
-    );
+    const now = new Date();
+    const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
 
-    // Insert order with PH timestamp
-    const { data: ord, error: ordErr } = await supabase
-      .from("orders")
-      .insert([
-        {
-          customer_id: customerId,
-          total_amount: totalAmount,
-          status: "pending",
-          date_created: phTime, 
-        },
-      ])
-      .select()
-      .single();
-    if (ordErr) throw ordErr;
+    const customerPayload: Partial<CustomerInfo> = {
+      ...customer,
+      date: phTime,
+      status: "pending",
+      transaction: items
+        .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
+        .join(", "),
+    };
 
-    const orderId = ord.id;
-    const rows = items.map((ci) => ({
-      order_id: orderId,
-      inventory_id: ci.item.id,
-      quantity: ci.quantity,
-      price: ci.item.unit_price || 0,
-    }));
+    try {
+      const { data: cust, error: custErr } = await supabase
+        .from("customers")
+        .insert([customerPayload])
+        .select()
+        .single();
+      if (custErr) throw custErr;
 
-    // Insert order items
-    const { error: itemsErr } = await supabase
-      .from("order_items")
-      .insert(rows);
-    if (itemsErr) throw itemsErr;
+      const customerId = cust.id;
+      const totalAmount = items.reduce(
+        (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
+        0
+      );
 
-    toast.success("Your order has been submitted successfully!");
+      const { data: ord, error: ordErr } = await supabase
+        .from("orders")
+        .insert([
+          {
+            customer_id: customerId,
+            total_amount: totalAmount,
+            status: "pending",
+            date_created: phTime,
+          },
+        ])
+        .select()
+        .single();
+      if (ordErr) throw ordErr;
 
-    // Reset UI
-    setShowFinalPopup(false);
-    setFinalOrderDetails(null);
-    setCart([]);
+      const orderId = ord.id;
+      const rows = items.map((ci) => ({
+        order_id: orderId,
+        inventory_id: ci.item.id,
+        quantity: ci.quantity,
+        price: ci.item.unit_price || 0,
+      }));
+      const { error: itemsErr } = await supabase
+        .from("order_items")
+        .insert(rows);
+      if (itemsErr) throw itemsErr;
 
-    setCustomerInfo({
-      name: "",
-      email: "",
-      phone: "",
-      address: "",
-      contact_person: "",
-      code: "",
-      area: "",
-      payment_type: "Cash",
-      customer_type: undefined,
-    });
-    setRegionCode("");
-    setProvinceCode("");
-    setCityCode("");
-    setBarangayCode("");
-    setProvinces([]);
-    setCities([]);
-    setBarangays([]);
-    setHouseStreet("");
+      toast.success("Your order has been submitted successfully!");
 
-    await fetchInventory();
-  } catch (e: any) {
-    console.error("Order submission error:", e.message);
-    toast.error("Something went wrong. Please try again.");
-  }
-};
+      // Reset UI but keep identity
+      setShowFinalPopup(false);
+      setFinalOrderDetails(null);
+      setCart([]);
 
+      setCustomerInfo({
+        name: authDefaults.name,
+        email: authDefaults.email,
+        phone: "",
+        address: "",
+        contact_person: "",
+        code: "",
+        area: "",
+        payment_type: "Cash",
+        customer_type: undefined,
+      });
+      setRegionCode("");
+      setProvinceCode("");
+      setCityCode("");
+      setBarangayCode("");
+      setProvinces([]);
+      setCities([]);
+      setBarangays([]);
+      setHouseStreet("");
 
+      await fetchInventory();
+
+      const emailUsed = customer.email || authDefaults.email;
+      if (emailUsed) await setTypeFromHistory(emailUsed);
+    } catch (e: any) {
+      console.error("Order submission error:", e.message);
+      toast.error("Something went wrong. Please try again.");
+    } finally {
+      setPlacingOrder(false);
+    }
+  };
 
   /* ------------------------------ Derived ------------------------------ */
   const totalItems = cart.reduce((sum, ci) => sum + ci.quantity, 0);
-
   const categoriesList = useMemo(
     () => Array.from(new Set(inventory.map((i) => i.category))).sort(),
     [inventory]
@@ -741,45 +763,48 @@ const customerPayload: Partial<CustomerInfo> = {
               </tr>
             </thead>
             <tbody>
-  {filteredInventory.map((item) => (
-    <tr key={item.id} className="border-b hover:bg-gray-100">
-      <td className="py-2 px-4 pl-6 text-left">
-        <button
-          className="text-[#2f63b7] hover:underline font-normal text-left"
-          onClick={() => openImageModal(item)}
-          title={item.image_url ? "View product image" : "No image available"}
-          style={{ wordBreak: "break-word" }}
-        >
-          {item.product_name}
-        </button>
-      </td>
-      <td className="py-2 px-4 text-left">{item.category}</td>
-      <td className="py-2 px-4 text-left">{item.subcategory}</td>
-      <td className="py-2 px-4 text-left">{item.status}</td>
-      <td className="py-2 px-4">
-        <button
-          className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
-          onClick={() => handleAddToCartClick(item)}
-        >
-          Add to Cart
-        </button>
-      </td>
-    </tr>
-  ))}
-  {filteredInventory.length === 0 && (
-    <tr>
-      <td colSpan={5} className="text-center py-6 text-gray-500">
-        No products found.
-      </td>
-    </tr>
-  )}
-</tbody>
-
+              {filteredInventory.map((item) => (
+                <tr key={item.id} className="border-b hover:bg-gray-100">
+                  <td className="py-2 px-4 pl-6 text-left">
+                    <button
+                      className="text-[#2f63b7] hover:underline font-normal text-left"
+                      onClick={() => openImageModal(item)}
+                      title={
+                        item.image_url
+                          ? "View product image"
+                          : "No image available"
+                      }
+                      style={{ wordBreak: "break-word" }}
+                    >
+                      {item.product_name}
+                    </button>
+                  </td>
+                  <td className="py-2 px-4 text-left">{item.category}</td>
+                  <td className="py-2 px-4 text-left">{item.subcategory}</td>
+                  <td className="py-2 px-4 text-left">{item.status}</td>
+                  <td className="py-2 px-4">
+                    <button
+                      className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
+                      onClick={() => handleAddToCartClick(item)}
+                    >
+                      Add to Cart
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {filteredInventory.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="text-center py-6 text-gray-500">
+                    No products found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
           </table>
         </div>
       )}
 
-      {/* View-only IMAGE MODAL */}
+      {/* Image Modal */}
       {showImageModal && imageModalItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl ring-1 ring-black/5">
@@ -847,9 +872,16 @@ const customerPayload: Partial<CustomerInfo> = {
                 type="number"
                 className="w-full border px-3 py-2 rounded"
                 min={1}
-                max={selectedItem.quantity}
+                max={50000}
                 value={orderQuantity}
-                onChange={(e) => setOrderQuantity(Number(e.target.value))}
+                onChange={(e) =>
+                  setOrderQuantity(
+                    Math.max(
+                      1,
+                      Math.min(50000, Math.floor(Number(e.target.value) || 1))
+                    )
+                  )
+                }
               />
             </div>
             <div className="mt-4 flex justify-end gap-2">
@@ -870,7 +902,7 @@ const customerPayload: Partial<CustomerInfo> = {
         </div>
       )}
 
-      {/* Cart Preview */}
+      {/* Cart (editable qty) */}
       {cart.length > 0 && (
         <div className="mt-10 bg-gray-100 p-4 rounded shadow">
           <h2 className="text-xl font-bold mb-4">Cart</h2>
@@ -878,7 +910,6 @@ const customerPayload: Partial<CustomerInfo> = {
             <thead className="bg-[#ffba20] text-black text-left">
               <tr>
                 <th className="py-2 px-4 pl-6 text-left">Product Name</th>
-
                 <th className="py-2 px-4">Category</th>
                 <th className="py-2 px-4">Subcategory</th>
                 <th className="py-2 px-4">Qty</th>
@@ -892,7 +923,52 @@ const customerPayload: Partial<CustomerInfo> = {
                   <td className="py-2 px-4">{ci.item.product_name}</td>
                   <td className="py-2 px-4">{ci.item.category}</td>
                   <td className="py-2 px-4">{ci.item.subcategory}</td>
-                  <td className="py-2 px-4">{ci.quantity}</td>
+                  <td className="py-2 px-4">
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="px-2 py-1 rounded border hover:bg-gray-100"
+                        onClick={() =>
+                          updateCartQuantity(ci.item.id, ci.quantity - 1)
+                        }
+                        title="Decrease"
+                      >
+                        −
+                      </button>
+                      <input
+                        type="number"
+                        className="w-20 border rounded px-2 py-1 text-center"
+                        min={1}
+                        max={50000}
+                        value={ci.quantity}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          updateCartQuantity(
+                            ci.item.id,
+                            Math.max(1, Math.min(50000, isNaN(v) ? 1 : v))
+                          );
+                        }}
+                        onBlur={(e) => {
+                          const v = Number(e.target.value);
+                          updateCartQuantity(
+                            ci.item.id,
+                            Math.max(1, Math.min(50000, isNaN(v) ? 1 : v))
+                          );
+                        }}
+                      />
+                      <button
+                        className="px-2 py-1 rounded border hover:bg-gray-100"
+                        onClick={() =>
+                          updateCartQuantity(
+                            ci.item.id,
+                            ci.quantity + 1 > 50000 ? 50000 : ci.quantity + 1
+                          )
+                        }
+                        title="Increase"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </td>
                   <td className="py-2 px-4">{ci.item.status}</td>
                   <td className="py-2 px-4">
                     <button
@@ -919,7 +995,7 @@ const customerPayload: Partial<CustomerInfo> = {
         </div>
       )}
 
-      {/* First Confirm Order Modal (modern) */}
+      {/* First Confirm Order Modal (name/email are READ-ONLY) */}
       {showCartPopup && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -928,14 +1004,13 @@ const customerPayload: Partial<CustomerInfo> = {
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
             className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
-            {/* Header */}
             <h2 className="text-2xl font-semibold tracking-tight shrink-0">
               Confirm Order
             </h2>
 
-            {/* Body (scrolls) */}
             <div className="flex-1 overflow-auto mt-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* READ-ONLY name & email */}
                 <input
                   placeholder="Customer Name"
                   className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
@@ -949,6 +1024,7 @@ const customerPayload: Partial<CustomerInfo> = {
                   value={customerInfo.email}
                   readOnly
                 />
+                {/* Editable phone & contact */}
                 <input
                   type="tel"
                   placeholder="Phone (11 digits)"
@@ -975,7 +1051,7 @@ const customerPayload: Partial<CustomerInfo> = {
                   }
                 />
 
-                {/* Location Pickers + House/Street */}
+                {/* Address pickers */}
                 <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
                   <div>
                     <label className="block text-sm mb-1">Region</label>
@@ -992,7 +1068,6 @@ const customerPayload: Partial<CustomerInfo> = {
                       ))}
                     </select>
                   </div>
-
                   <div>
                     <label className="block text-sm mb-1">Province</label>
                     <select
@@ -1016,7 +1091,6 @@ const customerPayload: Partial<CustomerInfo> = {
                         ))}
                     </select>
                   </div>
-
                   <div>
                     <label className="block text-sm mb-1">
                       City / Municipality
@@ -1043,7 +1117,6 @@ const customerPayload: Partial<CustomerInfo> = {
                       ))}
                     </select>
                   </div>
-
                   <div>
                     <label className="block text-sm mb-1">Barangay</label>
                     <select
@@ -1070,7 +1143,6 @@ const customerPayload: Partial<CustomerInfo> = {
                   value={houseStreet}
                   onChange={(e) => setHouseStreet(e.target.value)}
                 />
-
                 <input
                   className="border px-3 py-2 rounded col-span-2 bg-gray-50"
                   value={customerInfo.address || ""}
@@ -1078,28 +1150,22 @@ const customerPayload: Partial<CustomerInfo> = {
                   readOnly
                 />
 
+                {/* Customer Type (derived) */}
                 <div className="col-span-2">
                   <label className="block mb-1">Customer Type</label>
-                  <select
-                    className="border px-3 py-2 rounded w-full"
+                  <input
+                    className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
                     value={customerInfo.customer_type || ""}
-                    onChange={(e) =>
-                      setCustomerInfo({
-                        ...customerInfo,
-                        customer_type: e.target.value as
-                          | "New Customer"
-                          | "Existing Customer",
-                      })
-                    }
-                  >
-                    <option value="" disabled>
-                      Select customer type
-                    </option>
-                    <option value="New Customer">New Customer</option>
-                    <option value="Existing Customer">Existing Customer</option>
-                  </select>
+                    readOnly
+                  />
+                  {orderHistoryCount !== null && (
+                    <div className="text-xs text-gray-500 mt-1">
+                      Past orders under this email: {orderHistoryCount}
+                    </div>
+                  )}
                 </div>
 
+                {/* Payment Type */}
                 <div className="col-span-2">
                   <label className="block mb-1">Payment Type</label>
                   <div className="flex gap-4">
@@ -1157,7 +1223,6 @@ const customerPayload: Partial<CustomerInfo> = {
               </div>
             </div>
 
-            {/* Footer */}
             <div className="shrink-0 flex justify-end gap-2 mt-4">
               <button
                 onClick={() => setShowCartPopup(false)}
@@ -1176,7 +1241,7 @@ const customerPayload: Partial<CustomerInfo> = {
         </div>
       )}
 
-      {/* Final Confirmation Modal (modern) */}
+      {/* Final Confirmation Modal */}
       {showFinalPopup && finalOrderDetails && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -1185,12 +1250,10 @@ const customerPayload: Partial<CustomerInfo> = {
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
             className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
-            {/* Header */}
             <h2 className="text-2xl font-semibold tracking-tight shrink-0">
               Order Confirmation
             </h2>
 
-            {/* Body */}
             <div className="flex-1 overflow-auto mt-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
@@ -1266,19 +1329,31 @@ const customerPayload: Partial<CustomerInfo> = {
               </div>
             </div>
 
-            {/* Footer */}
             <div className="shrink-0 flex justify-end gap-2 mt-4">
               <button
-                onClick={() => setShowFinalPopup(false)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
+                onClick={() => !placingOrder && setShowFinalPopup(false)}
+                disabled={placingOrder}
+                className={`px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition ${
+                  placingOrder ? "opacity-60 cursor-not-allowed" : ""
+                }`}
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmOrder}
-                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition"
+                disabled={placingOrder}
+                className={`px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition inline-flex items-center gap-2 ${
+                  placingOrder ? "opacity-70 cursor-not-allowed" : ""
+                }`}
               >
-                Confirm Order
+                {placingOrder ? (
+                  <>
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-black/40 border-t-black" />
+                    Submitting…
+                  </>
+                ) : (
+                  "Confirm Order"
+                )}
               </button>
             </div>
           </motion.div>

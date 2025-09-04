@@ -73,6 +73,9 @@ type OrderWithCustomer = {
   total_amount: number | null;
   status: string | null;
   truck_delivery_id: number | null;
+  terms?: string | null;
+  collection?: string | null;
+  salesman?: string | null;
   customer: Customer; // joined
   order_items?: Array<{
     quantity: number;
@@ -112,22 +115,25 @@ export default function TruckDeliveryPage() {
   });
 
   // Add after: const supabase = createPagesBrowserClient();
-  async function logActivity(action: string, details: any = {}) {
-    try {
-      const { data } = await supabase.auth.getUser();
-      const userEmail = data?.user?.email || "";
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          action,
-          details,
-        },
-      ]);
-    } catch (e) {
-      // For dev only: ignore logging failures
-      console.error("Log activity failed", e);
-    }
+async function logActivity(action: string, details: any = {}) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    const userEmail = data?.user?.email || "";
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        action,
+        details,
+        user_role: "admin",             // Always log as admin
+        created_at: new Date().toISOString(), // Always log timestamp
+      },
+    ]);
+  } catch (e) {
+    console.error("Log activity failed", e);
   }
+}
+
+
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForDeliveryId, setAssignForDeliveryId] = useState<number | null>(
@@ -233,38 +239,39 @@ export default function TruckDeliveryPage() {
 
     const ids = deliveriesList.map((d) => d.id);
     const { data: oData, error: oErr } = await supabase
-      .from("orders")
-      .select(
-        `
-        id,
-        total_amount,
-        status,
-        truck_delivery_id,
-        customer:customer_id(
-          id,
-          name,
-          code,
-          address,
-          contact_person,
-          phone,
-          status,
-          date,
-          created_at 
-        ),
-        order_items(
-          quantity,
-          price,
-          inventory:inventory_id(
-            product_name,
-            category,
-            subcategory,
-            status
-          )
-        )
-      `
+  .from("orders")
+  .select(`
+    id,
+    total_amount,
+    status,
+    truck_delivery_id,
+    salesman,
+    terms,
+    accepted_at,
+    customer:customer_id (
+      id,
+      name,
+      code,
+      address,
+      contact_person,
+      phone,
+      status,
+      date
+    ),
+    order_items (
+      quantity,
+      price,
+      inventory:inventory_id (
+        product_name,
+        category,
+        subcategory,
+        status
       )
-      .in("truck_delivery_id", ids);
-
+    )
+  `)
+  .in("truck_delivery_id", ids)
+  .order("accepted_at", { ascending: false }); // instead of created_at
+      
     if (oErr) {
       console.error("Fetch assigned orders error:", oErr);
       return;
@@ -280,6 +287,8 @@ export default function TruckDeliveryPage() {
         total_amount: oRaw.total_amount,
         status: oRaw.status,
         truck_delivery_id: oRaw.truck_delivery_id,
+        terms: oRaw.terms ?? null,
+        salesman: oRaw.salesman ?? null,
         customer: oRaw.customer ?? null,
         order_items: oRaw.order_items ?? [],
       };
@@ -357,7 +366,16 @@ export default function TruckDeliveryPage() {
       setUnassignedOrders(sorted);
     }
 
-    setUnassignedOrders((data as OrderWithCustomer[]) || []);
+    setUnassignedOrders(
+      (data as any[]).map((oRaw) => ({
+        id: oRaw.id,
+        total_amount: oRaw.total_amount,
+        status: oRaw.status,
+        truck_delivery_id: oRaw.truck_delivery_id,
+        customer: Array.isArray(oRaw.customer) ? oRaw.customer[0] : oRaw.customer,
+        order_items: oRaw.order_items ?? [],
+      })) || []
+    );
 
     const assignSelected = async () => {
       if (!assignForDeliveryId || selectedOrderIds.length === 0) {
@@ -441,7 +459,16 @@ export default function TruckDeliveryPage() {
       await fetchDeliveriesAndAssignments();
     };
 
-    setUnassignedOrders((data as OrderWithCustomer[]) || []);
+    setUnassignedOrders(
+      (data as any[]).map((oRaw) => ({
+        id: oRaw.id,
+        total_amount: oRaw.total_amount,
+        status: oRaw.status,
+        truck_delivery_id: oRaw.truck_delivery_id,
+        customer: Array.isArray(oRaw.customer) ? oRaw.customer[0] : oRaw.customer,
+        order_items: oRaw.order_items ?? [],
+      })) || []
+    );
   };
 
   const handleClearInvoices = async (deliveryId: number) => {
@@ -706,6 +733,9 @@ export default function TruckDeliveryPage() {
     setPdfUrl(null);
   };
 
+  const isLocked = (status: string) => status === "Delivered";
+
+
   /* =========================
      RENDER
   ========================= */
@@ -735,7 +765,9 @@ export default function TruckDeliveryPage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4 }}
-              className="bg-white p-6 rounded-lg shadow-md mb-6"
+              className={`bg-white p-6 rounded-lg shadow-md mb-6 ${
+              isLocked(delivery.status) ? "opacity-80" : ""
+              }`}
             >
               <div className="grid grid-cols-12 gap-6">
                 {/* LEFT: Delivery details */}
@@ -886,32 +918,38 @@ export default function TruckDeliveryPage() {
                       )}
 
                       <select
-                        value={delivery.status}
-                        onChange={(e) =>
-                          setConfirmDialog({
-                            open: true,
-                            id: delivery.id,
-                            newStatus: e.target.value,
-                          })
-                        }
-                        className="border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
-                      >
-                        <option value="Scheduled">Scheduled</option>
-                        <option value="Ongoing">Ongoing</option>
-                        <option value="Delivered">Delivered</option>
-                      </select>
+                      value={delivery.status}
+                      onChange={(e) =>
+                        setConfirmDialog({
+                          open: true,
+                          id: delivery.id,
+                          newStatus: e.target.value,
+                        })
+                      }
+                      disabled={isLocked(delivery.status)}                
+                      className={`border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10
+                        ${isLocked(delivery.status) ? "opacity-60 cursor-not-allowed" : ""}`}
+                    >
+                      <option value="Scheduled">Scheduled</option>
+                      <option value="Ongoing">Ongoing</option>
+                      <option value="Delivered">Delivered</option>
+                    </select>
                     </div>
 
                     <button
                       onClick={() => openAssignDialog(delivery.id)}
-                      className="px-3 py-2 rounded-md border text-sm hover:bg-slate-50 transition"
+                      disabled={isLocked(delivery.status)}
+                      className={`px-3 py-2 rounded-md border text-sm hover:bg-slate-50 transition
+                        ${isLocked(delivery.status) ? "opacity-60 cursor-not-allowed" : ""}`}
                     >
                       Assign Invoices
                     </button>
 
                     <button
                       onClick={() => handleClearInvoices(delivery.id)}
-                      className="px-3 py-2 rounded-md border border-red-400 text-red-600 text-sm hover:bg-red-50 transition"
+                      disabled={isLocked(delivery.status)}                 // ✅ lock
+                      className={`px-3 py-2 rounded-md border border-red-400 text-red-600 text-sm hover:bg-red-50 transition
+                        ${isLocked(delivery.status) ? "opacity-60 cursor-not-allowed" : ""}`}
                     >
                       Clear Invoices
                     </button>
@@ -1065,36 +1103,38 @@ export default function TruckDeliveryPage() {
 
                     <div className="grid grid-cols-2 gap-y-1 text-sm">
                       <p>
-                        <strong>NAME:</strong>{" "}
+                        <strong>NAME: </strong>{" "}
                         {selectedOrderForInvoice.customer.name}
                       </p>
                       <p>
-                        <strong>TRANSACTION CODE:</strong>{" "}
+                        <strong>TRANSACTION CODE: </strong>{" "}
                         {selectedOrderForInvoice.customer.code}
                       </p>
                       <p className="col-span-2">
-                        <strong>ADDRESS:</strong>{" "}
+                        <strong>ADDRESS: </strong>{" "}
                         {selectedOrderForInvoice.customer.address}
                       </p>
                       <p>
-                        <strong>CONTACT PERSON:</strong>{" "}
+                        <strong>CONTACT PERSON: </strong>{" "}
                         {selectedOrderForInvoice.customer.contact_person}
                       </p>
                       <p>
-                        <strong>TEL NO:</strong>{" "}
+                        <strong>TEL NO: </strong>{" "}
                         {selectedOrderForInvoice.customer.phone}
                       </p>
                       <p>
-                        <strong>TERMS:</strong> Net 30
+                        <strong>TERMS: </strong> 
+                        {selectedOrderForInvoice.terms ?? "—"}
                       </p>
                       <p>
-                        <strong>COLLECTION:</strong> On Delivery
+                        <strong>COLLECTION: </strong>
                       </p>
                       <p>
-                        <strong>CREDIT LIMIT:</strong> ₱20,000
+                        <strong>CREDIT LIMIT: </strong> 
                       </p>
                       <p>
-                        <strong>SALESMAN:</strong> Pedro Reyes
+                        <strong>SALESMAN: </strong> 
+                        {selectedOrderForInvoice.salesman ?? "—"}
                       </p>
                     </div>
 
