@@ -89,8 +89,12 @@ export default function TransactionHistoryPage() {
   }, [searchQuery, transactions]);
 
   return (
-    <div className="p-6">
-      <h1 className="text-3xl font-bold mb-6">Transaction History</h1>
+    <div className="px-4 pb-4 pt-1">
+      <h1 className="pt-1 text-3xl font-bold mb-1">Transaction History</h1>
+      <p className="text-sm text-gray-500 mb-4">
+        View all orders with their status and totals, and quickly search by
+        code, customer, date, or amount.
+      </p>
 
       <input
         type="search"

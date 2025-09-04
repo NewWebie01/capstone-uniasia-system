@@ -6,6 +6,8 @@ import { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 import PageLoader from "@/components/PageLoader"; 
 import { toast } from "sonner";
+import { useSearchParams } from "next/navigation";
+
 
 type InventoryItem = {
   id: number;
@@ -82,6 +84,8 @@ export default function SalesPage() {
   const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
     null
   );
+  const searchParams = useSearchParams();
+  const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
@@ -95,7 +99,7 @@ export default function SalesPage() {
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
-const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null);
+  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null);
   const [salesman, setSalesman] = useState("");
   const [forwarder, setForwarder] = useState("");
   const resetSalesForm = () => {
@@ -294,19 +298,20 @@ const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null
       `
       )
       .order("date_created", { ascending: false });
-    if (!error && data) {
-      const formatted = data.map((o: any) => ({
-        ...o,
-        customers: Array.isArray(o.customer) ? o.customer[0] : o.customer,
-        order_items: o.order_items.map((item: any) => ({
-          ...item,
-          inventory: Array.isArray(item.inventory)
-            ? item.inventory[0]
-            : item.inventory,
-        })),
-      }));
-      setOrders(formatted);
-    }
+   if (!error && data) {
+  const formatted = data.map((o: any) => ({
+    ...o,
+    customers: Array.isArray(o.customer) ? o.customer[0] : o.customer,
+    order_items: o.order_items.map((item: any) => ({
+      ...item,
+      inventory: Array.isArray(item.inventory)
+        ? item.inventory[0]
+        : item.inventory,
+    })),
+  }));
+  setOrders(formatted);
+}
+
   };
 
   // Fetch Fast & Slow Moving Products from VIEW
@@ -367,6 +372,23 @@ const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null
       resetSalesForm();
     }
   }, [showModal, showSalesOrderModal]);
+
+
+  useEffect(() => {
+  const orderId = searchParams.get("order");
+  if (orderId && orders.length > 0) {
+    setTimeout(() => {
+      const el = document.getElementById(`order-card-${orderId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-2", "ring-blue-400", "bg-blue-50");
+        setTimeout(() => {
+          el.classList.remove("ring-2", "ring-blue-400", "bg-blue-50");
+        }, 2000);
+      }
+    }, 500);
+  }
+}, [searchParams, orders]);
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
@@ -1038,15 +1060,17 @@ const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null
             );
             return (
               <div
-                key={order.id}
-                className={`border p-4 mb-4 rounded shadow bg-white text-base ${
-                  isAccepted ? "border-blue-600 border-2" : ""
-                }`}
-              >
+  key={order.id}
+  id={`order-card-${order.id}`} 
+  ref={el => { orderRefs.current[order.id] = el; }}
+  className={`border p-4 mb-4 rounded shadow bg-white text-base transition-all duration-500 ${
+    isAccepted ? "border-blue-600 border-2" : ""
+  }`}
+>
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-bold text-xl">
                     Transaction ID:{" "}
-<span className="text-blue-700">{order.customers.code}</span>
+                  <span className="text-blue-700">{order.customers.code}</span>
 
                   </span>
                   <span
@@ -1109,14 +1133,14 @@ const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null
                             Accept Order
                           </button>
                           <button
-  onClick={() => {
-    setShowRejectConfirm(true);
-    setOrderToReject(order);
-  }}
-  className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
->
-  Reject Order
-</button>
+                         onClick={() => {
+                     setShowRejectConfirm(true);
+                        setOrderToReject(order);
+                        }}
+                           className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
+                      >
+                            Reject Order
+                        </button>
                         </>
                       )}
                       {isAccepted && (

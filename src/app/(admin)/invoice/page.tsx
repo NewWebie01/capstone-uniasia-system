@@ -757,7 +757,7 @@ export default function InvoiceMergedPage() {
   // Default: list + modal
   return (
     <motion.div
-      className="relative min-h-screen py-10 px-4"
+      className="relative min-h-screen px-4 pb-6 pt-1"
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: "easeOut" }}
@@ -765,13 +765,15 @@ export default function InvoiceMergedPage() {
       <GlobalPrintCSS />
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="mb-4">
-          <h1 className="text-3xl font-extrabold text-neutral-800 tracking-tight mb-2">
+          <h1 className="pt-1 text-3xl font-bold text-neutral-800 tracking-tight">
             Sales Invoices
           </h1>
-          <p className="text-neutral-500 mb-4 text-sm">
-            Manage and view all issued sales invoices.
+          <p className="text-sm text-neutral-500 mt-1">
+            Review completed invoices, preview delivery receipts, and export
+            PDFs.
           </p>
-          <div className="w-full max-w-3xl">
+
+          <div className="w-full max-w-3xl mt-4">
             <input
               type="text"
               placeholder="Search by customer name…"
@@ -781,6 +783,7 @@ export default function InvoiceMergedPage() {
             />
           </div>
         </div>
+
         <style jsx>{`
           /* Force vertical middle in all table cells inside this invoice only */
           .invoice table th,
