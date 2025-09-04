@@ -60,8 +60,8 @@ type InventoryItem = {
   quantity: number;
   unit_price: number;
   status: string;
-  date_added: string;
   image_url?: string | null;
+  date_added?: string | null; // ← make optional (and allow null)
 };
 
 type CartItem = { item: InventoryItem; quantity: number };
@@ -347,25 +347,38 @@ export default function CustomerInventoryPage() {
     setLoading(true);
     const { data, error } = await supabase.from("inventory").select("*");
     if (error) {
-      console.error("Error fetching inventory:", error.message);
+      console.error("Error fetching inventory:", error);
       toast.error("Could not load inventory.");
     } else {
-      setInventory((data ?? []) as InventoryItem[]);
+      // Map to ensure the fields we use exist (fallbacks avoid crashes)
+      const cleaned = (data ?? []).map((r: any) => ({
+        id: r.id,
+        product_name: r.product_name ?? "",
+        category: r.category ?? "",
+        subcategory: r.subcategory ?? "",
+        quantity: Number(r.quantity ?? 0),
+        unit_price: Number(r.unit_price ?? 0),
+        status: r.status ?? "",
+        image_url: r.image_url ?? null,
+      }));
+      setInventory(cleaned);
     }
     setLoading(false);
   }, []);
 
   useEffect(() => {
     fetchInventory();
-    const channel: RealtimeChannel = supabase
-      .channel("public:inventory")
+
+    const invChannel: RealtimeChannel = supabase
+      .channel("realtime:inventory")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "inventory" },
         () => fetchInventory()
       )
       .subscribe();
-    return () => void supabase.removeChannel(channel);
+
+    return () => void supabase.removeChannel(invChannel);
   }, [fetchInventory]);
 
   /* -------- Compute type from order history (by email, always) ---------- */
@@ -434,38 +447,94 @@ export default function CustomerInventoryPage() {
   }, [customerInfo.email, setTypeFromHistory]);
 
   /* ------------------------------ Tracking ------------------------------ */
-  const handleTrack = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setTrackError(null);
-    setTrackingResult(null);
-    setTrackingLoading(true);
-
+  const refetchTrackingByCode = useCallback(async (code: string) => {
     try {
       const { data, error } = await supabase
         .from("customers")
         .select(
           `
-          id, name, code, contact_person, email, phone, address, status, date,
-          orders (
-            id, total_amount, status,
-            order_items (
-              quantity, price,
-              inventory:inventory_id (product_name, category, subcategory, status)
+            id, name, code, contact_person, email, phone, address, status, date,
+            orders (
+              id, total_amount, status, date_created, date_completed, salesman, terms, po_number,
+              order_items (
+                quantity, price,
+                inventory:inventory_id (product_name, category, subcategory, status)
+              )
             )
-          )
-        `
+          `
         )
-        .eq("code", txn.trim().toUpperCase())
+        .eq("code", code.trim().toUpperCase())
         .maybeSingle();
 
-      if (error || !data) setTrackError("Transaction code not found.");
-      else setTrackingResult(data);
+      if (error || !data) {
+        setTrackError("Transaction code not found.");
+        setTrackingResult(null);
+      } else {
+        setTrackError(null);
+        setTrackingResult(data);
+      }
     } catch {
       setTrackError("Error while fetching. Please try again.");
     } finally {
       setTrackingLoading(false);
     }
+  }, []);
+
+  const handleTrack = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTrackError(null);
+    setTrackingResult(null);
+    setTrackingLoading(true);
+    await refetchTrackingByCode(txn);
   };
+
+  // Realtime tracking subscription (customers by code + orders by customer_id)
+  useEffect(() => {
+    const code = txn.trim().toUpperCase();
+    if (!code) return;
+
+    // Build one channel for this code
+    const channel = supabase.channel(`realtime:tracking:${code}`);
+
+    // Listen to the customer row with this code
+    channel.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "customers",
+        filter: `code=eq.${code}`,
+      },
+      () => refetchTrackingByCode(code)
+    );
+
+    // If we already fetched once, we know the customer_id: listen to that customer's orders
+    if (trackingResult?.id) {
+      channel.on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "orders",
+          filter: `customer_id=eq.${trackingResult.id}`,
+        },
+        () => refetchTrackingByCode(code)
+      );
+      // (Optional) You can also listen to order_items changes,
+      // but re-fetching on orders is usually enough since the SELECT joins order_items.
+      // channel.on(
+      //   "postgres_changes",
+      //   { event: "*", schema: "public", table: "order_items" },
+      //   () => refetchTrackingByCode(code)
+      // );
+    }
+
+    channel.subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [txn, trackingResult?.id, refetchTrackingByCode]);
 
   /* --------------------------- Payment type logic --------------------------- */
   useEffect(() => {
