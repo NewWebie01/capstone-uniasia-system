@@ -6,7 +6,7 @@ import { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 import PageLoader from "@/components/PageLoader"; 
 import { toast } from "sonner";
-import { useSearchParams } from "next/navigation";
+
 
 
 type InventoryItem = {
@@ -84,7 +84,7 @@ export default function SalesPage() {
   const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
     null
   );
-  const searchParams = useSearchParams();
+  
   const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
@@ -373,22 +373,6 @@ export default function SalesPage() {
     }
   }, [showModal, showSalesOrderModal]);
 
-
-  useEffect(() => {
-  const orderId = searchParams.get("order");
-  if (orderId && orders.length > 0) {
-    setTimeout(() => {
-      const el = document.getElementById(`order-card-${orderId}`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("ring-2", "ring-blue-400", "bg-blue-50");
-        setTimeout(() => {
-          el.classList.remove("ring-2", "ring-blue-400", "bg-blue-50");
-        }, 2000);
-      }
-    }, 500);
-  }
-}, [searchParams, orders]);
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
