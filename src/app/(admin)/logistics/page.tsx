@@ -823,9 +823,16 @@ const sortedDateKeysDelivered = useMemo(() => {
   });
 }, [groupedDelivered]);
 
+const pesoOrBlank = (v?: number | string | null) => {
+  const n = Number(v ?? 0);
+  return n > 0 ? `₱${n}` : "";
+};
+
   /* =========================
      RENDER
   ========================= */
+
+
   return (
     <div className="p-6 font-sans antialiased text-slate-800">
       {/* Header */}
@@ -1377,7 +1384,7 @@ const sortedDateKeysDelivered = useMemo(() => {
                                       <td className="border px-2 py-1">
                                         ₱{amount}
                                       </td>
-                                      <td className="border px-2 py-1">₱0</td>
+                                      <td className="border px-2 py-1">{pesoOrBlank(0)}</td>
                                       <td className="border px-2 py-1">
                                         ₱{amount}
                                       </td>
