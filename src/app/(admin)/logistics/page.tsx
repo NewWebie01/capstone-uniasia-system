@@ -115,25 +115,23 @@ export default function TruckDeliveryPage() {
   });
 
   // Add after: const supabase = createPagesBrowserClient();
-async function logActivity(action: string, details: any = {}) {
-  try {
-    const { data } = await supabase.auth.getUser();
-    const userEmail = data?.user?.email || "";
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        action,
-        details,
-        user_role: "admin",             // Always log as admin
-        created_at: new Date().toISOString(), // Always log timestamp
-      },
-    ]);
-  } catch (e) {
-    console.error("Log activity failed", e);
+  async function logActivity(action: string, details: any = {}) {
+    try {
+      const { data } = await supabase.auth.getUser();
+      const userEmail = data?.user?.email || "";
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: userEmail,
+          action,
+          details,
+          user_role: "admin", // Always log as admin
+          created_at: new Date().toISOString(), // Always log timestamp
+        },
+      ]);
+    } catch (e) {
+      console.error("Log activity failed", e);
+    }
   }
-}
-
-
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForDeliveryId, setAssignForDeliveryId] = useState<number | null>(
@@ -239,8 +237,9 @@ async function logActivity(action: string, details: any = {}) {
 
     const ids = deliveriesList.map((d) => d.id);
     const { data: oData, error: oErr } = await supabase
-  .from("orders")
-  .select(`
+      .from("orders")
+      .select(
+        `
     id,
     total_amount,
     status,
@@ -268,10 +267,11 @@ async function logActivity(action: string, details: any = {}) {
         status
       )
     )
-  `)
-  .in("truck_delivery_id", ids)
-  .order("accepted_at", { ascending: false }); // instead of created_at
-      
+  `
+      )
+      .in("truck_delivery_id", ids)
+      .order("accepted_at", { ascending: false }); // instead of created_at
+
     if (oErr) {
       console.error("Fetch assigned orders error:", oErr);
       return;
@@ -372,7 +372,9 @@ async function logActivity(action: string, details: any = {}) {
         total_amount: oRaw.total_amount,
         status: oRaw.status,
         truck_delivery_id: oRaw.truck_delivery_id,
-        customer: Array.isArray(oRaw.customer) ? oRaw.customer[0] : oRaw.customer,
+        customer: Array.isArray(oRaw.customer)
+          ? oRaw.customer[0]
+          : oRaw.customer,
         order_items: oRaw.order_items ?? [],
       })) || []
     );
@@ -465,7 +467,9 @@ async function logActivity(action: string, details: any = {}) {
         total_amount: oRaw.total_amount,
         status: oRaw.status,
         truck_delivery_id: oRaw.truck_delivery_id,
-        customer: Array.isArray(oRaw.customer) ? oRaw.customer[0] : oRaw.customer,
+        customer: Array.isArray(oRaw.customer)
+          ? oRaw.customer[0]
+          : oRaw.customer,
         order_items: oRaw.order_items ?? [],
       })) || []
     );
@@ -735,15 +739,20 @@ async function logActivity(action: string, details: any = {}) {
 
   const isLocked = (status: string) => status === "Delivered";
 
-
   /* =========================
      RENDER
   ========================= */
   return (
-    <div className="p-6 font-sans antialiased text-slate-800">
+    <div className="px-4 pb-6 pt-1 font-sans antialiased text-slate-800">
       {/* Header */}
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold">Truck Delivery</h1>
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h1 className="pt-1 text-3xl font-bold">Truck Delivery</h1>
+          <p className="text-sm text-neutral-500 mt-1">
+            Plan delivery schedules, assign completed invoices to trucks, and
+            track delivery status.
+          </p>
+        </div>
         <button
           onClick={showForm}
           className="bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] flex items-center gap-2 mr-20"
@@ -766,7 +775,7 @@ async function logActivity(action: string, details: any = {}) {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4 }}
               className={`bg-white p-6 rounded-lg shadow-md mb-6 ${
-              isLocked(delivery.status) ? "opacity-80" : ""
+                isLocked(delivery.status) ? "opacity-80" : ""
               }`}
             >
               <div className="grid grid-cols-12 gap-6">
@@ -918,38 +927,50 @@ async function logActivity(action: string, details: any = {}) {
                       )}
 
                       <select
-                      value={delivery.status}
-                      onChange={(e) =>
-                        setConfirmDialog({
-                          open: true,
-                          id: delivery.id,
-                          newStatus: e.target.value,
-                        })
-                      }
-                      disabled={isLocked(delivery.status)}                
-                      className={`border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10
-                        ${isLocked(delivery.status) ? "opacity-60 cursor-not-allowed" : ""}`}
-                    >
-                      <option value="Scheduled">Scheduled</option>
-                      <option value="Ongoing">Ongoing</option>
-                      <option value="Delivered">Delivered</option>
-                    </select>
+                        value={delivery.status}
+                        onChange={(e) =>
+                          setConfirmDialog({
+                            open: true,
+                            id: delivery.id,
+                            newStatus: e.target.value,
+                          })
+                        }
+                        disabled={isLocked(delivery.status)}
+                        className={`border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10
+                        ${
+                          isLocked(delivery.status)
+                            ? "opacity-60 cursor-not-allowed"
+                            : ""
+                        }`}
+                      >
+                        <option value="Scheduled">Scheduled</option>
+                        <option value="Ongoing">Ongoing</option>
+                        <option value="Delivered">Delivered</option>
+                      </select>
                     </div>
 
                     <button
                       onClick={() => openAssignDialog(delivery.id)}
                       disabled={isLocked(delivery.status)}
                       className={`px-3 py-2 rounded-md border text-sm hover:bg-slate-50 transition
-                        ${isLocked(delivery.status) ? "opacity-60 cursor-not-allowed" : ""}`}
+                        ${
+                          isLocked(delivery.status)
+                            ? "opacity-60 cursor-not-allowed"
+                            : ""
+                        }`}
                     >
                       Assign Invoices
                     </button>
 
                     <button
                       onClick={() => handleClearInvoices(delivery.id)}
-                      disabled={isLocked(delivery.status)}                 // ✅ lock
+                      disabled={isLocked(delivery.status)} // ✅ lock
                       className={`px-3 py-2 rounded-md border border-red-400 text-red-600 text-sm hover:bg-red-50 transition
-                        ${isLocked(delivery.status) ? "opacity-60 cursor-not-allowed" : ""}`}
+                        ${
+                          isLocked(delivery.status)
+                            ? "opacity-60 cursor-not-allowed"
+                            : ""
+                        }`}
                     >
                       Clear Invoices
                     </button>
@@ -1123,17 +1144,17 @@ async function logActivity(action: string, details: any = {}) {
                         {selectedOrderForInvoice.customer.phone}
                       </p>
                       <p>
-                        <strong>TERMS: </strong> 
+                        <strong>TERMS: </strong>
                         {selectedOrderForInvoice.terms ?? "—"}
                       </p>
                       <p>
                         <strong>COLLECTION: </strong>
                       </p>
                       <p>
-                        <strong>CREDIT LIMIT: </strong> 
+                        <strong>CREDIT LIMIT: </strong>
                       </p>
                       <p>
-                        <strong>SALESMAN: </strong> 
+                        <strong>SALESMAN: </strong>
                         {selectedOrderForInvoice.salesman ?? "—"}
                       </p>
                     </div>
