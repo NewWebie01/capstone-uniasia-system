@@ -28,15 +28,17 @@ export default function DeliveryReceiptLikeInvoice({
   customer,
   initialItems,
   initialDate,
+  initialTerms,
 }: {
   customer: CustomerInfo;
   initialItems: InvoiceItem[];
   initialDate?: string;
+  initialTerms?: string; // 👈 now passed from Sales
 }) {
   const [poNo, setPoNo] = useState("");
   const [forwarder, setForwarder] = useState("");
   const [salesman, setSalesman] = useState("");
-  const [terms, setTerms] = useState("Net 30");
+  const [terms] = useState(initialTerms ?? "—"); // 👈 no editing, just display
   const [dateStr, setDateStr] = useState(
     initialDate ?? new Date().toISOString().slice(0, 10)
   );
@@ -56,34 +58,31 @@ export default function DeliveryReceiptLikeInvoice({
   );
 
   // --- Compute Totals ---
-  const subtotal = useMemo(() => {
-    return items.reduce(
-      (sum, it) => sum + it.qty * it.unitPrice,
-      0
-    );
-  }, [items]);
+  const subtotal = useMemo(
+    () => items.reduce((sum, it) => sum + it.qty * it.unitPrice, 0),
+    [items]
+  );
 
-  const totalDiscount = useMemo(() => {
-    return items.reduce(
-      (sum, it) => sum + (it.discount || 0),
-      0
-    );
-  }, [items]);
+  const totalDiscount = useMemo(
+    () => items.reduce((sum, it) => sum + (it.discount || 0), 0),
+    [items]
+  );
 
-  const salesTax = useMemo(() => {
-    return (subtotal - totalDiscount) * 0.12;
-  }, [subtotal, totalDiscount]);
+  const salesTax = useMemo(
+    () => (subtotal - totalDiscount) * 0.12,
+    [subtotal, totalDiscount]
+  );
 
-  const grandTotal = useMemo(() => {
-    return subtotal - totalDiscount + salesTax;
-  }, [subtotal, totalDiscount, salesTax]);
+  const grandTotal = useMemo(
+    () => subtotal - totalDiscount + salesTax,
+    [subtotal, totalDiscount, salesTax]
+  );
 
   const updateItem = <K extends keyof InvoiceItem>(
     id: string,
     key: K,
     value: InvoiceItem[K]
-  ) =>
-    setItems((p) => p.map((r) => (r.id === id ? { ...r, [key]: value } : r)));
+  ) => setItems((p) => p.map((r) => (r.id === id ? { ...r, [key]: value } : r)));
 
   return (
     <div className="bg-white text-[13px] leading-tight text-neutral-900 print:text-black">
@@ -123,11 +122,9 @@ export default function DeliveryReceiptLikeInvoice({
         </div>
         <div className="flex gap-2 items-end">
           <span className="w-28 font-semibold">TERMS:</span>
-          <input
-            value={terms}
-            onChange={(e) => setTerms(e.target.value)}
-            className="flex-1 border-b border-neutral-300 outline-none"
-          />
+          <span className="flex-1 border-b border-neutral-300">
+            {terms}
+          </span>
         </div>
 
         <div className="flex gap-2 items-end">
@@ -226,11 +223,7 @@ export default function DeliveryReceiptLikeInvoice({
                       className="w-full text-right outline-none"
                       value={r.discount}
                       onChange={(e) =>
-                        updateItem(
-                          r.id,
-                          "discount",
-                          Number(e.target.value || 0)
-                        )
+                        updateItem(r.id, "discount", Number(e.target.value || 0))
                       }
                     />
                   </td>
@@ -243,7 +236,7 @@ export default function DeliveryReceiptLikeInvoice({
         </table>
       </div>
 
-      {/* Notes + NEW Totals */}
+      {/* Notes + Totals */}
       <div className="grid grid-cols-2 mt-4">
         <div className="pr-4">
           <div className="text-[11px] leading-snug mt-2">
