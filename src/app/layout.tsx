@@ -1,9 +1,13 @@
+// src/app/layout.tsx
 import type { Metadata } from "next";
 import { DM_Sans } from "next/font/google";
-import "@/styles/globals.css"; // ✅ correct place & casing
+import "@/styles/globals.css";
 import clsx from "clsx";
-import { Toaster } from "sonner";
-import { Analytics } from "@vercel/analytics/next"
+import { Analytics } from "@vercel/analytics/next";
+
+// client-side helpers
+import MobileGate from "@/components/MobileGate";
+import ToasterClient from "@/components/ToasterClient";
 
 const dmSans = DM_Sans({ subsets: ["latin"] });
 
@@ -18,8 +22,16 @@ export default function RootLayout({
   return (
     <html lang="en" className="relative">
       <body className={clsx(dmSans.className, "antialiased bg-[#dadada]")}>
+        {/* Blocks the UI on small screens */}
+        <MobileGate />
+
         {children}
+
+        {/* Analytics can stay in the server layout */}
         <Analytics />
+
+        {/* Sonner Toaster must run on the client */}
+        <ToasterClient />
       </body>
     </html>
   );
