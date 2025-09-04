@@ -284,7 +284,10 @@ export default function InventoryPage() {
 
   return (
     <div className="px-4 pb-4 pt-1">
-      <h1 className="text-3xl font-bold mb-6 mt-1">Inventory</h1>
+      <h1 className="text-3xl font-bold mt-1">Inventory</h1>
+      <p className="text-neutral-500 text-sm mb-4">
+        Manage and view all inventory items, categories, and stock levels.
+      </p>
 
       <div className="flex gap-4 mb-4">
         <input
