@@ -486,16 +486,18 @@ export default function InvoiceMergedPage() {
   }, [orderId]);
 
   // -------- Search / filter (show completed only) --------
-  const filteredOrders = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const completed = orders.filter(
-      (o) => (o.status || "").toLowerCase() === "completed"
-    );
-    if (!q) return completed;
-    return completed.filter((o) =>
-      (o.customer?.name || "").toLowerCase().includes(q)
-    );
-  }, [orders, search]);
+ const filteredOrders = useMemo(() => {
+  const q = search.trim().toLowerCase();
+  const allowedStatus = ["completed", "accepted"];
+  const filtered = orders.filter(
+    (o) => allowedStatus.includes((o.status || "").toLowerCase())
+  );
+  if (!q) return filtered;
+  return filtered.filter((o) =>
+    (o.customer?.name || "").toLowerCase().includes(q)
+  );
+}, [orders, search]);
+
 
   // -------- Open invoice from list (modal) --------
   const openInvoice = async (order: OrderForList) => {

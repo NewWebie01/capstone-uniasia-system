@@ -93,31 +93,35 @@ export default function SalesPage() {
   const [poNumber, setPoNumber] = useState("");
   const [repName, setRepName] = useState("");
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
-  
-
-const [isCompletingOrder, setIsCompletingOrder] = useState(false);
+  const [isCompletingOrder, setIsCompletingOrder] = useState(false);
+  const [showRejectConfirm, setShowRejectConfirm] = useState(false);
+const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null);
   const [salesman, setSalesman] = useState("");
-const [forwarder, setForwarder] = useState("");
-// Clears PO/Rep/terms/discount edits & toggles
-const resetSalesForm = () => {
-  setPoNumber("");
-  setRepName("");
-  setForwarder("");
-  setNumberOfTerms(1);
-  setInterestPercent(0);
-  setIsSalesTaxOn(true);
-  setEditedQuantities([]);
-  setEditedDiscounts([]);
-};
+  const [forwarder, setForwarder] = useState("");
+  const resetSalesForm = () => {
+    setPoNumber("");
+    setRepName("");
+    setForwarder("");
+    setNumberOfTerms(1);
+    setInterestPercent(0);
+    setIsSalesTaxOn(true);
+    setEditedQuantities([]);
+    setEditedDiscounts([]);
+    setFieldErrors({ poNumber: false, repName: false });
+  };
 
+  // Highlight/Validation State!
+  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
+    poNumber: false,
+    repName: false,
+  });
 
-// --- Activity Logs Modal State ---
-const [showLogsModal, setShowLogsModal] = useState(false);
-const [logsLoading, setLogsLoading] = useState(false);
-const [activityLogs, setActivityLogs] = useState<any[]>([]);
-const [logOrderId, setLogOrderId] = useState<string | null>(null);
+  // --- Activity Logs Modal State --- (kept as original)
+  const [showLogsModal, setShowLogsModal] = useState(false);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [activityLogs, setActivityLogs] = useState<any[]>([]);
+  const [logOrderId, setLogOrderId] = useState<string | null>(null);
 
-  // 👇 Add this here
   type Processor = { name: string; email: string; role: string | null };
   const [processor, setProcessor] = useState<Processor | null>(null);
 
@@ -148,20 +152,19 @@ const [logOrderId, setLogOrderId] = useState<string | null>(null);
     })();
   }, []);
 
-async function fetchActivityLogs(orderId: string) {
-  setLogsLoading(true);
-  setLogOrderId(orderId);
-  setShowLogsModal(true);
-  // Fetch logs for this orderId, most recent first
-  const { data, error } = await supabase
-    .from("activity_logs")
-    .select("*")
-    .eq("details->>order_id", orderId)
-    .order("created_at", { ascending: false });
-  if (!error && data) setActivityLogs(data);
-  else toast.error("Failed to fetch activity logs.");
-  setLogsLoading(false);
-}
+  async function fetchActivityLogs(orderId: string) {
+    setLogsLoading(true);
+    setLogOrderId(orderId);
+    setShowLogsModal(true);
+    const { data, error } = await supabase
+      .from("activity_logs")
+      .select("*")
+      .eq("details->>order_id", orderId)
+      .order("created_at", { ascending: false });
+    if (!error && data) setActivityLogs(data);
+    else toast.error("Failed to fetch activity logs.");
+    setLogsLoading(false);
+  }
 
   const [fastMovingProducts, setFastMovingProducts] = useState<
     FastMovingProduct[]
@@ -329,7 +332,6 @@ async function fetchActivityLogs(orderId: string) {
     fetchFastMovingProducts();
     fetchSlowMovingProducts();
 
-    // Realtime for INVENTORY: update inventory & fast/slow movers on any change
     const inventoryChannel: RealtimeChannel = supabase
       .channel("inventory-channel")
       .on(
@@ -343,7 +345,6 @@ async function fetchActivityLogs(orderId: string) {
       )
       .subscribe();
 
-    // Realtime for ORDERS: update orders and also re-calc dashboard cards on change
     const ordersChannel: RealtimeChannel = supabase
       .channel("orders-channel")
       .on(
@@ -362,88 +363,80 @@ async function fetchActivityLogs(orderId: string) {
   }, []);
 
   useEffect(() => {
-  // When both modals are closed, clear the form for the next order
-  if (!showModal && !showSalesOrderModal) {
-    resetSalesForm();
-  }
-}, [showModal, showSalesOrderModal]);
-
+    if (!showModal && !showSalesOrderModal) {
+      resetSalesForm();
+    }
+  }, [showModal, showSalesOrderModal]);
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
-const handleAcceptOrder = async (order: OrderWithDetails) => {
-  // 1. Update order status in Supabase
-  const { error } = await supabase
-    .from("orders")
-    .update({ status: "accepted" })
-    .eq("id", order.id);
+  const handleAcceptOrder = async (order: OrderWithDetails) => {
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "accepted" })
+      .eq("id", order.id);
 
-  if (error) {
-    toast.error("Failed to accept order: " + error.message);
-    return;
-  }
+    if (error) {
+      toast.error("Failed to accept order: " + error.message);
+      return;
+    }
 
-  // ✅ 2. Save who accepted the order into orders table
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-  await supabase
-    .from("orders")
-    .update({
-      accepted_by_auth_id: user?.id ?? null,
-      accepted_by_email: user?.email ?? null,
-      accepted_by_name:
-        processor?.name ?? (user?.email ? user.email.split("@")[0] : null),
-      accepted_by_role: processor?.role ?? user?.user_metadata?.role ?? null,
-      accepted_at: new Date().toISOString(),
-    })
-    .eq("id", order.id);
+    await supabase
+      .from("orders")
+      .update({
+        accepted_by_auth_id: user?.id ?? null,
+        accepted_by_email: user?.email ?? null,
+        accepted_by_name:
+          processor?.name ?? (user?.email ? user.email.split("@")[0] : null),
+        accepted_by_role: processor?.role ?? user?.user_metadata?.role ?? null,
+        accepted_at: new Date().toISOString(),
+      })
+      .eq("id", order.id);
 
-  // 3. Log the activity (your existing code stays here)
-  try {
-    const userEmail = user?.email || "unknown";
-    const userRole = user?.user_metadata?.role || "unknown";
+    try {
+      const userEmail = user?.email || "unknown";
+      const userRole = user?.user_metadata?.role || "unknown";
 
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        user_role: userRole,
-        action: "Accept Sales Order",
-        details: {
-          order_id: order.id,
-          customer_name: order.customers.name,
-          customer_email: order.customers.email,
-          items: order.order_items.map((oi) => ({
-            product_name: oi.inventory.product_name,
-            ordered_qty: oi.quantity,
-            unit_price: oi.price,
-          })),
-          total_amount: order.total_amount,
-          payment_type: order.customers.payment_type,
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: userEmail,
+          user_role: userRole,
+          action: "Accept Sales Order",
+          details: {
+            order_id: order.id,
+            customer_name: order.customers.name,
+            customer_email: order.customers.email,
+            items: order.order_items.map((oi) => ({
+              product_name: oi.inventory.product_name,
+              ordered_qty: oi.quantity,
+              unit_price: oi.price,
+            })),
+            total_amount: order.total_amount,
+            payment_type: order.customers.payment_type,
+          },
+          created_at: new Date().toISOString(),
         },
-        created_at: new Date().toISOString(),
-      },
+      ]);
+    } catch (err) {
+      console.error("Failed to log activity for order acceptance:", err);
+    }
+
+    setEditedDiscounts(order.order_items.map(() => 0));
+    setPickingStatus((prev) => [
+      ...prev,
+      { orderId: order.id, status: "accepted" },
     ]);
-  } catch (err) {
-    console.error("Failed to log activity for order acceptance:", err);
-  }
-
-  // 4. Update state/UI as usual
-  setEditedDiscounts(order.order_items.map(() => 0));
-  setPickingStatus((prev) => [
-    ...prev,
-    { orderId: order.id, status: "accepted" },
-  ]);
-  setEditedQuantities(order.order_items.map((item) => item.quantity));
-  setSelectedOrder(order);
-  setShowModal(true);
-  setNumberOfTerms(1);
-  setInterestPercent(0);
-};
-
-
+    setEditedQuantities(order.order_items.map((item) => item.quantity));
+    setSelectedOrder(order);
+    setShowModal(true);
+    setNumberOfTerms(1);
+    setInterestPercent(0);
+  };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
     setPickingStatus((prev) => [
@@ -455,185 +448,180 @@ const handleAcceptOrder = async (order: OrderWithDetails) => {
       .update({ status: "rejected" })
       .eq("id", order.id);
 
-    // ----------- ACTIVITY LOG FOR ORDER REJECT -----------
-try {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const userEmail = user?.email || "unknown";
-  const userRole = user?.user_metadata?.role || "unknown"; // <-- LOG ROLE
-
-  await supabase.from("activity_logs").insert([
-    {
-      user_email: userEmail,
-      user_role: userRole, // <-- LOG ROLE
-      action: "Reject Sales Order",
-      details: {
-        order_id: order.id,
-        customer_name: order.customers.name,
-        customer_email: order.customers.email,
-        items: order.order_items.map((oi) => ({
-          product_name: oi.inventory.product_name,
-          ordered_qty: oi.quantity,
-          unit_price: oi.price,
-        })),
-        total_amount: order.total_amount,
-        payment_type: order.customers.payment_type,
-      },
-      created_at: new Date().toISOString(),
-    },
-  ]);
-} catch (err) {
-  console.error("Failed to log activity for order rejection:", err);
-}
-// -----------------------------------------------------
-
-    // -----------------------------------------------------
-
-    fetchOrders();
-
-  };
-  
-
-  const handleOrderConfirm = async () => {
-    if (!selectedOrder) return;
-    setShowFinalConfirm(true);
-  };
-
-const handleOrderComplete = async () => {
-  if (!selectedOrder || isCompletingOrder) return;
-
-  setIsCompletingOrder(true);
-  try {
-    // --- Stock checks + writes ---
-    for (let i = 0; i < selectedOrder.order_items.length; i++) {
-      const oi = selectedOrder.order_items[i];
-      const invId = oi.inventory.id;
-      const remaining = oi.inventory.quantity - editedQuantities[i];
-
-      if (remaining < 0) {
-        toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
-        setShowFinalConfirm(false);
-        throw new Error("Insufficient stock");
-      }
-      if (!poNumber || !poNumber.trim()) {
-        toast.error("PO Number is required to complete the order!");
-        throw new Error("PO required");
-      }
-
-      await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
-
-      await supabase.from("sales").insert([
-        {
-          inventory_id: invId,
-          quantity_sold: editedQuantities[i],
-          amount: editedQuantities[i] * oi.price * (1 + (editedDiscounts[i] || 0) / 100),
-          date: new Date().toISOString(),
-        },
-      ]);
-    }
-
-    // --- Orders update ---
-    const isCredit = selectedOrder.customers.payment_type === "Credit";
-    const updateFields = {
-      status: "completed",
-      date_completed: new Date().toISOString(),
-      sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
-      po_number: poNumber,
-      salesman: repName,
-      terms: isCredit ? `Net ${numberOfTerms} Monthly` : selectedOrder.customers.payment_type,
-      payment_terms: isCredit ? numberOfTerms : null,
-      interest_percent: isCredit ? interestPercent : null,
-      grand_total_with_interest: isCredit ? getGrandTotalWithInterest() : null,
-      per_term_amount: isCredit ? getPerTermAmount() : null,
-      forwarder,
-      processed_by_email: processor?.email ?? "unknown",
-      processed_by_name: processor?.name ?? "unknown",
-      processed_by_role: processor?.role ?? "unknown",
-      processed_at: new Date().toISOString(),
-    } as const;
-
-    const { error: ordersErr } = await supabase.from("orders").update(updateFields).eq("id", selectedOrder.id);
-    if (ordersErr) throw ordersErr;
-
-    // --- Activity log (best-effort) ---
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
       const userRole = user?.user_metadata?.role || "unknown";
-
       await supabase.from("activity_logs").insert([
         {
           user_email: userEmail,
           user_role: userRole,
-          action: "Complete Sales Order",
+          action: "Reject Sales Order",
           details: {
-            order_id: selectedOrder.id,
-            customer_name: selectedOrder.customers.name,
-            customer_email: selectedOrder.customers.email,
-            items: selectedOrder.order_items.map((oi, idx) => ({
+            order_id: order.id,
+            customer_name: order.customers.name,
+            customer_email: order.customers.email,
+            items: order.order_items.map((oi) => ({
               product_name: oi.inventory.product_name,
               ordered_qty: oi.quantity,
-              fulfilled_qty: editedQuantities[idx],
               unit_price: oi.price,
-              discount_percent: editedDiscounts[idx] || 0,
             })),
-            total_amount: getGrandTotalWithInterest(),
-            payment_type: selectedOrder.customers.payment_type,
+            total_amount: order.total_amount,
+            payment_type: order.customers.payment_type,
           },
           created_at: new Date().toISOString(),
         },
       ]);
     } catch (err) {
-      console.error("Failed to log activity for sales order completion:", err);
-      // don't block success UI on log failure
+      console.error("Failed to log activity for order rejection:", err);
     }
 
-    // --- Reset UI ---
-   // --- Reset UI ---
-setShowSalesOrderModal(false);
-setShowModal(false);
-setShowFinalConfirm(false);
-resetSalesForm(); // << clear inputs & edits
-setSelectedOrder(null);
-setPickingStatus(prev => prev.filter(p => p.orderId !== selectedOrder.id));
+    fetchOrders();
+  };
 
-await Promise.all([fetchOrders(), fetchItems()]);
-toast.success("Order successfully completed!");
+  // --- 🎯 THE VALIDATED "COMPLETE" HANDLER ---
+  const handleOrderComplete = async () => {
+    if (!selectedOrder || isCompletingOrder) return;
 
-  } catch (err: any) {
-    console.error("Failed completing order:", err);
-    toast.error(`Failed to complete order: ${err?.message ?? "Unexpected error"}`);
-  } finally {
-    setIsCompletingOrder(false);
-  }
-};
+    // Reset errors before checking
+    setFieldErrors({ poNumber: false, repName: false });
 
+    let errors: any = {};
+    if (!poNumber || !poNumber.trim()) errors.poNumber = true;
+    if (!repName || !repName.trim()) errors.repName = true;
+    // add more checks if needed
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      toast.error("Please fill all required fields!");
+      return;
+    }
+
+    setIsCompletingOrder(true);
+    try {
+      for (let i = 0; i < selectedOrder.order_items.length; i++) {
+        const oi = selectedOrder.order_items[i];
+        const invId = oi.inventory.id;
+        const remaining = oi.inventory.quantity - editedQuantities[i];
+
+        if (remaining < 0) {
+          toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
+          setShowFinalConfirm(false);
+          throw new Error("Insufficient stock");
+        }
+
+        await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
+
+        await supabase.from("sales").insert([
+          {
+            inventory_id: invId,
+            quantity_sold: editedQuantities[i],
+            amount: editedQuantities[i] * oi.price * (1 + (editedDiscounts[i] || 0) / 100),
+            date: new Date().toISOString(),
+          },
+        ]);
+      }
+
+      const isCredit = selectedOrder.customers.payment_type === "Credit";
+      const updateFields = {
+        status: "completed",
+        date_completed: new Date().toISOString(),
+        sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
+        po_number: poNumber,
+        salesman: repName,
+        terms: isCredit ? `Net ${numberOfTerms} Monthly` : selectedOrder.customers.payment_type,
+        payment_terms: isCredit ? numberOfTerms : null,
+        interest_percent: isCredit ? interestPercent : null,
+        grand_total_with_interest: isCredit ? getGrandTotalWithInterest() : null,
+        per_term_amount: isCredit ? getPerTermAmount() : null,
+        forwarder,
+        processed_by_email: processor?.email ?? "unknown",
+        processed_by_name: processor?.name ?? "unknown",
+        processed_by_role: processor?.role ?? "unknown",
+        processed_at: new Date().toISOString(),
+      } as const;
+
+      const { error: ordersErr } = await supabase.from("orders").update(updateFields).eq("id", selectedOrder.id);
+      if (ordersErr) throw ordersErr;
+
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const userEmail = user?.email || "unknown";
+        const userRole = user?.user_metadata?.role || "unknown";
+
+        await supabase.from("activity_logs").insert([
+          {
+            user_email: userEmail,
+            user_role: userRole,
+            action: "Complete Sales Order",
+            details: {
+              order_id: selectedOrder.id,
+              customer_name: selectedOrder.customers.name,
+              customer_email: selectedOrder.customers.email,
+              items: selectedOrder.order_items.map((oi, idx) => ({
+                product_name: oi.inventory.product_name,
+                ordered_qty: oi.quantity,
+                fulfilled_qty: editedQuantities[idx],
+                unit_price: oi.price,
+                discount_percent: editedDiscounts[idx] || 0,
+              })),
+              total_amount: getGrandTotalWithInterest(),
+              payment_type: selectedOrder.customers.payment_type,
+            },
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      } catch (err) {
+        console.error("Failed to log activity for sales order completion:", err);
+      }
+
+      setShowSalesOrderModal(false);
+      setShowModal(false);
+      setShowFinalConfirm(false);
+      resetSalesForm();
+      setSelectedOrder(null);
+      setPickingStatus(prev => prev.filter(p => p.orderId !== selectedOrder.id));
+
+      await Promise.all([fetchOrders(), fetchItems()]);
+      toast.success("Order successfully completed!");
+
+    } catch (err: any) {
+      console.error("Failed completing order:", err);
+      toast.error(`Failed to complete order: ${err?.message ?? "Unexpected error"}`);
+    } finally {
+      setIsCompletingOrder(false);
+    }
+  };
+
+  const handleOrderConfirm = async () => {
+    if (!selectedOrder) return;
+    setShowFinalConfirm(true);
+  };
 
   const handleBackModal = () => {
     setShowSalesOrderModal(false);
     setShowModal(true);
   };
 
- const handleCancelModal = () => {
-  setShowModal(false);
-  setShowSalesOrderModal(false);
-  setShowFinalConfirm(false);
-  resetSalesForm();
-  setSelectedOrder(null);
-  setPickingStatus(prev =>
-    selectedOrder ? prev.filter(p => p.orderId !== selectedOrder.id) : prev
-  );
-};
-
+  const handleCancelModal = () => {
+    setShowModal(false);
+    setShowSalesOrderModal(false);
+    setShowFinalConfirm(false);
+    resetSalesForm();
+    setSelectedOrder(null);
+    setPickingStatus(prev =>
+      selectedOrder ? prev.filter(p => p.orderId !== selectedOrder.id) : prev
+    );
+  };
 
   const handleResetDiscount = (idx: number) => {
     setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
   };
 
-  // Discount +/- Hold
   const timersRef = useRef<{ [key: number]: NodeJS.Timeout }>({});
 
   const handleIncrement = (idx: number) => {
@@ -655,6 +643,7 @@ toast.success("Order successfully completed!");
   };
 
   const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
+
 
   // --- RENDER ---
   return (
@@ -1120,11 +1109,14 @@ toast.success("Order successfully completed!");
                             Accept Order
                           </button>
                           <button
-                            onClick={() => handleRejectOrder(order)}
-                            className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
-                          >
-                            Reject Order
-                          </button>
+  onClick={() => {
+    setShowRejectConfirm(true);
+    setOrderToReject(order);
+  }}
+  className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
+>
+  Reject Order
+</button>
                         </>
                       )}
                       {isAccepted && (
@@ -1538,16 +1530,26 @@ toast.success("Order successfully completed!");
 </div>
 
                 <div>
-                  <span className="font-medium">PO Number: </span>
-                  <input
-                    type="text"
-                    value={poNumber}
-                    onChange={(e) => setPoNumber(e.target.value)}
-                    className="border-b outline-none px-1"
-                    style={{ minWidth: 100 }}
-                    placeholder="Input PO No"
-                  />
-                </div>
+  <span className="font-medium">PO Number: </span>
+  <input
+    type="text"
+    value={poNumber}
+    onChange={e => {
+      setPoNumber(e.target.value);
+      if (fieldErrors.poNumber) setFieldErrors(f => ({ ...f, poNumber: false }));
+    }}
+    className={`border-b outline-none px-1 transition-all duration-150 ${
+      fieldErrors.poNumber
+        ? "border-red-500 bg-red-50 animate-shake"
+        : "border-gray-300"
+    }`}
+    style={{ minWidth: 100 }}
+    placeholder="Input PO No"
+  />
+  {fieldErrors.poNumber && (
+    <div className="text-xs text-red-600 mt-1">PO Number is required</div>
+  )}
+</div>
                 <div>
     <span className="font-medium">Processed By: </span>
     <span className="font-semibold">{processor?.name || "Unknown"}</span>
@@ -1558,17 +1560,27 @@ toast.success("Order successfully completed!");
       </span>
     )}
   </div>
-                <div>
-                  <span className="font-medium">Sales Rep Name: </span>
-                  <input
-                    type="text"
-                    value={repName}
-                    onChange={(e) => setRepName(e.target.value)}
-                    className="border-b outline-none px-1"
-                    style={{ minWidth: 100 }}
-                    placeholder="Input Rep"
-                  />
-                </div>
+              <div>
+  <span className="font-medium">Sales Rep Name: </span>
+  <input
+    type="text"
+    value={repName}
+    onChange={e => {
+      setRepName(e.target.value);
+      if (fieldErrors.repName) setFieldErrors(f => ({ ...f, repName: false }));
+    }}
+    className={`border-b outline-none px-1 transition-all duration-150 ${
+      fieldErrors.repName
+        ? "border-red-500 bg-red-50 animate-shake"
+        : "border-gray-300"
+    }`}
+    style={{ minWidth: 100 }}
+    placeholder="Input Rep"
+  />
+  {fieldErrors.repName && (
+    <div className="text-xs text-red-600 mt-1">Sales Rep Name is required</div>
+  )}
+</div>
                 <div>
                   <span className="font-medium">Payment Terms: </span>
                   {selectedOrder.customers.payment_type === "Credit" ? (
@@ -1768,7 +1780,41 @@ toast.success("Order successfully completed!");
           </div>
         </div>
       )}
-      
+      {/* --- REJECT CONFIRMATION MODAL --- */}
+{showRejectConfirm && orderToReject && (
+  <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
+    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-auto p-8 text-center">
+      <div className="text-xl font-bold mb-6 text-gray-800">
+        Are you sure you want to <span className="text-red-600">REJECT</span> this order?
+      </div>
+      <div className="text-base mb-6">
+        This will permanently reject the order and notify the customer.
+      </div>
+      <div className="flex justify-center gap-8 mt-4">
+        <button
+          className="bg-red-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-red-700 transition"
+          onClick={async () => {
+            await handleRejectOrder(orderToReject);
+            setShowRejectConfirm(false);
+            setOrderToReject(null);
+          }}
+        >
+          Yes, Reject Order
+        </button>
+        <button
+          className="bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
+          onClick={() => {
+            setShowRejectConfirm(false);
+            setOrderToReject(null);
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
     </div>
     
   );
