@@ -190,8 +190,11 @@ export default function AdminReturnsPage() {
   };
 
   return (
-    <div className="p-4">
-      <h1 className="text-3xl font-bold mb-4">Returns</h1>
+    <div className="px-4 pb-4 pt-1">
+      <h1 className="pt-1 text-3xl font-bold mb-1">Returns</h1>
+      <p className="text-sm text-gray-500 mb-4">
+        Track and manage product return requests from customers.
+      </p>
 
       {/* Filters */}
       <div className="bg-white border rounded-2xl p-4 shadow-sm mb-4">
