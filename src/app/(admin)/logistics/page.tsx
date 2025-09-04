@@ -939,7 +939,7 @@ const sortedDateKeysDelivered = useMemo(() => {
                       </div>
 
                       <div className="col-span-12 sm:col-span-3 text-right">
-                        <div className="text-[11px] text-slate-500">Order #{o.id}</div>
+                        
                         <div className="mt-1 inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-700">
                           {o.status ?? "pending"}
                         </div>
@@ -1292,20 +1292,6 @@ const sortedDateKeysDelivered = useMemo(() => {
                         <ReceiptText /> Sales Invoice –{" "}
                         {selectedOrderForInvoice.customer.code}
                       </h2>
-                      <button
-                        onClick={async () => {
-                          const blob = await generatePDFBlob(
-                            `invoice-${selectedOrderForInvoice.id}`
-                          );
-                          if (blob) {
-                            const url = URL.createObjectURL(blob);
-                            setPdfUrl(url);
-                          }
-                        }}
-                        className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
-                      >
-                        <Printer className="w-4 h-4" /> Preview PDF
-                      </button>
                     </div>
 
                     <div className="grid grid-cols-2 gap-y-1 text-sm">
