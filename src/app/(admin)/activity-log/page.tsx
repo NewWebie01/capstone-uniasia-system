@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { Loader2 } from "lucide-react";
 import { DM_Sans } from "next/font/google";
 import * as XLSX from "xlsx";
-import { saveAs } from "file-saver";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -44,12 +43,10 @@ function formatPHTime(dateString: string): string {
   });
 }
 
-// --- Account Type badge (Admin/Customer)
 function accountTypeBadge(role: string | null) {
   let text = "";
   let color = "";
 
-  // Treat "authenticated" as "Admin" for display purposes
   if (!role || role.toLowerCase() === "authenticated") {
     text = "Admin";
     color = "bg-[#e0f2fe] text-blue-800 border border-blue-200";
@@ -65,40 +62,35 @@ function accountTypeBadge(role: string | null) {
   }
   return (
     <span
-      className={`ml-0 px-3 py-1 text-xs font-bold rounded-full align-middle ${color}`}
+      className={`ml-0 px-2 py-0.5 text-xs rounded-full align-middle ${color}`}
     >
       {text}
     </span>
   );
 }
 
-// Color-coded activity chip
 function activityChip(action: string) {
   let color = "bg-gray-200 text-gray-800";
-  if (action.toLowerCase().includes("login"))
+  const a = action.toLowerCase();
+  if (a.includes("login") || a.includes("logout"))
     color = "bg-[#fff8db] text-yellow-800 border border-yellow-200";
-  else if (action.toLowerCase().includes("logout"))
-    color = "bg-[#fff8db] text-yellow-800 border border-yellow-200";
-  else if (
-    action.toLowerCase().includes("completed") ||
-    action.toLowerCase().includes("complete")
-  )
+  else if (a.includes("completed") || a.includes("complete"))
     color = "bg-[#dcfce7] text-green-800 border border-green-200";
-  else if (action.toLowerCase().includes("pending"))
+  else if (a.includes("pending"))
     color = "bg-[#fef9c3] text-yellow-900 border border-yellow-200";
-  else if (action.toLowerCase().includes("update"))
+  else if (a.includes("update"))
     color = "bg-[#dbeafe] text-blue-800 border border-blue-200";
-  else if (action.toLowerCase().includes("add"))
+  else if (a.includes("add"))
     color = "bg-[#fef3c7] text-orange-800 border border-orange-200";
-  else if (action.toLowerCase().includes("reject"))
+  else if (a.includes("reject"))
     color = "bg-[#fee2e2] text-red-800 border border-red-200";
-  else if (action.toLowerCase().includes("clear"))
-    color = "bg-gray-100 text-gray-700";
-  else if (action.toLowerCase().includes("export"))
+  else if (a.includes("clear")) color = "bg-gray-100 text-gray-700";
+  else if (a.includes("export"))
     color = "bg-[#e0f2fe] text-blue-800 border border-blue-200";
+
   return (
     <span
-      className={`inline-block px-4 py-1 text-base rounded-full font-medium ${color}`}
+      className={`inline-block px-2.5 py-0.5 text-xs rounded-full ${color}`}
     >
       {action}
     </span>
@@ -107,22 +99,14 @@ function activityChip(action: string) {
 
 export default function ActivityLogPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [searchQuery, setSearchQuery] = useState<string>("");
-  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 50;
 
-  // Sorting
-  const [sortCol, setSortCol] = useState<string>("created_at");
-  const [sortAsc, setSortAsc] = useState<boolean>(false);
-
-  // Export modal
   const [showExport, setShowExport] = useState(false);
 
-  // Real-time setup
   useEffect(() => {
-    let channel: ReturnType<typeof supabase.channel> | undefined;
-
     async function initialLoad() {
       setLoading(true);
       const { data, error } = await supabase
@@ -133,42 +117,8 @@ export default function ActivityLogPage() {
       setLoading(false);
     }
     initialLoad();
-
-    // Real-time channel: handle INSERT/UPDATE/DELETE
-    channel = supabase
-      .channel("public:activity_logs")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "activity_logs" },
-        (payload) => {
-          setActivities((prev) => {
-            if (payload.eventType === "INSERT") {
-              // Only add if not already present
-              if (!prev.some((a) => a.id === payload.new.id)) {
-                return [payload.new as Activity, ...prev];
-              }
-              return prev;
-            }
-            if (payload.eventType === "UPDATE") {
-              return prev.map((a) =>
-                a.id === payload.new.id ? { ...a, ...payload.new } : a
-              );
-            }
-            if (payload.eventType === "DELETE") {
-              return prev.filter((a) => a.id !== payload.old.id);
-            }
-            return prev;
-          });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      if (channel) supabase.removeChannel(channel);
-    };
   }, []);
 
-  // ---- filter, sort, paginate ----
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     let arr = activities.map((a) => ({
@@ -189,31 +139,18 @@ export default function ActivityLogPage() {
         );
       });
     }
-    if (sortCol) {
-      arr = arr.slice().sort((a, b) => {
-        let av: any = a[sortCol as keyof typeof a];
-        let bv: any = b[sortCol as keyof typeof b];
-        // Sort by badge label, not the raw user_role
-        if (sortCol === "user_role") {
-          av = !av || av.toLowerCase() === "authenticated" ? "Admin" : av;
-          bv = !bv || bv.toLowerCase() === "authenticated" ? "Admin" : bv;
-        }
-        if (av < bv) return sortAsc ? -1 : 1;
-        if (av > bv) return sortAsc ? 1 : -1;
-        return 0;
-      });
-    }
     return arr;
-  }, [activities, searchQuery, sortCol, sortAsc]);
+  }, [activities, searchQuery]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
   const pageStart = (currentPage - 1) * itemsPerPage;
   const paged = filtered.slice(pageStart, pageStart + itemsPerPage);
 
-  // --- Export as Excel (.xls) ---
+  // --- Export as Excel (.xlsx) using XLSX.writeFile (no file-saver) ---
   async function handleExport() {
     setShowExport(false);
-    // Log the export!
+
+    // Log the export (non-blocking)
     try {
       const { data } = await supabase.auth.getUser();
       const userEmail = data?.user?.email || "unknown";
@@ -226,19 +163,16 @@ export default function ActivityLogPage() {
             rows: paged.length,
             page: currentPage,
             query: searchQuery,
-            sort: { col: sortCol, asc: sortAsc },
           },
+          created_at: new Date().toISOString(),
         },
       ]);
-    } catch {}
-    // --- Build xlsx ---
-    const headerRow = [
-      "User",
-      "Account Type",
-      "Activity",
-      "Date",
-      "Time",
-    ];
+    } catch (e) {
+      console.error("Export log failed:", e);
+    }
+
+    // Build export
+    const headerRow = ["User", "Account Type", "Activity", "Date", "Time"];
     const exportRows = paged.map((a) => [
       a.user_email,
       !a.user_role || a.user_role.toLowerCase() === "authenticated"
@@ -248,47 +182,37 @@ export default function ActivityLogPage() {
       formatPHDate(a.created_at),
       formatPHTime(a.created_at),
     ]);
+
     const ws = XLSX.utils.aoa_to_sheet([headerRow, ...exportRows]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
-    const xlsBlob = XLSX.write(wb, {
-      type: "array",
-      bookType: "xls",
-    });
-    saveAs(
-      new Blob([xlsBlob], { type: "application/vnd.ms-excel" }),
-      `Activity_Log_${new Date().toISOString().slice(0, 10)}.xls`
-    );
+
+    const filename = `Activity_Log_${new Date()
+      .toISOString()
+      .slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, filename, { bookType: "xlsx" });
   }
 
-  // --- Modern Confirmation Modal ---
   function ExportModal() {
     return (
       <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-        <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md flex flex-col items-center">
-          <div className="text-xl font-bold text-center mb-2">
-            Are you sure you want to{" "}
-            <span className="text-[#22c55e] font-extrabold">EXPORT</span> the
-            Activity Log?
-          </div>
-          <div className="text-gray-700 text-center mb-6">
-            This will export <b>only the currently displayed rows</b>
-            <br />
-            (
-            <b>
-              {paged.length} row{paged.length !== 1 && "s"}
-            </b>{" "}
-            on page {currentPage}) to Excel for printing.
-          </div>
-          <div className="flex gap-4 w-full justify-center">
+        <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+          <h3 className="text-base font-semibold mb-2 text-center">
+            Export Activity Log?
+          </h3>
+          <p className="text-sm text-gray-700 text-center mb-5">
+            This will export <b>only the rows on this page</b> (
+            <b>{paged.length}</b> item{paged.length !== 1 && "s"}).
+          </p>
+          <div className="flex gap-3 justify-center">
             <button
-              className="px-7 py-3 rounded-xl text-white font-semibold text-base bg-[#22c55e] hover:bg-[#19a94a] shadow"
+              className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm"
               onClick={handleExport}
             >
               Yes, Export
             </button>
             <button
-              className="px-7 py-3 rounded-xl text-gray-700 bg-gray-100 hover:bg-gray-200 font-semibold text-base shadow"
+              className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
               onClick={() => setShowExport(false)}
             >
               Cancel
@@ -300,169 +224,110 @@ export default function ActivityLogPage() {
   }
 
   return (
-    <div
-      className={`${dmSans.className} min-h-screen bg-gradient-to-b from-[#e8e6dd] to-[#ffd670]/60`}
-    >
-      <div className="w-full py-12 flex flex-col items-center">
-        <h1 className="text-4xl font-extrabold text-[#181918] mb-8 tracking-tight">
-          Activity Log
-        </h1>
-        {/* Search bar - half width, centered */}
-        <div className="w-1/2 max-w-[900px] min-w-[320px] mb-8 flex flex-row justify-between items-center gap-3">
-          <input
-            type="text"
-            placeholder="Search by user, action, or details…"
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setCurrentPage(1);
-            }}
-            className="border border-gray-300 rounded-xl px-6 py-2 w-full shadow-sm focus:outline-none focus:ring-2 focus:ring-[#ffba20] text-base"
-          />
-          <button
-            className="ml-4 px-6 py-2 rounded-xl bg-black hover:bg-[#22c55e] hover:text-white text-white text-base font-bold shadow transition"
-            onClick={() => setShowExport(true)}
-          >
-            Export
-          </button>
-        </div>
+    <div className={`${dmSans.className} px-4 pb-4 pt-1`}>
+      {/* Header aligned like other pages */}
+      <h1 className="pt-2 text-3xl font-bold tracking-tight text-neutral-800 mb-1">
+        Activity Log
+      </h1>
 
-        {/* Table */}
-        <div className="rounded-3xl shadow-2xl border border-gray-100 bg-white/95 overflow-x-auto mb-10 w-full max-w-[1400px] xl:w-[1400px]">
-          <table className="w-full text-lg">
-            <thead className="bg-[#ffba20] text-[#181918]">
-              <tr>
-                <th
-                  className="px-8 py-2 text-left font-bold rounded-tl-3xl text-lg cursor-pointer select-none"
-                  onClick={() => {
-                    setSortCol("user_email");
-                    setSortAsc((asc) =>
-                      sortCol === "user_email" ? !asc : true
-                    );
-                  }}
-                >
-                  User
-                </th>
-                <th
-                  className="px-8 py-2 text-left font-bold text-lg cursor-pointer select-none"
-                  onClick={() => {
-                    setSortCol("user_role");
-                    setSortAsc((asc) =>
-                      sortCol === "user_role" ? !asc : true
-                    );
-                  }}
-                >
-                  Account Type
-                </th>
-                <th
-                  className="px-8 py-2 text-left font-bold text-lg cursor-pointer select-none"
-                  onClick={() => {
-                    setSortCol("action");
-                    setSortAsc((asc) =>
-                      sortCol === "action" ? !asc : true
-                    );
-                  }}
-                >
-                  Activity
-                </th>
-                <th
-                  className="px-8 py-2 text-left font-bold text-lg cursor-pointer select-none"
-                  onClick={() => {
-                    setSortCol("date");
-                    setSortAsc((asc) =>
-                      sortCol === "date" ? !asc : true
-                    );
-                  }}
-                >
-                  Date
-                </th>
-                <th
-                  className="px-8 py-2 text-left font-bold rounded-tr-3xl text-lg cursor-pointer select-none"
-                  onClick={() => {
-                    setSortCol("time");
-                    setSortAsc((asc) =>
-                      sortCol === "time" ? !asc : true
-                    );
-                  }}
-                >
-                  Time
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="px-7 py-8 text-center text-gray-500"
-                  >
-                    <Loader2 className="mx-auto animate-spin" size={28} />
-                    <div className="mt-3 text-lg">Loading…</div>
-                  </td>
-                </tr>
-              ) : paged.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="px-7 py-8 text-center text-gray-400 text-lg"
-                  >
-                    No activities found.
-                  </td>
-                </tr>
-              ) : (
-                paged.map((act) => (
-                  <tr
-                    key={act.id}
-                    className="hover:bg-[#fff8db] border-b last:border-0 transition text-lg"
-                  >
-                    <td className="px-8 py-1 font-medium">
-                      {act.user_email ?? (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-8 py-1">
-                      {accountTypeBadge(act.user_role)}
-                    </td>
-                    <td className="px-8 py-1">{activityChip(act.action)}</td>
-                    <td className="px-8 py-1 whitespace-nowrap text-[#222] font-bold tracking-wide">
-                      <span className="block leading-tight font-medium">
-                        {formatPHDate(act.created_at)}
-                      </span>
-                    </td>
-                    <td className="px-8 py-1 whitespace-nowrap text-[#222] font-bold tracking-wide">
-                      <span className="block leading-tight font-medium">
-                        {formatPHTime(act.created_at)}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+      <p className="text-sm text-gray-500 mb-4">
+        See who did what and when. Search by user, action, or details, and
+        export the current view.
+      </p>
 
-        {/* Pagination */}
-        <div className="flex flex-col sm:flex-row justify-between items-center gap-4 w-full max-w-[1400px] xl:w-[1400px]">
-          <button
-            onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
-            disabled={currentPage === 1}
-            className="px-5 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 transition disabled:opacity-60 text-base"
-          >
-            ← Prev
-          </button>
-          <span className="text-base text-gray-600">
-            Page <span className="font-bold">{currentPage}</span> of{" "}
-            <span className="font-bold">{totalPages}</span>
-          </span>
-          <button
-            onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
-            disabled={currentPage === totalPages}
-            className="px-5 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 transition disabled:opacity-60 text-base"
-          >
-            Next →
-          </button>
-        </div>
+      {/* Search & Export (left-aligned) */}
+      <div className="flex gap-3 mb-4">
+        <input
+          type="text"
+          placeholder="Search by user, action, or details…"
+          value={searchQuery}
+          onChange={(e) => {
+            setSearchQuery(e.target.value);
+            setCurrentPage(1);
+          }}
+          className="border px-4 py-2 w-full max-w-md rounded shadow-sm focus:outline-none focus:ring-2 focus:ring-black text-sm"
+        />
+        <button
+          className="bg-black text-white px-4 py-2 rounded hover:text-[#22c55e] transition text-sm"
+          onClick={() => setShowExport(true)}
+        >
+          Export
+        </button>
       </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto rounded-lg shadow bg-white/95 mb-6">
+        <table className="w-full text-sm">
+          <thead className="bg-[#ffba20] text-[#181918]">
+            <tr>
+              <th className="px-4 py-2 text-left font-semibold">User</th>
+              <th className="px-4 py-2 text-left font-semibold">
+                Account Type
+              </th>
+              <th className="px-4 py-2 text-left font-semibold">Activity</th>
+              <th className="px-4 py-2 text-left font-semibold">Date</th>
+              <th className="px-4 py-2 text-left font-semibold">Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
+                  <Loader2 className="mx-auto animate-spin" size={20} />
+                  <div className="mt-2 text-sm">Loading…</div>
+                </td>
+              </tr>
+            ) : paged.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="px-4 py-6 text-center text-gray-400 text-sm"
+                >
+                  No activities found.
+                </td>
+              </tr>
+            ) : (
+              paged.map((act) => (
+                <tr
+                  key={act.id}
+                  className="hover:bg-[#fff8db] border-b last:border-0 transition"
+                >
+                  <td className="px-4 py-2">{act.user_email ?? "—"}</td>
+                  <td className="px-4 py-2">
+                    {accountTypeBadge(act.user_role)}
+                  </td>
+                  <td className="px-4 py-2">{activityChip(act.action)}</td>
+                  <td className="px-4 py-2">{formatPHDate(act.created_at)}</td>
+                  <td className="px-4 py-2">{formatPHTime(act.created_at)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="flex justify-between items-center gap-4">
+        <button
+          onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+          disabled={currentPage === 1}
+          className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 transition disabled:opacity-60 text-sm"
+        >
+          ← Prev
+        </button>
+        <span className="text-sm text-gray-600">
+          Page <span className="font-bold">{currentPage}</span> of{" "}
+          <span className="font-bold">{totalPages}</span>
+        </span>
+        <button
+          onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+          disabled={currentPage === totalPages}
+          className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 transition disabled:opacity-60 text-sm"
+        >
+          Next →
+        </button>
+      </div>
+
       {showExport && <ExportModal />}
     </div>
   );

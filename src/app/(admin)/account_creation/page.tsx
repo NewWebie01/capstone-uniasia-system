@@ -68,7 +68,8 @@ export default function Page() {
     if (!formData.name.trim()) newErrors.name = "Name is required";
 
     if (!EMAIL_REGEX.test(formData.email))
-      newErrors.email = "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
+      newErrors.email =
+        "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
 
     // Contact number: must be 10 digits, user types only after +63
     if (!/^\d{10}$/.test(formData.contact_number)) {
@@ -79,11 +80,12 @@ export default function Page() {
       newErrors.password =
         "Min 6 chars, 1 letter, 1 number, 1 special (!@#$%^&*)";
     } else if (
-      [formData.name, formData.email, "+63" + formData.contact_number].some((field) =>
-        formData.password.includes(field)
+      [formData.name, formData.email, "+63" + formData.contact_number].some(
+        (field) => formData.password.includes(field)
       )
     ) {
-      newErrors.password = "Password must be unique (do not use your name, email, or contact)";
+      newErrors.password =
+        "Password must be unique (do not use your name, email, or contact)";
     }
     if (formData.password !== formData.confirmPassword)
       newErrors.confirmPassword = "Passwords do not match";
@@ -118,14 +120,18 @@ export default function Page() {
 
       if (res.ok) {
         try {
-          const { data: { user } } = await supabase.auth.getUser();
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
           const adminEmail = user?.email || "unknown";
           const adminRole = user?.user_metadata?.role || "unknown";
           await supabase.from("activity_logs").insert([
             {
               user_email: adminEmail,
               user_role: adminRole,
-              action: `Created ${role === "admin" ? "Admin" : "Customer"} Account`,
+              action: `Created ${
+                role === "admin" ? "Admin" : "Customer"
+              } Account`,
               details: {
                 created_name: formData.name,
                 created_email: formData.email,
@@ -155,17 +161,23 @@ export default function Page() {
 
   return (
     <motion.div
-      className="flex items-center justify-center h-[calc(100dvh-88px)] overflow-y-hidden px-4"
+      className="flex items-center justify-center min-h-[calc(100dvh-88px)] px-4"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3 }}
     >
       <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
-        <h1 className="text-2xl font-bold mb-6 text-center">Create Account</h1>
+        {/* Title (uniform with other pages) */}
+        <h1 className="pt-2 text-3xl font-bold tracking-tight text-neutral-800 mb-4 text-center">
+          Create Account
+        </h1>
+
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Name */}
           <div>
-            <label className="block text-sm font-medium">Name</label>
+            <label className="block text-sm font-medium text-neutral-700">
+              Name
+            </label>
             <input
               name="name"
               type="text"
@@ -173,19 +185,22 @@ export default function Page() {
               value={formData.name}
               onChange={handleChange}
               required
-              className={`w-full px-3 py-2 mt-1 border rounded-md outline-none focus:ring-2 ${
+              className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
                 errors.name
                   ? "border-red-500"
-                  : "focus:ring-[#ffba20] border-gray-300"
+                  : "focus:ring-black border-gray-300"
               }`}
             />
             {errors.name && (
-              <p className="text-red-500 text-sm mt-1">{errors.name}</p>
+              <p className="text-red-500 text-xs mt-1">{errors.name}</p>
             )}
           </div>
+
           {/* Email */}
           <div>
-            <label className="block text-sm font-medium">Email</label>
+            <label className="block text-sm font-medium text-neutral-700">
+              Email
+            </label>
             <input
               name="email"
               type="email"
@@ -193,21 +208,24 @@ export default function Page() {
               value={formData.email}
               onChange={handleChange}
               required
-              className={`w-full px-3 py-2 mt-1 border rounded-md outline-none focus:ring-2 ${
+              className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
                 errors.email
                   ? "border-red-500"
-                  : "focus:ring-[#ffba20] border-gray-300"
+                  : "focus:ring-black border-gray-300"
               }`}
             />
             {errors.email && (
-              <p className="text-red-500 text-sm mt-1">{errors.email}</p>
+              <p className="text-red-500 text-xs mt-1">{errors.email}</p>
             )}
           </div>
+
           {/* Contact Number with +63 fixed */}
           <div>
-            <label className="block text-sm font-medium">Contact Number</label>
-            <div className="flex items-center">
-              <span className="px-2 py-2 bg-gray-100 border border-r-0 border-gray-300 rounded-l-md text-gray-500 select-none">
+            <label className="block text-sm font-medium text-neutral-700">
+              Contact Number
+            </label>
+            <div className="flex items-center mt-1">
+              <span className="px-2 py-2 bg-gray-100 border border-r-0 border-gray-300 rounded-l-md text-gray-500 text-sm select-none">
                 +63
               </span>
               <input
@@ -218,10 +236,8 @@ export default function Page() {
                 onChange={handleChange}
                 required
                 maxLength={10}
-                className={`w-full px-3 py-2 border border-gray-300 rounded-r-md outline-none focus:ring-2 ${
-                  errors.contact_number
-                    ? "border-red-500"
-                    : "focus:ring-[#ffba20]"
+                className={`w-full px-3 py-2 text-sm border border-gray-300 rounded-r-md outline-none focus:ring-2 ${
+                  errors.contact_number ? "border-red-500" : "focus:ring-black"
                 }`}
                 style={{ borderLeft: "none" }}
               />
@@ -230,12 +246,17 @@ export default function Page() {
               Philippine mobile (enter 10 digits after +63)
             </span>
             {errors.contact_number && (
-              <p className="text-red-500 text-sm mt-1">{errors.contact_number}</p>
+              <p className="text-red-500 text-xs mt-1">
+                {errors.contact_number}
+              </p>
             )}
           </div>
+
           {/* Password */}
           <div>
-            <label className="block text-sm font-medium">Password</label>
+            <label className="block text-sm font-medium text-neutral-700">
+              Password
+            </label>
             <div className="relative">
               <input
                 name="password"
@@ -244,17 +265,17 @@ export default function Page() {
                 value={formData.password}
                 onChange={handleChange}
                 required
-                className={`w-full px-3 py-2 mt-1 border rounded-md outline-none focus:ring-2 ${
+                className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
                   errors.password
                     ? "border-red-500"
-                    : "focus:ring-[#ffba20] border-gray-300"
+                    : "focus:ring-black border-gray-300"
                 }`}
               />
               <button
                 type="button"
                 tabIndex={-1}
                 onClick={() => setShowPassword((v) => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs"
               >
                 {showPassword ? "Hide" : "Show"}
               </button>
@@ -266,8 +287,8 @@ export default function Page() {
                     passwordStrength === "Strong"
                       ? "text-green-600"
                       : passwordStrength === "Medium"
-                      ? "text-yellow-500"
-                      : "text-red-500"
+                      ? "text-yellow-600"
+                      : "text-red-600"
                   }`}
                 >
                   {passwordStrength}
@@ -278,12 +299,13 @@ export default function Page() {
               </span>
             </div>
             {errors.password && (
-              <p className="text-red-500 text-sm mt-1">{errors.password}</p>
+              <p className="text-red-500 text-xs mt-1">{errors.password}</p>
             )}
           </div>
+
           {/* Confirm Password */}
           <div>
-            <label className="block text-sm font-medium">
+            <label className="block text-sm font-medium text-neutral-700">
               Confirm Password
             </label>
             <input
@@ -293,21 +315,25 @@ export default function Page() {
               value={formData.confirmPassword}
               onChange={handleChange}
               required
-              className={`w-full px-3 py-2 mt-1 border rounded-md outline-none focus:ring-2 ${
+              className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
                 errors.confirmPassword
                   ? "border-red-500"
-                  : "focus:ring-[#ffba20] border-gray-300"
+                  : "focus:ring-black border-gray-300"
               }`}
             />
             {errors.confirmPassword && (
-              <p className="text-red-500 text-sm mt-1">{errors.confirmPassword}</p>
+              <p className="text-red-500 text-xs mt-1">
+                {errors.confirmPassword}
+              </p>
             )}
           </div>
 
           {/* ROLE RADIO BUTTONS */}
           <div>
-            <span className="block text-sm font-medium mb-1">Account Type</span>
-            <div className="flex gap-4">
+            <span className="block text-sm font-medium text-neutral-700 mb-1">
+              Account Type
+            </span>
+            <div className="flex gap-4 text-sm text-neutral-800">
               <label className="flex items-center gap-2">
                 <input
                   type="radio"
@@ -336,14 +362,14 @@ export default function Page() {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full bg-[#ffba20] text-white py-2 rounded-md hover:bg-yellow-500 transition"
+              className="w-full bg-[#181918] text-white py-2 rounded-md hover:text-[#ffba20] transition text-sm"
             >
               {isLoading ? "Creating..." : "Create Account"}
             </button>
             <button
               type="button"
               onClick={handleReset}
-              className="w-full bg-gray-300 text-black py-2 rounded-md hover:bg-gray-400 transition"
+              className="w-full bg-gray-200 text-black py-2 rounded-md hover:bg-gray-300 transition text-sm"
             >
               Reset
             </button>
