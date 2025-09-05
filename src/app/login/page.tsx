@@ -8,7 +8,6 @@ import splashImage from "@/assets/tools-log-in-splash.jpg";
 import Image from "next/image";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
-import { Eye, EyeOff } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import supabase from "@/config/supabaseClient";
 
@@ -23,21 +22,24 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // prevents double navigation
   const didNavigate = useRef(false);
-
-  // gate rendering if a session already exists (prevents flicker)
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
-      // ✅ Always allow login form to render (don’t redirect automatically)
+      try {
+        const savedEmail = localStorage.getItem("rememberedEmail");
+        if (savedEmail && mounted) {
+          setEmail(savedEmail);
+          setRememberMe(true);
+        }
+      } catch {}
       await supabase.auth.getSession();
       if (!mounted) return;
       setChecking(false);
@@ -66,21 +68,26 @@ export default function LoginPage() {
       return;
     }
 
-    // Ensure we have a fresh session on the client before redirecting
+    try {
+      if (rememberMe) {
+        localStorage.setItem("rememberedEmail", email.trim());
+      } else {
+        localStorage.removeItem("rememberedEmail");
+      }
+    } catch {}
+
     await supabase.auth.getSession();
-
     const user = data?.user;
-    const role = user?.user_metadata?.role as string | undefined;
+    const role = (user?.user_metadata?.role as string | undefined) ?? undefined;
 
-    // Fire-and-forget activity log (don't block navigation)
     supabase
       .from("activity_logs")
       .insert([
         {
           user_email: user?.email ?? null,
-          user_role: role ?? null, // <-- Set role in log!
+          user_role: role ?? null,
           action: "Login",
-          details: {}, // must NOT be null
+          details: {},
           created_at: new Date().toISOString(),
         },
       ])
@@ -101,14 +108,14 @@ export default function LoginPage() {
         setIsLoading(false);
       }
     }
-    // no setIsLoading(false) here; allow unmount after replace()
   };
 
-  // While checking existing session, render nothing to avoid the flash
   if (checking) return null;
 
   return (
-    <div className={`min-h-screen flex flex-col relative ${dmSans.className}`}>
+    <div
+      className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}
+    >
       {/* Loading Overlay */}
       <AnimatePresence>
         {isLoading && (
@@ -195,7 +202,7 @@ export default function LoginPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: "easeOut" }}
-        className="flex-grow flex items-center justify-center bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)] px-4 pt-16 pb-10"
+        className="flex-grow flex items-center justify-center bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)] px-4"
       >
         <div className="w-full max-w-4xl flex flex-col lg:flex-row bg-white rounded-2xl shadow-2xl overflow-hidden">
           {/* Form Box */}
@@ -229,7 +236,7 @@ export default function LoginPage() {
               </div>
 
               {/* Password Field */}
-              <div className="flex flex-col text-left relative">
+              <div className="flex flex-col text-left">
                 <label
                   htmlFor="password"
                   className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]"
@@ -238,27 +245,14 @@ export default function LoginPage() {
                 </label>
                 <input
                   id="password"
-                  type={showPassword ? "text" : "password"}
+                  type="password"
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 pr-10 disabled:opacity-60"
+                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 disabled:opacity-60"
                   required
                   disabled={isLoading}
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2 top-9"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  disabled={isLoading}
-                >
-                  {showPassword ? (
-                    <EyeOff size={20} className="text-gray-600" />
-                  ) : (
-                    <Eye size={20} className="text-gray-600" />
-                  )}
-                </button>
               </div>
 
               {/* Error */}
@@ -267,9 +261,17 @@ export default function LoginPage() {
               )}
 
               {/* Remember Me */}
-              <div className="flex gap-1 items-center">
-                <input type="checkbox" disabled={isLoading} />
-                <span className="text-base">Remember Password</span>
+              <div className="flex gap-2 items-center">
+                <input
+                  id="remember"
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  disabled={isLoading}
+                />
+                <label htmlFor="remember" className="text-base cursor-pointer">
+                  Remember Password
+                </label>
               </div>
 
               {/* Submit */}
@@ -305,4 +307,3 @@ export default function LoginPage() {
     </div>
   );
 }
- 
