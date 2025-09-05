@@ -27,27 +27,19 @@ export default function LoginPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // prevents double navigation
   const didNavigate = useRef(false);
-
-  // gate rendering if a session already exists (prevents flicker)
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
-      // Load remembered email (safe; do NOT store password)
       try {
         const savedEmail = localStorage.getItem("rememberedEmail");
         if (savedEmail && mounted) {
           setEmail(savedEmail);
           setRememberMe(true);
         }
-      } catch {
-        // ignore localStorage errors (Safari private mode, etc.)
-      }
-
-      // ✅ Always allow login form to render (don’t redirect automatically)
+      } catch {}
       await supabase.auth.getSession();
       if (!mounted) return;
       setChecking(false);
@@ -76,24 +68,18 @@ export default function LoginPage() {
       return;
     }
 
-    // Remember (or clear) the email based on the checkbox
     try {
       if (rememberMe) {
         localStorage.setItem("rememberedEmail", email.trim());
       } else {
         localStorage.removeItem("rememberedEmail");
       }
-    } catch {
-      // ignore localStorage errors
-    }
+    } catch {}
 
-    // Ensure we have a fresh session on the client before redirecting
     await supabase.auth.getSession();
-
     const user = data?.user;
     const role = (user?.user_metadata?.role as string | undefined) ?? undefined;
 
-    // Fire-and-forget activity log (don't block navigation)
     supabase
       .from("activity_logs")
       .insert([
@@ -101,7 +87,7 @@ export default function LoginPage() {
           user_email: user?.email ?? null,
           user_role: role ?? null,
           action: "Login",
-          details: {}, // must NOT be null
+          details: {},
           created_at: new Date().toISOString(),
         },
       ])
@@ -122,14 +108,14 @@ export default function LoginPage() {
         setIsLoading(false);
       }
     }
-    // no setIsLoading(false); allow unmount after replace()
   };
 
-  // While checking existing session, render nothing to avoid the flash
   if (checking) return null;
 
   return (
-    <div className={`min-h-screen flex flex-col relative ${dmSans.className}`}>
+    <div
+      className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}
+    >
       {/* Loading Overlay */}
       <AnimatePresence>
         {isLoading && (
@@ -216,7 +202,7 @@ export default function LoginPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: "easeOut" }}
-        className="flex-grow flex items-center justify-center bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)] px-4 pt-16 pb-10"
+        className="flex-grow flex items-center justify-center bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)] px-4"
       >
         <div className="w-full max-w-4xl flex flex-col lg:flex-row bg-white rounded-2xl shadow-2xl overflow-hidden">
           {/* Form Box */}
@@ -249,7 +235,7 @@ export default function LoginPage() {
                 />
               </div>
 
-              {/* Password Field (no toggle) */}
+              {/* Password Field */}
               <div className="flex flex-col text-left">
                 <label
                   htmlFor="password"
