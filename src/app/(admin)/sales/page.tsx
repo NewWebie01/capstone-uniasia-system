@@ -1238,13 +1238,18 @@ function SalesPageContent() {
       {/* --- MODALS: Picking List, Sales Order, Final Confirmation --- */}
 
       {/* Picking List Modal */}
-      {showModal &&
-        selectedOrder &&
-        (() => {
-          // 👇 Place hasZeroStock here (inside your function component, before return is fine too)
-          const hasZeroStock = selectedOrder.order_items.some(
-            (item) => item.inventory.quantity === 0
-          );
+    {showModal &&
+  selectedOrder &&
+  (() => {
+    const hasZeroStock = selectedOrder.order_items.some(
+      (item) => item.inventory.quantity === 0
+    );
+
+    const hasInsufficientStock = selectedOrder.order_items.some((item, i) => {
+      const requested = editedQuantities[i] ?? item.quantity;
+      return requested > item.inventory.quantity;
+    });
+
 
           return (
             <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
@@ -1400,150 +1405,170 @@ function SalesPageContent() {
                       </tr>
                     </thead>
                     <tbody>
-                      {selectedOrder.order_items.map((item, idx) => {
-                        const qty = editedQuantities[idx] ?? item.quantity;
-                        const price = item.price;
-                        const percent = editedDiscounts[idx] || 0;
-                        const amount = qty * price * (1 + percent / 100);
+                     {selectedOrder.order_items.map((item, idx) => {
+  const qty = editedQuantities[idx] ?? item.quantity;
+  const price = item.price;
+  const percent = editedDiscounts[idx] || 0;
+  const amount = qty * price * (1 + percent / 100);
 
-                        // Remove handler for zero-stock row
-                        const handleRemove = () => {
-                          // Remove the item at idx from all arrays/states
-                          setEditedQuantities((prev) =>
-                            prev.filter((_, i) => i !== idx)
-                          );
-                          setEditedDiscounts((prev) =>
-                            prev.filter((_, i) => i !== idx)
-                          );
-                          setSelectedOrder((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  order_items: prev.order_items.filter(
-                                    (_, i) => i !== idx
-                                  ),
-                                }
-                              : prev
-                          );
-                        };
+  const stock = item.inventory.quantity;
+  const insufficient = qty > stock || stock === 0; // highlight rule
 
-                        return (
-                          <tr
-                            key={idx}
-                            className={
-                              "border-t hover:bg-gray-50 " +
-                              (item.inventory.quantity === 0
-                                ? "bg-red-100 text-red-700 font-semibold"
-                                : "")
-                            }
-                          >
-                            {/* Quantity */}
-                            <td className="py-2 px-3">
-                              <input
-                                type="number"
-                                min={1}
-                                max={item.inventory.quantity}
-                                value={qty}
-                                onChange={(e) => {
-                                  const val = Number(e.target.value);
-                                  setEditedQuantities((prev) =>
-                                    prev.map((q, i) => (i === idx ? val : q))
-                                  );
-                                }}
-                                className="border rounded px-2 py-1 w-16 text-center bg-gray-100 font-medium"
-                              />
-                            </td>
-                            {/* Unit */}
-                            <td className="py-2 px-3">{item.inventory.unit}</td>
-                            {/* Description */}
-                            <td className="py-2 px-3">
-                              <div className="font-semibold">
-                                {item.inventory.product_name}
-                              </div>
-                              <div className="text-xs text-gray-500">
-                                SKU: {item.inventory.sku}
-                              </div>
-                            </td>
-                            {/* Unit Price */}
-                            <td className="py-2 px-3 text-right">
-                              ₱{price.toLocaleString()}
-                            </td>
-                            {/* Discount/Add (%) */}
-                            <td className="py-2 px-3 text-right">
-                              <div className="flex flex-col items-center gap-1">
-                                <div className="flex items-center justify-end gap-1">
-                                  <button
-                                    className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
-                                    onClick={() => handleDecrement(idx)}
-                                    type="button"
-                                    tabIndex={-1}
-                                    aria-label="Decrease"
-                                  >
-                                    –
-                                  </button>
-                                  <input
-                                    type="number"
-                                    value={percent}
-                                    onChange={(e) =>
-                                      handleDiscountInput(idx, e.target.value)
-                                    }
-                                    className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
-                                    min={-100}
-                                    max={100}
-                                    step={1}
-                                    style={{
-                                      fontWeight: 600,
-                                      color:
-                                        percent > 0
-                                          ? "#f59e42"
-                                          : percent < 0
-                                          ? "#059669"
-                                          : "#222",
-                                    }}
-                                  />
-                                  <span className="ml-1">%</span>
-                                  <button
-                                    className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
-                                    onClick={() => handleIncrement(idx)}
-                                    type="button"
-                                    tabIndex={-1}
-                                    aria-label="Increase"
-                                  >
-                                    +
-                                  </button>
-                                </div>
-                                <button
-                                  className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
-                                  style={{ fontSize: "11px" }}
-                                  onClick={() => handleResetDiscount(idx)}
-                                  type="button"
-                                >
-                                  Reset
-                                </button>
-                              </div>
-                            </td>
-                            {/* Amount */}
-                            <td className="py-2 px-3 text-right font-semibold">
-                              ₱
-                              {amount.toLocaleString(undefined, {
-                                minimumFractionDigits: 2,
-                              })}
-                            </td>
-                            {/* Remove button for zero-stock rows */}
-                            <td className="py-2 px-3 text-right">
-                              {item.inventory.quantity === 0 && (
-                                <button
-                                  onClick={handleRemove}
-                                  className="bg-red-500 hover:bg-red-700 text-white px-3 py-1 rounded shadow"
-                                  title="Remove this item"
-                                >
-                                  Remove
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
+  // Optional remove for bad/zero-stock lines
+  const handleRemove = () => {
+    setEditedQuantities((prev) => prev.filter((_, i) => i !== idx));
+    setEditedDiscounts((prev) => prev.filter((_, i) => i !== idx));
+    setSelectedOrder((prev) =>
+      prev
+        ? {
+            ...prev,
+            order_items: prev.order_items.filter((_, i) => i !== idx),
+          }
+        : prev
+    );
+  };
+
+  return (
+    <tr
+      key={idx}
+      className={
+        "border-t hover:bg-gray-50 " +
+        (insufficient ? "bg-red-100 text-red-700 font-semibold" : "")
+      }
+    >
+      {/* Quantity */}
+      <td className="py-2 px-3">
+        <input
+  type="number"
+  min={1}
+  // enforce both stock limit and 50k max
+  max={Math.min(item.inventory.quantity, 50000)}
+  value={qty}
+  onChange={(e) => {
+    let val = Number(e.target.value);
+
+    // clamp between 1 and 50,000 (and also not more than stock)
+    if (isNaN(val) || val < 1) val = 1;
+    if (val > 50000) val = 50000;
+    if (val > item.inventory.quantity) val = item.inventory.quantity;
+
+    setEditedQuantities((prev) =>
+      prev.map((q, i) => (i === idx ? val : q))
+    );
+  }}
+  className="border rounded px-2 py-1 w-24 text-center bg-gray-100 font-medium"
+/>
+
+      </td>
+
+      {/* Unit */}
+      <td className="py-2 px-3">{item.inventory.unit}</td>
+
+      {/* Description */}
+      <td className="py-2 px-3">
+        <div className="font-semibold">{item.inventory.product_name}</div>
+        <div className="text-xs text-gray-500">SKU: {item.inventory.sku}</div>
+        {insufficient && (
+          <div className="text-xs mt-1">
+            Requested: {qty.toLocaleString()} • In stock:{" "}
+            {stock.toLocaleString()}
+          </div>
+        )}
+      </td>
+
+      {/* Unit Price */}
+      <td className="py-2 px-3 text-right">
+        ₱{price.toLocaleString()}
+      </td>
+
+      {/* Discount/Add (%) */}
+      <td className="py-2 px-3 text-right">
+        <div className="flex flex-col items-center gap-1">
+          <div className="flex items-center justify-end gap-1">
+            <button
+              className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
+              onClick={() =>
+                setEditedDiscounts((prev) =>
+                  prev.map((d, i) => (i === idx ? Math.max(-100, (Number(d) || 0) - 1) : d))
+                )
+              }
+              type="button"
+              tabIndex={-1}
+              aria-label="Decrease"
+            >
+              –
+            </button>
+            <input
+              type="number"
+              value={percent}
+              onChange={(e) => {
+                let p = parseFloat(e.target.value.replace(/[^0-9\-]/g, ""));
+                if (isNaN(p)) p = 0;
+                if (p > 100) p = 100;
+                if (p < -100) p = -100;
+                setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
+              }}
+              className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
+              min={-100}
+              max={100}
+              step={1}
+              style={{
+                fontWeight: 600,
+                color: percent > 0 ? "#f59e42" : percent < 0 ? "#059669" : "#222",
+              }}
+            />
+            <span className="ml-1">%</span>
+            <button
+              className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
+              onClick={() =>
+                setEditedDiscounts((prev) =>
+                  prev.map((d, i) => (i === idx ? Math.min(100, (Number(d) || 0) + 1) : d))
+                )
+              }
+              type="button"
+              tabIndex={-1}
+              aria-label="Increase"
+            >
+              +
+            </button>
+          </div>
+          <button
+            className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
+            style={{ fontSize: "11px" }}
+            onClick={() =>
+              setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)))
+            }
+            type="button"
+          >
+            Reset
+          </button>
+        </div>
+      </td>
+
+      {/* Amount */}
+      <td className="py-2 px-3 text-right font-semibold">
+        ₱
+        {amount.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+        })}
+      </td>
+
+      {/* Remove button (shown when insufficient) */}
+      <td className="py-2 px-3 text-right">
+        {insufficient && (
+          <button
+            onClick={handleRemove}
+            className="bg-red-500 hover:bg-red-700 text-white px-3 py-1 rounded shadow"
+            title="Remove this item"
+          >
+            Remove
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+})}
+
                     </tbody>
                   </table>
                 </div>
@@ -1551,19 +1576,19 @@ function SalesPageContent() {
                 {/* Action Buttons */}
                 <div className="flex justify-center gap-8 mt-6">
                   <button
-                    className={`bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition ${
-                      hasZeroStock ? "opacity-50 cursor-not-allowed" : ""
-                    }`}
-                    onClick={() => {
-                      if (!hasZeroStock) {
-                        setShowModal(false);
-                        setShowSalesOrderModal(true);
-                      }
-                    }}
-                    disabled={hasZeroStock}
-                  >
-                    Proceed Order
-                  </button>
+  className={`bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition ${
+    hasZeroStock || hasInsufficientStock ? "opacity-50 cursor-not-allowed" : ""
+  }`}
+  onClick={() => {
+    if (!hasZeroStock && !hasInsufficientStock) {
+      setShowModal(false);
+      setShowSalesOrderModal(true);
+    }
+  }}
+  disabled={hasZeroStock || hasInsufficientStock}
+>
+  Proceed Order
+</button>
                   <button
                     className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
                     onClick={() => {
@@ -1618,30 +1643,44 @@ function SalesPageContent() {
                   {/* Payment Terms display stays here */}
                 </div>
 
-                <div>
-                  <span className="font-medium">PO Number: </span>
-                  <input
-                    type="text"
-                    value={poNumber}
-                    onChange={(e) => {
-                      setPoNumber(e.target.value);
-                      if (fieldErrors.poNumber)
-                        setFieldErrors((f) => ({ ...f, poNumber: false }));
-                    }}
-                    className={`border-b outline-none px-1 transition-all duration-150 ${
-                      fieldErrors.poNumber
-                        ? "border-red-500 bg-red-50 animate-shake"
-                        : "border-gray-300"
-                    }`}
-                    style={{ minWidth: 100 }}
-                    placeholder="Input PO No"
-                  />
-                  {fieldErrors.poNumber && (
-                    <div className="text-xs text-red-600 mt-1">
-                      PO Number is required
-                    </div>
-                  )}
-                </div>
+                {/* PO Number — digits only, max 6, with “No.” prefix */}
+<div className="flex items-baseline gap-2">
+  <span className="font-medium">PO Number:</span>
+  <span className="text-gray-700">No.</span>
+  <input
+    inputMode="numeric"
+    pattern="\d*"
+    maxLength={6}
+    value={poNumber}
+    onChange={(e) => {
+      // keep only digits, clamp to 6 chars
+      const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 6);
+      setPoNumber(digitsOnly);
+      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
+    }}
+    onPaste={(e) => {
+      // ensure pasted content follows the same rule
+      e.preventDefault();
+      const text = (e.clipboardData.getData("text") || "")
+        .replace(/\D/g, "")
+        .slice(0, 6);
+      setPoNumber(text);
+      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
+    }}
+    className={`border-b outline-none px-1 transition-all duration-150 tracking-widest tabular-nums ${
+      fieldErrors.poNumber
+        ? "border-red-500 bg-red-50 animate-shake"
+        : "border-gray-300"
+    }`}
+    style={{ minWidth: 110 }}
+    placeholder="000000"
+    aria-label="PO Number (numbers only, max 6)"
+  />
+</div>
+{fieldErrors.poNumber && (
+  <div className="text-xs text-red-600 mt-1">PO Number is required</div>
+)}
+
                 <div>
                   <span className="font-medium">Processed By: </span>
                   <span className="font-semibold">
@@ -1657,30 +1696,45 @@ function SalesPageContent() {
                     </span>
                   )}
                 </div>
-                <div>
-                  <span className="font-medium">Sales Rep Name: </span>
-                  <input
-                    type="text"
-                    value={repName}
-                    onChange={(e) => {
-                      setRepName(e.target.value);
-                      if (fieldErrors.repName)
-                        setFieldErrors((f) => ({ ...f, repName: false }));
-                    }}
-                    className={`border-b outline-none px-1 transition-all duration-150 ${
-                      fieldErrors.repName
-                        ? "border-red-500 bg-red-50 animate-shake"
-                        : "border-gray-300"
-                    }`}
-                    style={{ minWidth: 100 }}
-                    placeholder="Input Rep"
-                  />
-                  {fieldErrors.repName && (
-                    <div className="text-xs text-red-600 mt-1">
-                      Sales Rep Name is required
-                    </div>
-                  )}
-                </div>
+              {/* Sales Rep Name — letters + spaces only, max 30 chars */}
+<div>
+  <span className="font-medium">Sales Rep Name: </span>
+  <input
+    type="text"
+    maxLength={30}
+    value={repName}
+    onChange={(e) => {
+      // allow only letters and spaces, clamp to 30
+      const lettersOnly = e.target.value.replace(/[^A-Za-z\s]/g, "").slice(0, 30);
+      setRepName(lettersOnly);
+      if (fieldErrors.repName)
+        setFieldErrors((f) => ({ ...f, repName: false }));
+    }}
+    onPaste={(e) => {
+      e.preventDefault();
+      const text = (e.clipboardData.getData("text") || "")
+        .replace(/[^A-Za-z\s]/g, "")
+        .slice(0, 30);
+      setRepName(text);
+      if (fieldErrors.repName)
+        setFieldErrors((f) => ({ ...f, repName: false }));
+    }}
+    className={`border-b outline-none px-1 transition-all duration-150 ${
+      fieldErrors.repName
+        ? "border-red-500 bg-red-50 animate-shake"
+        : "border-gray-300"
+    }`}
+    style={{ minWidth: 120 }}
+    placeholder="Input Rep (letters only)"
+    aria-label="Sales Rep Name (letters only, max 30)"
+  />
+  {fieldErrors.repName && (
+    <div className="text-xs text-red-600 mt-1">
+      Sales Rep Name is required
+    </div>
+  )}
+</div>
+
                 <div>
                   <span className="font-medium">Payment Terms: </span>
                   {selectedOrder.customers.payment_type === "Credit" ? (
@@ -1748,10 +1802,14 @@ function SalesPageContent() {
                 </thead>
                 <tbody>
                   {selectedOrder.order_items.map((item, idx) => {
-                    const qty = editedQuantities[idx] ?? item.quantity;
-                    const price = item.price;
-                    const percent = editedDiscounts[idx] || 0;
-                    const amount = qty * price * (1 + percent / 100);
+                   const qty = editedQuantities[idx] ?? item.quantity;
+const price = item.price;
+const percent = editedDiscounts[idx] || 0;
+const amount = qty * price * (1 + percent / 100);
+
+const stock = item.inventory.quantity;
+const insufficient = qty > stock || stock === 0; // ← our rule
+
                     return (
                       <tr key={idx} className="border-t text-[14px]">
                         <td className="py-1 px-2">{qty}</td>
