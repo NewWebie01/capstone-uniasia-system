@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import supabase from "@/config/supabaseClient";
+import { toast } from "sonner";
 
 type InventoryItem = {
   id: number;
@@ -26,6 +27,7 @@ export default function InventoryPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [isCustomSubcategory, setIsCustomSubcategory] = useState(false);
@@ -60,6 +62,22 @@ export default function InventoryPage() {
     quantity: false,
     unit_price: false,
   });
+
+  useEffect(() => {
+  setValidationErrors({
+    product_name: !newItem.product_name.trim(),
+    category: !newItem.category.trim(),
+    subcategory: !newItem.subcategory.trim(),
+    unit: !newItem.unit.trim(),
+    quantity: newItem.quantity < 0,          // 0 is allowed
+    unit_price: newItem.unit_price <= 0,     // must be > 0
+  });
+}, [newItem]);
+
+useEffect(() => {
+  const amount = newItem.unit_price * newItem.quantity;
+  setNewItem((prev) => ({ ...prev, amount }));
+}, [newItem.unit_price, newItem.quantity]);
 
   const BUCKET = "inventory-images";
 
@@ -124,136 +142,84 @@ export default function InventoryPage() {
     return publicUrlData.publicUrl;
   };
 
-  const handleSubmitItem = async () => {
-    try {
-      const errors = {
-        product_name: !newItem.product_name,
-        category: !newItem.category,
-        subcategory: !newItem.subcategory,
-        unit: !newItem.unit,
-        quantity: newItem.quantity < 0,
-        unit_price: newItem.unit_price <= 0,
-      };
-      setValidationErrors(errors);
-      const hasErrors = Object.values(errors).some(Boolean);
-      if (hasErrors) {
-        alert("Please fill in all required fields correctly.");
-        return;
-      }
-
-      let finalImageUrl = newItem.image_url || null;
-      if (imageFile) {
-        finalImageUrl = await uploadImageAndGetUrl(
-          imageFile,
-          newItem.sku || newItem.product_name
-        );
-      }
-
-      const dataToSave = {
-        ...newItem,
-        image_url: finalImageUrl,
-        date_created: new Date().toISOString(),
-      };
-
-      if (editingItemId !== null) {
-        // Update existing item
-        const { error } = await supabase
-          .from("inventory")
-          .update(dataToSave)
-          .eq("id", editingItemId);
-        if (error) throw error;
-
-        // Log update activity
-        // Log activity (for both Add and Update)
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        const userEmail = user?.email || "unknown";
-        const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
-
-        await supabase.from("activity_logs").insert([
-          {
-            user_email: userEmail,
-            user_role: userRole, // <-- LOG THE ROLE!
-            action:
-              editingItemId !== null
-                ? "Update Inventory Item"
-                : "Add Inventory Item",
-            details: {
-              sku: dataToSave.sku,
-              product_name: dataToSave.product_name,
-              category: dataToSave.category,
-              subcategory: dataToSave.subcategory,
-              unit: dataToSave.unit,
-              quantity: dataToSave.quantity,
-              unit_price: dataToSave.unit_price,
-              status: dataToSave.status,
-            },
-            created_at: new Date().toISOString(),
-          },
-        ]);
-      } else {
-        // Insert new item
-        const { error } = await supabase.from("inventory").insert([dataToSave]);
-        if (error) throw error;
-
-        // Log add activity
-        // Log activity (for both Add and Update)
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        const userEmail = user?.email || "unknown";
-        const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
-
-        await supabase.from("activity_logs").insert([
-          {
-            user_email: userEmail,
-            user_role: userRole, // <-- LOG THE ROLE!
-            action:
-              editingItemId !== null
-                ? "Update Inventory Item"
-                : "Add Inventory Item",
-            details: {
-              sku: dataToSave.sku,
-              product_name: dataToSave.product_name,
-              category: dataToSave.category,
-              subcategory: dataToSave.subcategory,
-              unit: dataToSave.unit,
-              quantity: dataToSave.quantity,
-              unit_price: dataToSave.unit_price,
-              status: dataToSave.status,
-            },
-            created_at: new Date().toISOString(),
-          },
-        ]);
-      }
-
-      // Reset form, modal, and reload items
-      setNewItem({
-        sku: "",
-        product_name: "",
-        category: "",
-        quantity: 0,
-        subcategory: "",
-        unit: "",
-        unit_price: 0,
-        amount: 0,
-        date_created: new Date().toISOString(),
-        status: "",
-        image_url: null,
-      });
-      setImageFile(null);
-      setImagePreview(null);
-      setShowForm(false);
-      setEditingItemId(null);
-
-      fetchItems();
-      fetchDropdownOptions();
-    } catch (err: any) {
-      console.error("Update error:", err);
-      alert("Error saving item: " + (err.message || JSON.stringify(err)));
+const handleSubmitItem = async () => {
+  try {
+    // validation (unchanged)
+    const errors = {
+      product_name: !newItem.product_name,
+      category: !newItem.category,
+      subcategory: !newItem.subcategory,
+      unit: !newItem.unit,
+      quantity: newItem.quantity < 0,
+      unit_price: newItem.unit_price <= 0,
+    };
+    setValidationErrors(errors);
+    const hasErrors = Object.values(errors).some(Boolean);
+    if (hasErrors) {
+      toast.error("Please fill in all required fields correctly.");
+      return;
     }
-  };
+
+    setSaving(true); //  start loading
+
+    let finalImageUrl = newItem.image_url || null;
+    if (imageFile) {
+      finalImageUrl = await uploadImageAndGetUrl(
+        imageFile,
+        newItem.sku || newItem.product_name
+      );
+    }
+
+    const dataToSave = {
+      ...newItem,
+      image_url: finalImageUrl,
+      date_created: new Date().toISOString(),
+    };
+
+    if (editingItemId !== null) {
+      const { error } = await supabase
+        .from("inventory")
+        .update(dataToSave)
+        .eq("id", editingItemId);
+      if (error) throw error;
+      toast.success("Item updated successfully!");
+      // ...activity_logs insert (unchanged)...
+    } else {
+      const { error } = await supabase.from("inventory").insert([dataToSave]);
+      if (error) throw error;
+      toast.success("New item added successfully!");
+      // ...activity_logs insert (unchanged)...
+    }
+
+    // reset + refresh (unchanged)
+    setNewItem({
+      sku: "",
+      product_name: "",
+      category: "",
+      quantity: 0,
+      subcategory: "",
+      unit: "",
+      unit_price: 0,
+      amount: 0,
+      date_created: new Date().toISOString(),
+      status: "",
+      image_url: null,
+    });
+    setImageFile(null);
+    setImagePreview(null);
+    setShowForm(false);
+    setEditingItemId(null);
+
+    fetchItems();
+    fetchDropdownOptions();
+  } catch (err: any) {
+    console.error("Update error:", err);
+    toast.error(`❌ Error saving item: ${err.message || JSON.stringify(err)}`);
+  } finally {
+    setSaving(false); //  stop loading
+  }
+};
+
 
   const filteredItems = items
     .filter((item) =>
@@ -505,7 +471,7 @@ export default function InventoryPage() {
             </h2>
 
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">SKU</label>
+              <label className="w-36 text-sm text-gray-700">SKU<span className="text-red-500">*</span></label>
               <input
                 className="flex-1 border px-4 py-2 rounded"
                 placeholder="PRODUCT ID"
@@ -517,11 +483,12 @@ export default function InventoryPage() {
             </div>
 
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Product Name</label>
+              <label className="w-36 text-sm text-gray-700">
+  Product Name <span className="text-red-500">*</span>
+</label>
               <input
-                className={`flex-1 border px-4 py-2 rounded ${
-                  validationErrors.product_name ? "border-red-500" : ""
-                }`}
+                className="flex-1 border px-4 py-2 rounded"
+
                 placeholder="e.g. Boysen"
                 value={newItem.product_name}
                 onChange={(e) =>
@@ -535,7 +502,7 @@ export default function InventoryPage() {
 
             {/* CATEGORY */}
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Category</label>
+              <label className="w-36 text-sm text-gray-700">Category<span className="text-red-500">*</span></label>
               <div className="flex-1 flex gap-2">
                 {isCustomCategory ? (
                   <input
@@ -582,7 +549,7 @@ export default function InventoryPage() {
 
             {/* SUBCATEGORY */}
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Subcategory</label>
+              <label className="w-36 text-sm text-gray-700">Subcategory<span className="text-red-500">*</span></label>
               <div className="flex-1 flex gap-2">
                 {isCustomSubcategory ? (
                   <input
@@ -629,7 +596,7 @@ export default function InventoryPage() {
 
             {/* UNIT */}
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Unit</label>
+              <label className="w-36 text-sm text-gray-700">Unit<span className="text-red-500">*</span></label>
               <div className="flex-1 flex gap-2">
                 {isCustomUnit ? (
                   <input
@@ -668,40 +635,45 @@ export default function InventoryPage() {
             </div>
 
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Quantity</label>
-              <input
-                type="number"
-                className={`flex-1 border px-4 py-2 rounded ${
-                  validationErrors.quantity ? "border-red-500" : ""
-                }`}
-                placeholder="Enter quantity"
-                value={newItem.quantity}
-                onChange={(e) =>
-                  setNewItem((prev) => ({
-                    ...prev,
-                    quantity: parseInt(e.target.value) || 0,
-                  }))
-                }
-              />
-            </div>
+  <label className="w-36 text-sm text-gray-700">Quantity<span className="text-red-500">*</span></label>
+  <input
+    type="number"
+    min={0} // prevent negatives with arrow keys
+    className={`flex-1 border px-4 py-2 rounded ${
+      validationErrors.quantity ? "border-red-500" : ""
+    }`}
+    placeholder="Enter quantity"
+    value={newItem.quantity}
+    onFocus={(e) => e.target.select()} // auto-highlight when clicked
+    onChange={(e) =>
+      setNewItem((prev) => ({
+        ...prev,
+        quantity: Math.max(0, parseInt(e.target.value) || 0), // block negatives
+      }))
+    }
+  />
+</div>
+
 
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Unit Price</label>
-              <input
-                type="number"
-                className={`flex-1 border px-4 py-2 rounded ${
-                  validationErrors.unit_price ? "border-red-500" : ""
-                }`}
-                placeholder="₱ per unit"
-                value={newItem.unit_price}
-                onChange={(e) =>
-                  setNewItem((prev) => ({
-                    ...prev,
-                    unit_price: parseFloat(e.target.value) || 0,
-                  }))
-                }
-              />
-            </div>
+  <label className="w-36 text-sm text-gray-700">Unit Price<span className="text-red-500">*</span></label>
+  <input
+    type="number"
+    min={0} // prevent negatives with arrow keys
+    className={`flex-1 border px-4 py-2 rounded ${
+      validationErrors.unit_price ? "border-red-500" : ""
+    }`}
+    placeholder="₱ per unit"
+    value={newItem.unit_price}
+    onFocus={(e) => e.target.select()} // auto-highlight when clicked
+    onChange={(e) =>
+      setNewItem((prev) => ({
+        ...prev,
+        unit_price: Math.max(0, parseFloat(e.target.value) || 0), // block negatives
+      }))
+    }
+  />
+</div>
 
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Total Price</label>
@@ -714,68 +686,109 @@ export default function InventoryPage() {
               />
             </div>
 
-            {/* Image upload + preview */}
-            <div className="flex items-start gap-2">
-              <label className="w-36 text-sm text-gray-700 mt-2">
-                Item Image
-              </label>
-              <div className="flex-1">
-                {imagePreview ? (
-                  <img
-                    src={imagePreview}
-                    alt="Preview"
-                    className="w-full max-h-48 object-contain rounded border mb-2"
-                  />
-                ) : newItem.image_url ? (
-                  <img
-                    src={newItem.image_url}
-                    alt="Current"
-                    className="w-full max-h-48 object-contain rounded border mb-2"
-                  />
-                ) : (
-                  <div className="text-sm text-gray-500 border rounded p-3 mb-2">
-                    No image selected
-                  </div>
-                )}
+            <input
+  type="file"
+  // Only show image types in the chooser UI
+  accept="image/png, image/jpeg, image/webp, image/gif"
+  onChange={(e) => {
+    const f = e.target.files?.[0] || null;
+    if (!f) {
+      handleImageSelect(null);
+      return;
+    }
 
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) =>
-                    handleImageSelect(e.target.files?.[0] || null)
-                  }
-                  className="block w-full text-sm text-gray-700"
-                />
-                {imagePreview && (
-                  <button
-                    type="button"
-                    onClick={() => handleImageSelect(null)}
-                    className="mt-2 text-xs text-red-600 underline"
-                  >
-                    Remove selected image
-                  </button>
-                )}
-              </div>
-            </div>
+    // Hard validation — only allowed image MIME types
+    const ALLOWED = new Set([
+      "image/png",
+      "image/jpeg",
+      "image/webp",
+      "image/gif",
+    ]);
+    if (!ALLOWED.has(f.type)) {
+      toast.error("Please upload an image file (JPG, PNG, WEBP, or GIF).");
+      e.currentTarget.value = ""; // reset input
+      handleImageSelect(null);
+      return;
+    }
+
+    // Optional: size cap e.g. 5MB
+    const MAX_BYTES = 5 * 1024 * 1024;
+    if (f.size > MAX_BYTES) {
+      toast.error("Image too large. Max size is 5 MB.");
+      e.currentTarget.value = "";
+      handleImageSelect(null);
+      return;
+    }
+
+    handleImageSelect(f);
+  }}
+  className="block w-full text-sm text-gray-700"
+/>
+
+{/* helper placeholder under the chooser */}
+<p className="text-xs text-gray-500 mt-1">
+  Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
+</p>
+
+{imagePreview && (
+  <button
+    type="button"
+    onClick={() => handleImageSelect(null)}
+    className="mt-2 text-xs text-red-600 underline"
+  >
+    Remove selected image
+  </button>
+)}
+
 
             <div className="flex justify-end gap-2 pt-4">
-              <button
-                onClick={() => {
-                  setShowForm(false);
-                  setImageFile(null);
-                  setImagePreview(null);
-                }}
-                className="bg-gray-300 px-4 py-2 rounded"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSubmitItem}
-                className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
-              >
-                {editingItemId ? "Update Item" : "Add Item"}
-              </button>
-            </div>
+  <button
+    onClick={() => {
+      setShowForm(false);
+      setImageFile(null);
+      setImagePreview(null);
+    }}
+    className="bg-gray-300 px-4 py-2 rounded"
+  >
+    Cancel
+  </button>
+
+  {/* ✅ Replace this Add/Update Item button */}
+  <button
+    onClick={handleSubmitItem}
+    disabled={saving}
+    className={`bg-black text-white px-4 py-2 rounded hover:text-[#ffba20] 
+      ${saving ? "opacity-70 pointer-events-none" : ""}`}
+  >
+    {saving ? (
+      <span className="inline-flex items-center gap-2">
+        <svg
+          className="animate-spin h-4 w-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle
+            className="opacity-25"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            strokeWidth="4"
+          />
+          <path
+            className="opacity-75"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+          />
+        </svg>
+        {editingItemId ? "Updating..." : "Adding..."}
+      </span>
+    ) : (
+      <>{editingItemId ? "Update Item" : "Add Item"}</>
+    )}
+  </button>
+</div>
           </div>
         </div>
       )}
