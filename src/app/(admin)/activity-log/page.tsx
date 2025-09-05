@@ -1,3 +1,4 @@
+// src/app/admin/activity-log/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -61,9 +62,7 @@ function accountTypeBadge(role: string | null) {
     color = "bg-gray-100 text-gray-600 border border-gray-200";
   }
   return (
-    <span
-      className={`ml-0 px-2 py-0.5 text-xs rounded-full align-middle ${color}`}
-    >
+    <span className={`ml-0 px-2 py-0.5 text-xs rounded-full align-middle ${color}`}>
       {text}
     </span>
   );
@@ -89,9 +88,7 @@ function activityChip(action: string) {
     color = "bg-[#e0f2fe] text-blue-800 border border-blue-200";
 
   return (
-    <span
-      className={`inline-block px-2.5 py-0.5 text-xs rounded-full ${color}`}
-    >
+    <span className={`inline-block px-2.5 py-0.5 text-xs rounded-full ${color}`}>
       {action}
     </span>
   );
@@ -102,8 +99,9 @@ export default function ActivityLogPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 50;
+  const itemsPerPage = 20;
 
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
   const [showExport, setShowExport] = useState(false);
 
   useEffect(() => {
@@ -126,11 +124,10 @@ export default function ActivityLogPage() {
       date: formatPHDate(a.created_at),
       time: formatPHTime(a.created_at),
     }));
+
     if (q) {
       arr = arr.filter((a) => {
-        const detailsText = a.details
-          ? JSON.stringify(a.details).toLowerCase()
-          : "";
+        const detailsText = a.details ? JSON.stringify(a.details).toLowerCase() : "";
         return (
           (a.user_email ?? "").toLowerCase().includes(q) ||
           (a.user_role ?? "").toLowerCase().includes(q) ||
@@ -139,8 +136,43 @@ export default function ActivityLogPage() {
         );
       });
     }
+
+    if (sortConfig) {
+      const { key, direction } = sortConfig;
+      const cmp = (av: any, bv: any) => (av < bv ? -1 : av > bv ? 1 : 0);
+      arr.sort((a, b) => {
+        let aVal: any;
+        let bVal: any;
+
+        if (key === "created_at") {
+          aVal = new Date(a.created_at).getTime();
+          bVal = new Date(b.created_at).getTime();
+        } else {
+          aVal = (a as any)[key];
+          bVal = (b as any)[key];
+          if (typeof aVal === "string") aVal = aVal.toLowerCase();
+          if (typeof bVal === "string") bVal = bVal.toLowerCase();
+          if (aVal == null) aVal = "";
+          if (bVal == null) bVal = "";
+        }
+
+        const base = cmp(aVal, bVal);
+        return direction === "asc" ? base : -base;
+      });
+    }
+
     return arr;
-  }, [activities, searchQuery]);
+  }, [activities, searchQuery, sortConfig]);
+
+  function handleSort(key: string) {
+    setSortConfig((prev) => {
+      if (prev && prev.key === key) {
+        return { key, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      return { key, direction: "asc" };
+    });
+    setCurrentPage(1); // reset to first page on sort
+  }
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
   const pageStart = (currentPage - 1) * itemsPerPage;
@@ -187,9 +219,7 @@ export default function ActivityLogPage() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
 
-    const filename = `Activity_Log_${new Date()
-      .toISOString()
-      .slice(0, 10)}.xlsx`;
+    const filename = `Activity_Log_${new Date().toISOString().slice(0, 10)}.xlsx`;
     XLSX.writeFile(wb, filename, { bookType: "xlsx" });
   }
 
@@ -197,12 +227,10 @@ export default function ActivityLogPage() {
     return (
       <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
         <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-          <h3 className="text-base font-semibold mb-2 text-center">
-            Export Activity Log?
-          </h3>
+          <h3 className="text-base font-semibold mb-2 text-center">Export Activity Log?</h3>
           <p className="text-sm text-gray-700 text-center mb-5">
-            This will export <b>only the rows on this page</b> (
-            <b>{paged.length}</b> item{paged.length !== 1 && "s"}).
+            This will export <b>only the rows on this page</b> (<b>{paged.length}</b> item
+            {paged.length !== 1 && "s"}).
           </p>
           <div className="flex gap-3 justify-center">
             <button
@@ -226,13 +254,10 @@ export default function ActivityLogPage() {
   return (
     <div className={`${dmSans.className} px-4 pb-4 pt-1`}>
       {/* Header aligned like other pages */}
-      <h1 className="pt-2 text-3xl font-bold tracking-tight text-neutral-800 mb-1">
-        Activity Log
-      </h1>
+      <h1 className="pt-2 text-3xl font-bold tracking-tight text-neutral-800 mb-1">Activity Log</h1>
 
       <p className="text-sm text-gray-500 mb-4">
-        See who did what and when. Search by user, action, or details, and
-        export the current view.
+        See who did what and when. Search by user, action, or details, and export the current view.
       </p>
 
       {/* Search & Export (left-aligned) */}
@@ -260,13 +285,52 @@ export default function ActivityLogPage() {
         <table className="w-full text-sm">
           <thead className="bg-[#ffba20] text-[#181918]">
             <tr>
-              <th className="px-4 py-2 text-left font-semibold">User</th>
-              <th className="px-4 py-2 text-left font-semibold">
-                Account Type
+              <th
+                onClick={() => handleSort("user_email")}
+                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
+                aria-label="Sort by User"
+                title="Sort by User"
+              >
+                User {sortConfig?.key === "user_email" && (sortConfig.direction === "asc" ? "▲" : "▼")}
               </th>
-              <th className="px-4 py-2 text-left font-semibold">Activity</th>
-              <th className="px-4 py-2 text-left font-semibold">Date</th>
-              <th className="px-4 py-2 text-left font-semibold">Time</th>
+
+              <th
+                onClick={() => handleSort("user_role")}
+                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
+                aria-label="Sort by Account Type"
+                title="Sort by Account Type"
+              >
+                Account Type{" "}
+                {sortConfig?.key === "user_role" && (sortConfig.direction === "asc" ? "▲" : "▼")}
+              </th>
+
+              <th
+                onClick={() => handleSort("action")}
+                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
+                aria-label="Sort by Activity"
+                title="Sort by Activity"
+              >
+                Activity {sortConfig?.key === "action" && (sortConfig.direction === "asc" ? "▲" : "▼")}
+              </th>
+
+              {/* Sort Date/Time by the same field: created_at */}
+              <th
+                onClick={() => handleSort("created_at")}
+                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
+                aria-label="Sort by Date"
+                title="Sort by Date"
+              >
+                Date {sortConfig?.key === "created_at" && (sortConfig.direction === "asc" ? "▲" : "▼")}
+              </th>
+
+              <th
+                onClick={() => handleSort("created_at")}
+                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
+                aria-label="Sort by Time"
+                title="Sort by Time"
+              >
+                Time {sortConfig?.key === "created_at" && (sortConfig.direction === "asc" ? "▲" : "▼")}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -279,23 +343,15 @@ export default function ActivityLogPage() {
               </tr>
             ) : paged.length === 0 ? (
               <tr>
-                <td
-                  colSpan={5}
-                  className="px-4 py-6 text-center text-gray-400 text-sm"
-                >
+                <td colSpan={5} className="px-4 py-6 text-center text-gray-400 text-sm">
                   No activities found.
                 </td>
               </tr>
             ) : (
               paged.map((act) => (
-                <tr
-                  key={act.id}
-                  className="hover:bg-[#fff8db] border-b last:border-0 transition"
-                >
+                <tr key={act.id} className="hover:bg-[#fff8db] border-b last:border-0 transition">
                   <td className="px-4 py-2">{act.user_email ?? "—"}</td>
-                  <td className="px-4 py-2">
-                    {accountTypeBadge(act.user_role)}
-                  </td>
+                  <td className="px-4 py-2">{accountTypeBadge(act.user_role)}</td>
                   <td className="px-4 py-2">{activityChip(act.action)}</td>
                   <td className="px-4 py-2">{formatPHDate(act.created_at)}</td>
                   <td className="px-4 py-2">{formatPHTime(act.created_at)}</td>
