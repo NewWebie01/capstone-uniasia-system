@@ -3,7 +3,6 @@
 
 import { useState, useEffect } from "react";
 import { DM_Sans } from "next/font/google";
-import { Toaster } from "sonner";
 import { AlertTriangle } from "lucide-react";
 import CustomerSidebar from "@/components/CustomerSidebar";
 import GlobalRouteLoader from "@/components/GlobalRouteLoader";
@@ -62,8 +61,6 @@ export default function CustomerLayout({
     <div
       className={`min-h-screen bg-[radial-gradient(ellipse_200%_100%_at_bottom_left,#ffba20,#dadada_100%)] ${dmSans.className}`}
     >
-      <Toaster richColors position="top-center" />
-
       {/* Sticky Header */}
       <header className="sticky top-0 z-20 backdrop-blur-sm w-full h-12">
         <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3 h-full">

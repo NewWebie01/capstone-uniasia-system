@@ -503,6 +503,19 @@ export default function CustomerReturnsPage() {
     setConfirmOpen(true);
   };
 
+  const handleFiles = (files: FileList | null) => {
+    if (!files) return;
+
+    const valid = Array.from(files).filter((f) => f.type.startsWith("image/"));
+
+    if (valid.length !== files.length) {
+      toast.error("Only image files are allowed (jpg, png, gif, webp).");
+    }
+
+    // If at least one valid file, keep them, otherwise reset
+    setFiles(valid.length ? (valid as unknown as FileList) : null);
+  };
+
   const submitReturn = async () => {
     if (!sel.txn || !sel.order || !sel.item) return;
 
@@ -925,7 +938,7 @@ export default function CustomerReturnsPage() {
                   type="file"
                   multiple
                   accept="image/*"
-                  onChange={(e) => setFiles(e.target.files)}
+                  onChange={(e) => handleFiles(e.target.files)}
                   className="block w-full text-sm"
                 />
               </div>
