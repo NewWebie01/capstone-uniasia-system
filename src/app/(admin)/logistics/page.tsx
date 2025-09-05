@@ -653,7 +653,7 @@ export default function TruckDeliveryPage() {
   const addParticipant = () => {
     if (!newPerson.trim()) return;
     // optional safety: max 3
-    // if (newDelivery.participants.length >= 3) return toast.error("Up to 3 participants only.");
+    if (newDelivery.participants.length >= 2) return toast.error("Up to 3 participants only.");
     setNewDelivery((prev) => ({
       ...prev,
       participants: [...prev.participants, newPerson.trim()],
@@ -838,6 +838,42 @@ export default function TruckDeliveryPage() {
     const n = Number(v ?? 0);
     return n > 0 ? `₱${n}` : "";
   };
+
+
+  // Valicade name to avoid numbers and special characters
+  const handleDriverChange = (value: string) => {
+  // Allow only letters and spaces
+  const regex = /^[A-Za-z\s]*$/;
+
+    if (!regex.test(value)) {
+      toast.error("Driver name can only contain letters and spaces");
+      return; // block invalid input
+    }
+
+    // Auto-capitalize each word & trim spaces
+    const formatted = value
+      .trimStart()
+      .split(" ")
+      .filter(Boolean) // remove double spaces
+      .map(
+        (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      )
+      .join(" ");
+
+    setNewDelivery((prev) => ({ ...prev, driver: formatted }));
+  };
+
+  //PLATE NUM VALIDATION
+  const handlePlateNumberChange = (value: string) => {
+    // Remove spaces just for counting
+    const withoutSpaces = value.replace(/\s/g, "");
+    if (withoutSpaces.length <= 7) {
+      setNewDelivery((prev) => ({ ...prev, plateNumber: value.toUpperCase() }));
+    } else {
+      toast.error("Plate number must not exceed 7 characters");
+    }
+  };
+
 
   /* =========================
      RENDER
@@ -1649,18 +1685,11 @@ export default function TruckDeliveryPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">
-                    Plate Number
-                  </label>
+                  <label className="w-32 text-sm font-medium">Plate Number</label>
                   <input
                     type="text"
                     value={newDelivery.plateNumber}
-                    onChange={(e) =>
-                      setNewDelivery({
-                        ...newDelivery,
-                        plateNumber: e.target.value,
-                      })
-                    }
+                    onChange={(e) => handlePlateNumberChange(e.target.value)}
                     className="w-full border p-2 rounded"
                     required
                   />
@@ -1671,9 +1700,7 @@ export default function TruckDeliveryPage() {
                   <input
                     type="text"
                     value={newDelivery.driver}
-                    onChange={(e) =>
-                      setNewDelivery({ ...newDelivery, driver: e.target.value })
-                    }
+                    onChange={(e) => handleDriverChange(e.target.value)}
                     className="w-full border p-2 rounded"
                     required
                   />
@@ -1709,15 +1736,10 @@ export default function TruckDeliveryPage() {
                 <div className="flex items-center gap-2">
                   <label className="w-32 text-sm font-medium">Status</label>
                   <select
-                    value={newDelivery.status}
-                    onChange={(e) =>
-                      setNewDelivery({ ...newDelivery, status: e.target.value })
-                    }
-                    className="w-full border p-2 rounded"
-                  >
+                    value="Scheduled"
+                    disabled
+                    className="w-full border p-2 rounded bg-gray-100 text-gray-500 cursor-not-allowed">
                     <option>Scheduled</option>
-                    <option>Ongoing</option>
-                    <option>Delivered</option>
                   </select>
                 </div>
 
