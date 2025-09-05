@@ -75,18 +75,21 @@ export default function CustomerLayout({
       <div className="flex h-[calc(100vh-3rem)] overflow-hidden">
         <CustomerSidebar open={open} setOpen={setOpen} />
         <main className="flex-1 overflow-y-auto p-6 relative">
-          {/* 👋 Modern greeting */}
-          <div className="flex justify-end mb-2">
-            <div className="greeting-card bg-white rounded-xl px-4 py-2 text-gray-700 mr-6 select-none cursor-default shadow-md transition-shadow will-change-transform hover:shadow-lg">
-              <span className="font-semibold">Hi,</span>{" "}
-              <span className="text-[#ffba20] font-bold">
-                {userName || "Guest"}
-              </span>
-              👋
+          <div className="max-w-7xl mx-auto relative">
+            {/* User card — aligned with the title, zero gap, scrolls with content */}
+            <div className="absolute top-0 right-6">
+              <div className="greeting-card bg-white rounded-xl px-4 py-2 text-gray-700 shadow-md select-none cursor-default hover:shadow-lg">
+                <span className="font-semibold">Hi,</span>{" "}
+                <span className="text-[#ffba20] font-bold">
+                  {userName || "Guest"}
+                </span>{" "}
+                👋
+              </div>
             </div>
-          </div>
 
-          {children}
+            {/* Your page content (title, subtitle, filters, table, etc.) */}
+            {children}
+          </div>
         </main>
       </div>
 
