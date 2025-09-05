@@ -105,6 +105,7 @@ function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
 /* -------------------------------- Component ------------------------------- */
 export default function CustomerInventoryPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+
   const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -272,7 +273,7 @@ export default function CustomerInventoryPage() {
     if (isNCR) return;
 
     setCities([]);
-    setCityCode("");
+    setCityCode(""); // ✅ correct
     setBarangays([]);
     setBarangayCode("");
     if (!provinceCode) return;
@@ -306,7 +307,7 @@ export default function CustomerInventoryPage() {
           sensitivity: "base",
         });
         return list
-          .map((b) => ({ ...b, name: fixEncoding(b.name) }))
+          .map((b) => ({ ...b, name: fixEncoding(b.name) })) // ✅ fixed
           .sort((a, b) => collator.compare(a.name, b.name));
       };
 
@@ -520,13 +521,7 @@ export default function CustomerInventoryPage() {
         },
         () => refetchTrackingByCode(code)
       );
-      // (Optional) You can also listen to order_items changes,
-      // but re-fetching on orders is usually enough since the SELECT joins order_items.
-      // channel.on(
-      //   "postgres_changes",
-      //   { event: "*", schema: "public", table: "order_items" },
-      //   () => refetchTrackingByCode(code)
-      // );
+      // Optional: also subscribe to order_items if needed
     }
 
     channel.subscribe();
@@ -764,16 +759,47 @@ export default function CustomerInventoryPage() {
     [inventory]
   );
 
-  const filteredInventory = inventory.filter((i) => {
+  const filteredInventory = useMemo(() => {
     const q = searchTerm.toLowerCase();
-    const matchesSearch =
-      i.product_name.toLowerCase().includes(q) ||
-      i.category.toLowerCase().includes(q) ||
-      i.subcategory.toLowerCase().includes(q);
-    const matchesCategory =
-      categoryFilter === "" || i.category === categoryFilter;
-    return matchesSearch && matchesCategory;
-  });
+    return inventory.filter((i) => {
+      const matchesSearch =
+        i.product_name.toLowerCase().includes(q) ||
+        i.category.toLowerCase().includes(q) ||
+        i.subcategory.toLowerCase().includes(q);
+      const matchesCategory =
+        categoryFilter === "" || i.category === categoryFilter;
+      return matchesSearch && matchesCategory;
+    });
+  }, [inventory, searchTerm, categoryFilter]);
+
+  /* ----------------------- Pagination: 10 per page ----------------------- */
+  const itemsPerPage = 10;
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset to first page when filters/search/inventory change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, categoryFilter, inventory.length]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredInventory.length / itemsPerPage)
+  );
+
+  // Clamp current page if filter reduces page count
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  const pageStart = (currentPage - 1) * itemsPerPage;
+  const pageEnd = pageStart + itemsPerPage;
+  const pageItems = useMemo(
+    () => filteredInventory.slice(pageStart, pageEnd),
+    [filteredInventory, pageStart, pageEnd]
+  );
+
+  const goToPage = (p: number) =>
+    setCurrentPage(Math.max(1, Math.min(totalPages, p)));
 
   /* ---------------------- Image modal (view-only) ---------------------- */
   const [showImageModal, setShowImageModal] = useState(false);
@@ -814,7 +840,7 @@ export default function CustomerInventoryPage() {
         <input
           type="text"
           placeholder="Search by product, category, or subcategory..."
-          className="border border-gray-300 rounded px-3 py-2 w/full sm:max-w-xs focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          className="border border-gray-300 rounded px-3 py-2 w-full sm:max-w-xs focus:outline-none focus:ring-2 focus:ring-yellow-500"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
         />
@@ -835,57 +861,120 @@ export default function CustomerInventoryPage() {
       {loading ? (
         <p>Loading inventory...</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg shadow mb-6">
-          <table className="w-full table-fixed bg-white text-sm">
-            <thead className="bg-[#ffba20] text-black text-left">
-              <tr>
-                <th className="py-2 px-4 w-1/5">Product Name</th>
-                <th className="py-2 px-4 w-1/5">Category</th>
-                <th className="py-2 px-4 w-1/5">Subcategory</th>
-                <th className="py-2 px-4 w-1/5">Status</th>
-                <th className="py-2 px-4 w-1/5">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredInventory.map((item) => (
-                <tr key={item.id} className="border-b hover:bg-gray-100">
-                  <td className="py-2 px-4 pl-6 text-left">
-                    <button
-                      className="text-[#2f63b7] hover:underline font-normal text-left"
-                      onClick={() => openImageModal(item)}
-                      title={
-                        item.image_url
-                          ? "View product image"
-                          : "No image available"
-                      }
-                      style={{ wordBreak: "break-word" }}
-                    >
-                      {item.product_name}
-                    </button>
-                  </td>
-                  <td className="py-2 px-4 text-left">{item.category}</td>
-                  <td className="py-2 px-4 text-left">{item.subcategory}</td>
-                  <td className="py-2 px-4 text-left">{item.status}</td>
-                  <td className="py-2 px-4">
-                    <button
-                      className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
-                      onClick={() => handleAddToCartClick(item)}
-                    >
-                      Add to Cart
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {filteredInventory.length === 0 && (
+        <>
+          <div className="overflow-x-auto rounded-lg shadow mb-3">
+            <table className="w-full table-fixed bg-white text-sm">
+              <thead className="bg-[#ffba20] text-black text-left">
                 <tr>
-                  <td colSpan={5} className="text-center py-6 text-gray-500">
-                    No products found.
-                  </td>
+                  <th className="py-2 px-4 w-1/5">Product Name</th>
+                  <th className="py-2 px-4 w-1/5">Category</th>
+                  <th className="py-2 px-4 w-1/5">Subcategory</th>
+                  <th className="py-2 px-4 w-1/5">Status</th>
+                  <th className="py-2 px-4 w-1/5">Action</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {pageItems.map((item) => (
+                  <tr key={item.id} className="border-b hover:bg-gray-100">
+                    <td className="py-2 px-4 pl-6 text-left">
+                      <button
+                        className="text-[#2f63b7] hover:underline font-normal text-left"
+                        onClick={() => openImageModal(item)}
+                        title={
+                          item.image_url
+                            ? "View product image"
+                            : "No image available"
+                        }
+                        style={{ wordBreak: "break-word" }}
+                      >
+                        {item.product_name}
+                      </button>
+                    </td>
+                    <td className="py-2 px-4 text-left">{item.category}</td>
+                    <td className="py-2 px-4 text-left">{item.subcategory}</td>
+                    <td className="py-2 px-4 text-left">{item.status}</td>
+                    <td className="py-2 px-4">
+                      <button
+                        className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
+                        onClick={() => handleAddToCartClick(item)}
+                      >
+                        Add to Cart
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {pageItems.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="text-center py-6 text-gray-500">
+                      No products found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination controls*/}
+          <div className="mt-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              {/* Prev */}
+              <button
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage === 1}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
+                  bg-white/70 backdrop-blur-sm ring-1 ring-black/10
+                  hover:bg-white active:translate-y-px transition
+                  text-gray-800
+                  disabled:opacity-50 disabled:cursor-not-allowed`}
+                aria-label="Previous page"
+                title="Previous page"
+              >
+                <span className="text-lg">←</span>
+                <span className="font-medium">Prev</span>
+              </button>
+
+              {/* Center status */}
+              <div className="text-sm sm:text-base font-medium text-gray-900/90 text-center">
+                Page <span className="font-bold">{currentPage}</span> of{" "}
+                <span className="font-bold">{totalPages}</span>
+                <span className="hidden sm:inline text-gray-700/80">
+                  {" "}
+                  • Showing{" "}
+                  {filteredInventory.length > 0 ? (
+                    <>
+                      <span className="font-semibold">{pageStart + 1}</span>–
+                      <span className="font-semibold">
+                        {Math.min(pageEnd, filteredInventory.length)}
+                      </span>{" "}
+                      of{" "}
+                      <span className="font-semibold">
+                        {filteredInventory.length}
+                      </span>
+                    </>
+                  ) : (
+                    "0"
+                  )}
+                </span>
+              </div>
+
+              {/* Next */}
+              <button
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage >= totalPages}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
+                  bg-white/70 backdrop-blur-sm ring-1 ring-black/10
+                  hover:bg-white active:translate-y-px transition
+                  text-gray-800
+                  disabled:opacity-50 disabled:cursor-not-allowed`}
+                aria-label="Next page"
+                title="Next page"
+              >
+                <span className="font-medium">Next</span>
+                <span className="text-lg">→</span>
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Image Modal */}
