@@ -8,7 +8,6 @@ import splashImage from "@/assets/tools-log-in-splash.jpg";
 import Image from "next/image";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
-import { Eye, EyeOff } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import supabase from "@/config/supabaseClient";
 
@@ -23,8 +22,8 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
@@ -37,6 +36,17 @@ export default function LoginPage() {
   useEffect(() => {
     let mounted = true;
     (async () => {
+      // Load remembered email (safe; do NOT store password)
+      try {
+        const savedEmail = localStorage.getItem("rememberedEmail");
+        if (savedEmail && mounted) {
+          setEmail(savedEmail);
+          setRememberMe(true);
+        }
+      } catch {
+        // ignore localStorage errors (Safari private mode, etc.)
+      }
+
       // ✅ Always allow login form to render (don’t redirect automatically)
       await supabase.auth.getSession();
       if (!mounted) return;
@@ -66,11 +76,22 @@ export default function LoginPage() {
       return;
     }
 
+    // Remember (or clear) the email based on the checkbox
+    try {
+      if (rememberMe) {
+        localStorage.setItem("rememberedEmail", email.trim());
+      } else {
+        localStorage.removeItem("rememberedEmail");
+      }
+    } catch {
+      // ignore localStorage errors
+    }
+
     // Ensure we have a fresh session on the client before redirecting
     await supabase.auth.getSession();
 
     const user = data?.user;
-    const role = user?.user_metadata?.role as string | undefined;
+    const role = (user?.user_metadata?.role as string | undefined) ?? undefined;
 
     // Fire-and-forget activity log (don't block navigation)
     supabase
@@ -78,7 +99,7 @@ export default function LoginPage() {
       .insert([
         {
           user_email: user?.email ?? null,
-          user_role: role ?? null, // <-- Set role in log!
+          user_role: role ?? null,
           action: "Login",
           details: {}, // must NOT be null
           created_at: new Date().toISOString(),
@@ -101,7 +122,7 @@ export default function LoginPage() {
         setIsLoading(false);
       }
     }
-    // no setIsLoading(false) here; allow unmount after replace()
+    // no setIsLoading(false); allow unmount after replace()
   };
 
   // While checking existing session, render nothing to avoid the flash
@@ -228,8 +249,8 @@ export default function LoginPage() {
                 />
               </div>
 
-              {/* Password Field */}
-              <div className="flex flex-col text-left relative">
+              {/* Password Field (no toggle) */}
+              <div className="flex flex-col text-left">
                 <label
                   htmlFor="password"
                   className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]"
@@ -238,27 +259,14 @@ export default function LoginPage() {
                 </label>
                 <input
                   id="password"
-                  type={showPassword ? "text" : "password"}
+                  type="password"
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 pr-10 disabled:opacity-60"
+                  className="rounded-md p-1 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 disabled:opacity-60"
                   required
                   disabled={isLoading}
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2 top-9"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  disabled={isLoading}
-                >
-                  {showPassword ? (
-                    <EyeOff size={20} className="text-gray-600" />
-                  ) : (
-                    <Eye size={20} className="text-gray-600" />
-                  )}
-                </button>
               </div>
 
               {/* Error */}
@@ -267,9 +275,17 @@ export default function LoginPage() {
               )}
 
               {/* Remember Me */}
-              <div className="flex gap-1 items-center">
-                <input type="checkbox" disabled={isLoading} />
-                <span className="text-base">Remember Password</span>
+              <div className="flex gap-2 items-center">
+                <input
+                  id="remember"
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  disabled={isLoading}
+                />
+                <label htmlFor="remember" className="text-base cursor-pointer">
+                  Remember Password
+                </label>
               </div>
 
               {/* Submit */}
@@ -305,4 +321,3 @@ export default function LoginPage() {
     </div>
   );
 }
- 
