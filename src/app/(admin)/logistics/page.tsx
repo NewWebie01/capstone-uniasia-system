@@ -221,8 +221,10 @@ export default function TruckDeliveryPage() {
     const { data: dData, error: dErr } = await supabase
       .from("truck_deliveries")
       .select("*")
-      .order("schedule_date", { ascending: false, nullsFirst: false }) // latest first
-      .order("created_at", { ascending: false }); // tie-breaker
+      .in("status", ["Scheduled", "Ongoing"]) // ⬅️ only active
+      .order("schedule_date", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: false });
+
 
     if (dErr) {
       console.error("Fetch deliveries error:", dErr);
@@ -631,24 +633,30 @@ export default function TruckDeliveryPage() {
   };
 
   const confirmStatusChange = async () => {
-    const { id, newStatus } = confirmDialog;
-    if (id == null) return;
+  const { id, newStatus } = confirmDialog;
+  if (id == null) return;
 
-    const { error } = await supabase
-      .from("truck_deliveries")
-      .update({ status: newStatus })
-      .eq("id", id);
+  const { error } = await supabase
+    .from("truck_deliveries")
+    .update({ status: newStatus })
+    .eq("id", id);
 
-    if (error) {
-      console.error("Update error:", error);
-      toast.error("Failed to update delivery status");
+  if (error) {
+    console.error("Update error:", error);
+    toast.error("Failed to update delivery status");
+  } else {
+    if (newStatus === "Delivered") {
+      // Remove from current page immediately
+      setDeliveries((prev) => prev.filter((d) => d.id !== id));
+      toast.success("Marked as Delivered — moved to Delivered History.");
     } else {
       updateDeliveryStatusInState(id, newStatus);
       toast.success("Delivery status changed successfully");
     }
+  }
 
-    setConfirmDialog({ open: false, id: null, newStatus: "" });
-  };
+  setConfirmDialog({ open: false, id: null, newStatus: "" });
+};
 
   const addParticipant = () => {
     if (!newPerson.trim()) return;
@@ -781,11 +789,6 @@ export default function TruckDeliveryPage() {
     () => deliveries.filter((d) => isActiveStatus(d.status)),
     [deliveries]
   );
-  const deliveredDeliveries = useMemo(
-    () => deliveries.filter((d) => d.status === "Delivered"),
-    [deliveries]
-  );
-
   // Sort inside each bucket:
   // - Active: Scheduled first, then Ongoing. Newer schedule_date first.
   // - Delivered: Newer schedule_date first.
@@ -798,23 +801,10 @@ export default function TruckDeliveryPage() {
       return tb - ta; // latest first
     });
   }, [activeDeliveries]);
-
-  const sortedDelivered = useMemo(() => {
-    return [...deliveredDeliveries].sort((a, b) => {
-      const ta = a.schedule_date ? new Date(a.schedule_date).getTime() : 0;
-      const tb = b.schedule_date ? new Date(b.schedule_date).getTime() : 0;
-      return tb - ta; // latest first
-    });
-  }, [deliveredDeliveries]);
-
   // Group each bucket by date
   const groupedActive = useMemo(
     () => groupByDate(sortedActive),
     [sortedActive]
-  );
-  const groupedDelivered = useMemo(
-    () => groupByDate(sortedDelivered),
-    [sortedDelivered]
   );
 
   // Sorted date keys (latest date section first) for each bucket
@@ -825,14 +815,6 @@ export default function TruckDeliveryPage() {
       return tb - ta;
     });
   }, [groupedActive]);
-
-  const sortedDateKeysDelivered = useMemo(() => {
-    return Object.keys(groupedDelivered).sort((da, db) => {
-      const ta = da ? new Date(da).getTime() : 0;
-      const tb = db ? new Date(db).getTime() : 0;
-      return tb - ta;
-    });
-  }, [groupedDelivered]);
 
   const pesoOrBlank = (v?: number | string | null) => {
     const n = Number(v ?? 0);
@@ -1113,219 +1095,6 @@ export default function TruckDeliveryPage() {
         );
       })}
 
-      {/* 2) DELIVERED — always below active (newest delivered first inside) */}
-      {sortedDateKeysDelivered.map((date) => {
-        const dayDeliveries = groupedDelivered[date];
-        return (
-          <div key={`delivered-${date}`} className="mb-10">
-            <h2 className="text-lg font-bold text-gray-700 mb-3">
-              Scheduled on: {date}
-            </h2>
-
-            {dayDeliveries.map((delivery) => (
-              <motion.div
-                key={delivery.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4 }}
-                className={`bg-white p-6 rounded-lg shadow-md mb-6 ${
-                  isLocked(delivery.status) ? "opacity-80" : ""
-                }`}
-              >
-                <div className="grid grid-cols-12 gap-6">
-                  {/* LEFT: Delivery details */}
-                  <div className="col-span-12 lg:col-span-5">
-                    <h2 className="text-2xl font-semibold tracking-tight">
-                      Delivery to{" "}
-                      <span className="text-slate-900">
-                        {delivery.destination || (
-                          <span className="italic text-gray-400">
-                            [No destination]
-                          </span>
-                        )}
-                      </span>
-                    </h2>
-
-                    <div className="mt-3 text-sm leading-6">
-                      <div className="grid grid-cols-2 gap-y-2">
-                        <div className="text-slate-500 uppercase tracking-wide text-xs">
-                          SCHEDULE DATE
-                        </div>
-                        <div className="font-medium">
-                          {delivery.schedule_date}
-                        </div>
-
-                        <div className="text-slate-500 uppercase tracking-wide text-xs">
-                          PLATE NUMBER
-                        </div>
-                        <div className="font-medium">
-                          {delivery.plate_number}
-                        </div>
-
-                        <div className="text-slate-500 uppercase tracking-wide text-xs">
-                          DRIVER
-                        </div>
-                        <div className="font-medium">{delivery.driver}</div>
-
-                        {delivery.arrival_date &&
-                          delivery.status !== "Delivered" && (
-                            <>
-                              <div className="text-slate-500 uppercase tracking-wide text-xs">
-                                DATE RECEIVED
-                              </div>
-                              <div className="font-medium">
-                                {delivery.arrival_date}
-                              </div>
-                            </>
-                          )}
-                      </div>
-
-                      {/* Read-only Date Received for Delivered */}
-                      {delivery.status === "Delivered" && (
-                        <div className="mt-3">
-                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
-                            Date Received
-                          </label>
-                          <input
-                            type="date"
-                            value={delivery.arrival_date || ""}
-                            disabled={true}
-                            className="border rounded-md px-2 py-1 text-sm w-full max-w-xs opacity-60 cursor-not-allowed"
-                          />
-                        </div>
-                      )}
-
-                      {(delivery.participants?.length ?? 0) > 0 && (
-                        <p className="mt-3 text-sm">
-                          <span className="text-slate-500 uppercase tracking-wide text-xs">
-                            Other Participants
-                          </span>
-                          <br />
-                          <span className="font-medium">
-                            {(delivery.participants || []).join(", ")}
-                          </span>
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* MIDDLE: Assigned invoices list */}
-                  <div className="col-span-12 lg:col-span-5">
-                    <h3 className="text-sm font-semibold text-slate-600 mb-2">
-                      Invoices on this truck
-                    </h3>
-
-                    {delivery._orders && delivery._orders.length > 0 ? (
-                      <div className="space-y-3">
-                        {delivery._orders.map((o) => (
-                          <div
-                            key={o.id}
-                            className="grid grid-cols-12 items-center gap-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100 hover:bg-slate-100/60 transition"
-                          >
-                            <button
-                              className="col-span-12 sm:col-span-3 border rounded-lg px-3 py-1.5 font-mono text-xs bg-white hover:bg-slate-50 shadow-sm"
-                              onClick={() =>
-                                openInvoiceDialogForOrder(delivery.id, o)
-                              }
-                              title="Open invoice"
-                            >
-                              {o.customer?.code}
-                            </button>
-
-                            <div className="col-span-12 sm:col-span-6">
-                              <div className="font-medium truncate">
-                                {o.customer?.name}
-                              </div>
-                              <div className="text-xs text-slate-500 truncate">
-                                {o.customer?.address ?? ""}
-                              </div>
-                            </div>
-
-                            <div className="col-span-12 sm:col-span-3 text-right">
-                              <div className="text-[11px] text-slate-500">
-                                Order #{o.id}
-                              </div>
-                              <div className="mt-1 inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-700">
-                                {o.status ?? "pending"}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-slate-500">
-                        No invoices assigned yet.
-                      </p>
-                    )}
-                  </div>
-
-                  {/* RIGHT: Actions & status */}
-                  <div className="col-span-12 lg:col-span-2">
-                    <div className="flex lg:flex-col gap-2 justify-end lg:justify-start">
-                      <div className="inline-flex items-center gap-2">
-                        {delivery.status === "Delivered" && (
-                          <CheckCircle className="text-emerald-600" />
-                        )}
-                        {delivery.status === "Ongoing" && (
-                          <Truck className="text-amber-600" />
-                        )}
-                        {delivery.status === "Scheduled" && (
-                          <Clock className="text-sky-600" />
-                        )}
-
-                        <select
-                          value={delivery.status}
-                          onChange={(e) =>
-                            setConfirmDialog({
-                              open: true,
-                              id: delivery.id,
-                              newStatus: e.target.value,
-                            })
-                          }
-                          disabled={isLocked(delivery.status)}
-                          className={`border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10 ${
-                            isLocked(delivery.status)
-                              ? "opacity-60 cursor-not-allowed"
-                              : ""
-                          }`}
-                        >
-                          <option value="Scheduled">Scheduled</option>
-                          <option value="Ongoing">Ongoing</option>
-                          <option value="Delivered">Delivered</option>
-                        </select>
-                      </div>
-
-                      <button
-                        onClick={() => openAssignDialog(delivery.id)}
-                        disabled={isLocked(delivery.status)}
-                        className={`px-3 py-2 rounded-md border text-sm hover:bg-slate-50 transition ${
-                          isLocked(delivery.status)
-                            ? "opacity-60 cursor-not-allowed"
-                            : ""
-                        }`}
-                      >
-                        Assign Invoices
-                      </button>
-
-                      <button
-                        onClick={() => handleClearInvoices(delivery.id)}
-                        disabled={isLocked(delivery.status)}
-                        className={`px-3 py-2 rounded-md border border-red-400 text-red-600 text-sm hover:bg-red-50 transition ${
-                          isLocked(delivery.status)
-                            ? "opacity-60 cursor-not-allowed"
-                            : ""
-                        }`}
-                      >
-                        Clear Invoices
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        );
-      })}
       {/* Confirmation Modal */}
       <Dialog
         open={confirmDialog.open}
