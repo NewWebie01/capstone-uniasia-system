@@ -13,7 +13,13 @@ import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import LogoutIcon from "@/assets/power-button.png";
 
 // icons for customer nav
-import { ShoppingBag, ClipboardList, RotateCcw } from "lucide-react";
+import {
+  ShoppingBag,
+  ClipboardList,
+  RotateCcw,
+  BadgeCheck,
+  PackageCheck,
+} from "lucide-react";
 
 // shared link wrapper (same as admin)
 import NavLink from "@/components/NavLink";
@@ -37,8 +43,19 @@ const Menus: MenuItem[] = [
     icon: ShoppingBag,
   },
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
-  // NEW: separate returns page
+
+  // Returns flows
   { title: "Returns / Issues", href: "/customer/returns", icon: RotateCcw },
+  {
+    title: "Return Status",
+    href: "/customer/returns/status",
+    icon: BadgeCheck,
+  },
+  {
+    title: "Returned Items",
+    href: "/customer/returns/items",
+    icon: PackageCheck,
+  },
 ];
 
 export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
@@ -118,6 +135,8 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
               "Product catalog",
               "My orders",
               "Returns / Issues",
+              "Return Status",
+              "Returned Items",
             ]);
 
             const IconOrImage = menu.src ? (

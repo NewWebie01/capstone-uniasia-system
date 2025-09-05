@@ -40,6 +40,7 @@ const Menus: {
   { title: "Dashboard", src: ChartFill, href: "/dashboard" },
   { title: "Inventory", icon: Boxes, href: "/inventory" },
   { title: "Truck Delivery", src: Logistics, href: "/logistics" },
+  { title: "Delivered", src: Logistics, href: "/logistics/delivered" },
   { title: "Sales", src: Sales, href: "/sales" },
   { title: "Invoice", icon: FileText, href: "/invoice" },
   { title: "Returns", icon: RotateCcw, href: "/returns" },
