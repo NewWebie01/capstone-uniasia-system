@@ -26,19 +26,17 @@ function formatPHDate(dateString: string): string {
   d.setHours(d.getHours() + 8);
   return d.toLocaleDateString("en-PH", {
     year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
+    month: "short",
+    day: "numeric",
     timeZone: "Asia/Manila",
   });
 }
-
 function formatPHTime(dateString: string): string {
   const d = new Date(dateString);
   d.setHours(d.getHours() + 8);
   return d.toLocaleTimeString("en-PH", {
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit",
     hour12: true,
     timeZone: "Asia/Manila",
   });
@@ -58,11 +56,11 @@ function accountTypeBadge(role: string | null) {
     text = "Customer";
     color = "bg-[#f0fdf4] text-green-800 border border-green-200";
   } else {
-    text = role;
+    text = role ?? "—";
     color = "bg-gray-100 text-gray-600 border border-gray-200";
   }
   return (
-    <span className={`ml-0 px-2 py-0.5 text-xs rounded-full align-middle ${color}`}>
+    <span className={`inline-block px-2 py-0.5 text-xs rounded-full border ${color}`}>
       {text}
     </span>
   );
@@ -94,10 +92,28 @@ function activityChip(action: string) {
   );
 }
 
+/* ---------- Quick Action Tabs (like Returns quick chips) ---------- */
+const ACTION_TABS = [
+  { key: "all", label: "All" },
+  { key: "login", label: "Login" },
+  { key: "completed", label: "Completed" },
+  { key: "pending", label: "Pending" },
+  { key: "update", label: "Update" },
+  { key: "add", label: "Add" },
+  { key: "reject", label: "Rejected" },
+  { key: "export", label: "Exported" },
+] as const;
+type ActionTabKey = (typeof ACTION_TABS)[number]["key"];
+
 export default function ActivityLogPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // filters
   const [searchQuery, setSearchQuery] = useState("");
+  const [quick, setQuick] = useState<ActionTabKey>("all");
+
+  // pagination & sorting
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
@@ -117,72 +133,99 @@ export default function ActivityLogPage() {
     initialLoad();
   }, []);
 
+  // reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, quick]);
+
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    let arr = activities.map((a) => ({
+
+    let arr = activities.filter((a) => {
+      if (quick === "all") return true;
+      const act = (a.action || "").toLowerCase();
+      switch (quick) {
+        case "login":
+          return act.includes("login") || act.includes("logout");
+        case "completed":
+          return act.includes("completed") || act.includes("complete");
+        case "pending":
+          return act.includes("pending");
+        case "update":
+          return act.includes("update");
+        case "add":
+          return act.includes("add");
+        case "reject":
+          return act.includes("reject");
+        case "export":
+          return act.includes("export");
+        default:
+          return true;
+      }
+    });
+
+    // map formatted date/time for display
+    arr = arr.map((a) => ({
       ...a,
       date: formatPHDate(a.created_at),
       time: formatPHTime(a.created_at),
-    }));
+    })) as any;
 
+    // text search
     if (q) {
-      arr = arr.filter((a) => {
+      arr = arr.filter((a: any) => {
         const detailsText = a.details ? JSON.stringify(a.details).toLowerCase() : "";
         return (
           (a.user_email ?? "").toLowerCase().includes(q) ||
           (a.user_role ?? "").toLowerCase().includes(q) ||
-          a.action.toLowerCase().includes(q) ||
+          (a.action ?? "").toLowerCase().includes(q) ||
           detailsText.includes(q)
         );
       });
     }
 
+    // sort
     if (sortConfig) {
       const { key, direction } = sortConfig;
-      const cmp = (av: any, bv: any) => (av < bv ? -1 : av > bv ? 1 : 0);
-      arr.sort((a, b) => {
-        let aVal: any;
-        let bVal: any;
-
+      arr.sort((a: any, b: any) => {
+        let av: any;
+        let bv: any;
         if (key === "created_at") {
-          aVal = new Date(a.created_at).getTime();
-          bVal = new Date(b.created_at).getTime();
+          av = new Date(a.created_at).getTime();
+          bv = new Date(b.created_at).getTime();
         } else {
-          aVal = (a as any)[key];
-          bVal = (b as any)[key];
-          if (typeof aVal === "string") aVal = aVal.toLowerCase();
-          if (typeof bVal === "string") bVal = bVal.toLowerCase();
-          if (aVal == null) aVal = "";
-          if (bVal == null) bVal = "";
+          av = a[key];
+          bv = b[key];
+          if (typeof av === "string") av = av.toLowerCase();
+          if (typeof bv === "string") bv = bv.toLowerCase();
+          if (av == null) av = "";
+          if (bv == null) bv = "";
         }
-
-        const base = cmp(aVal, bVal);
+        const base = av < bv ? -1 : av > bv ? 1 : 0;
         return direction === "asc" ? base : -base;
       });
     }
 
     return arr;
-  }, [activities, searchQuery, sortConfig]);
+  }, [activities, searchQuery, quick, sortConfig]);
 
-  function handleSort(key: string) {
+  function toggleSort(key: string) {
     setSortConfig((prev) => {
       if (prev && prev.key === key) {
         return { key, direction: prev.direction === "asc" ? "desc" : "asc" };
       }
       return { key, direction: "asc" };
     });
-    setCurrentPage(1); // reset to first page on sort
+    setCurrentPage(1);
   }
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
   const pageStart = (currentPage - 1) * itemsPerPage;
   const paged = filtered.slice(pageStart, pageStart + itemsPerPage);
 
-  // --- Export as Excel (.xlsx) using XLSX.writeFile (no file-saver) ---
+  // Export current page
   async function handleExport() {
     setShowExport(false);
-
-    // Log the export (non-blocking)
     try {
       const { data } = await supabase.auth.getUser();
       const userEmail = data?.user?.email || "unknown";
@@ -195,15 +238,12 @@ export default function ActivityLogPage() {
             rows: paged.length,
             page: currentPage,
             query: searchQuery,
+            quick,
           },
           created_at: new Date().toISOString(),
         },
       ]);
-    } catch (e) {
-      console.error("Export log failed:", e);
-    }
-
-    // Build export
+    } catch {}
     const headerRow = ["User", "Account Type", "Activity", "Date", "Time"];
     const exportRows = paged.map((a) => [
       a.user_email,
@@ -214,177 +254,269 @@ export default function ActivityLogPage() {
       formatPHDate(a.created_at),
       formatPHTime(a.created_at),
     ]);
-
     const ws = XLSX.utils.aoa_to_sheet([headerRow, ...exportRows]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
-
-    const filename = `Activity_Log_${new Date().toISOString().slice(0, 10)}.xlsx`;
-    XLSX.writeFile(wb, filename, { bookType: "xlsx" });
+    XLSX.writeFile(wb, `Activity_Log_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
-  function ExportModal() {
-    return (
-      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-        <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-          <h3 className="text-base font-semibold mb-2 text-center">Export Activity Log?</h3>
-          <p className="text-sm text-gray-700 text-center mb-5">
-            This will export <b>only the rows on this page</b> (<b>{paged.length}</b> item
-            {paged.length !== 1 && "s"}).
+  return (
+    <div className={`${dmSans.className} px-4 pb-6 pt-1`}>
+      {/* Header like Returns */}
+      <div className="flex items-start justify-between flex-wrap gap-2">
+        <div>
+          <h1 className="pt-1 text-3xl font-bold mb-1">Activity Log</h1>
+          <p className="text-sm text-gray-500 mb-2">
+            Track and review system activities performed by users.
           </p>
-          <div className="flex gap-3 justify-center">
+        </div>
+      </div>
+
+      {/* Quick chips like Returns */}
+      <div className="bg-white border rounded-2xl p-3 shadow-sm mb-3">
+        <div className="flex flex-wrap gap-2">
+          {ACTION_TABS.map((t) => {
+            const active = quick === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setQuick(t.key)}
+                className={`px-3 py-1.5 rounded-full text-xs border transition ${
+                  active
+                    ? "bg-[#ffba20] border-[#ffba20] text-black"
+                    : "bg-white hover:bg-gray-50"
+                }`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Filters card like Returns */}
+      <div className="bg-white border rounded-2xl p-4 shadow-sm mb-4">
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-[22rem] max-w-full">
+              <input
+                className="border rounded-xl px-3 py-2 w-full bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#ffba20] transition"
+                placeholder="Search by user / role / action / details"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+
             <button
-              className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm"
-              onClick={handleExport}
+              className="px-4 py-2 rounded-xl border bg-black text-white hover:opacity-90 shadow-sm text-sm"
+              onClick={() => setShowExport(true)}
             >
-              Yes, Export
+              Export
             </button>
+          </div>
+
+          <div className="text-sm text-gray-600">
+            Showing <span className="font-medium">{filtered.length}</span>{" "}
+            record{filtered.length === 1 ? "" : "s"}
+          </div>
+        </div>
+      </div>
+
+      {/* Table styled like Returns with amber header + rounded corners */}
+      <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-[#ffba20]/90 text-black">
+              <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
+                <th>
+                  <div className="flex items-center gap-1">
+                    <span>User</span>
+                    <button
+                      onClick={() => toggleSort("user_email")}
+                      className="text-xs px-1 rounded hover:bg-black/10"
+                      title="Sort by User"
+                      aria-label="Sort by User"
+                    >
+                      {sortConfig?.key === "user_email"
+                        ? sortConfig.direction === "asc"
+                          ? "▲"
+                          : "▼"
+                        : "↕"}
+                    </button>
+                  </div>
+                </th>
+
+                <th>
+                  <div className="flex items-center gap-1">
+                    <span>Account Type</span>
+                    <button
+                      onClick={() => toggleSort("user_role")}
+                      className="text-xs px-1 rounded hover:bg-black/10"
+                      title="Sort by Account Type"
+                      aria-label="Sort by Account Type"
+                    >
+                      {sortConfig?.key === "user_role"
+                        ? sortConfig.direction === "asc"
+                          ? "▲"
+                          : "▼"
+                        : "↕"}
+                    </button>
+                  </div>
+                </th>
+
+                <th>
+                  <div className="flex items-center gap-1">
+                    <span>Activity</span>
+                    <button
+                      onClick={() => toggleSort("action")}
+                      className="text-xs px-1 rounded hover:bg-black/10"
+                      title="Sort by Activity"
+                      aria-label="Sort by Activity"
+                    >
+                      {sortConfig?.key === "action"
+                        ? sortConfig.direction === "asc"
+                          ? "▲"
+                          : "▼"
+                        : "↕"}
+                    </button>
+                  </div>
+                </th>
+
+                <th>
+                  <div className="flex items-center gap-1">
+                    <span>Date</span>
+                    <button
+                      onClick={() => toggleSort("created_at")}
+                      className="text-xs px-1 rounded hover:bg-black/10"
+                      title="Sort by Date"
+                      aria-label="Sort by Date"
+                    >
+                      {sortConfig?.key === "created_at"
+                        ? sortConfig.direction === "asc"
+                          ? "▲"
+                          : "▼"
+                        : "↕"}
+                    </button>
+                  </div>
+                </th>
+
+                <th>
+                  <div className="flex items-center gap-1">
+                    <span>Time</span>
+                    <button
+                      onClick={() => toggleSort("created_at")}
+                      className="text-xs px-1 rounded hover:bg-black/10"
+                      title="Sort by Time"
+                      aria-label="Sort by Time"
+                    >
+                      {sortConfig?.key === "created_at"
+                        ? sortConfig.direction === "asc"
+                          ? "▲"
+                          : "▼"
+                        : "↕"}
+                    </button>
+                  </div>
+                </th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={5} className="py-6 text-center text-gray-500">
+                    <Loader2 className="mx-auto animate-spin" size={20} />
+                    <div className="mt-2 text-sm">Loading…</div>
+                  </td>
+                </tr>
+              ) : paged.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-6 text-center text-gray-400 text-sm">
+                    No activities found.
+                  </td>
+                </tr>
+              ) : (
+                paged.map((act) => (
+                  <tr key={act.id} className="border-t hover:bg-gray-50">
+                    <td className="py-2 px-3">{act.user_email ?? "—"}</td>
+                    <td className="py-2 px-3">{accountTypeBadge(act.user_role)}</td>
+                    <td className="py-2 px-3">{activityChip(act.action)}</td>
+                    <td className="py-2 px-3">{formatPHDate(act.created_at)}</td>
+                    <td className="py-2 px-3">{formatPHTime(act.created_at)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Footer like Returns: numbered + Prev/Next */}
+        <div className="flex items-center justify-between px-3 py-2 border-t bg-white text-sm">
+          <div>
+            Page <span className="font-medium">{currentPage}</span> of{" "}
+            <span className="font-medium">{totalPages}</span>
+          </div>
+          <div className="flex items-center gap-1">
             <button
-              className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
-              onClick={() => setShowExport(false)}
+              className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
             >
-              Cancel
+              Prev
+            </button>
+            {Array.from({ length: totalPages }).map((_, i) => {
+              const n = i + 1;
+              const active = n === currentPage;
+              return (
+                <button
+                  key={n}
+                  onClick={() => setCurrentPage(n)}
+                  className={`px-2 py-1 rounded border text-xs ${
+                    active
+                      ? "bg-[#ffba20] border-[#ffba20] text-black"
+                      : "hover:bg-gray-50"
+                  }`}
+                >
+                  {n}
+                </button>
+              );
+            })}
+            <button
+              className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Next
             </button>
           </div>
         </div>
       </div>
-    );
-  }
 
-  return (
-    <div className={`${dmSans.className} px-4 pb-4 pt-1`}>
-      {/* Header aligned like other pages */}
-      <h1 className="pt-2 text-3xl font-bold tracking-tight text-neutral-800 mb-1">Activity Log</h1>
-
-      <p className="text-sm text-gray-500 mb-4">
-        See who did what and when. Search by user, action, or details, and export the current view.
-      </p>
-
-      {/* Search & Export (left-aligned) */}
-      <div className="flex gap-3 mb-4">
-        <input
-          type="text"
-          placeholder="Search by user, action, or details…"
-          value={searchQuery}
-          onChange={(e) => {
-            setSearchQuery(e.target.value);
-            setCurrentPage(1);
-          }}
-          className="border px-4 py-2 w-full max-w-md rounded shadow-sm focus:outline-none focus:ring-2 focus:ring-black text-sm"
-        />
-        <button
-          className="bg-black text-white px-4 py-2 rounded hover:text-[#22c55e] transition text-sm"
-          onClick={() => setShowExport(true)}
-        >
-          Export
-        </button>
-      </div>
-
-      {/* Table */}
-      <div className="overflow-x-auto rounded-lg shadow bg-white/95 mb-6">
-        <table className="w-full text-sm">
-          <thead className="bg-[#ffba20] text-[#181918]">
-            <tr>
-              <th
-                onClick={() => handleSort("user_email")}
-                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
-                aria-label="Sort by User"
-                title="Sort by User"
+      {/* Export modal */}
+      {showExport && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+            <h3 className="text-base font-semibold mb-2 text-center">Export Activity Log?</h3>
+            <p className="text-sm text-gray-700 text-center mb-5">
+              This will export <b>only the rows on this page</b> (<b>{paged.length}</b>{" "}
+              item{paged.length !== 1 && "s"}).
+            </p>
+            <div className="flex gap-3 justify-center">
+              <button
+                className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm"
+                onClick={handleExport}
               >
-                User {sortConfig?.key === "user_email" && (sortConfig.direction === "asc" ? "▲" : "▼")}
-              </th>
-
-              <th
-                onClick={() => handleSort("user_role")}
-                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
-                aria-label="Sort by Account Type"
-                title="Sort by Account Type"
+                Yes, Export
+              </button>
+              <button
+                className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
+                onClick={() => setShowExport(false)}
               >
-                Account Type{" "}
-                {sortConfig?.key === "user_role" && (sortConfig.direction === "asc" ? "▲" : "▼")}
-              </th>
-
-              <th
-                onClick={() => handleSort("action")}
-                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
-                aria-label="Sort by Activity"
-                title="Sort by Activity"
-              >
-                Activity {sortConfig?.key === "action" && (sortConfig.direction === "asc" ? "▲" : "▼")}
-              </th>
-
-              {/* Sort Date/Time by the same field: created_at */}
-              <th
-                onClick={() => handleSort("created_at")}
-                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
-                aria-label="Sort by Date"
-                title="Sort by Date"
-              >
-                Date {sortConfig?.key === "created_at" && (sortConfig.direction === "asc" ? "▲" : "▼")}
-              </th>
-
-              <th
-                onClick={() => handleSort("created_at")}
-                className="px-4 py-2 text-left font-semibold cursor-pointer select-none"
-                aria-label="Sort by Time"
-                title="Sort by Time"
-              >
-                Time {sortConfig?.key === "created_at" && (sortConfig.direction === "asc" ? "▲" : "▼")}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
-                  <Loader2 className="mx-auto animate-spin" size={20} />
-                  <div className="mt-2 text-sm">Loading…</div>
-                </td>
-              </tr>
-            ) : paged.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-gray-400 text-sm">
-                  No activities found.
-                </td>
-              </tr>
-            ) : (
-              paged.map((act) => (
-                <tr key={act.id} className="hover:bg-[#fff8db] border-b last:border-0 transition">
-                  <td className="px-4 py-2">{act.user_email ?? "—"}</td>
-                  <td className="px-4 py-2">{accountTypeBadge(act.user_role)}</td>
-                  <td className="px-4 py-2">{activityChip(act.action)}</td>
-                  <td className="px-4 py-2">{formatPHDate(act.created_at)}</td>
-                  <td className="px-4 py-2">{formatPHTime(act.created_at)}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Pagination */}
-      <div className="flex justify-between items-center gap-4">
-        <button
-          onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
-          disabled={currentPage === 1}
-          className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 transition disabled:opacity-60 text-sm"
-        >
-          ← Prev
-        </button>
-        <span className="text-sm text-gray-600">
-          Page <span className="font-bold">{currentPage}</span> of{" "}
-          <span className="font-bold">{totalPages}</span>
-        </span>
-        <button
-          onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
-          disabled={currentPage === totalPages}
-          className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 transition disabled:opacity-60 text-sm"
-        >
-          Next →
-        </button>
-      </div>
-
-      {showExport && <ExportModal />}
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
