@@ -7,6 +7,24 @@ import { Eye } from "lucide-react";
 import { motion } from "framer-motion";
 import supabase from "@/config/supabaseClient";
 
+/* -------------------- Activity Logger -------------------- */
+async function logActivity(action: string, details: any = {}) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: data?.user?.email || "",
+        user_role: "admin",
+        action,
+        details,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  } catch (e) {
+    console.error("logActivity failed:", e);
+  }
+}
+
 /* -------------------- Types -------------------- */
 type InvoiceItem = {
   id: string;
@@ -236,7 +254,6 @@ function DeliveryReceiptModern({
   return (
     <div className="w-full max-w-4xl mx-auto bg-white p-7 rounded-xl shadow print:shadow-none print:p-8 print:max-w-none print:w-[100%] text-black">
       <div className="relative mb-10">
-        {/* Centered Title */}
         <div className="flex flex-col items-center justify-center text-center">
           <h2 className="text-4xl font-extrabold tracking-tight text-neutral-900 mb-1 -mt-3">
             UNIASIA
@@ -528,6 +545,14 @@ export default function InvoiceMergedPage() {
   const openInvoice = async (order: OrderForList) => {
     setOpenId(order.id);
     setLoadingItems(true);
+
+    // ✅ log "Viewed Invoice"
+    const txn = order.customer?.code || order.id;
+    await logActivity("Viewed Invoice", {
+      order_id: order.id,
+      txn,
+      customer: order.customer?.name || null,
+    });
 
     setCustomerForOrder({
       name: order.customer?.name || "—",
@@ -847,10 +872,7 @@ export default function InvoiceMergedPage() {
                       </td>
                       <td className="px-6 py-3 text-center">
                         <DialogTrigger asChild>
-                          <button
-                            className="inline-flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-lg shadow transition"
-                            onClick={() => openInvoice(order)}
-                          >
+                          <button className="inline-flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-lg shadow transition">
                             <Eye className="w-4 h-4" />
                             View
                           </button>
@@ -907,6 +929,18 @@ export default function InvoiceMergedPage() {
                                     paperSize,
                                     `UNIASIA_${txn}`
                                   );
+
+                                  // ✅ log "Exported Invoice PDF"
+                                  await logActivity("Exported Invoice PDF", {
+                                    order_id: order.id,
+                                    txn,
+                                    paper: paperSize,
+                                    items: items?.length ?? 0,
+                                    sales_tax: salesTaxSaved,
+                                    grand_total_with_interest:
+                                      grandTotalWithInterest,
+                                    per_term_amount: perTermAmount,
+                                  });
                                 }}
                               >
                                 PRINT PDF

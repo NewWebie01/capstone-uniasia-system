@@ -5,6 +5,25 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 
+/* ============== Activity Log helper ============== */
+async function logActivity(action: string, details: any = {}) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    const userEmail = data?.user?.email || "";
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        user_role: "admin", // or your actual role if you track it
+        action,
+        details,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  } catch (e) {
+    console.error("logActivity failed:", e);
+  }
+}
+
 /* ============== Types & helpers ============== */
 
 type ReturnReason =
@@ -362,7 +381,10 @@ export default function AdminReturnsPage() {
     id: string,
     status: "approved" | "rejected" | "received"
   ) => {
-    const prev = rows;
+    const prev = rows; // keep to rollback
+    const prevRow = rows.find((r) => r.id === id);
+    const prevStatus = prevRow?.status ?? "";
+
     setUpdating(true);
     // optimistic update
     setRows((r) => r.map((x) => (x.id === id ? { ...x, status } : x)));
@@ -385,6 +407,16 @@ export default function AdminReturnsPage() {
       toast.error(error.message);
     } else {
       toast.success(`Status changed to ${status}`);
+
+      // ✅ Log to activity_logs
+      const code = prevRow?.code || id;
+      await logActivity("Updated Return Status", {
+        return_id: id,
+        code,
+        from: prevStatus,
+        to: status,
+        changed_at: new Date().toISOString(),
+      });
     }
   };
 
