@@ -125,7 +125,7 @@ export default function ReturnItemStatusPage() {
           return;
         }
 
-        // fetch customers -> orders (to know which order_ids belong to the user + TXN code per order)
+        // customers -> orders (map order_id -> TXN code)
         const { data: customers } = await supabase
           .from("customers")
           .select(
@@ -226,6 +226,7 @@ export default function ReturnItemStatusPage() {
     };
   };
 
+  /* -------- Group by TXN and paginate -------- */
   const returnsByTxn = useMemo(() => {
     const groups: Record<string, ReturnRow[]> = {};
     for (const r of returnsList) {
@@ -234,6 +235,33 @@ export default function ReturnItemStatusPage() {
     }
     return groups;
   }, [returnsList, orderIdToTxn]);
+
+  const txnGroups = useMemo(() => Object.entries(returnsByTxn), [returnsByTxn]);
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const groupsPerPage = 5;
+
+  // reset to page 1 when group count changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [txnGroups.length]);
+
+  const totalPages = Math.max(1, Math.ceil(txnGroups.length / groupsPerPage));
+
+  // clamp if needed
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  const pageStart = (currentPage - 1) * groupsPerPage;
+  const pageEnd = pageStart + groupsPerPage;
+  const pagedGroups = useMemo(
+    () => txnGroups.slice(pageStart, pageEnd),
+    [txnGroups, pageStart, pageEnd]
+  );
+
+  const goToPage = (p: number) =>
+    setCurrentPage(Math.max(1, Math.min(totalPages, p)));
 
   return (
     <div className="p-4">
@@ -260,143 +288,203 @@ export default function ReturnItemStatusPage() {
         <div className="bg-white border rounded-2xl p-4 shadow-sm">
           <h2 className="font-semibold text-lg mb-2">My Return Requests</h2>
 
-          {Object.keys(returnsByTxn).length === 0 ? (
+          {txnGroups.length === 0 ? (
             <p className="text-sm text-gray-600 mt-2">
               You have no return requests yet.
             </p>
           ) : (
-            Object.entries(returnsByTxn).map(([txnCode, list]) => (
-              <div
-                key={txnCode}
-                className="mb-6 last:mb-0 rounded-xl border bg-white overflow-hidden"
-              >
-                <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
-                  <div className="text-sm">
-                    <span className="text-gray-600 mr-1">TXN:</span>
-                    <span className="tracking-wider font-medium">
-                      {txnCode}
-                    </span>
+            <>
+              {pagedGroups.map(([txnCode, list]) => (
+                <div
+                  key={txnCode}
+                  className="mb-6 last:mb-0 rounded-xl border bg-white overflow-hidden"
+                >
+                  <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+                    <div className="text-sm">
+                      <span className="text-gray-600 mr-1">TXN:</span>
+                      <span className="tracking-wider font-medium">
+                        {txnCode}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {list.length} return{list.length === 1 ? "" : "s"}
+                    </div>
                   </div>
-                  <div className="text-xs text-gray-500">
-                    {list.length} return(s)
-                  </div>
-                </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-100">
-                      <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
-                        <th>Return Code</th>
-                        <th>Filed</th>
-                        <th>Status</th>
-                        <th className="text-center">Items</th>
-                        <th className="text-right">Details</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {list.map((rtn) => {
-                        const isOpen = !!expanded[rtn.id];
-                        const totalItems = rtn.return_items?.length ?? 0;
-                        return (
-                          <React.Fragment key={rtn.id}>
-                            <tr className="hover:bg-gray-50">
-                              <td className="py-2 px-3 font-medium tracking-wider">
-                                {rtn.code}
-                              </td>
-                              <td className="py-2 px-3">
-                                {formatPH(rtn.created_at)}
-                              </td>
-                              <td className="py-2 px-3">
-                                <StatusChip status={rtn.status} />
-                              </td>
-                              <td className="py-2 px-3 text-center">
-                                {totalItems}
-                              </td>
-                              <td className="py-2 px-3 text-right">
-                                <button
-                                  onClick={() => toggleExpanded(rtn.id)}
-                                  className="text-xs px-2 py-1 rounded-lg border hover:bg-gray-50"
-                                >
-                                  {isOpen ? "Hide" : "View"}
-                                </button>
-                              </td>
-                            </tr>
-
-                            {isOpen && (
-                              <tr className="bg-gray-50">
-                                <td colSpan={5} className="px-3 py-3">
-                                  <div className="rounded-lg border bg-white overflow-x-auto">
-                                    <table className="w-full text-sm">
-                                      <thead className="bg-gray-100">
-                                        <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
-                                          <th>Product</th>
-                                          <th className="w-24">Qty</th>
-                                          <th>Photos</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody className="divide-y">
-                                        {rtn.return_items.map((ri, idx) => (
-                                          <tr key={idx} className="align-top">
-                                            <td className="py-2 px-3">
-                                              {ri.inventory?.product_name ??
-                                                "—"}
-                                            </td>
-                                            <td className="py-2 px-3">
-                                              {ri.quantity}
-                                            </td>
-                                            <td className="py-2 px-3">
-                                              {ri.photo_urls?.length ? (
-                                                <div className="flex gap-2 flex-wrap">
-                                                  {ri.photo_urls.map((u, i) => (
-                                                    <a
-                                                      key={i}
-                                                      href={u}
-                                                      target="_blank"
-                                                      className="inline-block"
-                                                    >
-                                                      <img
-                                                        src={u}
-                                                        alt="evidence"
-                                                        className="w-12 h-12 object-cover rounded border"
-                                                      />
-                                                    </a>
-                                                  ))}
-                                                </div>
-                                              ) : (
-                                                "—"
-                                              )}
-                                            </td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-
-                                  <div className="text-xs text-gray-600 mt-2">
-                                    <span className="font-medium">Reason:</span>{" "}
-                                    {rtn.reason}
-                                    {rtn.note ? (
-                                      <>
-                                        {" "}
-                                        &middot;{" "}
-                                        <span className="font-medium">
-                                          Note:
-                                        </span>{" "}
-                                        {rtn.note}
-                                      </>
-                                    ) : null}
-                                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-100">
+                        <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
+                          <th>Return Code</th>
+                          <th>Filed</th>
+                          <th>Status</th>
+                          <th className="text-center">Items</th>
+                          <th className="text-right">Details</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {list.map((rtn) => {
+                          const isOpen = !!expanded[rtn.id];
+                          const totalItems = rtn.return_items?.length ?? 0;
+                          return (
+                            <React.Fragment key={rtn.id}>
+                              <tr className="hover:bg-gray-50">
+                                <td className="py-2 px-3 font-medium tracking-wider">
+                                  {rtn.code}
+                                </td>
+                                <td className="py-2 px-3">
+                                  {formatPH(rtn.created_at)}
+                                </td>
+                                <td className="py-2 px-3">
+                                  <StatusChip status={rtn.status} />
+                                </td>
+                                <td className="py-2 px-3 text-center">
+                                  {totalItems}
+                                </td>
+                                <td className="py-2 px-3 text-right">
+                                  <button
+                                    onClick={() => toggleExpanded(rtn.id)}
+                                    className="text-xs px-2 py-1 rounded-lg border hover:bg-gray-50"
+                                  >
+                                    {isOpen ? "Hide" : "View"}
+                                  </button>
                                 </td>
                               </tr>
-                            )}
-                          </React.Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+
+                              {isOpen && (
+                                <tr className="bg-gray-50">
+                                  <td colSpan={5} className="px-3 py-3">
+                                    <div className="rounded-lg border bg-white overflow-x-auto">
+                                      <table className="w-full text-sm">
+                                        <thead className="bg-gray-100">
+                                          <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
+                                            <th>Product</th>
+                                            <th className="w-24">Qty</th>
+                                            <th>Photos</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y">
+                                          {rtn.return_items.map((ri, idx) => (
+                                            <tr key={idx} className="align-top">
+                                              <td className="py-2 px-3">
+                                                {ri.inventory?.product_name ??
+                                                  "—"}
+                                              </td>
+                                              <td className="py-2 px-3">
+                                                {ri.quantity}
+                                              </td>
+                                              <td className="py-2 px-3">
+                                                {ri.photo_urls?.length ? (
+                                                  <div className="flex gap-2 flex-wrap">
+                                                    {ri.photo_urls.map(
+                                                      (u, i) => (
+                                                        <a
+                                                          key={i}
+                                                          href={u}
+                                                          target="_blank"
+                                                          className="inline-block"
+                                                        >
+                                                          <img
+                                                            src={u}
+                                                            alt="evidence"
+                                                            className="w-12 h-12 object-cover rounded border"
+                                                          />
+                                                        </a>
+                                                      )
+                                                    )}
+                                                  </div>
+                                                ) : (
+                                                  "—"
+                                                )}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+
+                                    <div className="text-xs text-gray-600 mt-2">
+                                      <span className="font-medium">
+                                        Reason:
+                                      </span>{" "}
+                                      {rtn.reason}
+                                      {rtn.note ? (
+                                        <>
+                                          {" "}
+                                          &middot;{" "}
+                                          <span className="font-medium">
+                                            Note:
+                                          </span>{" "}
+                                          {rtn.note}
+                                        </>
+                                      ) : null}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+
+              {/* Pagination controls — inline, no gradient */}
+              {txnGroups.length > groupsPerPage && (
+                <div className="mt-4">
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <button
+                      onClick={() => goToPage(currentPage - 1)}
+                      disabled={currentPage === 1}
+                      className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
+                                  bg-white/70 backdrop-blur-sm ring-1 ring-black/10
+                                  hover:bg-white active:translate-y-px transition
+                                  text-gray-800
+                                  disabled:opacity-50 disabled:cursor-not-allowed`}
+                      aria-label="Previous page"
+                      title="Previous page"
+                    >
+                      <span className="text-lg">←</span>
+                      <span className="font-medium">Prev</span>
+                    </button>
+
+                    <div className="text-sm sm:text-base font-medium text-gray-900/90 text-center">
+                      Page <span className="font-bold">{currentPage}</span> of{" "}
+                      <span className="font-bold">{totalPages}</span>
+                      <span className="hidden sm:inline text-gray-700/80">
+                        {" "}
+                        • Showing{" "}
+                        <span className="font-semibold">{pageStart + 1}</span>–
+                        <span className="font-semibold">
+                          {Math.min(pageEnd, txnGroups.length)}
+                        </span>{" "}
+                        of{" "}
+                        <span className="font-semibold">
+                          {txnGroups.length}
+                        </span>
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={() => goToPage(currentPage + 1)}
+                      disabled={currentPage >= totalPages}
+                      className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
+                                  bg-white/70 backdrop-blur-sm ring-1 ring-black/10
+                                  hover:bg-white active:translate-y-px transition
+                                  text-gray-800
+                                  disabled:opacity-50 disabled:cursor-not-allowed`}
+                      aria-label="Next page"
+                      title="Next page"
+                    >
+                      <span className="font-medium">Next</span>
+                      <span className="text-lg">→</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

@@ -119,7 +119,6 @@ export default function CustomerReturnsPage() {
   const [returnsList, setReturnsList] = useState<ReturnRow[]>([]);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-
   const toggleExpanded = (id: string) =>
     setExpanded((p) => ({ ...p, [id]: !p[id] }));
 
@@ -189,7 +188,6 @@ export default function CustomerReturnsPage() {
         previewUrls.forEach((u) => URL.revokeObjectURL(u));
       } catch {}
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [files]);
 
   /* -------------------------- Initial load (user) ------------------------- */
@@ -454,6 +452,40 @@ export default function CustomerReturnsPage() {
     return groups;
   }, [returnsList, orderIdToTxn]);
 
+  /* ---------------------- Pagination for Eligible TXN groups ---------------------- */
+  const eligibleGroups = useMemo(
+    () => Object.entries(eligibleByTxn),
+    [eligibleByTxn]
+  );
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const groupsPerPage = 5; // how many TXN cards per page
+
+  // reset to first page whenever groups change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [eligibleGroups.length]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(eligibleGroups.length / groupsPerPage)
+  );
+
+  // clamp page if groups shrink
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  const pageStart = (currentPage - 1) * groupsPerPage;
+  const pageEnd = pageStart + groupsPerPage;
+  const pagedEligibleGroups = useMemo(
+    () => eligibleGroups.slice(pageStart, pageEnd),
+    [eligibleGroups, pageStart, pageEnd]
+  );
+
+  const goToPage = (p: number) =>
+    setCurrentPage(Math.max(1, Math.min(totalPages, p)));
+
   /* --------------------- Modal helpers --------------------- */
   const openModal = (row: {
     txn: CustomerTx;
@@ -648,8 +680,7 @@ export default function CustomerReturnsPage() {
 
       {!loading && authEmail && (
         <>
-          {/* -------- Eligible by TXN -------- */}
-          {Object.keys(eligibleByTxn).length === 0 ? (
+          {eligibleGroups.length === 0 ? (
             <div className="bg-white border rounded-2xl p-4 shadow-sm mb-6">
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold text-lg">
@@ -661,55 +692,119 @@ export default function CustomerReturnsPage() {
               </p>
             </div>
           ) : (
-            Object.entries(eligibleByTxn).map(([txnCode, rows]) => (
-              <div
-                key={txnCode}
-                className="bg-white border rounded-2xl p-4 shadow-sm mb-6"
-              >
-                <div className="flex items-center justify-between">
-                  <h2 className="font-semibold text-lg">
-                    Eligible for Return • TXN:{" "}
-                    <span className="tracking-wider">{txnCode}</span>
-                  </h2>
-                  <span className="text-sm text-gray-500">
-                    {rows.length} item(s)
-                  </span>
-                </div>
+            <>
+              {pagedEligibleGroups.map(([txnCode, rows]) => (
+                <div
+                  key={txnCode}
+                  className="bg-white border rounded-2xl p-4 shadow-sm mb-6"
+                >
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-semibold text-lg">
+                      Eligible for Return • TXN:{" "}
+                      <span className="tracking-wider">{txnCode}</span>
+                    </h2>
+                    <span className="text-sm text-gray-500">
+                      {rows.length} item(s)
+                    </span>
+                  </div>
 
-                <div className="mt-3 border rounded overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th className="py-2 px-3 text-left">Product</th>
-                        <th className="py-2 px-3 text-left">Order Date</th>
-                        <th className="py-2 px-3 text-left">Remaining Qty</th>
-                        <th className="py-2 px-3 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map(({ txn, order, item }) => (
-                        <tr key={item.id} className="border-t">
-                          <td className="py-2 px-3">
-                            {item.inventory?.product_name ?? "—"}
-                          </td>
-                          <td className="py-2 px-3">{formatPH(txn.date)}</td>
-                          <td className="py-2 px-3">{item.quantity}</td>
-                          <td className="py-2 px-3 text-right">
-                            <button
-                              className="px-3 py-1 rounded-xl text-white hover:opacity-90"
-                              style={{ background: "#000" }}
-                              onClick={() => openModal({ txn, order, item })}
-                            >
-                              Return / Report issue
-                            </button>
-                          </td>
+                  <div className="mt-3 border rounded overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="py-2 px-3 text-left">Product</th>
+                          <th className="py-2 px-3 text-left">Order Date</th>
+                          <th className="py-2 px-3 text-left">Remaining Qty</th>
+                          <th className="py-2 px-3 text-right">Action</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {rows.map(({ txn, order, item }) => (
+                          <tr key={item.id} className="border-t">
+                            <td className="py-2 px-3">
+                              {item.inventory?.product_name ?? "—"}
+                            </td>
+                            <td className="py-2 px-3">{formatPH(txn.date)}</td>
+                            <td className="py-2 px-3">{item.quantity}</td>
+                            <td className="py-2 px-3 text-right">
+                              <button
+                                className="px-3 py-1 rounded-xl text-white hover:opacity-90"
+                                style={{ background: "#000" }}
+                                onClick={() => openModal({ txn, order, item })}
+                              >
+                                Return / Report issue
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+
+              {/* Pagination controls — inline, no gradient */}
+              <div className="mt-4">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                  {/* Prev */}
+                  <button
+                    onClick={() => goToPage(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
+                                bg-white/70 backdrop-blur-sm ring-1 ring-black/10
+                                hover:bg-white active:translate-y-px transition
+                                text-gray-800
+                                disabled:opacity-50 disabled:cursor-not-allowed`}
+                    aria-label="Previous page"
+                    title="Previous page"
+                  >
+                    <span className="text-lg">←</span>
+                    <span className="font-medium">Prev</span>
+                  </button>
+
+                  {/* Center status */}
+                  <div className="text-sm sm:text-base font-medium text-gray-900/90 text-center">
+                    Page <span className="font-bold">{currentPage}</span> of{" "}
+                    <span className="font-bold">{totalPages}</span>
+                    <span className="hidden sm:inline text-gray-700/80">
+                      {" "}
+                      • Showing{" "}
+                      {eligibleGroups.length > 0 ? (
+                        <>
+                          <span className="font-semibold">{pageStart + 1}</span>
+                          –
+                          <span className="font-semibold">
+                            {Math.min(pageEnd, eligibleGroups.length)}
+                          </span>{" "}
+                          of{" "}
+                          <span className="font-semibold">
+                            {eligibleGroups.length}
+                          </span>
+                        </>
+                      ) : (
+                        "0"
+                      )}
+                    </span>
+                  </div>
+
+                  {/* Next */}
+                  <button
+                    onClick={() => goToPage(currentPage + 1)}
+                    disabled={currentPage >= totalPages}
+                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
+                                bg-white/70 backdrop-blur-sm ring-1 ring-black/10
+                                hover:bg-white active:translate-y-px transition
+                                text-gray-800
+                                disabled:opacity-50 disabled:cursor-not-allowed`}
+                    aria-label="Next page"
+                    title="Next page"
+                  >
+                    <span className="font-medium">Next</span>
+                    <span className="text-lg">→</span>
+                  </button>
                 </div>
               </div>
-            ))
+            </>
           )}
         </>
       )}

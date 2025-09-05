@@ -104,9 +104,6 @@ export default function ReturnedItemsPage() {
   const [orderIdToTxn, setOrderIdToTxn] = useState<Record<string, string>>({});
   const orderIdsRef = useRef<Set<string>>(new Set());
 
-  // Include "processing" toggle
-  const [includeProcessing, setIncludeProcessing] = useState(false);
-
   // Simple client search
   const [search, setSearch] = useState("");
 
@@ -114,7 +111,6 @@ export default function ReturnedItemsPage() {
     (async () => {
       setLoading(true);
       try {
-        // 1) auth
         const {
           data: { user },
         } = await supabase.auth.getUser();
@@ -128,7 +124,6 @@ export default function ReturnedItemsPage() {
           return;
         }
 
-        // 2) customers -> orders to map order_id -> TXN code
         const { data: customers } = await supabase
           .from("customers")
           .select(
@@ -144,7 +139,6 @@ export default function ReturnedItemsPage() {
           .order("date", { ascending: false });
 
         const list = (customers ?? []) as CustomerTx[];
-
         const oIds = new Set<string>();
         const orderToTxn: Record<string, string> = {};
         for (const t of list) {
@@ -157,9 +151,7 @@ export default function ReturnedItemsPage() {
         orderIdsRef.current = oIds;
         setOrderIdToTxn(orderToTxn);
 
-        // 3) load returns (approved/completed by default)
         await refreshReturns();
-        // 4) realtime
         setupRealtime();
       } finally {
         setLoading(false);
@@ -169,7 +161,6 @@ export default function ReturnedItemsPage() {
     return () => {
       supabase.removeAllChannels();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshReturns = async () => {
@@ -231,24 +222,17 @@ export default function ReturnedItemsPage() {
     };
   };
 
-  // Filter to statuses for "Returned Items"
-  const allowedStatuses = useMemo(
-    () =>
-      includeProcessing
-        ? new Set(["approved", "completed", "processing"])
-        : new Set(["approved", "completed"]),
-    [includeProcessing]
-  );
+  // Only show Approved & Completed
+  const allowedStatuses = useMemo(() => new Set(["approved", "completed"]), []);
 
-  // Flatten: one row per return_item, with parent return data attached
   type FlatRow = {
-    id: string; // return_id + '-' + order_item_id
+    id: string;
     returnId: string;
     returnCode: string;
     status: string;
     filedAt: string;
     orderId: string;
-    txnCode: string; // via orderIdToTxn
+    txnCode: string;
     product: string;
     qty: number;
     photos: string[] | null;
@@ -273,7 +257,6 @@ export default function ReturnedItemsPage() {
         });
       }
     }
-    // simple text search across product, code, txn
     const q = search.trim().toLowerCase();
     return q
       ? rows.filter(
@@ -285,7 +268,6 @@ export default function ReturnedItemsPage() {
       : rows;
   }, [returnsList, orderIdToTxn, allowedStatuses, search]);
 
-  // Group by TXN for compact display
   const groupedByTxn = useMemo(() => {
     const map: Record<string, FlatRow[]> = {};
     for (const r of flatRows) {
@@ -293,6 +275,27 @@ export default function ReturnedItemsPage() {
     }
     return map;
   }, [flatRows]);
+
+  /* ---------------- Pagination ---------------- */
+  const txnGroups = useMemo(() => Object.entries(groupedByTxn), [groupedByTxn]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const groupsPerPage = 5;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [txnGroups.length]);
+
+  const totalPages = Math.max(1, Math.ceil(txnGroups.length / groupsPerPage));
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  const pageStart = (currentPage - 1) * groupsPerPage;
+  const pageEnd = pageStart + groupsPerPage;
+  const pagedGroups = txnGroups.slice(pageStart, pageEnd);
+
+  const goToPage = (p: number) =>
+    setCurrentPage(Math.max(1, Math.min(totalPages, p)));
 
   return (
     <div className="p-4">
@@ -320,7 +323,7 @@ export default function ReturnedItemsPage() {
       {!loading && authEmail && (
         <>
           {/* Controls */}
-          <div className="bg-white border rounded-2xl p-4 shadow-sm mb-4">
+          <div className="mb-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="flex items-center gap-3">
                 <input
@@ -330,15 +333,6 @@ export default function ReturnedItemsPage() {
                   placeholder="Search by product, return code, or TXN…"
                   className="border px-3 py-2 rounded w-72"
                 />
-                <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    className="accent-black"
-                    checked={includeProcessing}
-                    onChange={(e) => setIncludeProcessing(e.target.checked)}
-                  />
-                  Include “Processing”
-                </label>
               </div>
               <div className="text-sm text-gray-500">
                 Showing <span className="font-medium">{flatRows.length}</span>{" "}
@@ -349,12 +343,12 @@ export default function ReturnedItemsPage() {
           </div>
 
           {/* Tables grouped by TXN */}
-          {Object.keys(groupedByTxn).length === 0 ? (
+          {pagedGroups.length === 0 ? (
             <div className="bg-white border rounded-2xl p-4 shadow-sm">
               <p className="text-sm text-gray-600">No returned items found.</p>
             </div>
           ) : (
-            Object.entries(groupedByTxn).map(([txn, rows]) => (
+            pagedGroups.map(([txn, rows]) => (
               <div
                 key={txn}
                 className="bg-white border rounded-2xl p-4 shadow-sm mb-6"
@@ -422,6 +416,31 @@ export default function ReturnedItemsPage() {
                 </div>
               </div>
             ))
+          )}
+
+          {/* Pagination Controls */}
+          {txnGroups.length > groupsPerPage && (
+            <div className="mt-4">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                <button
+                  onClick={() => goToPage(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="px-4 py-2 rounded border bg-white disabled:opacity-50"
+                >
+                  Prev
+                </button>
+                <div className="text-sm font-medium">
+                  Page {currentPage} of {totalPages}
+                </div>
+                <button
+                  onClick={() => goToPage(currentPage + 1)}
+                  disabled={currentPage >= totalPages}
+                  className="px-4 py-2 rounded border bg-white disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           )}
         </>
       )}
