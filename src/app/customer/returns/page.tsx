@@ -503,6 +503,19 @@ export default function CustomerReturnsPage() {
     setConfirmOpen(true);
   };
 
+  const handleFiles = (files: FileList | null) => {
+    if (!files) return;
+
+    const valid = Array.from(files).filter((f) => f.type.startsWith("image/"));
+
+    if (valid.length !== files.length) {
+      toast.error("Only image files are allowed (jpg, png, gif, webp).");
+    }
+
+    // If at least one valid file, keep them, otherwise reset
+    setFiles(valid.length ? (valid as unknown as FileList) : null);
+  };
+
   const submitReturn = async () => {
     if (!sel.txn || !sel.order || !sel.item) return;
 
@@ -698,156 +711,6 @@ export default function CustomerReturnsPage() {
               </div>
             ))
           )}
-
-          {/* -------- My Returns grouped by TXN (clean, per-TXN tables) -------- */}
-          <div className="bg-white border rounded-2xl p-4 shadow-sm">
-            <h2 className="font-semibold text-lg mb-2">My Return Requests</h2>
-
-            {Object.keys(returnsByTxn).length === 0 ? (
-              <p className="text-sm text-gray-600 mt-2">
-                You have no return requests yet.
-              </p>
-            ) : (
-              Object.entries(returnsByTxn).map(([txnCode, list]) => (
-                <div
-                  key={txnCode}
-                  className="mb-6 last:mb-0 rounded-xl border bg-white overflow-hidden"
-                >
-                  <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
-                    <div className="text-sm">
-                      <span className="text-gray-600 mr-1">TXN:</span>
-                      <span className="tracking-wider font-medium">
-                        {txnCode}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {list.length} return(s)
-                    </div>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-100">
-                        <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
-                          <th>Return Code</th>
-                          <th>Filed</th>
-                          <th>Status</th>
-                          <th className="text-center">Items</th>
-                          <th className="text-right">Details</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {list.map((rtn) => {
-                          const isOpen = !!expanded[rtn.id];
-                          const totalItems = rtn.return_items?.length ?? 0;
-                          return (
-                            <React.Fragment key={rtn.id}>
-                              <tr className="hover:bg-gray-50">
-                                <td className="py-2 px-3 font-medium tracking-wider">
-                                  {rtn.code}
-                                </td>
-                                <td className="py-2 px-3">
-                                  {formatPH(rtn.created_at)}
-                                </td>
-                                <td className="py-2 px-3">
-                                  <StatusChip status={rtn.status} />
-                                </td>
-                                <td className="py-2 px-3 text-center">
-                                  {totalItems}
-                                </td>
-                                <td className="py-2 px-3 text-right">
-                                  <button
-                                    onClick={() => toggleExpanded(rtn.id)}
-                                    className="text-xs px-2 py-1 rounded-lg border hover:bg-gray-50"
-                                  >
-                                    {isOpen ? "Hide" : "View"}
-                                  </button>
-                                </td>
-                              </tr>
-
-                              {/* Row details */}
-                              {isOpen && (
-                                <tr className="bg-gray-50">
-                                  <td colSpan={5} className="px-3 py-3">
-                                    <div className="rounded-lg border bg-white overflow-x-auto">
-                                      <table className="w-full text-sm">
-                                        <thead className="bg-gray-100">
-                                          <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
-                                            <th>Product</th>
-                                            <th className="w-24">Qty</th>
-                                            <th>Photos</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y">
-                                          {rtn.return_items.map((ri, idx) => (
-                                            <tr key={idx} className="align-top">
-                                              <td className="py-2 px-3">
-                                                {ri.inventory?.product_name ??
-                                                  "—"}
-                                              </td>
-                                              <td className="py-2 px-3">
-                                                {ri.quantity}
-                                              </td>
-                                              <td className="py-2 px-3">
-                                                {ri.photo_urls?.length ? (
-                                                  <div className="flex gap-2 flex-wrap">
-                                                    {ri.photo_urls.map(
-                                                      (u, i) => (
-                                                        <a
-                                                          key={i}
-                                                          href={u}
-                                                          target="_blank"
-                                                          className="inline-block"
-                                                        >
-                                                          <img
-                                                            src={u}
-                                                            alt="evidence"
-                                                            className="w-12 h-12 object-cover rounded border"
-                                                          />
-                                                        </a>
-                                                      )
-                                                    )}
-                                                  </div>
-                                                ) : (
-                                                  "—"
-                                                )}
-                                              </td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-
-                                    {/* reason / note row */}
-                                    <div className="text-xs text-gray-600 mt-2">
-                                      <span className="font-medium">
-                                        Reason:
-                                      </span>{" "}
-                                      {rtn.reason}
-                                      {rtn.note ? (
-                                        <>
-                                          {" "}
-                                          &middot;{" "}
-                                          <span className="font-medium">
-                                            Note:
-                                          </span>{" "}
-                                          {rtn.note}
-                                        </>
-                                      ) : null}
-                                    </div>
-                                  </td>
-                                </tr>
-                              )}
-                            </React.Fragment>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
         </>
       )}
 
@@ -925,7 +788,7 @@ export default function CustomerReturnsPage() {
                   type="file"
                   multiple
                   accept="image/*"
-                  onChange={(e) => setFiles(e.target.files)}
+                  onChange={(e) => handleFiles(e.target.files)}
                   className="block w-full text-sm"
                 />
               </div>

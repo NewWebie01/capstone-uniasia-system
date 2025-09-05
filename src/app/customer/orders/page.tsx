@@ -136,6 +136,33 @@ export default function TrackPage() {
 
   const hasData = useMemo(() => txns.length > 0, [txns.length]);
 
+  /* ----------------------------- Pagination (TXN cards) ----------------------------- */
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 5; // adjust how many TXN cards per page
+
+  // Reset to first page when the data set changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [txns.length]);
+
+  const totalPages = Math.max(1, Math.ceil(txns.length / itemsPerPage));
+
+  // Clamp current page if the count shrinks
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  const pageStart = (currentPage - 1) * itemsPerPage;
+  const pageEnd = pageStart + itemsPerPage;
+
+  const pagedTxns = useMemo(
+    () => txns.slice(pageStart, pageEnd),
+    [txns, pageStart, pageEnd]
+  );
+
+  const goToPage = (p: number) =>
+    setCurrentPage(Math.max(1, Math.min(totalPages, p)));
+
   /* -------------------------- Helper: fetch deliveries --------------------- */
   const fetchDeliveriesByIds = async (ids: number[]) => {
     if (!ids.length) return;
@@ -367,7 +394,7 @@ export default function TrackPage() {
         {/* Orders list */}
         <div className="w-full space-y-4 mt-4">
           {!loading &&
-            txns.map((t) => {
+            pagedTxns.map((t) => {
               const orderList = t.orders ?? [];
 
               // Header badge: prefer first order's delivery.status, fallback to order.status
@@ -557,6 +584,66 @@ export default function TrackPage() {
               );
             })}
         </div>
+
+        {/* Pagination controls — inline, no gradient */}
+        {!loading && hasData && (
+          <div className="mt-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              {/* Prev */}
+              <button
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage === 1}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
+                    bg-white/70 backdrop-blur-sm ring-1 ring-black/10
+                    hover:bg-white active:translate-y-px transition
+                    text-gray-800
+                    disabled:opacity-50 disabled:cursor-not-allowed`}
+                aria-label="Previous page"
+                title="Previous page"
+              >
+                <span className="text-lg">←</span>
+                <span className="font-medium">Prev</span>
+              </button>
+
+              {/* Center status */}
+              <div className="text-sm sm:text-base font-medium text-gray-900/90 text-center">
+                Page <span className="font-bold">{currentPage}</span> of{" "}
+                <span className="font-bold">{totalPages}</span>
+                <span className="hidden sm:inline text-gray-700/80">
+                  {" "}
+                  • Showing{" "}
+                  {txns.length > 0 ? (
+                    <>
+                      <span className="font-semibold">{pageStart + 1}</span>–
+                      <span className="font-semibold">
+                        {Math.min(pageEnd, txns.length)}
+                      </span>{" "}
+                      of <span className="font-semibold">{txns.length}</span>
+                    </>
+                  ) : (
+                    "0"
+                  )}
+                </span>
+              </div>
+
+              {/* Next */}
+              <button
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage >= totalPages}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
+                    bg-white/70 backdrop-blur-sm ring-1 ring-black/10
+                    hover:bg-white active:translate-y-px transition
+                    text-gray-800
+                    disabled:opacity-50 disabled:cursor-not-allowed`}
+                aria-label="Next page"
+                title="Next page"
+              >
+                <span className="font-medium">Next</span>
+                <span className="text-lg">→</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

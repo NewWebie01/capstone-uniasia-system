@@ -1,7 +1,7 @@
 // src/app/returns/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 
@@ -24,6 +24,7 @@ type ReturnRow = {
   order_id: string;
 
   customer: {
+    code?: string | null; // TXN code
     name: string | null;
     email: string | null;
     phone: string | null;
@@ -31,7 +32,7 @@ type ReturnRow = {
   } | null;
 
   order: {
-    id: string;
+    id: string; // kept in shape, not rendered
     status: string | null;
   } | null;
 
@@ -61,6 +62,7 @@ const normalizeAdminReturns = (rows: any[]): ReturnRow[] =>
 
     customer: r.customer
       ? {
+          code: toStrOrNull(r.customer.code),
           name: toStrOrNull(r.customer.name),
           email: toStrOrNull(r.customer.email),
           phone: toStrOrNull(r.customer.phone),
@@ -98,18 +100,148 @@ const formatPH = (d: string | Date) =>
     timeZone: "Asia/Manila",
   }).format(new Date(d));
 
+const StatusChip = ({ status }: { status?: string | null }) => {
+  const s = (status || "").toLowerCase();
+  const styles =
+    s === "approved"
+      ? "bg-green-100 text-green-700 border-green-200"
+      : s === "rejected"
+      ? "bg-red-100 text-red-700 border-red-200"
+      : s === "received"
+      ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+      : s === "processing" || s === "review"
+      ? "bg-blue-100 text-blue-700 border-blue-200"
+      : "bg-gray-100 text-gray-700 border-gray-200";
+  return (
+    <span
+      className={`inline-block px-2 py-0.5 rounded-full text-xs border ${styles}`}
+    >
+      {status || "—"}
+    </span>
+  );
+};
+
+/* ============== Custom Select (styled dropdown) ============== */
+
+type SelectOption = { label: string; value: string };
+const STATUS_OPTIONS: SelectOption[] = [
+  { label: "All statuses", value: "" },
+  { label: "requested", value: "requested" },
+  { label: "approved", value: "approved" },
+  { label: "rejected", value: "rejected" },
+  { label: "received", value: "received" },
+];
+
+function useClickOutside<T extends HTMLElement>(onClickOutside: () => void) {
+  const ref = useRef<T | null>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!(e.target instanceof Node)) return;
+      if (!ref.current.contains(e.target)) onClickOutside();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClickOutside]);
+  return ref;
+}
+
+function StatusSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useClickOutside<HTMLDivElement>(() => setOpen(false));
+  const selected =
+    STATUS_OPTIONS.find((o) => o.value === value) ?? STATUS_OPTIONS[0];
+
+  return (
+    <div ref={ref} className="relative w-56">
+      <button
+        type="button"
+        onClick={() => setOpen((s) => !s)}
+        className="w-full text-left px-3 py-2 rounded-xl border bg-white hover:bg-gray-50 focus:outline-none ring-0 focus:ring-2 focus:ring-[#ffba20] transition"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        {selected.label}
+        <span className="float-right opacity-70">▾</span>
+      </button>
+
+      {open && (
+        <div
+          className="absolute z-20 mt-1 w-full rounded-xl border bg-white shadow-xl overflow-hidden"
+          role="listbox"
+        >
+          {STATUS_OPTIONS.map((opt) => {
+            const active = opt.value === value;
+            return (
+              <div
+                key={opt.value || "all"}
+                role="option"
+                aria-selected={active}
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+                className={`px-3 py-2 cursor-pointer transition ${
+                  active
+                    ? "bg-[#ffba20]/20 text-black"
+                    : "hover:bg-gray-50 text-gray-800"
+                }`}
+              >
+                {opt.label}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ============== Page ============== */
+
+const QUICK_STATUSES = [
+  "all",
+  "requested",
+  "approved",
+  "rejected",
+  "received",
+] as const;
+type QuickStatus = (typeof QUICK_STATUSES)[number];
 
 export default function AdminReturnsPage() {
   const [rows, setRows] = useState<ReturnRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // table filters
+  // filters
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("");
+  const [quick, setQuick] = useState<QuickStatus>("all");
 
-  // modal
+  // details modal
   const [selected, setSelected] = useState<ReturnRow | null>(null);
+
+  // confirm modal for status change
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<{
+    id: string;
+    code: string;
+    current: string;
+    next: "approved" | "rejected" | "received";
+  } | null>(null);
+  const [updating, setUpdating] = useState(false);
+
+  // pagination
+  const [page, setPage] = useState(1);
+  const perPage = 10;
+
+  // realtime channel guard (FIXED stray token)
+  const subscribedRef = useRef(false);
 
   const fetchReturns = async () => {
     setLoading(true);
@@ -119,7 +251,7 @@ export default function AdminReturnsPage() {
         .select(
           `
           id, code, status, reason, note, created_at, order_id,
-          customer:customers!returns_customer_id_fkey ( name, email, phone, address ),
+          customer:customers!returns_customer_id_fkey ( code, name, email, phone, address ),
           order:orders!returns_order_id_fkey ( id, status ),
           return_items (
             order_item_id,
@@ -144,40 +276,107 @@ export default function AdminReturnsPage() {
 
   useEffect(() => {
     fetchReturns();
+
+    // Supabase Realtime — refresh on changes
+    if (!subscribedRef.current) {
+      subscribedRef.current = true;
+      const ch = supabase
+        .channel("admin-returns")
+        .on(
+          "postgres_changes",
+          { schema: "public", table: "returns", event: "*" },
+          () => fetchReturns()
+        )
+        .on(
+          "postgres_changes",
+          { schema: "public", table: "return_items", event: "*" },
+          () => fetchReturns()
+        )
+        .subscribe();
+
+      return () => {
+        try {
+          supabase.removeChannel(ch);
+          subscribedRef.current = false;
+        } catch {}
+      };
+    }
   }, []);
+
+  // reset to page 1 when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [q, statusFilter, quick]);
 
   const filtered = useMemo(() => {
     const text = q.trim().toLowerCase();
     let out = rows;
 
+    if (quick !== "all") {
+      out = out.filter((r) => (r.status || "").toLowerCase() === quick);
+    }
     if (statusFilter) {
       out = out.filter((r) => (r.status || "").toLowerCase() === statusFilter);
     }
     if (text) {
       out = out.filter((r) => {
-        const customer = `${r.customer?.name ?? ""} ${
+        const customerStr = `${r.customer?.name ?? ""} ${
           r.customer?.email ?? ""
-        } ${r.customer?.phone ?? ""} ${
-          r.customer?.address ?? ""
+        } ${r.customer?.phone ?? ""} ${r.customer?.address ?? ""} ${
+          r.customer?.code ?? ""
         }`.toLowerCase();
         return (
           r.code.toLowerCase().includes(text) ||
-          customer.includes(text) ||
+          customerStr.includes(text) ||
           (r.order?.id ?? "").toLowerCase().includes(text)
         );
       });
     }
     return out;
-  }, [rows, q, statusFilter]);
+  }, [rows, q, statusFilter, quick]);
 
-  const updateStatus = async (id: string, status: string) => {
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+  const pageRows = useMemo(() => {
+    const start = (page - 1) * perPage;
+    return filtered.slice(start, start + perPage);
+  }, [filtered, page]);
+
+  const isReceived = (status?: string | null) =>
+    (status || "").toLowerCase() === "received";
+
+  // Guard: don't open modal if attempting to set to same status
+  const openConfirm = (
+    id: string,
+    code: string,
+    current: string,
+    next: "approved" | "rejected" | "received"
+  ) => {
+    const curr = (current || "").toLowerCase();
+    const nxt = (next || "").toLowerCase();
+    if (curr === nxt) return; // no-op
+    setConfirmTarget({ id, code, current, next });
+    setConfirmOpen(true);
+  };
+
+  const updateStatus = async (
+    id: string,
+    status: "approved" | "rejected" | "received"
+  ) => {
     const prev = rows;
+    setUpdating(true);
+    // optimistic update
     setRows((r) => r.map((x) => (x.id === id ? { ...x, status } : x)));
     setSelected((s) => (s && s.id === id ? { ...s, status } : s));
+
     const { error } = await supabase
       .from("returns")
       .update({ status })
       .eq("id", id);
+
+    setUpdating(false);
+    setConfirmOpen(false);
+    setConfirmTarget(null);
+
     if (error) {
       setRows(prev);
       setSelected((s) =>
@@ -190,32 +389,62 @@ export default function AdminReturnsPage() {
   };
 
   return (
-    <div className="px-4 pb-4 pt-1">
-      <h1 className="pt-1 text-3xl font-bold mb-1">Returns</h1>
-      <p className="text-sm text-gray-500 mb-4">
-        Track and manage product return requests from customers.
-      </p>
+    <div className="px-4 pb-6 pt-1">
+      <div className="flex items-start justify-between flex-wrap gap-2">
+        <div>
+          <h1 className="pt-1 text-3xl font-bold mb-1">Returns</h1>
+          <p className="text-sm text-gray-500 mb-2">
+            Track and manage product return requests from customers.
+          </p>
+        </div>
+        {/* Refresh button removed per request */}
+      </div>
+
+      {/* Quick tabs */}
+      <div className="bg-white border rounded-2xl p-3 shadow-sm mb-3">
+        <div className="flex flex-wrap gap-2">
+          {QUICK_STATUSES.map((s) => {
+            const active = quick === s;
+            const label = s[0].toUpperCase() + s.slice(1);
+            return (
+              <button
+                key={s}
+                onClick={() => setQuick(s)}
+                className={`px-3 py-1.5 rounded-full text-xs border transition ${
+                  active
+                    ? "bg-[#ffba20] border-[#ffba20] text-black"
+                    : "bg-white hover:bg-gray-50"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Filters */}
       <div className="bg-white border rounded-2xl p-4 shadow-sm mb-4">
-        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-          <input
-            className="border rounded px-3 py-2 w-full sm:max-w-xs"
-            placeholder="Search by return code / name / email / phone"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <select
-            className="border rounded px-3 py-2 w-full sm:w-auto"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-          >
-            <option value="">All statuses</option>
-            <option value="requested">requested</option>
-            <option value="approved">approved</option>
-            <option value="rejected">rejected</option>
-            <option value="received">received</option>
-          </select>
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-[22rem] max-w-full">
+              <input
+                className="border rounded-xl px-3 py-2 w-full bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#ffba20] transition"
+                placeholder="Search by return code / name / email / phone / TXN"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+            </div>
+
+            {/* Custom Select */}
+            <StatusSelect value={statusFilter} onChange={setStatusFilter} />
+          </div>
+
+          <div className="text-sm text-gray-600">
+            Showing <span className="font-medium">{filtered.length}</span>{" "}
+            record
+            {filtered.length === 1 ? "" : "s"}
+          </div>
         </div>
       </div>
 
@@ -223,177 +452,422 @@ export default function AdminReturnsPage() {
       <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-[#ffba20] text-black">
-              <tr>
-                <th className="py-2 px-3 text-left">Return code</th>
-                <th className="py-2 px-3 text-left">Status</th>
-                <th className="py-2 px-3 text-left">Date</th>
+            <thead className="bg-[#ffba20]/90 text-black">
+              <tr className="[&>th]:py-2 [&>th]:px-3 text-left">
+                <th className="min-w-[140px]">Return code</th>
+                <th className="min-w-[110px]">Status</th>
+                <th className="min-w-[150px]">TXN</th>
+                <th className="min-w-[180px]">Customer</th>
+                <th className="min-w-[110px]">Items</th>
+                <th className="min-w-[160px]">Filed</th>
+                <th className="min-w-[200px]" aria-label="Actions">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
               {loading && (
                 <tr>
-                  <td className="py-3 px-3" colSpan={3}>
+                  <td className="py-3 px-3" colSpan={7}>
                     Loading…
                   </td>
                 </tr>
               )}
 
-              {!loading && filtered.length === 0 && (
+              {!loading && pageRows.length === 0 && (
                 <tr>
-                  <td className="py-3 px-3 text-gray-600" colSpan={3}>
+                  <td className="py-3 px-3 text-gray-600" colSpan={7}>
                     No returns found.
                   </td>
                 </tr>
               )}
 
               {!loading &&
-                filtered.map((rtn) => (
-                  <tr key={rtn.id} className="border-t hover:bg-gray-50">
-                    <td className="py-2 px-3">
-                      <button
-                        onClick={() => setSelected(rtn)}
-                        className="text-blue-600 hover:underline font-medium"
-                        title="View details"
-                      >
-                        {rtn.code}
-                      </button>
-                    </td>
-                    <td className="py-2 px-3 capitalize">{rtn.status}</td>
-                    <td className="py-2 px-3">{formatPH(rtn.created_at)}</td>
-                  </tr>
-                ))}
+                pageRows.map((rtn) => {
+                  const itemsCount = rtn.return_items.length;
+                  const locked = isReceived(rtn.status);
+                  return (
+                    <tr key={rtn.id} className="border-t hover:bg-gray-50">
+                      <td className="py-2 px-3">
+                        <button
+                          onClick={() => setSelected(rtn)}
+                          className="text-blue-600 hover:underline font-medium"
+                          title="View details"
+                        >
+                          {rtn.code}
+                        </button>
+                      </td>
+                      <td className="py-2 px-3">
+                        <StatusChip status={rtn.status} />
+                      </td>
+                      <td className="py-2 px-3 tracking-wider">
+                        {rtn.customer?.code ?? "—"}
+                      </td>
+                      <td className="py-2 px-3">
+                        {rtn.customer?.name ?? "—"}
+                        <div className="text-xs text-gray-500">
+                          {rtn.customer?.email ?? "—"}
+                        </div>
+                      </td>
+                      <td className="py-2 px-3">{itemsCount}</td>
+                      <td className="py-2 px-3">{formatPH(rtn.created_at)}</td>
+                      <td className="py-2 px-3">
+                        <div className="flex flex-wrap gap-1">
+                          <button
+                            onClick={() =>
+                              openConfirm(
+                                rtn.id,
+                                rtn.code,
+                                rtn.status,
+                                "approved"
+                              )
+                            }
+                            className={`px-2.5 py-1.5 rounded-xl border text-xs hover:bg-green-50 ${
+                              locked ? "opacity-50 cursor-not-allowed" : ""
+                            }`}
+                            disabled={locked}
+                            title={locked ? "Already received" : "Approve"}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            onClick={() =>
+                              openConfirm(
+                                rtn.id,
+                                rtn.code,
+                                rtn.status,
+                                "rejected"
+                              )
+                            }
+                            className={`px-2.5 py-1.5 rounded-xl border text-xs hover:bg-red-50 ${
+                              locked ? "opacity-50 cursor-not-allowed" : ""
+                            }`}
+                            disabled={locked}
+                            title={locked ? "Already received" : "Reject"}
+                          >
+                            Reject
+                          </button>
+                          <button
+                            onClick={() =>
+                              openConfirm(
+                                rtn.id,
+                                rtn.code,
+                                rtn.status,
+                                "received"
+                              )
+                            }
+                            className={`px-2.5 py-1.5 rounded-xl border text-xs hover:bg-gray-50 ${
+                              locked ? "opacity-50 cursor-not-allowed" : ""
+                            }`}
+                            title={
+                              locked ? "Already received" : "Mark Received"
+                            }
+                            disabled={locked}
+                          >
+                            Received
+                          </button>
+                          <button
+                            onClick={() => setSelected(rtn)}
+                            className="px-2.5 py-1.5 rounded-xl border text-xs hover:bg-gray-50"
+                          >
+                            View
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>
+
+        {/* Pagination footer */}
+        <div className="flex items-center justify-between px-3 py-2 border-t bg-white text-sm">
+          <div>
+            Page <span className="font-medium">{page}</span> of{" "}
+            <span className="font-medium">{totalPages}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+            >
+              Prev
+            </button>
+            {Array.from({ length: totalPages }).map((_, i) => {
+              const n = i + 1;
+              const active = n === page;
+              return (
+                <button
+                  key={n}
+                  onClick={() => setPage(n)}
+                  className={`px-2 py-1 rounded border text-xs ${
+                    active
+                      ? "bg-[#ffba20] border-[#ffba20] text-black"
+                      : "hover:bg-gray-50"
+                  }`}
+                >
+                  {n}
+                </button>
+              );
+            })}
+            <button
+              className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* Modal with full details */}
+      {/* Details Modal */}
       {selected && (
         <div
           className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={() => setSelected(null)}
         >
           <div
-            className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl ring-1 ring-black/5 p-6"
+            className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl ring-1 ring-black/5 p-0 overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-              <div className="space-x-2">
-                <span className="font-semibold text-lg">{selected.code}</span>
-                <span className="text-gray-400">•</span>
-                <span className="capitalize">{selected.status}</span>
-              </div>
-              <div className="text-sm text-gray-600">
-                Filed: {formatPH(selected.created_at)}
+            <div className="px-6 pt-5 pb-4 border-b bg-white">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-x-2">
+                  <span className="font-semibold text-xl">{selected.code}</span>
+                  <span className="text-gray-300">•</span>
+                  <StatusChip status={selected.status} />
+                </div>
+                <div className="text-sm text-gray-600">
+                  Filed: {formatPH(selected.created_at)}
+                </div>
               </div>
             </div>
 
-            {/* Customer + Order + Reason */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4 text-sm">
-              <div className="bg-gray-50 rounded p-3">
-                <div className="text-xs text-gray-500">Customer</div>
-                <div className="font-medium">
-                  {selected.customer?.name ?? "—"}
+            {/* Body */}
+            <div className="p-6">
+              {/* Info cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-xl border bg-white p-4">
+                  <div className="text-xs text-gray-500 mb-1">Customer</div>
+                  <div className="font-medium">
+                    {selected.customer?.name ?? "—"}
+                  </div>
+                  <div className="text-gray-700">
+                    {selected.customer?.email ?? "—"}
+                  </div>
+                  <div className="text-gray-700">
+                    {selected.customer?.phone ?? "—"}
+                  </div>
+                  <div className="text-gray-700">
+                    {selected.customer?.address ?? "—"}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-3">TXN</div>
+                  <div className="font-medium tracking-wider">
+                    {selected.customer?.code ?? "—"}
+                  </div>
                 </div>
-                <div className="text-gray-600">
-                  {selected.customer?.email ?? "—"}
+
+                <div className="rounded-xl border bg-white p-4">
+                  <div className="text-xs text-gray-500 mb-1">Order</div>
+                  {/* Order ID intentionally hidden */}
+                  <div className="text-gray-700">
+                    Status: {selected.order?.status ?? "—"}
+                  </div>
                 </div>
-                <div className="text-gray-600">
-                  {selected.customer?.phone ?? "—"}
-                </div>
-                <div className="text-gray-600">
-                  {selected.customer?.address ?? "—"}
+
+                <div className="rounded-xl border bg-white p-4">
+                  <div className="text-xs text-gray-500 mb-1">Reason</div>
+                  <div className="font-medium">{selected.reason}</div>
+                  {selected.note && (
+                    <>
+                      <div className="text-xs text-gray-500 mt-3">Note</div>
+                      <div className="text-gray-800 whitespace-pre-wrap">
+                        {selected.note}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
-              <div className="bg-gray-50 rounded p-3">
-                <div className="text-xs text-gray-500">Order</div>
-                <div className="font-medium">{selected.order?.id ?? "—"}</div>
-                <div className="text-gray-600">
-                  Status: {selected.order?.status ?? "—"}
-                </div>
+              {/* Items */}
+              <div className="mt-6 rounded-xl border overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-[#ffba20] text-black">
+                    <tr>
+                      <th className="py-2 px-3 text-left">Product</th>
+                      <th className="py-2 px-3 text-left">Qty</th>
+                      <th className="py-2 px-3 text-left">Photos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selected.return_items.map((ri, idx) => (
+                      <tr key={idx} className="border-t align-top">
+                        <td className="py-2 px-3">
+                          {ri.inventory?.product_name ?? "—"}
+                        </td>
+                        <td className="py-2 px-3">{ri.quantity}</td>
+                        <td className="py-2 px-3">
+                          {ri.photo_urls && ri.photo_urls.length > 0 ? (
+                            <div className="flex gap-2 flex-wrap">
+                              {ri.photo_urls.map((u, i) => (
+                                <a key={i} href={u} target="_blank">
+                                  <img
+                                    src={u}
+                                    alt="evidence"
+                                    className="w-12 h-12 object-cover rounded border"
+                                  />
+                                </a>
+                              ))}
+                            </div>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
 
-              <div className="bg-gray-50 rounded p-3">
-                <div className="text-xs text-gray-500">Reason</div>
-                <div className="font-medium">{selected.reason}</div>
-                {selected.note && (
-                  <>
-                    <div className="text-xs text-gray-500 mt-2">Note</div>
-                    <div className="text-gray-700">{selected.note}</div>
-                  </>
-                )}
+              {/* Actions */}
+              <div className="mt-6 flex flex-wrap gap-2 justify-end">
+                <button
+                  onClick={() => setSelected(null)}
+                  className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() =>
+                    openConfirm(
+                      selected.id,
+                      selected.code,
+                      selected.status,
+                      "approved"
+                    )
+                  }
+                  className={`px-4 py-2 rounded-xl bg-green-600 text-white hover:opacity-90 ${
+                    isReceived(selected.status)
+                      ? "opacity-50 cursor-not-allowed"
+                      : ""
+                  }`}
+                  disabled={isReceived(selected.status)}
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() =>
+                    openConfirm(
+                      selected.id,
+                      selected.code,
+                      selected.status,
+                      "rejected"
+                    )
+                  }
+                  className={`px-4 py-2 rounded-xl bg-red-600 text-white hover:opacity-90 ${
+                    isReceived(selected.status)
+                      ? "opacity-50 cursor-not-allowed"
+                      : ""
+                  }`}
+                  disabled={isReceived(selected.status)}
+                >
+                  Reject
+                </button>
+                <button
+                  onClick={() =>
+                    openConfirm(
+                      selected.id,
+                      selected.code,
+                      selected.status,
+                      "received"
+                    )
+                  }
+                  className={`px-4 py-2 rounded-xl bg-black text-white hover:opacity-90 ${
+                    isReceived(selected.status)
+                      ? "opacity-50 cursor-not-allowed"
+                      : ""
+                  }`}
+                  disabled={isReceived(selected.status)}
+                >
+                  Mark Received
+                </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
 
-            {/* Items */}
-            <div className="mt-4 border rounded overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-[#ffba20] text-black">
-                  <tr>
-                    <th className="py-2 px-3 text-left">Product</th>
-                    <th className="py-2 px-3 text-left">Qty</th>
-                    <th className="py-2 px-3 text-left">Photos</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selected.return_items.map((ri, idx) => (
-                    <tr key={idx} className="border-t">
-                      <td className="py-2 px-3">
-                        {ri.inventory?.product_name ?? "—"}
-                      </td>
-                      <td className="py-2 px-3">{ri.quantity}</td>
-                      <td className="py-2 px-3">
-                        {ri.photo_urls && ri.photo_urls.length > 0 ? (
-                          <div className="flex gap-2 flex-wrap">
-                            {ri.photo_urls.map((u, i) => (
-                              <a key={i} href={u} target="_blank">
-                                <img
-                                  src={u}
-                                  alt="evidence"
-                                  className="w-12 h-12 object-cover rounded border"
-                                />
-                              </a>
-                            ))}
-                          </div>
-                        ) : (
-                          "—"
-                        )}
+      {/* Confirm Status Change Modal */}
+      {confirmOpen && confirmTarget && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => !updating && setConfirmOpen(false)}
+        >
+          <div
+            className="bg-white w-full max-w-md rounded-2xl shadow-2xl ring-1 ring-black/5 p-0 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 pt-5 pb-4 border-b">
+              <h3 className="text-lg font-semibold">Change status?</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                You are about to change the status of{" "}
+                <span className="font-medium tracking-wider">
+                  {confirmTarget.code}
+                </span>
+                .
+              </p>
+            </div>
+
+            <div className="p-6">
+              <div className="rounded-xl border overflow-hidden">
+                <table className="w-full text-sm">
+                  <tbody>
+                    <tr className="border-b">
+                      <td className="px-3 py-2 text-gray-600 w-32">Current</td>
+                      <td className="px-3 py-2">
+                        <StatusChip status={confirmTarget.current} />
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                    <tr>
+                      <td className="px-3 py-2 text-gray-600">New</td>
+                      <td className="px-3 py-2">
+                        <StatusChip status={confirmTarget.next} />
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
 
-            {/* Actions */}
-            <div className="mt-4 flex flex-wrap gap-2 justify-end">
-              <button
-                onClick={() => setSelected(null)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
-              >
-                Close
-              </button>
-              <button
-                onClick={() => updateStatus(selected.id, "approved")}
-                className="px-4 py-2 rounded-xl bg-green-600 text-white hover:opacity-90"
-              >
-                Approve
-              </button>
-              <button
-                onClick={() => updateStatus(selected.id, "rejected")}
-                className="px-4 py-2 rounded-xl bg-red-600 text-white hover:opacity-90"
-              >
-                Reject
-              </button>
-              <button
-                onClick={() => updateStatus(selected.id, "received")}
-                className="px-4 py-2 rounded-xl bg-black text-white hover:opacity-90"
-              >
-                Mark Received
-              </button>
+              {confirmTarget.next === "received" && (
+                <div className="mt-3 text-xs text-gray-700 bg-amber-50 border border-amber-200 rounded-md p-2">
+                  Note: Once marked as <b>received</b>, this return becomes{" "}
+                  <b>non-editable</b>. You will not be able to approve or reject
+                  it afterward.
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 mt-6">
+                <button
+                  onClick={() => setConfirmOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
+                  disabled={updating}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() =>
+                    updateStatus(confirmTarget.id, confirmTarget.next)
+                  }
+                  className="px-4 py-2 rounded-xl bg-black text-white hover:opacity-90 disabled:opacity-50"
+                  disabled={updating}
+                >
+                  {updating ? "Applying…" : "Confirm"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
