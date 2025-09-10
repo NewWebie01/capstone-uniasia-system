@@ -181,15 +181,22 @@ function SalesPageContent() {
   const [showSlowMovingModal, setShowSlowMovingModal] = useState(false);
   const ordersPerPage = 10;
 
-  const computedOrderTotal = useMemo(() => {
-    if (!selectedOrder) return 0;
-    return selectedOrder.order_items.reduce((sum, item, idx) => {
-      const q = editedQuantities[idx] ?? item.quantity;
-      const percent = editedDiscounts[idx] ?? 0;
-      const p = item.price;
-      return sum + q * p * (1 + percent / 100);
-    }, 0);
-  }, [selectedOrder, editedQuantities, editedDiscounts]);
+const computedOrderTotal = useMemo(() => {
+  if (!selectedOrder) return 0;
+  return selectedOrder.order_items.reduce((sum, item, idx) => {
+    // Skip out-of-stock
+    if (item.inventory.quantity === 0) return sum;
+    const qty = editedQuantities[idx] ?? item.quantity;
+    const percent = editedDiscounts[idx] ?? 0;
+    const price = item.price;
+    // Apply discount to each
+    const discounted = qty * price * (1 - percent / 100);
+    return sum + discounted;
+  }, 0);
+}, [selectedOrder, editedQuantities, editedDiscounts]);
+
+
+
 
   const salesTaxValue = isSalesTaxOn ? computedOrderTotal * 0.12 : 0;
 
@@ -217,22 +224,28 @@ function SalesPageContent() {
   };
 
   // Calculate original subtotal (before any discounts/markups)
-  const subtotalBeforeDiscount = selectedOrder
-    ? selectedOrder.order_items.reduce(
-        (sum, item, idx) =>
-          sum + (editedQuantities[idx] ?? item.quantity) * item.price,
-        0
-      )
-    : 0;
+const subtotalBeforeDiscount = selectedOrder
+  ? selectedOrder.order_items.reduce(
+      (sum, item, idx) =>
+        item.inventory.quantity === 0
+          ? sum
+          : sum + (editedQuantities[idx] ?? item.quantity) * item.price,
+      0
+    )
+  : 0;
 
-  // Calculate total discount/add (sum of all LESS/ADD)
-  const totalDiscount = selectedOrder
-    ? selectedOrder.order_items.reduce((sum, item, idx) => {
-        const qty = editedQuantities[idx] ?? item.quantity;
-        const percent = editedDiscounts[idx] ?? 0;
-        return sum + qty * item.price * (percent / 100);
-      }, 0)
-    : 0;
+
+// Total discount/add
+const totalDiscount = selectedOrder
+  ? selectedOrder.order_items.reduce((sum, item, idx) => {
+      if (item.inventory.quantity === 0) return sum;
+      const qty = editedQuantities[idx] ?? item.quantity;
+      const percent = editedDiscounts[idx] ?? 0;
+      return sum + qty * item.price * (percent / 100);
+    }, 0)
+  : 0;
+
+
 
   const totalSales = useMemo(
     () =>
@@ -431,16 +444,17 @@ function SalesPageContent() {
       console.error("Failed to log activity for order acceptance:", err);
     }
 
-    setEditedDiscounts(order.order_items.map(() => 0));
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "accepted" },
-    ]);
-    setEditedQuantities(order.order_items.map((item) => item.quantity));
-    setSelectedOrder(order);
-    setShowModal(true);
-    setNumberOfTerms(1);
-    setInterestPercent(0);
+  setSelectedOrder(order);
+setEditedQuantities(order.order_items.map(item => item.quantity));
+setEditedDiscounts(order.order_items.map(() => 0));
+setShowModal(true);
+setNumberOfTerms(1);
+setInterestPercent(0);
+setPickingStatus((prev) => [
+  ...prev,
+  { orderId: order.id, status: "accepted" },
+]);
+
   };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
@@ -508,6 +522,7 @@ function SalesPageContent() {
     try {
       for (let i = 0; i < selectedOrder.order_items.length; i++) {
         const oi = selectedOrder.order_items[i];
+        if (oi.inventory.quantity === 0) continue;
         const invId = oi.inventory.id;
         const remaining = oi.inventory.quantity - editedQuantities[i];
 
@@ -1289,144 +1304,161 @@ function SalesPageContent() {
                     )}
                   </div>
                   <div className="bg-gray-50 border rounded-xl p-5 shadow-sm flex flex-col gap-3">
-                    <h3 className="text-lg font-semibold text-gray-700">
-                      Payment & Totals
-                    </h3>
-                    <div>
-                      <span className="font-semibold">Total: </span>
-                      <span className="text-2xl font-bold text-green-700">
-                        ₱
-                        {computedOrderTotal.toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="font-semibold">Payment Type:</span>{" "}
-                      <span
-                        className={
-                          selectedOrder.customers.payment_type === "Credit"
-                            ? "font-bold text-blue-600"
-                            : selectedOrder.customers.payment_type === "Cash"
-                            ? "font-bold text-green-600"
-                            : "font-bold text-orange-500"
-                        }
-                      >
-                        {selectedOrder.customers.payment_type || "N/A"}
-                      </span>
-                    </div>
-                    {selectedOrder.customers.payment_type === "Credit" && (
-                      <>
-                        <div>
-                          <label className="font-semibold mr-2">Terms:</label>
-                          <input
-                            type="number"
-                            min={1}
-                            value={numberOfTerms}
-                            onChange={(e) =>
-                              setNumberOfTerms(
-                                Math.max(1, Number(e.target.value))
-                              )
-                            }
-                            className="border rounded px-2 py-1 w-20 text-center"
-                          />
-                        </div>
-                        <div>
-                          <label className="font-semibold mr-2">
-                            Interest %:
-                          </label>
-                          <input
-                            type="number"
-                            min={0}
-                            value={interestPercent}
-                            onChange={(e) =>
-                              setInterestPercent(
-                                Math.max(0, Number(e.target.value))
-                              )
-                            }
-                            className="border rounded px-2 py-1 w-20 text-center"
-                          />
-                        </div>
-                      </>
-                    )}
-                    <div className="flex items-center">
-                      <input
-                        type="checkbox"
-                        checked={isSalesTaxOn}
-                        onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
-                        id="sales-tax-toggle"
-                        className="mr-2 accent-blue-600"
-                      />
-                      <label
-                        htmlFor="sales-tax-toggle"
-                        className="font-semibold"
-                      >
-                        Include Sales Tax (12%)
-                      </label>
-                    </div>
-                    <div className="border-t pt-3 text-sm">
-                      <p>
-                        <b>Grand Total w/ Interest:</b>{" "}
-                        <span className="font-bold text-blue-700">
-                          ₱
-                          {getGrandTotalWithInterest().toLocaleString(
-                            undefined,
-                            { minimumFractionDigits: 2 }
-                          )}
-                        </span>
-                      </p>
-                      <p>
-                        <b>Per Term:</b>{" "}
-                        <span className="font-bold text-blue-700">
-                          ₱
-                          {getPerTermAmount().toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                          })}
-                        </span>
-                      </p>
-                    </div>
-                  </div>
+  <h3 className="text-lg font-semibold text-gray-700 mb-2">
+    Payment & Totals
+  </h3>
+
+  {/* TOTAL */}
+  <div>
+    <span className="font-semibold">Total: </span>
+    <span className="text-2xl font-bold text-green-700">
+      ₱{computedOrderTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+    </span>
+    <div className="text-xs text-gray-500 ml-1">Sum of items after discount</div>
+  </div>
+
+  {/* PAYMENT TYPE */}
+  <div>
+    <span className="font-semibold">Payment Type:</span>{" "}
+    <span
+      className={
+        selectedOrder.customers.payment_type === "Credit"
+          ? "font-bold text-blue-600"
+          : selectedOrder.customers.payment_type === "Cash"
+          ? "font-bold text-green-600"
+          : "font-bold text-orange-500"
+      }
+    >
+      {selectedOrder.customers.payment_type || "N/A"}
+    </span>
+    <div className="text-xs text-gray-500 ml-1">Customer's chosen payment method</div>
+  </div>
+
+  {/* TERMS (only for Credit) */}
+  {selectedOrder.customers.payment_type === "Credit" && (
+    <div>
+      <label className="font-semibold mr-2">Terms:</label>
+      <input
+        type="number"
+        min={1}
+        value={numberOfTerms}
+        onChange={(e) => setNumberOfTerms(Math.max(1, Number(e.target.value)))}
+        className="border rounded px-2 py-1 w-20 text-center"
+      />
+      <div className="text-xs text-gray-500 ml-1">
+        Number of months to pay (credit terms)
+      </div>
+    </div>
+  )}
+
+  {/* INTEREST % (only for Credit) */}
+  {selectedOrder.customers.payment_type === "Credit" && (
+    <div>
+      <label className="font-semibold mr-2">Interest %:</label>
+      <input
+        type="number"
+        min={0}
+        value={interestPercent}
+        onChange={(e) => setInterestPercent(Math.max(0, Number(e.target.value)))}
+        className="border rounded px-2 py-1 w-20 text-center"
+      />
+      <div className="text-xs text-gray-500 ml-1">
+        Interest applied to subtotal + tax
+      </div>
+    </div>
+  )}
+
+  {/* SALES TAX CHECKBOX */}
+  <div className="flex items-center">
+    <input
+      type="checkbox"
+      checked={isSalesTaxOn}
+      onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
+      id="sales-tax-toggle"
+      className="mr-2 accent-blue-600"
+    />
+    <label htmlFor="sales-tax-toggle" className="font-semibold">
+      Include Sales Tax (12%)
+    </label>
+    <div className="text-xs text-gray-500 ml-6">Check to add 12% VAT to total</div>
+  </div>
+
+  {/* SALES TAX VALUE */}
+  <div>
+    <span className="font-semibold">Sales Tax (12%): </span>
+    <span>₱{salesTaxValue.toLocaleString(undefined, {minimumFractionDigits:2})}</span>
+    <div className="text-xs text-gray-500 ml-1">Tax amount added to subtotal</div>
+  </div>
+
+  {/* INTEREST AMOUNT */}
+  {selectedOrder.customers.payment_type === "Credit" && (
+    <div>
+      <span className="font-semibold">
+        Interest Amount ({interestPercent}%):
+      </span>
+      <span>
+        ₱{((computedOrderTotal + salesTaxValue) * (interestPercent/100)).toLocaleString(undefined, {minimumFractionDigits:2})}
+      </span>
+      <div className="text-xs text-gray-500 ml-1">
+        Additional cost due to credit terms
+      </div>
+    </div>
+  )}
+
+  {/* GRAND TOTAL */}
+  <div className="border-t pt-3 text-sm">
+    <span className="font-bold">Grand Total w/ Interest:</span>{" "}
+    <span className="font-bold text-blue-700">
+      ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+    </span>
+    <div className="text-xs text-gray-500 ml-1">
+      Final amount after tax & interest
+    </div>
+  </div>
+
+  {/* PER TERM */}
+  {selectedOrder.customers.payment_type === "Credit" && (
+    <div>
+      <span className="font-bold">Per Term ({numberOfTerms}x):</span>
+      <span className="font-bold text-blue-700 ml-2">
+        ₱{getPerTermAmount().toLocaleString(undefined, {minimumFractionDigits:2})}
+      </span>
+      <div className="text-xs text-gray-500 ml-1">
+        Amount due per installment/month
+      </div>
+    </div>
+  )}
+</div>
+
                 </div>
 
                 {/* Picking List Table */}
                 <div className="overflow-x-auto rounded-xl border shadow-sm">
                   <table className="w-full text-sm">
-                    <thead className="bg-[#ffba20] text-black">
-                      <tr>
-                        <th className="py-2 px-3 text-left">Quantity</th>
-                        <th className="py-2 px-3 text-left">Unit</th>
-                        <th className="py-2 px-3 text-left">Description</th>
-                        <th className="py-2 px-3 text-right">Unit Price</th>
-                        <th className="py-2 px-3 text-right">
-                          Discount/Add (%)
-                        </th>
-                        <th className="py-2 px-3 text-right">Amount</th>
-                        <th className="py-2 px-3 text-right"></th>
-                      </tr>
-                    </thead>
+<thead className="bg-[#ffba20] text-black">
+  <tr>
+    <th className="py-2 px-3 text-left">Quantity</th>
+    <th className="py-2 px-3 text-left">Unit</th>
+    <th className="py-2 px-3 text-left">Description</th>
+    <th className="py-2 px-3 text-left">Notes</th>
+    <th className="py-2 px-3 text-right">Unit Price</th>
+    <th className="py-2 px-3 text-right">Discount (%)</th>
+    <th className="py-2 px-3 text-right">Amount</th>
+  </tr>
+</thead>
+
+
                     <tbody>
                      {selectedOrder.order_items.map((item, idx) => {
   const qty = editedQuantities[idx] ?? item.quantity;
   const price = item.price;
   const percent = editedDiscounts[idx] || 0;
-  const amount = qty * price * (1 + percent / 100);
+  const amount = qty * price * (1 - percent / 100);
 
   const stock = item.inventory.quantity;
   const insufficient = qty > stock || stock === 0; // highlight rule
 
-  // Optional remove for bad/zero-stock lines
-  const handleRemove = () => {
-    setEditedQuantities((prev) => prev.filter((_, i) => i !== idx));
-    setEditedDiscounts((prev) => prev.filter((_, i) => i !== idx));
-    setSelectedOrder((prev) =>
-      prev
-        ? {
-            ...prev,
-            order_items: prev.order_items.filter((_, i) => i !== idx),
-          }
-        : prev
-    );
-  };
+ 
 
   return (
     <tr
@@ -1465,16 +1497,24 @@ function SalesPageContent() {
       <td className="py-2 px-3">{item.inventory.unit}</td>
 
       {/* Description */}
-      <td className="py-2 px-3">
-        <div className="font-semibold">{item.inventory.product_name}</div>
-        <div className="text-xs text-gray-500">SKU: {item.inventory.sku}</div>
-        {insufficient && (
-          <div className="text-xs mt-1">
-            Requested: {qty.toLocaleString()} • In stock:{" "}
-            {stock.toLocaleString()}
-          </div>
-        )}
-      </td>
+<td className="py-2 px-3">
+  <div className="font-semibold">{item.inventory.product_name}</div>
+  <div className="text-xs text-gray-500">SKU: {item.inventory.sku}</div>
+</td>
+
+{/* Notes */}
+<td className="py-2 px-3">
+  {stock === 0 ? (
+    <span className="text-red-600 font-semibold">Out of Stock</span>
+  ) : qty > stock ? (
+    <span className="text-orange-600 font-semibold">
+      Insufficient (Requested {qty}, In stock {stock})
+    </span>
+  ) : (
+    <span className="text-green-600">Available</span>
+  )}
+</td>
+
 
       {/* Unit Price */}
       <td className="py-2 px-3 text-right">
@@ -1482,89 +1522,57 @@ function SalesPageContent() {
       </td>
 
       {/* Discount/Add (%) */}
-      <td className="py-2 px-3 text-right">
-        <div className="flex flex-col items-center gap-1">
-          <div className="flex items-center justify-end gap-1">
-            <button
-              className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
-              onClick={() =>
-                setEditedDiscounts((prev) =>
-                  prev.map((d, i) => (i === idx ? Math.max(-100, (Number(d) || 0) - 1) : d))
-                )
-              }
-              type="button"
-              tabIndex={-1}
-              aria-label="Decrease"
-            >
-              –
-            </button>
-            <input
-              type="number"
-              value={percent}
-              onChange={(e) => {
-                let p = parseFloat(e.target.value.replace(/[^0-9\-]/g, ""));
-                if (isNaN(p)) p = 0;
-                if (p > 100) p = 100;
-                if (p < -100) p = -100;
-                setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
-              }}
-              className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
-              min={-100}
-              max={100}
-              step={1}
-              style={{
-                fontWeight: 600,
-                color: percent > 0 ? "#f59e42" : percent < 0 ? "#059669" : "#222",
-              }}
-            />
-            <span className="ml-1">%</span>
-            <button
-              className="px-2 py-0.5 rounded text-lg font-bold bg-gray-200 hover:bg-gray-300"
-              onClick={() =>
-                setEditedDiscounts((prev) =>
-                  prev.map((d, i) => (i === idx ? Math.min(100, (Number(d) || 0) + 1) : d))
-                )
-              }
-              type="button"
-              tabIndex={-1}
-              aria-label="Increase"
-            >
-              +
-            </button>
-          </div>
-          <button
-            className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
-            style={{ fontSize: "11px" }}
-            onClick={() =>
-              setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)))
-            }
-            type="button"
-          >
-            Reset
-          </button>
-        </div>
-      </td>
+<td className="py-2 px-3 text-right">
+  <div className="flex flex-col items-center gap-1">
+    <div className="flex items-center justify-end gap-1">
+      <input
+        type="number"
+        value={percent}
+        onChange={(e) => {
+          let p = parseFloat(e.target.value.replace(/[^0-9]/g, ""));
+          if (isNaN(p)) p = 0;
+          if (p > 100) p = 100;
+          if (p < 0) p = 0;
+          setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
+        }}
+        className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
+        min={0}
+        max={100}
+        step={1}
+        style={{
+          fontWeight: 600,
+          color: "#222",
+        }}
+      />
+      <span className="ml-1">%</span>
+    </div>
+    <button
+      className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
+      style={{ fontSize: "11px" }}
+      onClick={() =>
+        setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)))
+      }
+      type="button"
+    >
+      Reset
+    </button>
+  </div>
+</td>
+
+
 
       {/* Amount */}
-      <td className="py-2 px-3 text-right font-semibold">
-        ₱
-        {amount.toLocaleString(undefined, {
-          minimumFractionDigits: 2,
-        })}
-      </td>
+  <td className="py-2 px-3 text-right font-semibold">
+  ₱
+  {(item.inventory.quantity === 0
+    ? 0
+    : amount
+  ).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+  })}
+</td>
 
-      {/* Remove button (shown when insufficient) */}
-      <td className="py-2 px-3 text-right">
-        {insufficient && (
-          <button
-            onClick={handleRemove}
-            className="bg-red-500 hover:bg-red-700 text-white px-3 py-1 rounded shadow"
-            title="Remove this item"
-          >
-            Remove
-          </button>
-        )}
-      </td>
+     
     </tr>
   );
 })}
@@ -1574,42 +1582,47 @@ function SalesPageContent() {
                 </div>
 
                 {/* Action Buttons */}
-                <div className="flex justify-center gap-8 mt-6">
-                  <button
-  className={`bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition ${
-    hasZeroStock || hasInsufficientStock ? "opacity-50 cursor-not-allowed" : ""
-  }`}
-  onClick={() => {
-    if (!hasZeroStock && !hasInsufficientStock) {
+
+               {/* Optional warning banner if there are stock issues */}
+{(hasZeroStock || hasInsufficientStock) && (
+  <div className="mt-4 mb-2 rounded-lg border border-orange-300 bg-orange-50 px-4 py-2 text-sm text-orange-700 text-center">
+    Some items are out of stock or exceed available quantity. You can still proceed and review on the next step.
+  </div>
+)}
+
+{/* Action Buttons */}
+<div className="flex justify-center gap-8 mt-6">
+  <button
+    className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
+    onClick={() => {
       setShowModal(false);
       setShowSalesOrderModal(true);
-    }
-  }}
-  disabled={hasZeroStock || hasInsufficientStock}
->
-  Proceed Order
-</button>
-                  <button
-                    className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-                    onClick={() => {
-                      // Reset states back to default
-                      setShowModal(false);
-                      setShowSalesOrderModal(false);
-                      setShowFinalConfirm(false);
-                      setSelectedOrder(null);
-                      setEditedQuantities([]);
-                      setEditedDiscounts([]);
-                      setPickingStatus([]);
-                      setPoNumber("");
-                      setRepName("");
-                      setNumberOfTerms(1);
-                      setInterestPercent(0);
-                      setIsSalesTaxOn(true);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
+    }}
+  >
+    Proceed Order
+  </button>
+  <button
+    className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
+    onClick={() => {
+      // Reset states back to default
+      setShowModal(false);
+      setShowSalesOrderModal(false);
+      setShowFinalConfirm(false);
+      setSelectedOrder(null);
+      setEditedQuantities([]);
+      setEditedDiscounts([]);
+      setPickingStatus([]);
+      setPoNumber("");
+      setRepName("");
+      setNumberOfTerms(1);
+      setInterestPercent(0);
+      setIsSalesTaxOn(true);
+    }}
+  >
+    Cancel
+  </button>
+</div>
+
               </div>
             </div>
           );
@@ -1790,44 +1803,60 @@ function SalesPageContent() {
             {/* Item Table */}
             <div className="rounded-xl border mt-3">
               <table className="w-full text-[15px]">
-                <thead className="bg-[#ffba20] text-black">
-                  <tr>
-                    <th className="py-1 px-2 text-left">Quantity</th>
-                    <th className="py-1 px-2 text-left">Unit</th>
-                    <th className="py-1 px-2 text-left">Description</th>
-                    <th className="py-1 px-2 text-right">Unit Price</th>
-                    {/* /*<th className="py-1 px-2 text-right">Discount/Add (%)</th>*/}
-                    <th className="py-1 px-2 text-right">Amount</th>
-                  </tr>
-                </thead>
+<thead className="bg-[#ffba20] text-black">
+  <tr>
+    <th className="py-1 px-2 text-left">Quantity</th>
+    <th className="py-1 px-2 text-left">Unit</th>
+    <th className="py-1 px-2 text-left">Description</th>
+    <th className="py-1 px-2 text-left">Notes</th>
+    <th className="py-1 px-2 text-right">Unit Price</th>
+    <th className="py-1 px-2 text-right">Discount</th>
+    <th className="py-1 px-2 text-right">Amount</th>
+  </tr>
+</thead>
+
+
                 <tbody>
                   {selectedOrder.order_items.map((item, idx) => {
                    const qty = editedQuantities[idx] ?? item.quantity;
 const price = item.price;
 const percent = editedDiscounts[idx] || 0;
-const amount = qty * price * (1 + percent / 100);
+const amount = qty * price * (1 - percent / 100);
 
 const stock = item.inventory.quantity;
 const insufficient = qty > stock || stock === 0; // ← our rule
 
                     return (
-                      <tr key={idx} className="border-t text-[14px]">
-                        <td className="py-1 px-2">{qty}</td>
-                        <td className="py-1 px-2">{item.inventory.unit}</td>
-                        <td className="py-1 px-2 font-semibold">
-                          {item.inventory.product_name}
-                        </td>
-                        <td className="py-1 px-2 text-right">
-                          ₱{price.toLocaleString()}
-                        </td>
-                        {/* Removed Discount/Add column */}
-                        <td className="py-1 px-2 text-right font-semibold">
-                          ₱
-                          {amount.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                          })}
-                        </td>
-                      </tr>
+<tr key={idx} className="border-t text-[14px]">
+  <td className="py-1 px-2">{qty}</td>
+  <td className="py-1 px-2">{item.inventory.unit}</td>
+  <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
+  <td className="py-1 px-2">
+    {stock === 0 ? (
+      <span className="text-red-600 font-semibold">Out of Stock</span>
+    ) : qty > stock ? (
+      <span className="text-orange-600 font-semibold">
+        Insufficient (Requested {qty}, In stock {stock})
+      </span>
+    ) : (
+      <span className="text-green-600">Available</span>
+    )}
+  </td>
+  <td className="py-1 px-2 text-right">₱{price.toLocaleString()}</td>
+  <td className="py-1 px-2 text-right">
+    {editedDiscounts[idx]
+      ? `-${Math.abs(editedDiscounts[idx])}%`
+      : "0%"}
+  </td>
+  <td className="py-1 px-2 text-right font-semibold">
+    ₱
+    {amount.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+    })}
+  </td>
+</tr>
+
+
                     );
                   })}
                 </tbody>
@@ -1836,46 +1865,91 @@ const insufficient = qty > stock || stock === 0; // ← our rule
             {/* Totals and Terms */}
             <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
               <div className="space-y-2 min-w-[350px]">
-                <div className="flex justify-between font-medium">
-                  <span>Subtotal:</span>
-                  <span>
-                    ₱
-                    {subtotalBeforeDiscount.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
 
-                <div className="flex justify-between">
-                  <span>Sales Tax (12%):</span>
-                  <span>
-                    ₱
-                    {salesTaxValue.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-                <div className="flex justify-between text-xl font-bold border-t pt-2">
-                  <span>TOTAL ORDER AMOUNT:</span>
-                  <span className="text-green-700">
-                    ₱
-                    {getGrandTotalWithInterest().toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-                {selectedOrder.customers.payment_type === "Credit" && (
-                  <div className="flex justify-between">
-                    <span>Payment per Term:</span>
-                    <span className="font-bold text-blue-700">
-                      ₱
-                      {getPerTermAmount().toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
-                  </div>
-                )}
-              </div>
+  {/* Subtotal */}
+  <div className="flex justify-between font-medium">
+    <span>
+      Subtotal:
+      <div className="text-xs text-gray-500">Sum before tax & discount</div>
+    </span>
+    <span>
+      ₱{subtotalBeforeDiscount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+    </span>
+  </div>
+
+  {/* Sales Tax */}
+  <div className="flex justify-between">
+    <span>
+      Sales Tax (12%):
+      <div className="text-xs text-gray-500">Tax applied to subtotal</div>
+    </span>
+    <span>
+      ₱{salesTaxValue.toLocaleString(undefined, {minimumFractionDigits: 2})}
+    </span>
+  </div>
+
+  {/* Total Discount */}
+  <div className="flex justify-between">
+    <span>
+      Discount/Add:
+      <div className="text-xs text-gray-500">Sum of per-item discounts/adds</div>
+    </span>
+    <span className={totalDiscount !== 0 ? "text-orange-600 font-semibold" : ""}>
+      {totalDiscount === 0
+        ? "—"
+        : `${totalDiscount > 0 ? "-" : "+"}₱${Math.abs(totalDiscount).toLocaleString(undefined, {minimumFractionDigits: 2})}`}
+    </span>
+  </div>
+
+  {/* Subtotal with Tax/Discount */}
+  <div className="flex justify-between">
+    <span>
+      Subtotal w/ Tax & Discount:
+      <div className="text-xs text-gray-500">Subtotal after discount & tax</div>
+    </span>
+    <span>
+      ₱{(subtotalBeforeDiscount + salesTaxValue - totalDiscount).toLocaleString(undefined, {minimumFractionDigits: 2})}
+    </span>
+  </div>
+
+  {/* Interest (for Credit) */}
+  {selectedOrder.customers.payment_type === "Credit" && (
+    <div className="flex justify-between">
+      <span>
+        Interest Amount ({interestPercent}%):
+        <div className="text-xs text-gray-500">For credit terms</div>
+      </span>
+      <span>
+        ₱{((subtotalBeforeDiscount + salesTaxValue - totalDiscount) * (interestPercent/100)).toLocaleString(undefined, {minimumFractionDigits:2})}
+      </span>
+    </div>
+  )}
+
+  {/* Grand Total */}
+  <div className="flex justify-between text-xl font-bold border-t pt-2">
+    <span>
+      TOTAL ORDER AMOUNT:
+      <div className="text-xs text-gray-500">Final total (tax, discount & interest)</div>
+    </span>
+    <span className="text-green-700">
+      ₱{getGrandTotalWithInterest().toLocaleString(undefined, {minimumFractionDigits: 2})}
+    </span>
+  </div>
+
+  {/* Per Term (for Credit) */}
+  {selectedOrder.customers.payment_type === "Credit" && (
+    <div className="flex justify-between">
+      <span>
+        Payment per Term:
+        <div className="text-xs text-gray-500">Amount per installment/month</div>
+      </span>
+      <span className="font-bold text-blue-700">
+        ₱{getPerTermAmount().toLocaleString(undefined, {minimumFractionDigits: 2})}
+      </span>
+    </div>
+  )}
+</div>
+
             </div>
             {/* Action Buttons */}
             <div className="flex justify-center gap-8 mt-6">

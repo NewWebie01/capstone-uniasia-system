@@ -33,6 +33,7 @@ type InvoiceItem = {
   description: string;
   unitPrice: number;
   discount: number; // percent
+  inStock?: boolean;
 };
 
 type CustomerInfo = {
@@ -63,12 +64,15 @@ type OrderItemRow = {
   inventory_id: string;
   quantity: number;
   price: number | null;
+  discount_percent?: number | null;  
   inventory?: {
     product_name: string | null;
     unit?: string | null;
     unit_price?: number | null;
+    quantity?: number | null;
   } | null;
 };
+
 
 type OrderDetailRow = {
   id: string;
@@ -231,10 +235,12 @@ function DeliveryReceiptModern({
   txn?: string;
   status?: string | null;
 }) {
+  // Only count items NOT marked as out of stock (inStock !== false)
   const rows = initialItems || [];
+  const inStockRows = rows.filter(i => i.inStock !== false);
 
-  const subtotal = rows.reduce((s, i) => s + i.qty * i.unitPrice, 0);
-  const totalDiscount = rows.reduce((s, i) => {
+  const subtotal = inStockRows.reduce((s, i) => s + i.qty * i.unitPrice, 0);
+  const totalDiscount = inStockRows.reduce((s, i) => {
     const line = i.qty * i.unitPrice;
     return s + (line * (i.discount || 0)) / 100;
   }, 0);
@@ -258,7 +264,6 @@ function DeliveryReceiptModern({
           <h2 className="text-4xl font-extrabold tracking-tight text-neutral-900 mb-1 -mt-3">
             UNIASIA
           </h2>
-
           <div className="text-base font-small text-neutral-500 mb-2">
             SITIO II MANGGAHAN BAHAY PARE, MEYCAUAYAN CITY BULACAN
           </div>
@@ -313,30 +318,19 @@ function DeliveryReceiptModern({
               className="text-black uppercase tracking-wider text-[11px]"
               style={{ background: "#ffba20" }}
             >
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                QTY
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                UNIT
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                ITEM DESCRIPTION
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                UNIT PRICE
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                DISCOUNT/ADD (%)
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                AMOUNT
-              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">QTY</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">ITEM DESCRIPTION</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">REMARKS</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT PRICE</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">DISCOUNT/ADD (%)</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">AMOUNT</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="text-center py-8 text-neutral-400">
+                <td colSpan={7} className="text-center py-8 text-neutral-400">
                   No items found.
                 </td>
               </tr>
@@ -349,25 +343,20 @@ function DeliveryReceiptModern({
                   key={item.id}
                   className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
                 >
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
-                    {item.qty}
-                  </td>
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
-                    {item.unit}
-                  </td>
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.qty}</td>
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.unit}</td>
                   <td className="px-2.5 py-1.5 text-left align-middle">
                     <span className="font-semibold">{item.description}</span>
                   </td>
-                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
-                    {formatCurrency(item.unitPrice)}
+                  <td className="px-2.5 py-1.5 text-center align-middle">
+                    {item.inStock === true ? "✓" : item.inStock === false ? "✗" : ""}
                   </td>
+                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">{formatCurrency(item.unitPrice)}</td>
                   <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
-                    {item.discount && item.discount !== 0
-                      ? `${item.discount}%`
-                      : ""}
+                    {item.discount && item.discount !== 0 ? `${item.discount}%` : ""}
                   </td>
                   <td className="px-2.5 py-1.5 text-center font-mono font-bold align-middle whitespace-nowrap">
-                    {formatCurrency(lineAfter)}
+                    {item.inStock === false ? formatCurrency(0) : formatCurrency(lineAfter)}
                   </td>
                 </tr>
               );
@@ -375,6 +364,7 @@ function DeliveryReceiptModern({
           </tbody>
         </table>
       </div>
+
       {/* Notes + Summary */}
       <div className="flex flex-row gap-4 mt-5 print:gap-2">
         <div className="w-2/3 text-xs pr-4">
@@ -432,6 +422,7 @@ function DeliveryReceiptModern({
     </div>
   );
 }
+
 
 /* -------------------- Main Page (with Modal) -------------------- */
 export default function InvoiceMergedPage() {
@@ -567,23 +558,27 @@ export default function InvoiceMergedPage() {
     setCurrentStatus(order.status || null);
 
     // fetch items
-    const { data: rows, error } = await supabase
-      .from("order_items")
-      .select(
-        `
-        id,
-        order_id,
-        inventory_id,
-        quantity,
-        price,
-        inventory:inventory_id (
-          product_name,
-          unit,
-          unit_price
-        )
-      `
-      )
-      .eq("order_id", order.id);
+const { data: rows, error } = await supabase
+  .from("order_items")
+  .select(
+    `
+    id,
+    order_id,
+    inventory_id,
+    quantity,
+    price,
+    discount_percent,
+    inventory:inventory_id (
+      product_name,
+      unit,
+      unit_price,
+      quantity
+    )
+    `
+  )
+  .eq("order_id", order.id);
+
+
 
     // fetch saved totals (same row as order)
     const { data: orderRow, error: orderErr } = await supabase
@@ -606,16 +601,19 @@ export default function InvoiceMergedPage() {
     setSalesTaxSaved(Number(orderRow?.sales_tax || 0));
 
     if (!error && rows) {
-      const mapped: InvoiceItem[] = (rows as unknown as OrderItemRow[]).map(
-        (r) => ({
-          id: r.id,
-          qty: Number(r.quantity || 0),
-          unit: r.inventory?.unit || "pcs",
-          description: r.inventory?.product_name || "",
-          unitPrice: Number(r.price ?? r.inventory?.unit_price ?? 0),
-          discount: 0,
-        })
-      );
+     const mapped: InvoiceItem[] = (rows as unknown as OrderItemRow[]).map(
+  (r) => ({
+    id: r.id,
+    qty: Number(r.quantity || 0),
+    unit: r.inventory?.unit || "pcs",
+    description: r.inventory?.product_name || "",
+    unitPrice: Number(r.price ?? r.inventory?.unit_price ?? 0),
+    discount: Number(r.discount_percent ?? 0),
+    inStock: (r.inventory?.quantity ?? 0) > 0,
+  })
+);
+
+
       setItems(mapped);
     } else {
       if (error) console.error("Invoice items fetch error:", error);
@@ -658,7 +656,8 @@ export default function InvoiceMergedPage() {
             id,
             quantity,
             price,
-            inventory:inventory_id ( product_name, unit, unit_price )
+            discount_percent,
+             inventory:inventory_id ( product_name, unit, unit_price )
           )
         `
         )
@@ -680,13 +679,15 @@ export default function InvoiceMergedPage() {
         setDetailStatus(row.status || null);
 
         const mapped: InvoiceItem[] = (row.order_items || []).map((it) => ({
-          id: it.id,
-          qty: Number(it.quantity || 0),
-          unit: it.inventory?.unit || "pcs",
-          description: it.inventory?.product_name || "",
-          unitPrice: Number(it.price ?? it.inventory?.unit_price ?? 0),
-          discount: 0,
-        }));
+  id: it.id,
+  qty: Number(it.quantity || 0),
+  unit: it.inventory?.unit || "pcs",
+  description: it.inventory?.product_name || "",
+  unitPrice: Number(it.price ?? it.inventory?.unit_price ?? 0),
+  discount: Number(it.discount_percent ?? 0),
+  inStock: (it.inventory?.quantity ?? 0) > 0,
+}));
+
         setDetailItems(
           mapped.length
             ? mapped
