@@ -7,6 +7,49 @@ import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 
+/* ----------------------------- Limits ----------------------------- */
+const MAX_QTY = 1000;
+const clampQty = (n: number) =>
+  Math.max(1, Math.min(MAX_QTY, Math.floor(n) || 1));
+
+/* ---------------------- 🚚 6-TYRE truck limits ---------------------- */
+const TRUCK_LIMITS = {
+  type: "6-tyre",
+  maxTotalUnits: 5000, // 👈 tweak as needed
+  maxDistinctItems: 60, // 👈 tweak as needed
+};
+
+const totalUnits = (list: CartItem[]) =>
+  list.reduce((sum, ci) => sum + ci.quantity, 0);
+
+function canAddItemWithQty(
+  current: CartItem[],
+  item: InventoryItem,
+  qty: number
+) {
+  const nextDistinct = current.some((ci) => ci.item.id === item.id)
+    ? current.length
+    : current.length + 1;
+  const nextUnits = totalUnits(current) + qty;
+
+  if (nextDistinct > TRUCK_LIMITS.maxDistinctItems) {
+    return {
+      ok: false,
+      reason: "distinct",
+      message: `You can add up to ${TRUCK_LIMITS.maxDistinctItems} different items only. Please split into another transaction.`,
+    };
+  }
+  if (nextUnits > TRUCK_LIMITS.maxTotalUnits) {
+    return {
+      ok: false,
+      reason: "units",
+      message: `Total items are limited to ${TRUCK_LIMITS.maxTotalUnits} units. Please split into another transaction.`,
+    };
+  }
+
+  return { ok: true as const };
+}
+
 /* ----------------------------- Date formatter ----------------------------- */
 const formatPH = (d?: string | number | Date) =>
   new Intl.DateTimeFormat("en-PH", {
@@ -556,27 +599,64 @@ export default function CustomerInventoryPage() {
 
   const addToCart = () => {
     if (!selectedItem) return;
-    const qty = Math.max(1, Math.min(50000, Math.floor(orderQuantity) || 1));
+
+    let qty = clampQty(orderQuantity);
+    if (orderQuantity > MAX_QTY) {
+      toast.error(
+        `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
+      );
+    }
     if (cart.some((ci) => ci.item.id === selectedItem.id)) {
       toast.error("Item already in cart.");
       return;
     }
-    setCart((prev) => [...prev, { item: selectedItem, quantity: qty }]);
+
+    // 🚚 6-TYRE: check cart-wide limits before pushing
+    const check = canAddItemWithQty(cart, selectedItem, qty);
+    if (!check.ok) {
+      toast.error(check.message.replace(/^For .*truck, /, "")); // strip truck mention if any
+      return;
+    }
+
+    setCart((prev) => [...prev, { item: selectedItem!, quantity: qty }]);
     setSelectedItem(null);
     setOrderQuantity(1);
   };
 
-  const removeFromCart = (itemId: number) =>
-    setCart((prev) => prev.filter((ci) => ci.item.id !== itemId));
-
   const updateCartQuantity = (itemId: number, nextQtyRaw: number) => {
-    setCart((prev) => {
-      const parsed = Math.floor(Number.isFinite(nextQtyRaw) ? nextQtyRaw : 1);
-      const nextQty = Math.max(1, Math.min(50000, isNaN(parsed) ? 1 : parsed));
-      return prev.map((ci) =>
-        ci.item.id === itemId ? { ...ci, quantity: nextQty } : ci
+    const current = cart.find((ci) => ci.item.id === itemId);
+    if (!current) return;
+
+    // clamp to per-item rule first
+    const requested = clampQty(Number.isFinite(nextQtyRaw) ? nextQtyRaw : 1);
+
+    // cart-wide limit: keep total units within cap
+    const unitsWithoutThis = totalUnits(cart) - current.quantity;
+    const maxAllowedForThis = Math.max(
+      1,
+      TRUCK_LIMITS.maxTotalUnits - unitsWithoutThis
+    );
+    const approved = Math.min(requested, maxAllowedForThis);
+
+    setCart((prev) =>
+      prev.map((ci) =>
+        ci.item.id === itemId ? { ...ci, quantity: approved } : ci
+      )
+    );
+
+    if (requested > MAX_QTY) {
+      toast.error(
+        `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
       );
-    });
+    } else if (requested > approved) {
+      toast.error(
+        `Total items are limited to ${TRUCK_LIMITS.maxTotalUnits} units. Please split into another transaction.`
+      );
+    }
+  };
+
+  const removeFromCart = (itemId: number) => {
+    setCart((prev) => prev.filter((ci) => ci.item.id !== itemId));
   };
 
   const handleShowCart = async () => {
@@ -597,38 +677,20 @@ export default function CustomerInventoryPage() {
   };
 
   const handleOpenFinalModal = () => {
-    if (!isValidPhone(customerInfo.phone)) {
-      toast.error("Phone number must be exactly 11 digits.");
-      return;
-    }
-    if (
-      !houseStreet.trim() ||
-      !barangayCode ||
-      !cityCode ||
-      (!isNCR && !provinceCode) ||
-      !regionCode
-    ) {
+    // Cart-wide checks (generic, no truck mention)
+    if (cart.length > TRUCK_LIMITS.maxDistinctItems) {
       toast.error(
-        "Please complete your full address (House/St., Barangay, City, Province/Region)."
+        `Too many different items (max ${TRUCK_LIMITS.maxDistinctItems}). Please split into another transaction.`
       );
       return;
     }
-    if (cart.some((ci) => ci.quantity < 1 || ci.quantity > 50000)) {
-      toast.error("All quantities must be between 1 and 50,000.");
+    if (totalUnits(cart) > TRUCK_LIMITS.maxTotalUnits) {
+      toast.error(
+        `Total items exceed ${TRUCK_LIMITS.maxTotalUnits} units. Please split into another transaction.`
+      );
       return;
     }
-    if (
-      !customerInfo.name ||
-      !customerInfo.email ||
-      !customerInfo.phone ||
-      !customerInfo.address ||
-      !customerInfo.payment_type ||
-      !customerInfo.code ||
-      !customerInfo.customer_type
-    ) {
-      toast.error("Please complete all required customer fields.");
-      return;
-    }
+
     setFinalOrderDetails({ customer: customerInfo, items: cart });
     setShowCartPopup(false);
     setShowFinalPopup(true);
@@ -639,24 +701,26 @@ export default function CustomerInventoryPage() {
     setPlacingOrder(true);
 
     const { customer, items } = finalOrderDetails;
-
-    if (!isValidPhone(customer.phone)) {
-      toast.error("Phone number must be exactly 11 digits.");
+    if (items.some((ci) => ci.quantity > MAX_QTY)) {
+      toast.error(
+        `Each item can be ordered up to ${MAX_QTY} units only. For larger needs, please submit another transaction.`
+      );
       setPlacingOrder(false);
       return;
     }
-    if (!customer.address) {
-      toast.error("Missing address.");
+    if (items.length > TRUCK_LIMITS.maxDistinctItems) {
+      toast.error(
+        `Too many different items (max ${TRUCK_LIMITS.maxDistinctItems}). Please split into another transaction.`
+      );
       setPlacingOrder(false);
       return;
     }
-
-    const { data: existing } = await supabase
-      .from("customers")
-      .select("code")
-      .eq("code", customer.code);
-    if (existing && existing.length > 0) {
-      toast.error("Duplicate transaction code generated. Please try again.");
+    if (
+      items.reduce((s, ci) => s + ci.quantity, 0) > TRUCK_LIMITS.maxTotalUnits
+    ) {
+      toast.error(
+        `Total items exceed ${TRUCK_LIMITS.maxTotalUnits} units. Please split into another transaction.`
+      );
       setPlacingOrder(false);
       return;
     }
@@ -1045,17 +1109,26 @@ export default function CustomerInventoryPage() {
                 type="number"
                 className="w-full border px-3 py-2 rounded"
                 min={1}
-                max={50000}
+                max={MAX_QTY}
                 value={orderQuantity}
-                onChange={(e) =>
-                  setOrderQuantity(
-                    Math.max(
-                      1,
-                      Math.min(50000, Math.floor(Number(e.target.value) || 1))
-                    )
-                  )
-                }
+                onChange={(e) => {
+                  const raw = Number(e.target.value);
+                  const clamped = clampQty(isNaN(raw) ? 1 : raw);
+                  setOrderQuantity(clamped);
+                }}
+                onBlur={(e) => {
+                  const raw = Number(e.target.value);
+                  if (raw > MAX_QTY) {
+                    toast.error(
+                      `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
+                    );
+                  }
+                  setOrderQuantity(clampQty(isNaN(raw) ? 1 : raw));
+                }}
               />
+              <div className="text-xs text-gray-500 mt-1">
+                Max {MAX_QTY} per item.
+              </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button
@@ -1111,30 +1184,26 @@ export default function CustomerInventoryPage() {
                         type="number"
                         className="w-20 border rounded px-2 py-1 text-center"
                         min={1}
-                        max={50000}
+                        max={MAX_QTY}
                         value={ci.quantity}
                         onChange={(e) => {
                           const v = Number(e.target.value);
-                          updateCartQuantity(
-                            ci.item.id,
-                            Math.max(1, Math.min(50000, isNaN(v) ? 1 : v))
-                          );
+                          updateCartQuantity(ci.item.id, isNaN(v) ? 1 : v);
                         }}
                         onBlur={(e) => {
                           const v = Number(e.target.value);
-                          updateCartQuantity(
-                            ci.item.id,
-                            Math.max(1, Math.min(50000, isNaN(v) ? 1 : v))
-                          );
+                          if (v > MAX_QTY) {
+                            toast.error(
+                              `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
+                            );
+                          }
+                          updateCartQuantity(ci.item.id, isNaN(v) ? 1 : v);
                         }}
                       />
                       <button
                         className="px-2 py-1 rounded border hover:bg-gray-100"
                         onClick={() =>
-                          updateCartQuantity(
-                            ci.item.id,
-                            ci.quantity + 1 > 50000 ? 50000 : ci.quantity + 1
-                          )
+                          updateCartQuantity(ci.item.id, ci.quantity + 1)
                         }
                         title="Increase"
                       >
