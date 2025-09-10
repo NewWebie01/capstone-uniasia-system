@@ -76,6 +76,14 @@ type Delivery = {
 const DeliveryBadge = ({ status }: { status?: string | null }) => {
   const s = (status || "").trim().toLowerCase();
 
+  if (s === "to receive")
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-green-100 text-green-800">
+      <CheckCircle2 className="h-3.5 w-3.5" />
+      To Receive
+    </span>
+  );
+
   if (s === "delivered")
     return (
       <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-green-200 text-green-900">
