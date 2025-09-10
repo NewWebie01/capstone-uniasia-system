@@ -217,7 +217,7 @@ export default function TruckDeliveryPage() {
     const { data: dData, error: dErr } = await supabase
       .from("truck_deliveries")
       .select("*")
-      .in("status", ["Scheduled", "Ongoing"]) // ⬅️ only active
+      //.in("status", ["Scheduled", "To Ship", "To Receive"])
       .order("schedule_date", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false });
 
@@ -235,7 +235,7 @@ export default function TruckDeliveryPage() {
     // 🔑 Put Scheduled first, then Ongoing, Delivered last.
     // Within the same status, newer schedule_date first.
     const statusRank = (s?: string) =>
-      s === "Scheduled" ? 0 : s === "Ongoing" ? 1 : 2; // Delivered (and others) last
+      s === "Scheduled" ? 0 : s === "To Ship" ? 1 : 2; // Delivered (and others) last
 
     deliveriesList.sort((a, b) => {
       const r = statusRank(a.status) - statusRank(b.status);
@@ -640,7 +640,7 @@ export default function TruckDeliveryPage() {
     console.error("Update error:", error);
     toast.error("Failed to update delivery status");
   } else {
-    if (newStatus === "Delivered") {
+    if (newStatus === "To Receive") {
       setDeliveries((prev) => prev.filter((d) => d.id !== id));
       toast.success("Marked as Delivered — moved to Delivered History.");
     } else {
@@ -804,9 +804,13 @@ const updateEtaDate = async (deliveryId: number, date: string) => {
   };
 
   const isLocked = (status: string) => status === "To Receive";
-  const isActiveStatus = (s?: string) => s === "Scheduled" || s === "To Ship";
-  const statusRank = (s?: string) =>
-    s === "Scheduled" ? 0 : s === "To Ship" ? 1 : 2;
+  const isActiveStatus = (s?: string) =>
+  s === "Scheduled" || s === "To Ship";
+  const statusRank = (s?: string) => {
+  if (s === "Scheduled") return 0;
+  if (s === "To Ship") return 1;
+  return 2; // To Receive / Delivered / others
+  };
 
   type Groups = Record<string, Delivery[]>;
 
@@ -822,18 +826,18 @@ const updateEtaDate = async (deliveryId: number, date: string) => {
     () => deliveries.filter((d) => isActiveStatus(d.status)),
     [deliveries]
   );
-  // Sort inside each bucket:
-  // - Active: Scheduled first, then Ongoing. Newer schedule_date first.
-  // - Delivered: Newer schedule_date first.
+  //TO REMOVE THE TO RECEIVE STATUS IN LOGISTICS
+  const listToShow = deliveries.filter((d) => isActiveStatus(d.status));
+
   const sortedActive = useMemo(() => {
-    return [...activeDeliveries].sort((a, b) => {
-      const r = statusRank(a.status) - statusRank(b.status);
-      if (r !== 0) return r;
-      const ta = a.schedule_date ? new Date(a.schedule_date).getTime() : 0;
-      const tb = b.schedule_date ? new Date(b.schedule_date).getTime() : 0;
-      return tb - ta; // latest first
-    });
-  }, [activeDeliveries]);
+  return [...listToShow].sort((a, b) => {
+    const r = statusRank(a.status) - statusRank(b.status);
+    if (r !== 0) return r;
+    const ta = a.schedule_date ? new Date(a.schedule_date).getTime() : 0;
+    const tb = b.schedule_date ? new Date(b.schedule_date).getTime() : 0;
+    return tb - ta; // latest first
+  });
+}, [listToShow]);
   // Group each bucket by date
   const groupedActive = useMemo(
     () => groupByDate(sortedActive),
@@ -1091,19 +1095,9 @@ const updateEtaDate = async (deliveryId: number, date: string) => {
 
                         <select
                           value={delivery.status}
-                          onChange={(e) =>
-                            setConfirmDialog({
-                              open: true,
-                              id: delivery.id,
-                              newStatus: e.target.value,
-                            })
-                          }
+                          onChange={(e) => setConfirmDialog({ open: true, id: delivery.id, newStatus: e.target.value })}
                           disabled={isLocked(delivery.status)}
-                          className={`border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10 ${
-                            isLocked(delivery.status)
-                              ? "opacity-60 cursor-not-allowed"
-                              : ""
-                          }`}
+                          className="border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
                         >
                           <option value="Scheduled">Scheduled</option>
                           <option value="To Ship">To Ship</option>

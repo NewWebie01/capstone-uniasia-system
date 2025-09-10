@@ -14,7 +14,7 @@ type Delivery = {
   destination: string;
   plate_number: string;
   driver: string;
-  status: "Scheduled" | "Ongoing" | "Delivered" | string;
+  status: "Scheduled" | "To Ship" | "To Receive" | string;
   schedule_date: string;
   arrival_date: string | null;
   participants?: string[] | null;
@@ -74,7 +74,7 @@ export default function DeliveredPage() {
   const [dateTo, setDateTo] = useState<string>("");     // YYYY-MM-DD
   const [loading, setLoading] = useState<boolean>(false);
 
-  const isLocked = (status: string) => status === "Delivered";
+  const isLocked = (status: string) => status === "To Receive";
 
   // group by schedule_date (for section headers)
   const groupedDeliveries = useMemo(() => {
@@ -101,7 +101,7 @@ export default function DeliveredPage() {
       let q = supabase
         .from("truck_deliveries")
         .select("*", { count: "exact" })
-        .eq("status", "Delivered");
+        .eq("status", "To Receive");
 
       // filters
       if (dateFrom) q = q.gte("schedule_date", dateFrom);
@@ -217,7 +217,7 @@ export default function DeliveredPage() {
       {/* Header */}
       <div className="flex items-end justify-between mb-6 gap-4">
         <div>
-          <h1 className="text-3xl font-bold">Delivered (History)</h1>
+          <h1 className="text-3xl font-bold">To Receive (History)</h1>
           <p className="text-sm text-slate-500">
             View delivered trucks with filters and pagination.
           </p>
@@ -254,7 +254,7 @@ export default function DeliveredPage() {
 
       {/* Delivered Cards – grouped by schedule_date, read-only */}
       {sortedDateKeys.length === 0 && !loading && (
-        <p className="text-sm text-slate-500">No delivered records found.</p>
+        <p className="text-sm text-slate-500">No “To Receive” records found.</p>
       )}
 
       {sortedDateKeys.map((date) => {
@@ -382,10 +382,10 @@ export default function DeliveredPage() {
                   <div className="col-span-12 lg:col-span-2">
                     <div className="flex lg:flex-col gap-2 justify-end lg:justify-start">
                       <div className="inline-flex items-center gap-2">
-                        {delivery.status === "Delivered" && (
+                        {delivery.status === "To Receive" && (
                           <CheckCircle className="text-emerald-600" />
                         )}
-                        {delivery.status === "Ongoing" && (
+                        {delivery.status === "To Ship" && (
                           <Truck className="text-amber-600" />
                         )}
                         {delivery.status === "Scheduled" && (
@@ -397,7 +397,7 @@ export default function DeliveredPage() {
                           disabled
                           className="border rounded-md px-2 py-1 text-sm bg-gray-100 text-gray-500 cursor-not-allowed"
                         >
-                          <option>Delivered</option>
+                          <option>To Receive</option>
                         </select>
                       </div>
 
