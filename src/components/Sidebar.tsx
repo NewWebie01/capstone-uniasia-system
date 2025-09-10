@@ -46,7 +46,7 @@ const Menus: {
   { title: "Returns", icon: RotateCcw, href: "/returns" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
-  // { title: "Account Creation", icon: UserPlus, href: "/account_creation" },
+  { title: "Account Request", icon: UserPlus, href: "/account-request" }, // ADDED
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
@@ -140,15 +140,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
             ) : menu.icon ? (
               <menu.icon
                 className={`h-5 w-5 ${
-                  // highlight these icons in yellow
                   [
                     "Activity Log",
                     "Account Creation",
+                    "Account Request", // highlight in yellow
                     "Purchase",
                     "Inventory",
                     "Invoice",
                     "Transaction History",
-                    "Returns", // ← NEW
+                    "Returns",
                   ].includes(menu.title)
                     ? "text-[#ffba20]"
                     : "text-black"
