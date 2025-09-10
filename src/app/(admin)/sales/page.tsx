@@ -1337,7 +1337,7 @@ setPickingStatus((prev) => [
     >
       {selectedOrder.customers.payment_type || "N/A"}
     </span>
-    <div className="text-xs text-gray-500 ml-1">Customer's chosen payment method</div>
+    <div className="text-xs text-gray-500 ml-1">Customer&apos;s chosen payment method</div>
   </div>
 
   {/* TERMS (only for Credit) */}
@@ -1935,7 +1935,7 @@ const insufficient = qty > stock || stock === 0; // ← our rule
   <div className="flex justify-between text-xl font-bold border-t pt-2">
     <span>
       TOTAL ORDER AMOUNT:
-      <div className="text-xs text-gray-500">Final total (tax, discount & interest)</div>
+      <div className="text-xs text-gray-500">Final total (tax, discount &amp; interest)</div>
     </span>
     <span className="text-green-700">
       ₱{getGrandTotalWithInterest().toLocaleString(undefined, {minimumFractionDigits: 2})}
