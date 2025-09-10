@@ -33,12 +33,16 @@ type InvoiceItem = {
   description: string;
   unitPrice: number;
   discount: number; // percent
+  inStock?: boolean;
 };
 
 type CustomerInfo = {
   name: string;
   address?: string;
   code?: string;
+  email?: string;
+  phone?: string;
+  area?: string;
 };
 
 type OrderForList = {
@@ -54,6 +58,9 @@ type OrderForList = {
     name: string | null;
     address: string | null;
     code: string | null;
+    email?: string | null;
+    phone?: string | null;
+    area?: string | null;
   } | null;
 };
 
@@ -63,10 +70,12 @@ type OrderItemRow = {
   inventory_id: string;
   quantity: number;
   price: number | null;
+  discount_percent?: number | null;  
   inventory?: {
     product_name: string | null;
     unit?: string | null;
     unit_price?: number | null;
+    quantity?: number | null;
   } | null;
 };
 
@@ -82,7 +91,13 @@ type OrderDetailRow = {
   interest_percent: number | null;
   sales_tax: number | null;
   status?: string | null;
-  customers: { name: string | null; address: string | null } | null;
+  customers: { 
+    name: string | null; 
+    address: string | null; 
+    email?: string | null; 
+    phone?: string | null; 
+    area?: string | null;
+  } | null;
   order_items: OrderItemRow[];
 };
 
@@ -231,10 +246,12 @@ function DeliveryReceiptModern({
   txn?: string;
   status?: string | null;
 }) {
+  // Only count items NOT marked as out of stock (inStock !== false)
   const rows = initialItems || [];
+  const inStockRows = rows.filter(i => i.inStock !== false);
 
-  const subtotal = rows.reduce((s, i) => s + i.qty * i.unitPrice, 0);
-  const totalDiscount = rows.reduce((s, i) => {
+  const subtotal = inStockRows.reduce((s, i) => s + i.qty * i.unitPrice, 0);
+  const totalDiscount = inStockRows.reduce((s, i) => {
     const line = i.qty * i.unitPrice;
     return s + (line * (i.discount || 0)) / 100;
   }, 0);
@@ -258,7 +275,6 @@ function DeliveryReceiptModern({
           <h2 className="text-4xl font-extrabold tracking-tight text-neutral-900 mb-1 -mt-3">
             UNIASIA
           </h2>
-
           <div className="text-base font-small text-neutral-500 mb-2">
             SITIO II MANGGAHAN BAHAY PARE, MEYCAUAYAN CITY BULACAN
           </div>
@@ -267,7 +283,6 @@ function DeliveryReceiptModern({
           </div>
         </div>
       </div>
-
       {/* Details */}
       <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs mb-4 border border-neutral-300 rounded-lg p-3">
         <div>
@@ -283,6 +298,21 @@ function DeliveryReceiptModern({
           <div>
             <b>SALESMAN:</b> {salesman || "—"}
           </div>
+          {customer?.email && (
+            <div>
+              <b>EMAIL:</b> {customer.email}
+            </div>
+          )}
+          {customer?.phone && (
+            <div>
+              <b>PHONE:</b> {customer.phone}
+            </div>
+          )}
+          {customer?.area && (
+            <div>
+              <b>AREA:</b> {customer.area}
+            </div>
+          )}
         </div>
         <div>
           <div>
@@ -304,7 +334,6 @@ function DeliveryReceiptModern({
           )}
         </div>
       </div>
-
       {/* Items */}
       <div className="border border-neutral-300 rounded-lg overflow-x-auto mt-2 mb-2">
         <table className="min-w-full text-xs align-middle">
@@ -313,30 +342,19 @@ function DeliveryReceiptModern({
               className="text-black uppercase tracking-wider text-[11px]"
               style={{ background: "#ffba20" }}
             >
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                QTY
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                UNIT
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                ITEM DESCRIPTION
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                UNIT PRICE
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                DISCOUNT/ADD (%)
-              </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
-                AMOUNT
-              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">QTY</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">ITEM DESCRIPTION</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">REMARKS</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT PRICE</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">DISCOUNT/ADD (%)</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">AMOUNT</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="text-center py-8 text-neutral-400">
+                <td colSpan={7} className="text-center py-8 text-neutral-400">
                   No items found.
                 </td>
               </tr>
@@ -349,25 +367,20 @@ function DeliveryReceiptModern({
                   key={item.id}
                   className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
                 >
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
-                    {item.qty}
-                  </td>
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
-                    {item.unit}
-                  </td>
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.qty}</td>
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.unit}</td>
                   <td className="px-2.5 py-1.5 text-left align-middle">
                     <span className="font-semibold">{item.description}</span>
                   </td>
-                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
-                    {formatCurrency(item.unitPrice)}
+                  <td className="px-2.5 py-1.5 text-center align-middle">
+                    {item.inStock === true ? "✓" : item.inStock === false ? "✗" : ""}
                   </td>
+                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">{formatCurrency(item.unitPrice)}</td>
                   <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
-                    {item.discount && item.discount !== 0
-                      ? `${item.discount}%`
-                      : ""}
+                    {item.discount && item.discount !== 0 ? `${item.discount}%` : ""}
                   </td>
                   <td className="px-2.5 py-1.5 text-center font-mono font-bold align-middle whitespace-nowrap">
-                    {formatCurrency(lineAfter)}
+                    {item.inStock === false ? formatCurrency(0) : formatCurrency(lineAfter)}
                   </td>
                 </tr>
               );
@@ -399,7 +412,7 @@ function DeliveryReceiptModern({
               </tr>
               <tr>
                 <td className="font-semibold py-0.5">
-                  Less/Add (Discount/Markup):
+                  Discount
                 </td>
                 <td className="pl-2 font-mono">
                   {formatCurrency(totalDiscount)}
@@ -446,37 +459,28 @@ export default function InvoiceMergedPage() {
 
   // modal header state
   const [items, setItems] = useState<InvoiceItem[] | null>(null);
-  const [customerForOrder, setCustomerForOrder] = useState<CustomerInfo | null>(
-    null
-  );
+  const [customerForOrder, setCustomerForOrder] = useState<CustomerInfo | null>(null);
   const [initialDate, setInitialDate] = useState<string | null>(null);
   const [currentTerms, setCurrentTerms] = useState<string | null>(null);
   const [currentSalesman, setCurrentSalesman] = useState<string | null>(null);
   const [currentPoNumber, setCurrentPoNumber] = useState<string | null>(null);
-  const [currentDateCompleted, setCurrentDateCompleted] = useState<
-    string | null
-  >(null);
+  const [currentDateCompleted, setCurrentDateCompleted] = useState<string | null>(null);
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [loadingItems, setLoadingItems] = useState(false);
 
   // detail route state
-  const [detailCustomer, setDetailCustomer] = useState<CustomerInfo | null>(
-    null
-  );
+  const [detailCustomer, setDetailCustomer] = useState<CustomerInfo | null>(null);
   const [detailItems, setDetailItems] = useState<InvoiceItem[] | null>(null);
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const [detailTerms, setDetailTerms] = useState<string | null>(null);
   const [detailSalesman, setDetailSalesman] = useState<string | null>(null);
   const [detailPoNumber, setDetailPoNumber] = useState<string | null>(null);
-  const [detailDateCompleted, setDetailDateCompleted] = useState<string | null>(
-    null
-  );
+  const [detailDateCompleted, setDetailDateCompleted] = useState<string | null>(null);
   const [detailStatus, setDetailStatus] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(true);
 
   // saved totals (for both modal & detail)
-  const [grandTotalWithInterest, setGrandTotalWithInterest] =
-    useState<number>(0);
+  const [grandTotalWithInterest, setGrandTotalWithInterest] = useState<number>(0);
   const [perTermAmount, setPerTermAmount] = useState<number>(0);
   const [salesTaxSaved, setSalesTaxSaved] = useState<number>(0);
 
@@ -514,7 +518,10 @@ export default function InvoiceMergedPage() {
             id,
             name,
             address,
-            code
+            code,
+            email,
+            phone,
+            area
           )
         `
         )
@@ -558,6 +565,9 @@ export default function InvoiceMergedPage() {
       name: order.customer?.name || "—",
       address: order.customer?.address || "",
       code: order.customer?.code || "",
+      email: order.customer?.email || "",
+      phone: order.customer?.phone || "",
+      area: order.customer?.area || "",
     });
     setInitialDate(order.date_created ? order.date_created.slice(0, 10) : null);
     setCurrentTerms(order.terms || null);
@@ -567,23 +577,24 @@ export default function InvoiceMergedPage() {
     setCurrentStatus(order.status || null);
 
     // fetch items
-    const { data: rows, error } = await supabase
-      .from("order_items")
-      .select(
-        `
-        id,
-        order_id,
-        inventory_id,
-        quantity,
-        price,
-        inventory:inventory_id (
-          product_name,
-          unit,
-          unit_price
-        )
-      `
-      )
-      .eq("order_id", order.id);
+  const { data: rows, error } = await supabase
+  .from("order_items")
+  .select(`
+    id,
+    order_id,
+    inventory_id,
+    quantity,
+    price,
+    discount_percent,
+    inventory:inventory_id (
+      product_name,
+      unit,
+      unit_price,
+      quantity
+    )
+  `)
+  .eq("order_id", order.id);
+
 
     // fetch saved totals (same row as order)
     const { data: orderRow, error: orderErr } = await supabase
@@ -613,7 +624,8 @@ export default function InvoiceMergedPage() {
           unit: r.inventory?.unit || "pcs",
           description: r.inventory?.product_name || "",
           unitPrice: Number(r.price ?? r.inventory?.unit_price ?? 0),
-          discount: 0,
+          discount: Number(r.discount_percent ?? 0),
+          inStock: (r.inventory?.quantity ?? 0) > 0,
         })
       );
       setItems(mapped);
@@ -653,12 +665,19 @@ export default function InvoiceMergedPage() {
           per_term_amount,
           interest_percent,
           sales_tax,
-          customers:customer_id ( name, address ),
+          customers:customer_id (
+            name,
+            address,
+            email,
+            phone,
+            area
+          ),
           order_items (
             id,
             quantity,
             price,
-            inventory:inventory_id ( product_name, unit, unit_price )
+            discount_percent,
+            inventory:inventory_id ( product_name, unit, unit_price, quantity )
           )
         `
         )
@@ -671,6 +690,9 @@ export default function InvoiceMergedPage() {
         setDetailCustomer({
           name: row.customers?.name || "—",
           address: row.customers?.address || "",
+          email: row.customers?.email || "",
+          phone: row.customers?.phone || "",
+          area: row.customers?.area || "",
         });
         setDetailDate(row.date_created ? row.date_created.slice(0, 10) : null);
         setDetailTerms(row.terms || null);
@@ -685,8 +707,10 @@ export default function InvoiceMergedPage() {
           unit: it.inventory?.unit || "pcs",
           description: it.inventory?.product_name || "",
           unitPrice: Number(it.price ?? it.inventory?.unit_price ?? 0),
-          discount: 0,
+          discount: Number(it.discount_percent ?? 0),
+          inStock: (it.inventory?.quantity ?? 0) > 0,
         }));
+
         setDetailItems(
           mapped.length
             ? mapped
