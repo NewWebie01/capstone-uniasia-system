@@ -48,6 +48,7 @@ type Delivery = {
   eta_date?: string | null;
   participants?: string[] | null;
   created_at?: string;
+  shipping_fee?: number | null; 
   _orders?: OrderWithCustomer[];
 };
 
@@ -719,6 +720,30 @@ const updateEtaDate = async (deliveryId: number, date: string) => {
   });
 };
 
+//SHIPPING FEE HANDLER
+const handleShippingFeeChange = async (deliveryId: number, value: number) => {
+  const { error } = await supabase
+    .from("truck_deliveries")
+    .update({ shipping_fee: value })
+    .eq("id", deliveryId);
+
+  if (error) {
+    toast.error("Failed to update Shipping Fee");
+    return;
+  }
+
+  setDeliveries((prev) =>
+    prev.map((d) => (d.id === deliveryId ? { ...d, shipping_fee: value } : d))
+  );
+
+  toast.success("Shipping Fee updated");
+
+  await logActivity("Updated Shipping Fee", {
+    delivery_id: deliveryId,
+    shipping_fee: value,
+  });
+};
+
 
   /* =========================
      GROUP BY schedule_date
@@ -894,7 +919,6 @@ const updateEtaDate = async (deliveryId: number, date: string) => {
     }
   };
 
-
   /* =========================
      RENDER
   ========================= */
@@ -1003,6 +1027,24 @@ const updateEtaDate = async (deliveryId: number, date: string) => {
                             />
                           </div>
                         )}
+
+                        {delivery.status === "Scheduled" && (
+                        <div className="mt-3">
+                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
+                            Shipping Fee (₱)
+                          </label>
+                          <input
+                            type="number"
+                            className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
+                            value={delivery.shipping_fee ?? ""} // You may need to support this field in your database
+                            onChange={(e) =>
+                              handleShippingFeeChange(delivery.id, parseFloat(e.target.value))
+                            }
+                            placeholder="Enter shipping fee"
+                          />
+                        </div>
+)}
+
                       {/* If Delivered (rare here), keep read-only date */}
                       {delivery.status === "Delivered" && (
                         <div className="mt-3">
