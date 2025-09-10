@@ -1,6 +1,7 @@
 // src/app/customer/track/page.tsx
 "use client";
 
+import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import {
@@ -585,6 +586,38 @@ export default function TrackPage() {
                                 </p>
                               </div>
                             )}
+                          </div>
+                          
+                        )}
+                        {deliv?.status === "To Receive" && (
+                          <div className="mt-3">
+                            <button
+                              onClick={async () => {
+                                const confirm = window.confirm("Confirm that you have received this order?");
+                                if (!confirm) return;
+
+                                const { error } = await supabase
+                                  .from("truck_deliveries")
+                                  .update({
+                                    status: "Delivered", 
+                                    date_received: new Date().toISOString(),
+                                  })
+                                  .eq("id", deliv.id);
+
+                                if (error) {
+                                  toast.error("Failed to confirm delivery. Please try again.");
+                                  if (error) {
+                                    console.error("Delivery update failed:", error);
+                                    toast.error("❌ Failed to confirm delivery. Please try again.");
+                                  }
+                                } else {
+                                  toast.success("Thank you! Delivery has been confirmed.");
+                                }
+                              }}
+                              className="px-4 py-2 text-sm font-medium bg-green-600 text-white rounded hover:bg-green-700 transition"
+                            >
+                              Confirm Received
+                            </button>
                           </div>
                         )}
                       </div>

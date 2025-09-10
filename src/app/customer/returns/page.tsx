@@ -413,7 +413,7 @@ export default function CustomerReturnsPage() {
         const delivStatus = delivId
           ? (deliveryStatusById[delivId] || "").toLowerCase()
           : "";
-        const delivered = delivStatus === "to receive";
+        const delivered = delivStatus === "delivered";
         const within7 = daysBetween(t.date, now) <= 7;
         if (!delivered || !within7) continue;
 
