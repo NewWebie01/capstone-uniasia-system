@@ -1,7 +1,7 @@
 // src/app/account-request/page.tsx
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { motion, AnimatePresence } from "framer-motion";
 import { BadgeCheck, Ban, Loader2 } from "lucide-react";
@@ -19,6 +19,7 @@ type AccountRequest = {
   role?: string;
 };
 
+// --- Show only DATE (not time)
 function formatPHDate(d?: string | number | Date | null) {
   if (!d) return "—";
   return new Intl.DateTimeFormat("en-PH", {
@@ -28,7 +29,6 @@ function formatPHDate(d?: string | number | Date | null) {
     timeZone: "Asia/Manila",
   }).format(new Date(d));
 }
-
 
 export default function AccountRequestPage() {
   const [requests, setRequests] = useState<AccountRequest[]>([]);
@@ -40,10 +40,10 @@ export default function AccountRequestPage() {
   const [modalReq, setModalReq] = useState<AccountRequest | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Local per-row role select
+  // Per-row role select
   const [selectedRoles, setSelectedRoles] = useState<{ [id: string]: string }>({});
 
-  // --- Real-time subscription (mount once)
+  // Real-time subscription (mount once)
   useEffect(() => {
     fetchRequests();
     const channel = supabase
@@ -54,14 +54,13 @@ export default function AccountRequestPage() {
         () => fetchRequests()
       )
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line
   }, []);
 
-  // --- Fetch from DB
+  // Fetch from DB
   async function fetchRequests() {
     setLoading(true);
     const { data } = await supabase
@@ -72,7 +71,7 @@ export default function AccountRequestPage() {
     setLoading(false);
   }
 
-  // --- Search
+  // Search
   const filteredRequests = requests.filter((req) => {
     const q = search.toLowerCase();
     return (
@@ -84,17 +83,17 @@ export default function AccountRequestPage() {
     );
   });
 
-  // --- Status Badge
+  // Status Badge
   function StatusBadge({ status }: { status: string }) {
     return (
       <motion.span
         className={
-          "flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold " +
+          "flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border " +
           (status === "Approved"
-            ? "bg-green-100 text-green-700"
+            ? "bg-[#dcfce7] text-green-800 border-green-200"
             : status === "Rejected"
-            ? "bg-red-100 text-red-600"
-            : "bg-yellow-100 text-yellow-700")
+            ? "bg-[#fee2e2] text-red-700 border-red-200"
+            : "bg-[#fef9c3] text-yellow-800 border-yellow-200")
         }
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -107,7 +106,7 @@ export default function AccountRequestPage() {
     );
   }
 
-  // --- Approve modal open
+  // Approve modal open
   const handleApprove = (req: AccountRequest) => {
     setModalReq(req);
     setShowModal(true);
@@ -121,7 +120,7 @@ export default function AccountRequestPage() {
     const role = selectedRoles[id] || "customer";
 
     try {
-      // 1. Create user in Supabase Auth
+      // 1. Create user in Supabase Auth (your own admin route)
       const res = await fetch("/api/setup-admin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -134,7 +133,6 @@ export default function AccountRequestPage() {
         }),
       });
       const data = await res.json();
-
       if (data?.error) throw new Error(data?.error);
 
       // 2. Update status to Approved
@@ -143,7 +141,14 @@ export default function AccountRequestPage() {
         .update({ status: "Approved", role })
         .eq("id", id);
 
-      toast.success(`Account for ${modalReq.name} approved as ${role}.`);
+      // 3. Send approval email notification
+      await fetch("/api/send-approval-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: modalReq.email, name: modalReq.name }),
+      });
+
+      toast.success(`Account for ${modalReq.name} approved as ${role}. Email sent.`);
     } catch (err: any) {
       toast.error("Failed to approve: " + (err?.message || "Unknown"));
     } finally {
@@ -152,7 +157,7 @@ export default function AccountRequestPage() {
     }
   };
 
-  // --- Reject handler
+  // Reject handler
   const handleReject = async (req: AccountRequest) => {
     try {
       await supabase
@@ -165,131 +170,122 @@ export default function AccountRequestPage() {
     }
   };
 
-  // --- Modern Table, Modal, Sticky Head, and Search
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#fff8e1] to-[#ececec] py-8 px-2">
-      <div className="max-w-6xl mx-auto">
-        <motion.h1
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.5 }}
-          className="text-3xl md:text-4xl font-bold text-neutral-900 mb-1"
-        >
-          Account Requests
-        </motion.h1>
-        <p className="text-gray-700 mb-6 text-sm md:text-base">
-          View, approve, or reject new account signups in real time.
-        </p>
+    <div className="px-4 pb-6 pt-1 min-h-screen bg-gradient-to-br from-[#fff8e1] to-[#ececec]">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="pt-2 pb-1">
+          <h1 className="text-3xl font-bold mb-1">Account Requests</h1>
+          <p className="text-sm text-gray-500 mb-2">
+            View, approve, or reject new account signups in real time.
+          </p>
+        </div>
 
-        {/* Search */}
-        <div className="flex flex-wrap items-center gap-3 mb-4">
+        {/* Search bar */}
+        <div className="flex flex-wrap items-center gap-3 mb-5">
           <input
             type="text"
-            className="w-full md:w-96 px-5 py-3 rounded-full text-sm outline-none border border-gray-200 focus:ring-2 focus:ring-[#ffba20] transition-all"
+            className="w-full md:w-[22rem] px-4 py-2 rounded-xl border border-gray-200 bg-white shadow-sm text-sm outline-none focus:ring-2 focus:ring-[#ffba20] transition-all"
             placeholder="Search by name, email, contact, or status…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
 
-        {/* Table */}
-<div className="bg-white rounded-2xl shadow-xl overflow-x-auto border border-yellow-200/40">
-  <table className="min-w-full text-[15px]">
-    <thead className="sticky top-0 z-10">
-      <tr className="bg-[#ffe174]/90 text-neutral-900 font-bold">
-        <th className="py-2 px-3 font-semibold rounded-tl-2xl text-left">Date</th>
-        <th className="py-2 px-3 font-semibold text-left">Name</th>
-        <th className="py-2 px-3 font-semibold text-left">Email</th>
-        <th className="py-2 px-3 font-semibold text-left">Contact #</th>
-        <th className="py-2 px-3 font-semibold text-left">Status</th>
-        <th className="py-2 px-3 font-semibold text-left">Role</th>
-        <th className="py-2 px-3 font-semibold rounded-tr-2xl text-left">Action</th>
-      </tr>
-    </thead>
-    <tbody>
-      {loading ? (
-        <tr>
-          <td colSpan={7} className="py-8 text-center text-gray-400">
-            <Loader2 className="mx-auto animate-spin" /> Loading…
-          </td>
-        </tr>
-      ) : filteredRequests.length === 0 ? (
-        <tr>
-          <td colSpan={7} className="py-8 text-center text-gray-400">
-            No requests found.
-          </td>
-        </tr>
-      ) : (
-        filteredRequests.map((req, i) => (
-          <tr
-            key={req.id}
-            className={
-              "align-middle transition " +
-              (i % 2 === 0
-                ? "bg-[#fffbe7] hover:bg-yellow-50"
-                : "bg-white hover:bg-yellow-50")
-            }
-          >
-            {/* Date */}
-            <td className="py-2 px-3 align-middle" title={req.date_created}>
-              <span className="whitespace-nowrap font-mono">
-                {formatPHDate(req.date_created)}
-              </span>
-            </td>
-            {/* Name */}
-            <td className="py-2 px-3 align-middle">{req.name}</td>
-            {/* Email */}
-            <td className="py-2 px-3 align-middle whitespace-nowrap">{req.email}</td>
-            {/* Contact number */}
-            <td className="py-2 px-3 align-middle whitespace-nowrap">{req.contact_number}</td>
-            {/* Status */}
-            <td className="py-2 px-3 align-middle">
-              <StatusBadge status={req.status} />
-            </td>
-            {/* Role (dropdown only if pending) */}
-            <td className="py-2 px-3 align-middle">
-              {req.status === "Pending" ? (
-                <select
-                  className="border rounded px-2 py-1 bg-gray-50 outline-none focus:ring-2 focus:ring-[#ffba20] transition text-[14px]"
-                  value={selectedRoles[req.id] || "customer"}
-                  onChange={e =>
-                    setSelectedRoles({ ...selectedRoles, [req.id]: e.target.value })
-                  }
-                >
-                  <option value="customer">Customer</option>
-                  <option value="admin">Admin</option>
-                </select>
+        {/* Table - styled like Activity Log */}
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-[13.5px] rounded-2xl overflow-hidden">
+            <thead>
+              <tr className="bg-[#ffd033] text-neutral-900 font-bold rounded-t-2xl">
+                <th className="py-3 px-4 font-semibold text-left rounded-tl-2xl">Date</th>
+                <th className="py-3 px-4 font-semibold text-left">Name</th>
+                <th className="py-3 px-4 font-semibold text-left">Email</th>
+                <th className="py-3 px-4 font-semibold text-left">Contact #</th>
+                <th className="py-3 px-4 font-semibold text-left">Status</th>
+                <th className="py-3 px-4 font-semibold text-left">Role</th>
+                <th className="py-3 px-4 font-semibold text-left rounded-tr-2xl">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-gray-400">
+                    <Loader2 className="mx-auto animate-spin" /> Loading…
+                  </td>
+                </tr>
+              ) : filteredRequests.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-gray-400">
+                    No requests found.
+                  </td>
+                </tr>
               ) : (
-                <span className="capitalize">{req.role || "—"}</span>
-              )}
-            </td>
-            {/* Approve/Reject buttons */}
-            <td className="py-2 px-3 align-middle">
-              {req.status === "Pending" && (
-                <div className="flex gap-2">
-                  <button
-                    className="bg-green-600 hover:bg-green-700 text-white text-xs px-4 py-1 rounded-full shadow"
-                    onClick={() => handleApprove(req)}
+                filteredRequests.map((req, i) => (
+                  <tr
+                    key={req.id}
+                    className={
+                      "transition " +
+                      (i % 2 === 0
+                        ? "bg-[#fffbe7] hover:bg-yellow-50"
+                        : "bg-white hover:bg-yellow-50")
+                    }
                   >
-                    Approve
-                  </button>
-                  <button
-                    className="bg-red-500 hover:bg-red-600 text-white text-xs px-4 py-1 rounded-full shadow"
-                    onClick={() => handleReject(req)}
-                  >
-                    Reject
-                  </button>
-                </div>
+                    {/* Date */}
+                    <td className="py-2 px-4 align-middle font-mono text-[13px] whitespace-nowrap">
+                      {formatPHDate(req.date_created)}
+                    </td>
+                    {/* Name */}
+                    <td className="py-2 px-4 align-middle">{req.name}</td>
+                    {/* Email */}
+                    <td className="py-2 px-4 align-middle whitespace-nowrap">{req.email}</td>
+                    {/* Contact number */}
+                    <td className="py-2 px-4 align-middle whitespace-nowrap">{req.contact_number}</td>
+                    {/* Status */}
+                    <td className="py-2 px-4 align-middle">
+                      <StatusBadge status={req.status} />
+                    </td>
+                    {/* Role (dropdown only if pending) */}
+                    <td className="py-2 px-4 align-middle">
+                      {req.status === "Pending" ? (
+                        <select
+                          className="border rounded px-2 py-1 bg-gray-50 outline-none focus:ring-2 focus:ring-[#ffba20] transition text-[13px]"
+                          value={selectedRoles[req.id] || "customer"}
+                          onChange={e =>
+                            setSelectedRoles({ ...selectedRoles, [req.id]: e.target.value })
+                          }
+                        >
+                          <option value="customer">Customer</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                      ) : (
+                        <span className="capitalize">{req.role || "—"}</span>
+                      )}
+                    </td>
+                    {/* Approve/Reject buttons */}
+                    <td className="py-2 px-4 align-middle">
+                      {req.status === "Pending" && (
+                        <div className="flex gap-2">
+                          <button
+                            className="bg-green-600 hover:bg-green-700 text-white text-xs px-4 py-1 rounded-full shadow"
+                            onClick={() => handleApprove(req)}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            className="bg-red-500 hover:bg-red-600 text-white text-xs px-4 py-1 rounded-full shadow"
+                            onClick={() => handleReject(req)}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))
               )}
-            </td>
-          </tr>
-        ))
-      )}
-    </tbody>
-  </table>
-</div>
-
-
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Modal */}

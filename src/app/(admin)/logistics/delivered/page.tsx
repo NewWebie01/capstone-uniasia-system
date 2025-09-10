@@ -101,7 +101,7 @@ export default function DeliveredPage() {
       let q = supabase
         .from("truck_deliveries")
         .select("*", { count: "exact" })
-        .eq("status", "To Receive");
+        .in("status", ["To Receive", "Delivered"]);
 
       // filters
       if (dateFrom) q = q.gte("schedule_date", dateFrom);
@@ -199,7 +199,7 @@ export default function DeliveredPage() {
     fetchDelivered(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, dateFrom, dateTo]);
-
+  
   // search submit (debounce could be added; simplest: re-fetch on submit)
   const onSearch = (e: React.FormEvent) => {
     e.preventDefault();
