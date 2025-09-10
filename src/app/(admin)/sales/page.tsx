@@ -195,9 +195,6 @@ const computedOrderTotal = useMemo(() => {
   }, 0);
 }, [selectedOrder, editedQuantities, editedDiscounts]);
 
-
-
-
   const salesTaxValue = isSalesTaxOn ? computedOrderTotal * 0.12 : 0;
 
   const getGrandTotalWithInterest = () => {
@@ -521,34 +518,43 @@ setPickingStatus((prev) => [
     setIsCompletingOrder(true);
     try {
       for (let i = 0; i < selectedOrder.order_items.length; i++) {
-        const oi = selectedOrder.order_items[i];
-        if (oi.inventory.quantity === 0) continue;
-        const invId = oi.inventory.id;
-        const remaining = oi.inventory.quantity - editedQuantities[i];
+  const oi = selectedOrder.order_items[i];
+  if (oi.inventory.quantity === 0) continue;
+  const invId = oi.inventory.id;
+  const remaining = oi.inventory.quantity - editedQuantities[i];
 
-        if (remaining < 0) {
-          toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
-          setShowFinalConfirm(false);
-          throw new Error("Insufficient stock");
-        }
+  if (remaining < 0) {
+    toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
+    setShowFinalConfirm(false);
+    throw new Error("Insufficient stock");
+  }
 
-        await supabase
-          .from("inventory")
-          .update({ quantity: remaining })
-          .eq("id", invId);
+  // 1. Update inventory
+  await supabase
+    .from("inventory")
+    .update({ quantity: remaining })
+    .eq("id", invId);
 
-        await supabase.from("sales").insert([
-          {
-            inventory_id: invId,
-            quantity_sold: editedQuantities[i],
-            amount:
-              editedQuantities[i] *
-              oi.price *
-              (1 + (editedDiscounts[i] || 0) / 100),
-            date: new Date().toISOString(),
-          },
-        ]);
-      }
+  // 2. Update discount_percent in order_items
+  await supabase
+    .from("order_items")
+    .update({
+      discount_percent: editedDiscounts[i] || 0,
+    })
+    .eq("order_id", selectedOrder.id)
+    .eq("inventory_id", invId);
+
+  // 3. Insert to sales as usual
+  await supabase.from("sales").insert([
+    {
+      inventory_id: invId,
+      quantity_sold: editedQuantities[i],
+      amount: editedQuantities[i] * oi.price * (1 - (editedDiscounts[i] || 0) / 100),
+      date: new Date().toISOString(),
+    },
+  ]);
+}
+
 
       const isCredit = selectedOrder.customers.payment_type === "Credit";
       const updateFields = {

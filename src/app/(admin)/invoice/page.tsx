@@ -40,6 +40,9 @@ type CustomerInfo = {
   name: string;
   address?: string;
   code?: string;
+  email?: string;
+  phone?: string;
+  area?: string;
 };
 
 type OrderForList = {
@@ -55,6 +58,9 @@ type OrderForList = {
     name: string | null;
     address: string | null;
     code: string | null;
+    email?: string | null;
+    phone?: string | null;
+    area?: string | null;
   } | null;
 };
 
@@ -73,7 +79,6 @@ type OrderItemRow = {
   } | null;
 };
 
-
 type OrderDetailRow = {
   id: string;
   date_created: string | null;
@@ -86,7 +91,13 @@ type OrderDetailRow = {
   interest_percent: number | null;
   sales_tax: number | null;
   status?: string | null;
-  customers: { name: string | null; address: string | null } | null;
+  customers: { 
+    name: string | null; 
+    address: string | null; 
+    email?: string | null; 
+    phone?: string | null; 
+    area?: string | null;
+  } | null;
   order_items: OrderItemRow[];
 };
 
@@ -272,7 +283,6 @@ function DeliveryReceiptModern({
           </div>
         </div>
       </div>
-
       {/* Details */}
       <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs mb-4 border border-neutral-300 rounded-lg p-3">
         <div>
@@ -288,6 +298,21 @@ function DeliveryReceiptModern({
           <div>
             <b>SALESMAN:</b> {salesman || "—"}
           </div>
+          {customer?.email && (
+            <div>
+              <b>EMAIL:</b> {customer.email}
+            </div>
+          )}
+          {customer?.phone && (
+            <div>
+              <b>PHONE:</b> {customer.phone}
+            </div>
+          )}
+          {customer?.area && (
+            <div>
+              <b>AREA:</b> {customer.area}
+            </div>
+          )}
         </div>
         <div>
           <div>
@@ -309,7 +334,6 @@ function DeliveryReceiptModern({
           )}
         </div>
       </div>
-
       {/* Items */}
       <div className="border border-neutral-300 rounded-lg overflow-x-auto mt-2 mb-2">
         <table className="min-w-full text-xs align-middle">
@@ -364,7 +388,6 @@ function DeliveryReceiptModern({
           </tbody>
         </table>
       </div>
-
       {/* Notes + Summary */}
       <div className="flex flex-row gap-4 mt-5 print:gap-2">
         <div className="w-2/3 text-xs pr-4">
@@ -389,7 +412,7 @@ function DeliveryReceiptModern({
               </tr>
               <tr>
                 <td className="font-semibold py-0.5">
-                  Less/Add (Discount/Markup):
+                  Discount
                 </td>
                 <td className="pl-2 font-mono">
                   {formatCurrency(totalDiscount)}
@@ -423,7 +446,6 @@ function DeliveryReceiptModern({
   );
 }
 
-
 /* -------------------- Main Page (with Modal) -------------------- */
 export default function InvoiceMergedPage() {
   const params = useParams<{ id?: string }>();
@@ -437,37 +459,28 @@ export default function InvoiceMergedPage() {
 
   // modal header state
   const [items, setItems] = useState<InvoiceItem[] | null>(null);
-  const [customerForOrder, setCustomerForOrder] = useState<CustomerInfo | null>(
-    null
-  );
+  const [customerForOrder, setCustomerForOrder] = useState<CustomerInfo | null>(null);
   const [initialDate, setInitialDate] = useState<string | null>(null);
   const [currentTerms, setCurrentTerms] = useState<string | null>(null);
   const [currentSalesman, setCurrentSalesman] = useState<string | null>(null);
   const [currentPoNumber, setCurrentPoNumber] = useState<string | null>(null);
-  const [currentDateCompleted, setCurrentDateCompleted] = useState<
-    string | null
-  >(null);
+  const [currentDateCompleted, setCurrentDateCompleted] = useState<string | null>(null);
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [loadingItems, setLoadingItems] = useState(false);
 
   // detail route state
-  const [detailCustomer, setDetailCustomer] = useState<CustomerInfo | null>(
-    null
-  );
+  const [detailCustomer, setDetailCustomer] = useState<CustomerInfo | null>(null);
   const [detailItems, setDetailItems] = useState<InvoiceItem[] | null>(null);
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const [detailTerms, setDetailTerms] = useState<string | null>(null);
   const [detailSalesman, setDetailSalesman] = useState<string | null>(null);
   const [detailPoNumber, setDetailPoNumber] = useState<string | null>(null);
-  const [detailDateCompleted, setDetailDateCompleted] = useState<string | null>(
-    null
-  );
+  const [detailDateCompleted, setDetailDateCompleted] = useState<string | null>(null);
   const [detailStatus, setDetailStatus] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(true);
 
   // saved totals (for both modal & detail)
-  const [grandTotalWithInterest, setGrandTotalWithInterest] =
-    useState<number>(0);
+  const [grandTotalWithInterest, setGrandTotalWithInterest] = useState<number>(0);
   const [perTermAmount, setPerTermAmount] = useState<number>(0);
   const [salesTaxSaved, setSalesTaxSaved] = useState<number>(0);
 
@@ -505,7 +518,10 @@ export default function InvoiceMergedPage() {
             id,
             name,
             address,
-            code
+            code,
+            email,
+            phone,
+            area
           )
         `
         )
@@ -549,6 +565,9 @@ export default function InvoiceMergedPage() {
       name: order.customer?.name || "—",
       address: order.customer?.address || "",
       code: order.customer?.code || "",
+      email: order.customer?.email || "",
+      phone: order.customer?.phone || "",
+      area: order.customer?.area || "",
     });
     setInitialDate(order.date_created ? order.date_created.slice(0, 10) : null);
     setCurrentTerms(order.terms || null);
@@ -558,10 +577,9 @@ export default function InvoiceMergedPage() {
     setCurrentStatus(order.status || null);
 
     // fetch items
-const { data: rows, error } = await supabase
+  const { data: rows, error } = await supabase
   .from("order_items")
-  .select(
-    `
+  .select(`
     id,
     order_id,
     inventory_id,
@@ -574,10 +592,8 @@ const { data: rows, error } = await supabase
       unit_price,
       quantity
     )
-    `
-  )
+  `)
   .eq("order_id", order.id);
-
 
 
     // fetch saved totals (same row as order)
@@ -601,19 +617,17 @@ const { data: rows, error } = await supabase
     setSalesTaxSaved(Number(orderRow?.sales_tax || 0));
 
     if (!error && rows) {
-     const mapped: InvoiceItem[] = (rows as unknown as OrderItemRow[]).map(
-  (r) => ({
-    id: r.id,
-    qty: Number(r.quantity || 0),
-    unit: r.inventory?.unit || "pcs",
-    description: r.inventory?.product_name || "",
-    unitPrice: Number(r.price ?? r.inventory?.unit_price ?? 0),
-    discount: Number(r.discount_percent ?? 0),
-    inStock: (r.inventory?.quantity ?? 0) > 0,
-  })
-);
-
-
+      const mapped: InvoiceItem[] = (rows as unknown as OrderItemRow[]).map(
+        (r) => ({
+          id: r.id,
+          qty: Number(r.quantity || 0),
+          unit: r.inventory?.unit || "pcs",
+          description: r.inventory?.product_name || "",
+          unitPrice: Number(r.price ?? r.inventory?.unit_price ?? 0),
+          discount: Number(r.discount_percent ?? 0),
+          inStock: (r.inventory?.quantity ?? 0) > 0,
+        })
+      );
       setItems(mapped);
     } else {
       if (error) console.error("Invoice items fetch error:", error);
@@ -651,13 +665,19 @@ const { data: rows, error } = await supabase
           per_term_amount,
           interest_percent,
           sales_tax,
-          customers:customer_id ( name, address ),
+          customers:customer_id (
+            name,
+            address,
+            email,
+            phone,
+            area
+          ),
           order_items (
             id,
             quantity,
             price,
             discount_percent,
-             inventory:inventory_id ( product_name, unit, unit_price )
+            inventory:inventory_id ( product_name, unit, unit_price, quantity )
           )
         `
         )
@@ -670,6 +690,9 @@ const { data: rows, error } = await supabase
         setDetailCustomer({
           name: row.customers?.name || "—",
           address: row.customers?.address || "",
+          email: row.customers?.email || "",
+          phone: row.customers?.phone || "",
+          area: row.customers?.area || "",
         });
         setDetailDate(row.date_created ? row.date_created.slice(0, 10) : null);
         setDetailTerms(row.terms || null);
@@ -679,14 +702,14 @@ const { data: rows, error } = await supabase
         setDetailStatus(row.status || null);
 
         const mapped: InvoiceItem[] = (row.order_items || []).map((it) => ({
-  id: it.id,
-  qty: Number(it.quantity || 0),
-  unit: it.inventory?.unit || "pcs",
-  description: it.inventory?.product_name || "",
-  unitPrice: Number(it.price ?? it.inventory?.unit_price ?? 0),
-  discount: Number(it.discount_percent ?? 0),
-  inStock: (it.inventory?.quantity ?? 0) > 0,
-}));
+          id: it.id,
+          qty: Number(it.quantity || 0),
+          unit: it.inventory?.unit || "pcs",
+          description: it.inventory?.product_name || "",
+          unitPrice: Number(it.price ?? it.inventory?.unit_price ?? 0),
+          discount: Number(it.discount_percent ?? 0),
+          inStock: (it.inventory?.quantity ?? 0) > 0,
+        }));
 
         setDetailItems(
           mapped.length
