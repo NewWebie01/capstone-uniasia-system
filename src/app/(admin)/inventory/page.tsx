@@ -10,14 +10,22 @@ type InventoryItem = {
   product_name: string;
   category: string;
   subcategory: string;
-  unit: string;
+  unit: string; // e.g. Piece, Dozen, Box, Pack, Kg (or custom)
   quantity: number;
   unit_price: number;
   amount: number;
   date_created: string;
   status: string;
   image_url?: string | null;
+
+  // NEW FIELDS
+  weight_per_piece_kg: number | null;
+  pieces_per_unit: number | null;
+  total_weight_kg: number | null;
 };
+
+const FIXED_UNIT_OPTIONS = ["Piece", "Dozen", "Box", "Pack", "Kg"] as const;
+type FixedUnit = (typeof FIXED_UNIT_OPTIONS)[number];
 
 export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -52,6 +60,11 @@ export default function InventoryPage() {
     date_created: new Date().toISOString(),
     status: "",
     image_url: null,
+
+    // NEW
+    weight_per_piece_kg: null,
+    pieces_per_unit: null,
+    total_weight_kg: null,
   });
 
   const [validationErrors, setValidationErrors] = useState({
@@ -61,23 +74,96 @@ export default function InventoryPage() {
     unit: false,
     quantity: false,
     unit_price: false,
+    pieces_per_unit: false, // NEW
+    weight_per_piece_kg: false, // NEW
   });
 
   useEffect(() => {
-  setValidationErrors({
-    product_name: !newItem.product_name.trim(),
-    category: !newItem.category.trim(),
-    subcategory: !newItem.subcategory.trim(),
-    unit: !newItem.unit.trim(),
-    quantity: newItem.quantity < 0,          // 0 is allowed
-    unit_price: newItem.unit_price <= 0,     // must be > 0
-  });
-}, [newItem]);
+    setValidationErrors((prev) => ({
+      ...prev,
+      product_name: !newItem.product_name.trim(),
+      category: !newItem.category.trim(),
+      subcategory: !newItem.subcategory.trim(),
+      unit: !newItem.unit.trim(),
+      quantity: newItem.quantity < 0, // 0 is allowed
+      unit_price: newItem.unit_price < 0, // 0 is allowed
+      pieces_per_unit:
+        (newItem.unit === "Box" || newItem.unit === "Pack") &&
+        (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
+      weight_per_piece_kg:
+        newItem.unit !== "Kg" && newItem.weight_per_piece_kg !== null
+          ? newItem.weight_per_piece_kg < 0
+          : false,
+    }));
+  }, [newItem]);
 
-useEffect(() => {
-  const amount = newItem.unit_price * newItem.quantity;
-  setNewItem((prev) => ({ ...prev, amount }));
-}, [newItem.unit_price, newItem.quantity]);
+  // Compute amount whenever price or quantity changes
+  useEffect(() => {
+    const amount = newItem.unit_price * newItem.quantity;
+    setNewItem((prev) => ({ ...prev, amount }));
+  }, [newItem.unit_price, newItem.quantity]);
+
+  // Auto-default pieces_per_unit based on unit
+  useEffect(() => {
+    const u = newItem.unit;
+
+    if (u === "Kg") {
+      // Treat piece as 1kg
+      setNewItem((prev) => ({
+        ...prev,
+        pieces_per_unit: 1,
+        weight_per_piece_kg: 1,
+      }));
+      return;
+    }
+
+    if (u === "Piece") {
+      setNewItem((prev) => ({
+        ...prev,
+        pieces_per_unit: 1,
+        // keep weight_per_piece_kg as is (optional)
+      }));
+      return;
+    }
+
+    if (u === "Dozen") {
+      setNewItem((prev) => ({
+        ...prev,
+        pieces_per_unit: 12,
+      }));
+      return;
+    }
+
+    // Box / Pack (or any other custom unit): keep whatever user sets
+    // Do not overwrite pieces_per_unit here.
+  }, [newItem.unit]);
+
+  // Compute total weight whenever any dependency changes
+  useEffect(() => {
+    const weightPerPiece =
+      newItem.unit === "Kg" ? 1 : Number(newItem.weight_per_piece_kg) || 0;
+    const piecesPerUnit =
+      newItem.unit === "Kg"
+        ? 1
+        : Number(newItem.pieces_per_unit) ||
+          (newItem.unit === "Piece" ? 1 : newItem.unit === "Dozen" ? 12 : 0);
+    const qty = Number(newItem.quantity) || 0;
+
+    const total =
+      weightPerPiece > 0 && piecesPerUnit > 0 && qty > 0
+        ? weightPerPiece * piecesPerUnit * qty
+        : 0;
+
+    setNewItem((prev) => ({
+      ...prev,
+      total_weight_kg: total || null,
+    }));
+  }, [
+    newItem.unit,
+    newItem.weight_per_piece_kg,
+    newItem.pieces_per_unit,
+    newItem.quantity,
+  ]);
 
   const BUCKET = "inventory-images";
 
@@ -87,7 +173,11 @@ useEffect(() => {
       .from("inventory")
       .select("*")
       .order("date_created", { ascending: false });
-    if (!error && data) setItems(data as InventoryItem[]);
+    if (error) {
+      console.error(error);
+    } else if (data) {
+      setItems(data as InventoryItem[]);
+    }
     setLoading(false);
   };
 
@@ -110,11 +200,6 @@ useEffect(() => {
     fetchItems();
     fetchDropdownOptions();
   }, []);
-
-  useEffect(() => {
-    const amount = newItem.unit_price * newItem.quantity;
-    setNewItem((prev) => ({ ...prev, amount }));
-  }, [newItem.unit_price, newItem.quantity]);
 
   const handleImageSelect = (file: File | null) => {
     setImageFile(file);
@@ -142,113 +227,152 @@ useEffect(() => {
     return publicUrlData.publicUrl;
   };
 
-const handleSubmitItem = async () => {
-  try {
-    const errors = {
-      product_name: !newItem.product_name,
-      category: !newItem.category,
-      subcategory: !newItem.subcategory,
-      unit: !newItem.unit,
-      quantity: newItem.quantity < 0,
-      unit_price: newItem.unit_price < 0, // ✅ allow 0
-    };
-    setValidationErrors(errors);
-    const hasErrors = Object.values(errors).some(Boolean);
-    if (hasErrors) {
-      toast.error("Please fill in all required fields correctly.");
-      return;
+  // Normalize fields before save (enforce the concept consistently)
+  const normalizeForSave = () => {
+    let { unit, pieces_per_unit, weight_per_piece_kg, quantity } = newItem;
+
+    if (unit === "Kg") {
+      pieces_per_unit = 1;
+      weight_per_piece_kg = 1;
+    } else if (unit === "Piece") {
+      pieces_per_unit = 1;
+    } else if (unit === "Dozen") {
+      pieces_per_unit = 12;
     }
+    // Box/Pack/custom → respect user input
 
-    setSaving(true);
+    const total_weight_kg =
+      pieces_per_unit && weight_per_piece_kg
+        ? Number(pieces_per_unit) *
+          Number(weight_per_piece_kg) *
+          Number(quantity || 0)
+        : null;
 
-    let finalImageUrl = newItem.image_url || null;
-    if (imageFile) {
-      finalImageUrl = await uploadImageAndGetUrl(
-        imageFile,
-        newItem.sku || newItem.product_name
+    return {
+      pieces_per_unit: pieces_per_unit ?? null,
+      weight_per_piece_kg: weight_per_piece_kg ?? null,
+      total_weight_kg,
+    };
+  };
+
+  const handleSubmitItem = async () => {
+    try {
+      const errors = {
+        product_name: !newItem.product_name,
+        category: !newItem.category,
+        subcategory: !newItem.subcategory,
+        unit: !newItem.unit,
+        quantity: newItem.quantity < 0,
+        unit_price: newItem.unit_price < 0, // allow 0
+        pieces_per_unit:
+          (newItem.unit === "Box" || newItem.unit === "Pack") &&
+          (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
+        weight_per_piece_kg:
+          newItem.unit !== "Kg" && newItem.weight_per_piece_kg !== null
+            ? newItem.weight_per_piece_kg < 0
+            : false,
+      };
+      setValidationErrors(errors);
+      const hasErrors = Object.values(errors).some(Boolean);
+      if (hasErrors) {
+        toast.error("Please fill in all required fields correctly.");
+        return;
+      }
+
+      setSaving(true);
+
+      let finalImageUrl = newItem.image_url || null;
+      if (imageFile) {
+        finalImageUrl = await uploadImageAndGetUrl(
+          imageFile,
+          newItem.sku || newItem.product_name
+        );
+      }
+
+      const normalized = normalizeForSave();
+
+      const dataToSave = {
+        ...newItem,
+        ...normalized,
+        image_url: finalImageUrl,
+        date_created: new Date().toISOString(),
+      };
+
+      if (editingItemId !== null) {
+        const { error } = await supabase
+          .from("inventory")
+          .update(dataToSave)
+          .eq("id", editingItemId);
+        if (error) throw error;
+
+        toast.success("Item updated successfully!");
+
+        await supabase.from("activity_logs").insert([
+          {
+            user_email: (await supabase.auth.getUser()).data.user?.email,
+            user_role: "admin",
+            action: "Update Item",
+            details: {
+              item_id: editingItemId,
+              sku: newItem.sku,
+              product_name: newItem.product_name,
+            },
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      } else {
+        const { error } = await supabase.from("inventory").insert([dataToSave]);
+        if (error) throw error;
+
+        toast.success("New item added successfully!");
+
+        await supabase.from("activity_logs").insert([
+          {
+            user_email: (await supabase.auth.getUser()).data.user?.email,
+            user_role: "admin",
+            action: "Add Item",
+            details: {
+              sku: newItem.sku,
+              product_name: newItem.product_name,
+            },
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
+
+      // reset + refresh
+      setNewItem({
+        sku: "",
+        product_name: "",
+        category: "",
+        quantity: 0,
+        subcategory: "",
+        unit: "",
+        unit_price: 0,
+        amount: 0,
+        date_created: new Date().toISOString(),
+        status: "",
+        image_url: null,
+        weight_per_piece_kg: null,
+        pieces_per_unit: null,
+        total_weight_kg: null,
+      });
+      setImageFile(null);
+      setImagePreview(null);
+      setShowForm(false);
+      setEditingItemId(null);
+
+      fetchItems();
+      fetchDropdownOptions();
+    } catch (err: any) {
+      console.error("Update error:", err);
+      toast.error(
+        `❌ Error saving item: ${err.message || JSON.stringify(err)}`
       );
+    } finally {
+      setSaving(false);
     }
-
-    const dataToSave = {
-      ...newItem,
-      image_url: finalImageUrl,
-      date_created: new Date().toISOString(),
-    };
-
-    if (editingItemId !== null) {
-      const { error } = await supabase
-        .from("inventory")
-        .update(dataToSave)
-        .eq("id", editingItemId);
-      if (error) throw error;
-
-      toast.success("Item updated successfully!");
-
-      // ✅ log activity
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: (await supabase.auth.getUser()).data.user?.email,
-          user_role: "admin",
-          action: "Update Item",
-          details: {
-            item_id: editingItemId,
-            sku: newItem.sku,
-            product_name: newItem.product_name,
-          },
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    } else {
-      const { error } = await supabase.from("inventory").insert([dataToSave]);
-      if (error) throw error;
-
-      toast.success("New item added successfully!");
-
-      // ✅ log activity
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: (await supabase.auth.getUser()).data.user?.email,
-          user_role: "admin",
-          action: "Add Item",
-          details: {
-            sku: newItem.sku,
-            product_name: newItem.product_name,
-          },
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    }
-
-    // reset + refresh
-    setNewItem({
-      sku: "",
-      product_name: "",
-      category: "",
-      quantity: 0,
-      subcategory: "",
-      unit: "",
-      unit_price: 0,
-      amount: 0,
-      date_created: new Date().toISOString(),
-      status: "",
-      image_url: null,
-    });
-    setImageFile(null);
-    setImagePreview(null);
-    setShowForm(false);
-    setEditingItemId(null);
-
-    fetchItems();
-    fetchDropdownOptions();
-  } catch (err: any) {
-    console.error("Update error:", err);
-    toast.error(`❌ Error saving item: ${err.message || JSON.stringify(err)}`);
-  } finally {
-    setSaving(false);
-  }
-};
-
-
+  };
 
   const filteredItems = items
     .filter((item) =>
@@ -308,6 +432,9 @@ const handleSubmitItem = async () => {
               date_created: new Date().toISOString(),
               status: "",
               image_url: null,
+              weight_per_piece_kg: null,
+              pieces_per_unit: null,
+              total_weight_kg: null,
             });
             setImageFile(null);
             setImagePreview(null);
@@ -321,17 +448,19 @@ const handleSubmitItem = async () => {
         <table className="min-w-full bg-white text-sm">
           <thead className="bg-[#ffba20] text-black text-left">
             <tr>
-              <th className={`${cellNowrap}`}>SKU</th>
-              <th className={`${cellNowrap}`}>Product</th>
-              <th className={`${cellNowrap}`}>Category</th>
-              <th className={`${cellNowrap}`}>Subcategory</th>
-              <th className={`${cellNowrap}`}>Unit</th>
-              <th className={`${cellNowrap}`}>Quantity</th>
-              <th className={`${cellNowrap}`}>Unit Price</th>
-              <th className={`${cellNowrap}`}>Total</th>
-              <th className={`${cellNowrap}`}>Status</th>
-              <th className={`${cellNowrap}`}>Date</th>
-              <th className={`${cellNowrap}`}>Actions</th>
+              <th className={cellNowrap}>SKU</th>
+              <th className={cellNowrap}>Product</th>
+              <th className={cellNowrap}>Category</th>
+              <th className={cellNowrap}>Subcategory</th>
+              <th className={cellNowrap}>Unit</th>
+              <th className={cellNowrap}>Quantity</th>
+              <th className={cellNowrap}>Unit Price</th>
+              <th className={cellNowrap}>Total</th>
+              <th className={cellNowrap}>Total Weight</th>{" "}
+              {/* NEW (optional) */}
+              <th className={cellNowrap}>Status</th>
+              <th className={cellNowrap}>Date</th>
+              <th className={cellNowrap}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -364,6 +493,14 @@ const handleSubmitItem = async () => {
                   ₱{item.unit_price.toLocaleString()}
                 </td>
                 <td className={cellNowrap}>₱{item.amount.toLocaleString()}</td>
+
+                <td className={cellNowrap}>
+                  {item.total_weight_kg
+                    ? `${item.total_weight_kg.toLocaleString(undefined, {
+                        maximumFractionDigits: 3,
+                      })} kg`
+                    : "—"}
+                </td>
 
                 <td className={cellNowrap}>
                   <span
@@ -401,7 +538,7 @@ const handleSubmitItem = async () => {
               <tr>
                 <td
                   className="px-4 py-6 text-center text-gray-500"
-                  colSpan={11}
+                  colSpan={12}
                 >
                   No items found.
                 </td>
@@ -477,6 +614,27 @@ const handleSubmitItem = async () => {
                   <span className="font-medium">Quantity:</span>{" "}
                   {imageModalItem.quantity}
                 </div>
+                <div>
+                  <span className="font-medium">Pieces/Unit:</span>{" "}
+                  {imageModalItem.pieces_per_unit ?? "—"}
+                </div>
+                <div>
+                  <span className="font-medium">Weight/Piece:</span>{" "}
+                  {imageModalItem.weight_per_piece_kg
+                    ? `${imageModalItem.weight_per_piece_kg} kg`
+                    : "—"}
+                </div>
+                <div>
+                  <span className="font-medium">Total Weight:</span>{" "}
+                  {imageModalItem.total_weight_kg
+                    ? `${imageModalItem.total_weight_kg.toLocaleString(
+                        undefined,
+                        {
+                          maximumFractionDigits: 3,
+                        }
+                      )} kg`
+                    : "—"}
+                </div>
               </div>
             </div>
             <div className="px-4 py-3 border-t text-right">
@@ -500,7 +658,9 @@ const handleSubmitItem = async () => {
             </h2>
 
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">SKU<span className="text-red-500">*</span></label>
+              <label className="w-36 text-sm text-gray-700">
+                SKU<span className="text-red-500">*</span>
+              </label>
               <input
                 className="flex-1 border px-4 py-2 rounded"
                 placeholder="PRODUCT ID"
@@ -513,11 +673,10 @@ const handleSubmitItem = async () => {
 
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
-  Product Name <span className="text-red-500">*</span>
-</label>
+                Product Name <span className="text-red-500">*</span>
+              </label>
               <input
                 className="flex-1 border px-4 py-2 rounded"
-
                 placeholder="e.g. Boysen"
                 value={newItem.product_name}
                 onChange={(e) =>
@@ -531,7 +690,9 @@ const handleSubmitItem = async () => {
 
             {/* CATEGORY */}
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Category<span className="text-red-500">*</span></label>
+              <label className="w-36 text-sm text-gray-700">
+                Category<span className="text-red-500">*</span>
+              </label>
               <div className="flex-1 flex gap-2">
                 {isCustomCategory ? (
                   <input
@@ -578,7 +739,9 @@ const handleSubmitItem = async () => {
 
             {/* SUBCATEGORY */}
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Subcategory<span className="text-red-500">*</span></label>
+              <label className="w-36 text-sm text-gray-700">
+                Subcategory<span className="text-red-500">*</span>
+              </label>
               <div className="flex-1 flex gap-2">
                 {isCustomSubcategory ? (
                   <input
@@ -625,7 +788,9 @@ const handleSubmitItem = async () => {
 
             {/* UNIT */}
             <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Unit<span className="text-red-500">*</span></label>
+              <label className="w-36 text-sm text-gray-700">
+                Unit<span className="text-red-500">*</span>
+              </label>
               <div className="flex-1 flex gap-2">
                 {isCustomUnit ? (
                   <input
@@ -645,11 +810,22 @@ const handleSubmitItem = async () => {
                     className="flex-1 border px-4 py-2 rounded"
                   >
                     <option value="">Select Unit</option>
-                    {unitOptions.map((u) => (
+                    {/* Fixed options first (Shopee/Lazada style) */}
+                    {FIXED_UNIT_OPTIONS.map((u) => (
                       <option key={u} value={u}>
                         {u}
                       </option>
                     ))}
+                    {/* Dynamic options from DB (avoid duplicating fixed ones) */}
+                    {unitOptions
+                      .filter(
+                        (u) => !FIXED_UNIT_OPTIONS.includes(u as FixedUnit)
+                      )
+                      .map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
                   </select>
                 )}
                 <label className="text-sm">
@@ -663,47 +839,119 @@ const handleSubmitItem = async () => {
               </div>
             </div>
 
+            {/* PIECES PER UNIT (only for Box/Pack or custom where needed) */}
+            {newItem.unit &&
+              newItem.unit !== "Piece" &&
+              newItem.unit !== "Dozen" &&
+              newItem.unit !== "Kg" && (
+                <div className="flex items-center gap-2">
+                  <label className="w-36 text-sm text-gray-700">
+                    Pieces per {newItem.unit}
+                    <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    className={`flex-1 border px-4 py-2 rounded ${
+                      validationErrors.pieces_per_unit ? "border-red-500" : ""
+                    }`}
+                    placeholder={`e.g. 24 pieces per ${newItem.unit.toLowerCase()}`}
+                    value={newItem.pieces_per_unit ?? ""}
+                    onChange={(e) =>
+                      setNewItem((prev) => ({
+                        ...prev,
+                        pieces_per_unit: Math.max(
+                          1,
+                          parseInt(e.target.value) || 0
+                        ),
+                      }))
+                    }
+                  />
+                </div>
+              )}
+
+            {/* WEIGHT PER PIECE (kg) */}
             <div className="flex items-center gap-2">
-  <label className="w-36 text-sm text-gray-700">Quantity<span className="text-red-500">*</span></label>
-  <input
-    type="number"
-    min={0} // prevent negatives with arrow keys
-    className={`flex-1 border px-4 py-2 rounded ${
-      validationErrors.quantity ? "border-red-500" : ""
-    }`}
-    placeholder="Enter quantity"
-    value={newItem.quantity}
-    onFocus={(e) => e.target.select()} // auto-highlight when clicked
-    onChange={(e) =>
-      setNewItem((prev) => ({
-        ...prev,
-        quantity: Math.max(0, parseInt(e.target.value) || 0), // block negatives
-      }))
-    }
-  />
-</div>
+              <label className="w-36 text-sm text-gray-700">
+                Weight / piece (kg)
+              </label>
+              <input
+                type="number"
+                min={0}
+                step="0.001"
+                className={`flex-1 border px-4 py-2 rounded ${
+                  validationErrors.weight_per_piece_kg ? "border-red-500" : ""
+                }`}
+                placeholder={
+                  newItem.unit === "Kg" ? "1 (auto for Kg items)" : "e.g. 0.45"
+                }
+                value={
+                  newItem.unit === "Kg" ? 1 : newItem.weight_per_piece_kg ?? ""
+                }
+                disabled={newItem.unit === "Kg"}
+                onChange={(e) =>
+                  setNewItem((prev) => ({
+                    ...prev,
+                    weight_per_piece_kg: Math.max(
+                      0,
+                      parseFloat(e.target.value) || 0
+                    ),
+                  }))
+                }
+              />
+            </div>
 
-
+            {/* QUANTITY */}
             <div className="flex items-center gap-2">
-  <label className="w-36 text-sm text-gray-700">Unit Price<span className="text-red-500">*</span></label>
-  <input
-    type="number"
-    min={0} // prevent negatives with arrow keys
-    className={`flex-1 border px-4 py-2 rounded ${
-      validationErrors.unit_price ? "border-red-500" : ""
-    }`}
-    placeholder="₱ per unit"
-    value={newItem.unit_price}
-    onFocus={(e) => e.target.select()} // auto-highlight when clicked
-    onChange={(e) =>
-      setNewItem((prev) => ({
-        ...prev,
-        unit_price: Math.max(0, parseFloat(e.target.value) || 0), // block negatives
-      }))
-    }
-  />
-</div>
+              <label className="w-36 text-sm text-gray-700">
+                Quantity<span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                min={0}
+                className={`flex-1 border px-4 py-2 rounded ${
+                  validationErrors.quantity ? "border-red-500" : ""
+                }`}
+                placeholder={
+                  newItem.unit === "Kg"
+                    ? "Enter kilograms"
+                    : `Enter quantity (${newItem.unit || "unit"})`
+                }
+                value={newItem.quantity}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) =>
+                  setNewItem((prev) => ({
+                    ...prev,
+                    quantity: Math.max(0, parseInt(e.target.value) || 0),
+                  }))
+                }
+              />
+            </div>
 
+            {/* UNIT PRICE */}
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">
+                Unit Price<span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                min={0}
+                className={`flex-1 border px-4 py-2 rounded ${
+                  validationErrors.unit_price ? "border-red-500" : ""
+                }`}
+                placeholder="₱ per unit"
+                value={newItem.unit_price}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) =>
+                  setNewItem((prev) => ({
+                    ...prev,
+                    unit_price: Math.max(0, parseFloat(e.target.value) || 0),
+                  }))
+                }
+              />
+            </div>
+
+            {/* TOTAL PRICE */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Total Price</label>
               <input
@@ -715,109 +963,120 @@ const handleSubmitItem = async () => {
               />
             </div>
 
+            {/* TOTAL WEIGHT (read-only) */}
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">Total Weight</label>
+              <input
+                type="text"
+                className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
+                value={
+                  newItem.total_weight_kg
+                    ? `${newItem.total_weight_kg.toLocaleString(undefined, {
+                        maximumFractionDigits: 3,
+                      })} kg`
+                    : "—"
+                }
+                readOnly
+                disabled
+              />
+            </div>
+
+            {/* IMAGE */}
             <input
-  type="file"
-  // Only show image types in the chooser UI
-  accept="image/png, image/jpeg, image/webp, image/gif"
-  onChange={(e) => {
-    const f = e.target.files?.[0] || null;
-    if (!f) {
-      handleImageSelect(null);
-      return;
-    }
+              type="file"
+              accept="image/png, image/jpeg, image/webp, image/gif"
+              onChange={(e) => {
+                const f = e.target.files?.[0] || null;
+                if (!f) {
+                  handleImageSelect(null);
+                  return;
+                }
+                const ALLOWED = new Set([
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp",
+                  "image/gif",
+                ]);
+                if (!ALLOWED.has(f.type)) {
+                  toast.error(
+                    "Please upload an image file (JPG, PNG, WEBP, or GIF)."
+                  );
+                  e.currentTarget.value = "";
+                  handleImageSelect(null);
+                  return;
+                }
+                const MAX_BYTES = 5 * 1024 * 1024;
+                if (f.size > MAX_BYTES) {
+                  toast.error("Image too large. Max size is 5 MB.");
+                  e.currentTarget.value = "";
+                  handleImageSelect(null);
+                  return;
+                }
+                handleImageSelect(f);
+              }}
+              className="block w-full text-sm text-gray-700"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
+            </p>
 
-    // Hard validation — only allowed image MIME types
-    const ALLOWED = new Set([
-      "image/png",
-      "image/jpeg",
-      "image/webp",
-      "image/gif",
-    ]);
-    if (!ALLOWED.has(f.type)) {
-      toast.error("Please upload an image file (JPG, PNG, WEBP, or GIF).");
-      e.currentTarget.value = ""; // reset input
-      handleImageSelect(null);
-      return;
-    }
-
-    // Optional: size cap e.g. 5MB
-    const MAX_BYTES = 5 * 1024 * 1024;
-    if (f.size > MAX_BYTES) {
-      toast.error("Image too large. Max size is 5 MB.");
-      e.currentTarget.value = "";
-      handleImageSelect(null);
-      return;
-    }
-
-    handleImageSelect(f);
-  }}
-  className="block w-full text-sm text-gray-700"
-/>
-
-{/* helper placeholder under the chooser */}
-<p className="text-xs text-gray-500 mt-1">
-  Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
-</p>
-
-{imagePreview && (
-  <button
-    type="button"
-    onClick={() => handleImageSelect(null)}
-    className="mt-2 text-xs text-red-600 underline"
-  >
-    Remove selected image
-  </button>
-)}
-
+            {imagePreview && (
+              <button
+                type="button"
+                onClick={() => handleImageSelect(null)}
+                className="mt-2 text-xs text-red-600 underline"
+              >
+                Remove selected image
+              </button>
+            )}
 
             <div className="flex justify-end gap-2 pt-4">
-  <button
-    onClick={() => {
-      setShowForm(false);
-      setImageFile(null);
-      setImagePreview(null);
-    }}
-    className="bg-gray-300 px-4 py-2 rounded"
-  >
-    Cancel
-  </button>
+              <button
+                onClick={() => {
+                  setShowForm(false);
+                  setImageFile(null);
+                  setImagePreview(null);
+                }}
+                className="bg-gray-300 px-4 py-2 rounded"
+              >
+                Cancel
+              </button>
 
-  {/* ✅ Replace this Add/Update Item button */}
-  <button
-    onClick={handleSubmitItem}
-    disabled={saving}
-    className={`bg-black text-white px-4 py-2 rounded hover:text-[#ffba20] 
-      ${saving ? "opacity-70 pointer-events-none" : ""}`}
-  >
-    {saving ? (
-      <span className="inline-flex items-center gap-2">
-        <svg
-          className="animate-spin h-4 w-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-          />
-        </svg>
-        {editingItemId ? "Updating..." : "Adding..."}
-      </span>
-    ) : (
-      <>{editingItemId ? "Update Item" : "Add Item"}</>
-    )}
-  </button>
-</div>
+              <button
+                onClick={handleSubmitItem}
+                disabled={saving}
+                className={`bg-black text-white px-4 py-2 rounded hover:text-[#ffba20] 
+                  ${saving ? "opacity-70 pointer-events-none" : ""}`}
+              >
+                {saving ? (
+                  <span className="inline-flex items-center gap-2">
+                    <svg
+                      className="animate-spin h-4 w-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                      />
+                    </svg>
+                    {editingItemId ? "Updating..." : "Adding..."}
+                  </span>
+                ) : (
+                  <>{editingItemId ? "Update Item" : "Add Item"}</>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -42,15 +42,11 @@ type Delivery = {
   destination: string;
   plate_number: string;
   driver: string;
-  status: "Scheduled" | "Ongoing" | "Delivered" | string;
+  status: "Scheduled" | "To Ship" | "To Receive" | string;
   schedule_date: string;
   arrival_date: string | null;
+  eta_date?: string | null;
   participants?: string[] | null;
-  food?: number | null;
-  gas?: number | null;
-  toll?: number | null;
-  boat?: number | null;
-  other?: number | null;
   created_at?: string;
   _orders?: OrderWithCustomer[];
 };
@@ -221,7 +217,7 @@ export default function TruckDeliveryPage() {
     const { data: dData, error: dErr } = await supabase
       .from("truck_deliveries")
       .select("*")
-      .in("status", ["Scheduled", "Ongoing"]) // ⬅️ only active
+      //.in("status", ["Scheduled", "To Ship", "To Receive"])
       .order("schedule_date", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false });
 
@@ -239,7 +235,7 @@ export default function TruckDeliveryPage() {
     // 🔑 Put Scheduled first, then Ongoing, Delivered last.
     // Within the same status, newer schedule_date first.
     const statusRank = (s?: string) =>
-      s === "Scheduled" ? 0 : s === "Ongoing" ? 1 : 2; // Delivered (and others) last
+      s === "Scheduled" ? 0 : s === "To Ship" ? 1 : 2; // Delivered (and others) last
 
     deliveriesList.sort((a, b) => {
       const r = statusRank(a.status) - statusRank(b.status);
@@ -614,9 +610,9 @@ export default function TruckDeliveryPage() {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case "Delivered":
+      case "To Receive":
         return <CheckCircle className="text-green-600" />;
-      case "Ongoing":
+      case "To Ship":
         return <Truck className="text-yellow-600" />;
       case "Scheduled":
         return <Clock className="text-blue-600" />;
@@ -644,7 +640,7 @@ export default function TruckDeliveryPage() {
     console.error("Update error:", error);
     toast.error("Failed to update delivery status");
   } else {
-    if (newStatus === "Delivered") {
+    if (newStatus === "To Receive") {
       setDeliveries((prev) => prev.filter((d) => d.id !== id));
       toast.success("Marked as Delivered — moved to Delivered History.");
     } else {
@@ -666,7 +662,7 @@ export default function TruckDeliveryPage() {
   const addParticipant = () => {
     if (!newPerson.trim()) return;
     // optional safety: max 3
-    if (newDelivery.participants.length >= 2) return toast.error("Up to 3 participants only.");
+    if (newDelivery.participants.length >= 2) return toast.error("Up to 2 participants only.");
     setNewDelivery((prev) => ({
       ...prev,
       participants: [...prev.participants, newPerson.trim()],
@@ -695,6 +691,31 @@ const updateArrivalDate = async (deliveryId: number, date: string) => {
   await logActivity("Updated Delivery Date Received", {
     delivery_id: deliveryId,
     arrival_date: date,
+  });
+};
+
+/** Update eta_date (Estimated Arrival for Ongoing) */
+const updateEtaDate = async (deliveryId: number, date: string) => {
+  const { error } = await supabase
+    .from("truck_deliveries")
+    .update({ eta_date: date })
+    .eq("id", deliveryId);
+
+  if (error) {
+    console.error("ETA update failed:", error);
+    toast.error("Failed to update Estimated Arrival. Make sure 'eta_date' exists in truck_deliveries.");
+    return;
+  }
+
+  setDeliveries((prev) =>
+    prev.map((d) => (d.id === deliveryId ? { ...d, eta_date: date } : d))
+  );
+  toast.success("Estimated Arrival updated");
+  
+  // Optional activity log
+  await logActivity("Updated Estimated Arrival", {
+    delivery_id: deliveryId,
+    eta_date: date,
   });
 };
 
@@ -782,10 +803,14 @@ const updateArrivalDate = async (deliveryId: number, date: string) => {
     setPdfUrl(null);
   };
 
-  const isLocked = (status: string) => status === "Delivered";
-  const isActiveStatus = (s?: string) => s === "Scheduled" || s === "Ongoing";
-  const statusRank = (s?: string) =>
-    s === "Scheduled" ? 0 : s === "Ongoing" ? 1 : 2;
+  const isLocked = (status: string) => status === "To Receive";
+  const isActiveStatus = (s?: string) =>
+  s === "Scheduled" || s === "To Ship";
+  const statusRank = (s?: string) => {
+  if (s === "Scheduled") return 0;
+  if (s === "To Ship") return 1;
+  return 2; // To Receive / Delivered / others
+  };
 
   type Groups = Record<string, Delivery[]>;
 
@@ -801,18 +826,18 @@ const updateArrivalDate = async (deliveryId: number, date: string) => {
     () => deliveries.filter((d) => isActiveStatus(d.status)),
     [deliveries]
   );
-  // Sort inside each bucket:
-  // - Active: Scheduled first, then Ongoing. Newer schedule_date first.
-  // - Delivered: Newer schedule_date first.
+  //TO REMOVE THE TO RECEIVE STATUS IN LOGISTICS
+  const listToShow = deliveries.filter((d) => isActiveStatus(d.status));
+
   const sortedActive = useMemo(() => {
-    return [...activeDeliveries].sort((a, b) => {
-      const r = statusRank(a.status) - statusRank(b.status);
-      if (r !== 0) return r;
-      const ta = a.schedule_date ? new Date(a.schedule_date).getTime() : 0;
-      const tb = b.schedule_date ? new Date(b.schedule_date).getTime() : 0;
-      return tb - ta; // latest first
-    });
-  }, [activeDeliveries]);
+  return [...listToShow].sort((a, b) => {
+    const r = statusRank(a.status) - statusRank(b.status);
+    if (r !== 0) return r;
+    const ta = a.schedule_date ? new Date(a.schedule_date).getTime() : 0;
+    const tb = b.schedule_date ? new Date(b.schedule_date).getTime() : 0;
+    return tb - ta; // latest first
+  });
+}, [listToShow]);
   // Group each bucket by date
   const groupedActive = useMemo(
     () => groupByDate(sortedActive),
@@ -845,14 +870,15 @@ const updateArrivalDate = async (deliveryId: number, date: string) => {
     }
 
     // Auto-capitalize each word & trim spaces
-    const formatted = value
-      .trimStart()
+    let formatted = value
+      .replace(/\s+/g, " ")
       .split(" ")
-      .filter(Boolean) // remove double spaces
       .map(
         (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
       )
       .join(" ");
+
+      if (value.endsWith(" ")) formatted += " ";
 
     setNewDelivery((prev) => ({ ...prev, driver: formatted }));
   };
@@ -962,7 +988,21 @@ const updateArrivalDate = async (deliveryId: number, date: string) => {
                             </>
                           )}
                       </div>
-
+                      {/* If Ongoing, show ETA date picker */}
+                      {/* ETA picker for Ongoing */}
+                        {delivery.status === "To Ship" && (
+                          <div className="mt-3">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
+                              Estimated Arrival
+                            </label>
+                            <input
+                              type="date"
+                              value={delivery.eta_date || ""}
+                              onChange={(e) => updateEtaDate(delivery.id, e.target.value)}
+                              className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
+                            />
+                          </div>
+                        )}
                       {/* If Delivered (rare here), keep read-only date */}
                       {delivery.status === "Delivered" && (
                         <div className="mt-3">
@@ -981,7 +1021,7 @@ const updateArrivalDate = async (deliveryId: number, date: string) => {
                       {(delivery.participants?.length ?? 0) > 0 && (
                         <p className="mt-3 text-sm">
                           <span className="text-slate-500 uppercase tracking-wide text-xs">
-                            Other Participants
+                            Assistants: 
                           </span>
                           <br />
                           <span className="font-medium">
@@ -1055,23 +1095,13 @@ const updateArrivalDate = async (deliveryId: number, date: string) => {
 
                         <select
                           value={delivery.status}
-                          onChange={(e) =>
-                            setConfirmDialog({
-                              open: true,
-                              id: delivery.id,
-                              newStatus: e.target.value,
-                            })
-                          }
+                          onChange={(e) => setConfirmDialog({ open: true, id: delivery.id, newStatus: e.target.value })}
                           disabled={isLocked(delivery.status)}
-                          className={`border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10 ${
-                            isLocked(delivery.status)
-                              ? "opacity-60 cursor-not-allowed"
-                              : ""
-                          }`}
+                          className="border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
                         >
                           <option value="Scheduled">Scheduled</option>
-                          <option value="Ongoing">Ongoing</option>
-                          <option value="Delivered">Delivered</option>
+                          <option value="To Ship">To Ship</option>
+                          <option value="To Receive">To Receive</option>
                         </select>
                       </div>
 
@@ -1489,7 +1519,7 @@ const updateArrivalDate = async (deliveryId: number, date: string) => {
 
                 <div className="flex items-center gap-2">
                   <label className="w-32 text-sm font-medium">
-                    Participant
+                    Assistant
                   </label>
                   <div className="flex gap-2 w-full">
                     <input

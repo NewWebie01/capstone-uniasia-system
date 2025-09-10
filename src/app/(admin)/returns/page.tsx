@@ -363,6 +363,10 @@ export default function AdminReturnsPage() {
   const isReceived = (status?: string | null) =>
     (status || "").toLowerCase() === "received";
 
+  // NEW: disable reject when approved (and keep disabled when received)
+  const isApproved = (status?: string | null) =>
+    (status || "").toLowerCase() === "approved";
+
   // Guard: don't open modal if attempting to set to same status
   const openConfirm = (
     id: string,
@@ -517,7 +521,8 @@ export default function AdminReturnsPage() {
               {!loading &&
                 pageRows.map((rtn) => {
                   const itemsCount = rtn.return_items.length;
-                  const locked = isReceived(rtn.status);
+                  const lockedReceived = isReceived(rtn.status);
+                  const lockedReject = lockedReceived || isApproved(rtn.status); // NEW
                   return (
                     <tr key={rtn.id} className="border-t hover:bg-gray-50">
                       <td className="py-2 px-3">
@@ -555,10 +560,14 @@ export default function AdminReturnsPage() {
                               )
                             }
                             className={`px-2.5 py-1.5 rounded-xl border text-xs hover:bg-green-50 ${
-                              locked ? "opacity-50 cursor-not-allowed" : ""
+                              lockedReceived
+                                ? "opacity-50 cursor-not-allowed"
+                                : ""
                             }`}
-                            disabled={locked}
-                            title={locked ? "Already received" : "Approve"}
+                            disabled={lockedReceived}
+                            title={
+                              lockedReceived ? "Already received" : "Approve"
+                            }
                           >
                             Approve
                           </button>
@@ -572,10 +581,18 @@ export default function AdminReturnsPage() {
                               )
                             }
                             className={`px-2.5 py-1.5 rounded-xl border text-xs hover:bg-red-50 ${
-                              locked ? "opacity-50 cursor-not-allowed" : ""
+                              lockedReject
+                                ? "opacity-50 cursor-not-allowed"
+                                : ""
                             }`}
-                            disabled={locked}
-                            title={locked ? "Already received" : "Reject"}
+                            disabled={lockedReject}
+                            title={
+                              lockedReject
+                                ? isApproved(rtn.status)
+                                  ? "Already approved"
+                                  : "Already received"
+                                : "Reject"
+                            }
                           >
                             Reject
                           </button>
@@ -589,12 +606,16 @@ export default function AdminReturnsPage() {
                               )
                             }
                             className={`px-2.5 py-1.5 rounded-xl border text-xs hover:bg-gray-50 ${
-                              locked ? "opacity-50 cursor-not-allowed" : ""
+                              lockedReceived
+                                ? "opacity-50 cursor-not-allowed"
+                                : ""
                             }`}
                             title={
-                              locked ? "Already received" : "Mark Received"
+                              lockedReceived
+                                ? "Already received"
+                                : "Mark Received"
                             }
-                            disabled={locked}
+                            disabled={lockedReceived}
                           >
                             Received
                           </button>
@@ -801,11 +822,20 @@ export default function AdminReturnsPage() {
                     )
                   }
                   className={`px-4 py-2 rounded-xl bg-red-600 text-white hover:opacity-90 ${
-                    isReceived(selected.status)
+                    isReceived(selected.status) || isApproved(selected.status)
                       ? "opacity-50 cursor-not-allowed"
                       : ""
                   }`}
-                  disabled={isReceived(selected.status)}
+                  disabled={
+                    isReceived(selected.status) || isApproved(selected.status)
+                  } // NEW
+                  title={
+                    isApproved(selected.status)
+                      ? "Already approved"
+                      : isReceived(selected.status)
+                      ? "Already received"
+                      : "Reject"
+                  }
                 >
                   Reject
                 </button>
