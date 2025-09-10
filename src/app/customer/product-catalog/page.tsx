@@ -12,43 +12,19 @@ const MAX_QTY = 1000;
 const clampQty = (n: number) =>
   Math.max(1, Math.min(MAX_QTY, Math.floor(n) || 1));
 
-/* ---------------------- 🚚 6-TYRE truck limits ---------------------- */
+/* ---------------------- Cart-wide limits (silent) ---------------------- */
+// Do NOT show these numbers in the UI/toasts.
 const TRUCK_LIMITS = {
-  type: "6-tyre",
-  maxTotalUnits: 5000, // 👈 tweak as needed
-  maxDistinctItems: 60, // 👈 tweak as needed
+  maxTotalWeightKg: 10_000, // internal weight cap
+  maxDistinctItems: 60, // how many different SKUs per order
 };
+
+// One generic message for all cart-limit failures.
+const LIMIT_TOAST =
+  "Exceeds items per transaction. Please split into another transaction.";
 
 const totalUnits = (list: CartItem[]) =>
   list.reduce((sum, ci) => sum + ci.quantity, 0);
-
-function canAddItemWithQty(
-  current: CartItem[],
-  item: InventoryItem,
-  qty: number
-) {
-  const nextDistinct = current.some((ci) => ci.item.id === item.id)
-    ? current.length
-    : current.length + 1;
-  const nextUnits = totalUnits(current) + qty;
-
-  if (nextDistinct > TRUCK_LIMITS.maxDistinctItems) {
-    return {
-      ok: false,
-      reason: "distinct",
-      message: `You can add up to ${TRUCK_LIMITS.maxDistinctItems} different items only. Please split into another transaction.`,
-    };
-  }
-  if (nextUnits > TRUCK_LIMITS.maxTotalUnits) {
-    return {
-      ok: false,
-      reason: "units",
-      message: `Total items are limited to ${TRUCK_LIMITS.maxTotalUnits} units. Please split into another transaction.`,
-    };
-  }
-
-  return { ok: true as const };
-}
 
 /* ----------------------------- Date formatter ----------------------------- */
 const formatPH = (d?: string | number | Date) =>
@@ -95,6 +71,7 @@ type PSGCCity = {
 };
 type PSGCBarangay = { id: number; name: string; code: string };
 
+/** ⬇️ include unit + weight fields from inventory for weight calc */
 type InventoryItem = {
   id: number;
   product_name: string;
@@ -104,7 +81,12 @@ type InventoryItem = {
   unit_price: number;
   status: string;
   image_url?: string | null;
-  date_added?: string | null; // ← make optional (and allow null)
+  date_added?: string | null;
+
+  // OPTIONAL: used for weight-based limits
+  unit?: string | null; // "Piece" | "Dozen" | "Box" | "Pack" | "Kg" | etc.
+  pieces_per_unit?: number | null; // e.g., Piece=1, Dozen=12, Box=24...
+  weight_per_piece_kg?: number | null; // weight of ONE piece in kg (if unit !== "Kg")
 };
 
 type CartItem = { item: InventoryItem; quantity: number };
@@ -124,6 +106,67 @@ type CustomerInfo = {
   payment_type?: "Credit" | "Balance" | "Cash";
   customer_type?: "New Customer" | "Existing Customer";
 };
+
+/* ------------------------------ Weight helpers ------------------------------ */
+/** Weight in kg for ONE inventory "unit" (e.g., 1 piece, 1 dozen, 1 box, or 1 kg). */
+function unitWeightKg(i: InventoryItem): number {
+  const unit = (i.unit || "").trim();
+  // If sold directly by kg, 1 unit = 1 kg
+  if (unit === "Kg") return 1;
+
+  const piecesPerUnit =
+    Number(
+      i.pieces_per_unit ??
+        (unit === "Piece" ? 1 : unit === "Dozen" ? 12 : undefined)
+    ) || 0;
+
+  const weightPerPiece = Number(i.weight_per_piece_kg ?? 0);
+
+  const w =
+    piecesPerUnit > 0 && weightPerPiece > 0
+      ? piecesPerUnit * weightPerPiece
+      : 0;
+  return isFinite(w) ? w : 0;
+}
+
+/** Sum of all cart items' total weight (kg). */
+function cartTotalWeightKg(
+  list: { item: InventoryItem; quantity: number }[]
+): number {
+  return list.reduce((sum, ci) => sum + unitWeightKg(ci.item) * ci.quantity, 0);
+}
+
+/** Pre-add check: distinct items + weight cap. */
+function canAddItemWithQty(
+  current: { item: InventoryItem; quantity: number }[],
+  item: InventoryItem,
+  qty: number
+) {
+  // distinct items rule
+  const nextDistinct = current.some((ci) => ci.item.id === item.id)
+    ? current.length
+    : current.length + 1;
+  if (nextDistinct > TRUCK_LIMITS.maxDistinctItems) {
+    return { ok: false as const, reason: "distinct", message: LIMIT_TOAST };
+  }
+
+  // weight rule
+  const perUnitKg = unitWeightKg(item);
+  if (perUnitKg <= 0) {
+    // cannot compute weight -> block with generic message
+    return {
+      ok: false as const,
+      reason: "weight-missing",
+      message: LIMIT_TOAST,
+    };
+  }
+  const nextWeight = cartTotalWeightKg(current) + perUnitKg * qty;
+  if (nextWeight > TRUCK_LIMITS.maxTotalWeightKg) {
+    return { ok: false as const, reason: "weight", message: LIMIT_TOAST };
+  }
+
+  return { ok: true as const };
+}
 
 /* ------------------------------ Util helpers ------------------------------ */
 function generateTransactionCode(): string {
@@ -148,7 +191,6 @@ function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
 /* -------------------------------- Component ------------------------------- */
 export default function CustomerInventoryPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
-
   const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -174,7 +216,10 @@ export default function CustomerInventoryPage() {
   const [authDefaults, setAuthDefaults] = useState<{
     name: string;
     email: string;
-  }>({ name: "", email: "" });
+  }>({
+    name: "",
+    email: "",
+  });
 
   // order history counter (for display)
   const [orderHistoryCount, setOrderHistoryCount] = useState<number | null>(
@@ -316,7 +361,7 @@ export default function CustomerInventoryPage() {
     if (isNCR) return;
 
     setCities([]);
-    setCityCode(""); // ✅ correct
+    setCityCode("");
     setBarangays([]);
     setBarangayCode("");
     if (!provinceCode) return;
@@ -350,7 +395,7 @@ export default function CustomerInventoryPage() {
           sensitivity: "base",
         });
         return list
-          .map((b) => ({ ...b, name: fixEncoding(b.name) })) // ✅ fixed
+          .map((b) => ({ ...b, name: fixEncoding(b.name) }))
           .sort((a, b) => collator.compare(a.name, b.name));
       };
 
@@ -389,12 +434,17 @@ export default function CustomerInventoryPage() {
   /* --------------------- Inventory load + realtime --------------------- */
   const fetchInventory = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase.from("inventory").select("*");
+    // ⬇️ pull the weight-related fields too
+    const { data, error } = await supabase
+      .from("inventory")
+      .select(
+        "id, product_name, category, subcategory, quantity, unit_price, status, image_url, unit, pieces_per_unit, weight_per_piece_kg"
+      );
+
     if (error) {
       console.error("Error fetching inventory:", error);
       toast.error("Could not load inventory.");
     } else {
-      // Map to ensure the fields we use exist (fallbacks avoid crashes)
       const cleaned = (data ?? []).map((r: any) => ({
         id: r.id,
         product_name: r.product_name ?? "",
@@ -404,6 +454,9 @@ export default function CustomerInventoryPage() {
         unit_price: Number(r.unit_price ?? 0),
         status: r.status ?? "",
         image_url: r.image_url ?? null,
+        unit: r.unit ?? null,
+        pieces_per_unit: r.pieces_per_unit ?? null,
+        weight_per_piece_kg: r.weight_per_piece_kg ?? null,
       }));
       setInventory(cleaned);
     }
@@ -537,10 +590,8 @@ export default function CustomerInventoryPage() {
     const code = txn.trim().toUpperCase();
     if (!code) return;
 
-    // Build one channel for this code
     const channel = supabase.channel(`realtime:tracking:${code}`);
 
-    // Listen to the customer row with this code
     channel.on(
       "postgres_changes",
       {
@@ -552,7 +603,6 @@ export default function CustomerInventoryPage() {
       () => refetchTrackingByCode(code)
     );
 
-    // If we already fetched once, we know the customer_id: listen to that customer's orders
     if (trackingResult?.id) {
       channel.on(
         "postgres_changes",
@@ -564,7 +614,6 @@ export default function CustomerInventoryPage() {
         },
         () => refetchTrackingByCode(code)
       );
-      // Optional: also subscribe to order_items if needed
     }
 
     channel.subscribe();
@@ -611,10 +660,9 @@ export default function CustomerInventoryPage() {
       return;
     }
 
-    // 🚚 6-TYRE: check cart-wide limits before pushing
     const check = canAddItemWithQty(cart, selectedItem, qty);
     if (!check.ok) {
-      toast.error(check.message.replace(/^For .*truck, /, "")); // strip truck mention if any
+      toast.error(LIMIT_TOAST); // always generic
       return;
     }
 
@@ -627,16 +675,23 @@ export default function CustomerInventoryPage() {
     const current = cart.find((ci) => ci.item.id === itemId);
     if (!current) return;
 
-    // clamp to per-item rule first
+    // clamp per-item rule first
     const requested = clampQty(Number.isFinite(nextQtyRaw) ? nextQtyRaw : 1);
 
-    // cart-wide limit: keep total units within cap
-    const unitsWithoutThis = totalUnits(cart) - current.quantity;
-    const maxAllowedForThis = Math.max(
-      1,
-      TRUCK_LIMITS.maxTotalUnits - unitsWithoutThis
-    );
-    const approved = Math.min(requested, maxAllowedForThis);
+    // compute how many units we can still fit by WEIGHT
+    const perUnitKg = unitWeightKg(current.item);
+    if (perUnitKg <= 0) {
+      // if weight unknown, keep current and show generic limit
+      toast.error(LIMIT_TOAST);
+      return;
+    }
+    const weightWithoutThis =
+      cartTotalWeightKg(cart) - perUnitKg * current.quantity;
+    const remainingKg = TRUCK_LIMITS.maxTotalWeightKg - weightWithoutThis;
+    const maxQtyByWeight = Math.max(0, Math.floor(remainingKg / perUnitKg));
+
+    // approved quantity is min of requested, weight-cap, and not below 1
+    const approved = Math.max(1, Math.min(requested, maxQtyByWeight));
 
     setCart((prev) =>
       prev.map((ci) =>
@@ -644,14 +699,13 @@ export default function CustomerInventoryPage() {
       )
     );
 
+    // toasts
     if (requested > MAX_QTY) {
       toast.error(
         `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
       );
     } else if (requested > approved) {
-      toast.error(
-        `Total items are limited to ${TRUCK_LIMITS.maxTotalUnits} units. Please split into another transaction.`
-      );
+      toast.error(LIMIT_TOAST);
     }
   };
 
@@ -663,13 +717,11 @@ export default function CustomerInventoryPage() {
     if (!customerInfo.code) {
       setCustomerInfo((prev) => ({ ...prev, code: generateTransactionCode() }));
     }
-    // ensure identity present from auth defaults
     setCustomerInfo((prev) => ({
       ...prev,
       name: prev.name || authDefaults.name,
       email: prev.email || authDefaults.email,
     }));
-    // refresh type using current email
     const emailToCheck =
       (customerInfo.email && customerInfo.email.trim()) || authDefaults.email;
     if (emailToCheck) await setTypeFromHistory(emailToCheck);
@@ -677,17 +729,14 @@ export default function CustomerInventoryPage() {
   };
 
   const handleOpenFinalModal = () => {
-    // Cart-wide checks (generic, no truck mention)
+    // distinct items
     if (cart.length > TRUCK_LIMITS.maxDistinctItems) {
-      toast.error(
-        `Too many different items (max ${TRUCK_LIMITS.maxDistinctItems}). Please split into another transaction.`
-      );
+      toast.error(LIMIT_TOAST);
       return;
     }
-    if (totalUnits(cart) > TRUCK_LIMITS.maxTotalUnits) {
-      toast.error(
-        `Total items exceed ${TRUCK_LIMITS.maxTotalUnits} units. Please split into another transaction.`
-      );
+    // weight
+    if (cartTotalWeightKg(cart) > TRUCK_LIMITS.maxTotalWeightKg) {
+      toast.error(LIMIT_TOAST);
       return;
     }
 
@@ -709,18 +758,12 @@ export default function CustomerInventoryPage() {
       return;
     }
     if (items.length > TRUCK_LIMITS.maxDistinctItems) {
-      toast.error(
-        `Too many different items (max ${TRUCK_LIMITS.maxDistinctItems}). Please split into another transaction.`
-      );
+      toast.error(LIMIT_TOAST);
       setPlacingOrder(false);
       return;
     }
-    if (
-      items.reduce((s, ci) => s + ci.quantity, 0) > TRUCK_LIMITS.maxTotalUnits
-    ) {
-      toast.error(
-        `Total items exceed ${TRUCK_LIMITS.maxTotalUnits} units. Please split into another transaction.`
-      );
+    if (cartTotalWeightKg(items) > TRUCK_LIMITS.maxTotalWeightKg) {
+      toast.error(LIMIT_TOAST);
       setPlacingOrder(false);
       return;
     }
@@ -840,7 +883,6 @@ export default function CustomerInventoryPage() {
   const itemsPerPage = 10;
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Reset to first page when filters/search/inventory change
   useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, categoryFilter, inventory.length]);
@@ -850,7 +892,6 @@ export default function CustomerInventoryPage() {
     Math.ceil(filteredInventory.length / itemsPerPage)
   );
 
-  // Clamp current page if filter reduces page count
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
