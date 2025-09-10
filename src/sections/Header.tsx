@@ -1,44 +1,44 @@
 "use client";
 
-import Logo from "../assets/uniasia-high-resolution-logo.png"; // Importing UniAsia logo
-import Image from "next/image"; // Importing Image component from Next.js
-import MenuIcon from "../assets/menu.svg"; // Importing menu icon for mobile navigation
-import { useState, useEffect } from "react"; // Importing useState and useEffect
-import { useRouter } from "next/navigation"; // Importing useRouter for navigation
-import { motion, AnimatePresence } from "framer-motion"; // Importing motion for animations
+import Logo from "../assets/uniasia-high-resolution-logo.png";
+import Image from "next/image";
+import MenuIcon from "../assets/menu.svg";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
 
 export const Header = () => {
-  const [activeLink, setActiveLink] = useState<string>(""); // State to store the clicked navigation link
-  const [isMenuOpen, setIsMenuOpen] = useState(false); // Mobile menu toggle
-  const router = useRouter(); // Initialize the router
+  const [activeLink, setActiveLink] = useState<string>("");
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const router = useRouter();
 
-  // Function to handle navigation link clicks for smooth scrolling
   const handleClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
-    event.preventDefault(); // Prevent default anchor behavior
-    const targetId = event.currentTarget.getAttribute("href")?.substring(1); // Get target section ID
+    event.preventDefault();
+    const targetId = event.currentTarget.getAttribute("href")?.substring(1);
     setActiveLink(targetId || "");
-    setIsMenuOpen(false); // Close mobile menu when link clicked
+    setIsMenuOpen(false);
 
     if (targetId) {
-      const targetSection = document.getElementById(targetId); // Get the target section element
-      if (targetSection) {
-        targetSection.scrollIntoView({ behavior: "smooth" }); // Smooth scroll to target section
-      }
+      const targetSection = document.getElementById(targetId);
+      if (targetSection) targetSection.scrollIntoView({ behavior: "smooth" });
     }
   };
 
-  // Function to navigate to login page
   const handleLoginClick = () => {
-    setIsMenuOpen(false); // Close mobile menu
-    router.push("/login"); // Navigate to login page
+    setIsMenuOpen(false);
+    router.push("/login");
   };
 
-  // Update activeLink based on scroll position
+  const handleSignUpClick = () => {
+    setIsMenuOpen(false);
+    // from your screenshot, the route is /account_creation
+    router.push("/account_creation");
+  };
+
   useEffect(() => {
     const handleScroll = () => {
       const sections = ["hero", "about-us", "contact", "help"];
       let currentSection = "";
-
       for (const section of sections) {
         const el = document.getElementById(section);
         if (el) {
@@ -49,7 +49,6 @@ export const Header = () => {
           }
         }
       }
-
       setActiveLink(currentSection);
     };
 
@@ -60,25 +59,20 @@ export const Header = () => {
   return (
     <header className="sticky top-0 backdrop-blur-sm z-20">
       <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
-        {/* <p className="text-white/60 hidden md:block">
-          Streamline your workflow and boost your productivity
-        </p> */}
         <div className="inline-flex gap-1 items-center">
           <p>UNIASIA - Reliable Hardware Supplier in the Philippines</p>
-          {/* <ArrowRight className="h-4 w-4 inline-flex justify-center items-center" /> */}
         </div>
       </div>
 
       <div className="py-5">
         <div className="container">
           <div className="flex items-center justify-between">
-            {/* Logo section */}
+            {/* Logo */}
             <motion.button
               onClick={() => {
                 const heroSection = document.getElementById("hero");
-                if (heroSection) {
+                if (heroSection)
                   heroSection.scrollIntoView({ behavior: "smooth" });
-                }
               }}
               whileHover={{ scale: 1.1 }}
               transition={{ type: "spring", stiffness: 300 }}
@@ -92,7 +86,7 @@ export const Header = () => {
               />
             </motion.button>
 
-            {/* Mobile menu icon (Only visible on smaller screens) */}
+            {/* Mobile menu */}
             <div className="md:hidden relative">
               <MenuIcon
                 className="h-5 w-5 cursor-pointer"
@@ -107,7 +101,7 @@ export const Header = () => {
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: -10 }}
                     transition={{ duration: 0.25 }}
-                    className="absolute right-0 mt-3 w-48 bg-white shadow-lg rounded-lg z-50"
+                    className="absolute right-0 mt-3 w-56 bg-white shadow-lg rounded-lg z-50"
                   >
                     <ul className="flex flex-col gap-4 p-4 text-sm text-black">
                       <li>
@@ -128,28 +122,23 @@ export const Header = () => {
                           About Us
                         </a>
                       </li>
-                      {/* <li>
-                        <a
-                          href="#contact-us"
-                          onClick={handleClick}
-                          className="hover:text-[#ffba20]"
+
+                      {/* Sign Up (mobile) */}
+                      <li>
+                        <motion.button
+                          onClick={handleSignUpClick}
+                          whileTap={{ scale: 1.05 }}
+                          className="w-full border border-[#181918] text-[#181918] py-2 rounded-md hover:bg-[#181918] hover:text-white"
                         >
-                          Contact
-                        </a>
-                      </li> */}
-                      {/* <li>
-                        <a
-                          href="#help"
-                          onClick={handleClick}
-                          className="hover:text-[#ffba20]"
-                        >
-                          Help
-                        </a>
-                      </li> */}
+                          Sign Up
+                        </motion.button>
+                      </li>
+
+                      {/* Log-In (mobile) */}
                       <li>
                         <motion.button
                           onClick={handleLoginClick}
-                          whileTap={{ scale: 1.1 }}
+                          whileTap={{ scale: 1.05 }}
                           className="bg-[#181918] text-white w-full py-2 rounded-md hover:text-[#ffba20]"
                         >
                           Log-In
@@ -161,10 +150,10 @@ export const Header = () => {
               </AnimatePresence>
             </div>
 
-            {/* Navigation links */}
+            {/* Desktop nav */}
             <nav className="hidden md:flex gap-6 text-black/60 items-center">
               <a
-                href="#hero" // Links to the Hero section with ID 'hero'
+                href="#hero"
                 id="home"
                 onClick={handleClick}
                 className="hover:text-[#ffba20] transition-colors duration-300"
@@ -172,36 +161,33 @@ export const Header = () => {
                 Home
               </a>
               <a
-                href="#about-us" // Updated to match the AboutUs section ID
+                href="#about-us"
                 onClick={handleClick}
                 className="hover:text-[#ffba20] transition-colors duration-300"
               >
                 About Us
               </a>
-              {/* <a
-                href="#contact-us"
-                onClick={handleClick}
-                className="hover:text-[#ffba20] transition-colors duration-300"
-              >
-                Contact
-              </a> */}
-              {/* <a
-                href="#help"
-                id="help"
-                onClick={handleClick}
-                className="hover:text-[#ffba20] transition-colors duration-300"
-              >
-                Help
-              </a> */}
 
-              {/* Log-in button */}
-              <motion.button
-                onClick={handleLoginClick} // Navigate to Login page
-                whileTap={{ scale: 1.1 }}
-                className="bg-[#181918] text-white px-4 py-2 rounded-lg font-medium hover:text-[#ffba20]"
-              >
-                Log-In
-              </motion.button>
+              {/* Actions */}
+              <div className="flex items-center gap-3">
+                {/* Sign Up (desktop) */}
+                <motion.button
+                  onClick={handleSignUpClick}
+                  whileTap={{ scale: 1.05 }}
+                  className="border border-[#181918] text-[#181918] px-4 py-2 rounded-lg font-medium hover:bg-[#181918] hover:text-white"
+                >
+                  Sign Up
+                </motion.button>
+
+                {/* Log-In (desktop) */}
+                <motion.button
+                  onClick={handleLoginClick}
+                  whileTap={{ scale: 1.05 }}
+                  className="bg[#181918] bg-[#181918] text-white px-4 py-2 rounded-lg font-medium hover:text-[#ffba20]"
+                >
+                  Log-In
+                </motion.button>
+              </div>
             </nav>
           </div>
         </div>

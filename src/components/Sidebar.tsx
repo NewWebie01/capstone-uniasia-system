@@ -46,40 +46,39 @@ const Menus: {
   { title: "Returns", icon: RotateCcw, href: "/returns" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
-  { title: "Account Creation", icon: UserPlus, href: "/account_creation" },
+  // { title: "Account Creation", icon: UserPlus, href: "/account_creation" },
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   const pathname = usePathname();
   const supabase = createClientComponentClient();
 
-const handleLogout = async () => {
-  // Get user info (role is stored in user_metadata, just like in login)
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const userEmail = user?.email || "unknown";
-  const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
+  const handleLogout = async () => {
+    // Get user info (role is stored in user_metadata, just like in login)
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const userEmail = user?.email || "unknown";
+    const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
 
-  // Log the logout action, with the role!
-  await supabase.from("activity_logs").insert([
-    {
-      user_email: userEmail,
-      user_role: userRole,        // <-- SAVE ROLE!
-      action: "Logout",
-      details: {},
-      created_at: new Date().toISOString(),
-    },
-  ]);
+    // Log the logout action, with the role!
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        user_role: userRole, // <-- SAVE ROLE!
+        action: "Logout",
+        details: {},
+        created_at: new Date().toISOString(),
+      },
+    ]);
 
-  const { error } = await supabase.auth.signOut();
-  if (error) {
-    console.error("Logout failed:", error.message);
-  } else {
-    window.location.href = "/login";
-  }
-};
-
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error("Logout failed:", error.message);
+    } else {
+      window.location.href = "/login";
+    }
+  };
 
   return (
     <motion.div

@@ -293,6 +293,18 @@ export default function LoginPage() {
                 )}
               </motion.button>
             </form>
+
+            {/* Sign Up Link */}
+            <p className="text-sm text-gray-600">
+              Don’t have an account?{" "}
+              <button
+                type="button"
+                onClick={() => router.push("/account_creation")}
+                className="text-[#181918] font-medium hover:text-[#ffba20] transition-colors"
+              >
+                Sign Up
+              </button>
+            </p>
           </div>
 
           {/* Splash Image */}
