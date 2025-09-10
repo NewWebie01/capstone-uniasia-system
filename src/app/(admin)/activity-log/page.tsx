@@ -97,7 +97,7 @@ const ACTION_TABS = [
   { key: "all", label: "All" },
   { key: "login", label: "Login" },
   { key: "completed", label: "Completed" },
-  { key: "pending", label: "Pending" },
+  // { key: "pending", label: "Pending" }, // <--- REMOVED
   { key: "update", label: "Update" },
   { key: "add", label: "Add" },
   { key: "reject", label: "Rejected" },
@@ -149,8 +149,6 @@ export default function ActivityLogPage() {
           return act.includes("login") || act.includes("logout");
         case "completed":
           return act.includes("completed") || act.includes("complete");
-        case "pending":
-          return act.includes("pending");
         case "update":
           return act.includes("update");
         case "add":
@@ -224,41 +222,52 @@ export default function ActivityLogPage() {
   const paged = filtered.slice(pageStart, pageStart + itemsPerPage);
 
   // Export current page
-  async function handleExport() {
-    setShowExport(false);
-    try {
-      const { data } = await supabase.auth.getUser();
-      const userEmail = data?.user?.email || "unknown";
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          user_role: "admin",
-          action: "Exported Activity Log",
-          details: {
-            rows: paged.length,
-            page: currentPage,
-            query: searchQuery,
-            quick,
-          },
-          created_at: new Date().toISOString(),
+async function handleExport() {
+  setShowExport(false);
+  // Fetch ALL records from activity_logs
+  let allActivities: Activity[] = [];
+  setLoading(true);
+  try {
+    const { data } = await supabase
+      .from("activity_logs")
+      .select("id, user_email, user_role, action, details, created_at")
+      .order("created_at", { ascending: false });
+    allActivities = data ?? [];
+  } catch {}
+  setLoading(false);
+
+  try {
+    const { data } = await supabase.auth.getUser();
+    const userEmail = data?.user?.email || "unknown";
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        user_role: "admin",
+        action: "Exported Activity Log (ALL)",
+        details: {
+          rows: allActivities.length,
+          filter: "ALL",
         },
-      ]);
-    } catch {}
-    const headerRow = ["User", "Account Type", "Activity", "Date", "Time"];
-    const exportRows = paged.map((a) => [
-      a.user_email,
-      !a.user_role || a.user_role.toLowerCase() === "authenticated"
-        ? "Admin"
-        : a.user_role.charAt(0).toUpperCase() + a.user_role.slice(1),
-      a.action,
-      formatPHDate(a.created_at),
-      formatPHTime(a.created_at),
+        created_at: new Date().toISOString(),
+      },
     ]);
-    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...exportRows]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
-    XLSX.writeFile(wb, `Activity_Log_${new Date().toISOString().slice(0, 10)}.xlsx`);
-  }
+  } catch {}
+
+  const headerRow = ["User", "Account Type", "Activity", "Date", "Time"];
+  const exportRows = allActivities.map((a) => [
+    a.user_email,
+    !a.user_role || a.user_role.toLowerCase() === "authenticated"
+      ? "Admin"
+      : a.user_role.charAt(0).toUpperCase() + a.user_role.slice(1),
+    a.action,
+    formatPHDate(a.created_at),
+    formatPHTime(a.created_at),
+  ]);
+  const ws = XLSX.utils.aoa_to_sheet([headerRow, ...exportRows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
+  XLSX.writeFile(wb, `Activity_Log_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
 
   return (
     <div className={`${dmSans.className} px-4 pb-6 pt-1`}>
@@ -497,9 +506,9 @@ export default function ActivityLogPage() {
           <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
             <h3 className="text-base font-semibold mb-2 text-center">Export Activity Log?</h3>
             <p className="text-sm text-gray-700 text-center mb-5">
-              This will export <b>only the rows on this page</b> (<b>{paged.length}</b>{" "}
-              item{paged.length !== 1 && "s"}).
-            </p>
+  This will export <b>ALL activity log records</b> in one file.
+</p>
+
             <div className="flex gap-3 justify-center">
               <button
                 className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm"
