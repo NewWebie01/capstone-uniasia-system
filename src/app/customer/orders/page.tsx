@@ -14,15 +14,18 @@ import {
 } from "lucide-react";
 
 /* ----------------------------- Date formatter ----------------------------- */
-const formatPH = (d?: string | number | Date | null) =>
+const formatPH = (
+  d?: string | number | Date | null,
+  opts: "date" | "datetime" = "datetime"
+) =>
   d
     ? new Intl.DateTimeFormat("en-PH", {
         year: "numeric",
         month: "short",
         day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
+        ...(opts === "datetime"
+          ? { hour: "numeric", minute: "2-digit", hour12: true }
+          : {}),
         timeZone: "Asia/Manila",
       }).format(new Date(d))
     : "—";
@@ -63,6 +66,7 @@ type Delivery = {
   id: number;
   status: string | null;
   schedule_date: string | null;
+  eta_date?: string | null;
   date_received?: string | null;
   driver?: string | null;
   participants?: string[] | null;
@@ -113,6 +117,12 @@ const DeliveryBadge = ({ status }: { status?: string | null }) => {
     </span>
   );
 };
+
+// Normalize status string to check if it's "To Ship"
+const isToShip = (s?: string | null) => {
+  return !!(s && /^(to[-_ ]?ship)$/i.test(s.trim()));
+};
+
 
 export default function TrackPage() {
   const [loading, setLoading] = useState(true);
@@ -168,7 +178,7 @@ export default function TrackPage() {
     if (!ids.length) return;
     const { data, error } = await supabase
       .from("truck_deliveries")
-      .select("id, status, schedule_date, date_received, driver, participants")
+      .select("id, status, schedule_date, eta_date, date_received, driver, participants")
       .in("id", ids);
     if (!error && data) {
       setDeliveriesById((prev) => {
@@ -201,36 +211,15 @@ export default function TrackPage() {
 
         const { data: customers, error } = await supabase
           .from("customers")
-          .select(
-            `
-            id,
-            name,
-            code,
-            contact_person,
-            email,
-            phone,
-            address,
-            date,
+          .select(`
+            id, name, code, contact_person, email, phone, address, date,
             orders (
-              id,
-              total_amount,
-              status,
-              truck_delivery_id,
-              order_items (
-                quantity,
-                price,
-                inventory:inventory_id (
-                  product_name,
-                  category,
-                  subcategory,
-                  status
-                )
-              )
+              id, total_amount, status, truck_delivery_id,
+              order_items ( quantity, price, inventory:inventory_id ( product_name, category, subcategory, status ) )
             )
-          `
-          )
+          `)
           .eq("email", email)
-          .order("date", { ascending: false });
+          .order("date", { ascending: false })
 
         if (error || !customers) {
           setTxns([]);
@@ -425,6 +414,12 @@ export default function TrackPage() {
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-gray-600">Delivery:</span>
                       <DeliveryBadge status={headerStatus} />
+                      {/* ETA chip for To Ship */}
+                      {isToShip(headerStatus) && firstDelivery?.eta_date && (
+                        <span className="text-xs font-medium text-blue-900 bg-blue-50 border border-blue-200 rounded px-2 py-0.5">
+                          ETA: {formatPH(firstDelivery.eta_date, "date")}
+                        </span>
+                      )}
                       <div className="text-xs text-gray-500">
                         Placed: {formatPH(t.date)}
                       </div>
@@ -560,6 +555,13 @@ export default function TrackPage() {
                                     ? formatPH(deliv.date_received)
                                     : "Not yet received"}
                                 </p>
+                                {/* ETA line for To Ship */}
+                                  {isToShip(rowStatus) && (
+                                    <p className="md:col-span-2">
+                                      <span className="text-gray-500">ETA:</span>{" "}
+                                      {deliv.eta_date ? formatPH(deliv.eta_date, "date") : "—"}
+                                    </p>
+                                  )}
                                 <p>
                                   <span className="text-gray-500">Driver:</span>{" "}
                                   {deliv.driver ?? "—"}
