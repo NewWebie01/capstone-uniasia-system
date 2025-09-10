@@ -571,47 +571,46 @@ export default function TruckDeliveryPage() {
   };
 
   const handleAddDelivery = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const region = regions.find((r) => r.code === regionCode)?.name || "";
-    const province = provinces.find((p) => p.code === provinceCode)?.name || "";
-    const destinationComposed =
-      newDelivery.destination?.trim() ||
-      [region, province].filter(Boolean).join(", ");
+  e.preventDefault();
+  const region = regions.find((r) => r.code === regionCode)?.name || "";
+  const province = provinces.find((p) => p.code === provinceCode)?.name || "";
+  const destinationComposed =
+    newDelivery.destination?.trim() ||
+    [region, province].filter(Boolean).join(", ");
 
-    const { error } = await supabase.from("truck_deliveries").insert([
-      {
-        destination: destinationComposed,
-        plate_number: newDelivery.plateNumber,
-        driver: newDelivery.driver,
-        participants: newDelivery.participants,
-        status: newDelivery.status,
-        schedule_date: newDelivery.scheduleDate,
-        arrival_date: newDelivery.arrivalDate || null,
-      },
-    ]);
+  const { error } = await supabase.from("truck_deliveries").insert([{
+    destination: destinationComposed,
+    plate_number: newDelivery.plateNumber,
+    driver: newDelivery.driver,
+    participants: newDelivery.participants,
+    status: newDelivery.status,           // "Scheduled"
+    schedule_date: newDelivery.scheduleDate,
+    arrival_date: newDelivery.arrivalDate || null,
+  }]);
 
-    if (error) {
-      console.error("Insert error:", error);
-      toast.error("Failed to add delivery");
-      return;
-    }
+  if (error) {
+    console.error("Insert error:", error);
+    toast.error("Failed to add delivery");
+    return;
+  }
 
-    toast.success("Delivery schedule added");
+  toast.success("Delivery schedule added");
 
-    // 🔥 ADD THIS:
-    await logActivity("Added Delivery Schedule", {
-      destination: destinationComposed,
-      plate_number: newDelivery.plateNumber,
-      driver: newDelivery.driver,
-      participants: newDelivery.participants,
-      status: newDelivery.status,
-      schedule_date: newDelivery.scheduleDate,
-      arrival_date: newDelivery.arrivalDate || null,
-    });
+  // ✅ ACTIVITY LOG ON SAVE
+  await logActivity("Added Delivery Schedule", {
+    destination: destinationComposed,
+    plate_number: newDelivery.plateNumber,
+    driver: newDelivery.driver,
+    participants: newDelivery.participants,
+    status: newDelivery.status,
+    schedule_date: newDelivery.scheduleDate,
+    arrival_date: newDelivery.arrivalDate || null,
+  });
 
-    await fetchDeliveriesAndAssignments();
-    hideForm();
-  };
+  await fetchDeliveriesAndAssignments();
+  hideForm();
+};
+
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -646,17 +645,23 @@ export default function TruckDeliveryPage() {
     toast.error("Failed to update delivery status");
   } else {
     if (newStatus === "Delivered") {
-      // Remove from current page immediately
       setDeliveries((prev) => prev.filter((d) => d.id !== id));
       toast.success("Marked as Delivered — moved to Delivered History.");
     } else {
       updateDeliveryStatusInState(id, newStatus);
       toast.success("Delivery status changed successfully");
     }
+
+    // ✅ ACTIVITY LOG FOR STATUS CHANGE
+    await logActivity("Changed Delivery Status", {
+      delivery_id: id,
+      new_status: newStatus,
+    });
   }
 
   setConfirmDialog({ open: false, id: null, newStatus: "" });
 };
+
 
   const addParticipant = () => {
     if (!newPerson.trim()) return;
@@ -670,22 +675,29 @@ export default function TruckDeliveryPage() {
   };
 
   /** Update arrival_date (a.k.a. Date Received) */
-  const updateArrivalDate = async (deliveryId: number, date: string) => {
-    const { error } = await supabase
-      .from("truck_deliveries")
-      .update({ arrival_date: date })
-      .eq("id", deliveryId);
+const updateArrivalDate = async (deliveryId: number, date: string) => {
+  const { error } = await supabase
+    .from("truck_deliveries")
+    .update({ arrival_date: date })
+    .eq("id", deliveryId);
 
-    if (error) {
-      toast.error("Failed to update Date Received");
-      return;
-    }
+  if (error) {
+    toast.error("Failed to update Date Received");
+    return;
+  }
 
-    setDeliveries((prev) =>
-      prev.map((d) => (d.id === deliveryId ? { ...d, arrival_date: date } : d))
-    );
-    toast.success("Date Received updated");
-  };
+  setDeliveries((prev) =>
+    prev.map((d) => (d.id === deliveryId ? { ...d, arrival_date: date } : d))
+  );
+  toast.success("Date Received updated");
+
+  // ✅ ACTIVITY LOG FOR DATE RECEIVED
+  await logActivity("Updated Delivery Date Received", {
+    delivery_id: deliveryId,
+    arrival_date: date,
+  });
+};
+
 
   /* =========================
      GROUP BY schedule_date

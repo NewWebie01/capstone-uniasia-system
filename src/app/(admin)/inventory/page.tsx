@@ -144,14 +144,13 @@ useEffect(() => {
 
 const handleSubmitItem = async () => {
   try {
-    // validation (unchanged)
     const errors = {
       product_name: !newItem.product_name,
       category: !newItem.category,
       subcategory: !newItem.subcategory,
       unit: !newItem.unit,
       quantity: newItem.quantity < 0,
-      unit_price: newItem.unit_price <= 0,
+      unit_price: newItem.unit_price < 0, // ✅ allow 0
     };
     setValidationErrors(errors);
     const hasErrors = Object.values(errors).some(Boolean);
@@ -160,7 +159,7 @@ const handleSubmitItem = async () => {
       return;
     }
 
-    setSaving(true); //  start loading
+    setSaving(true);
 
     let finalImageUrl = newItem.image_url || null;
     if (imageFile) {
@@ -182,16 +181,45 @@ const handleSubmitItem = async () => {
         .update(dataToSave)
         .eq("id", editingItemId);
       if (error) throw error;
+
       toast.success("Item updated successfully!");
-      // ...activity_logs insert (unchanged)...
+
+      // ✅ log activity
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: (await supabase.auth.getUser()).data.user?.email,
+          user_role: "admin",
+          action: "Update Item",
+          details: {
+            item_id: editingItemId,
+            sku: newItem.sku,
+            product_name: newItem.product_name,
+          },
+          created_at: new Date().toISOString(),
+        },
+      ]);
     } else {
       const { error } = await supabase.from("inventory").insert([dataToSave]);
       if (error) throw error;
+
       toast.success("New item added successfully!");
-      // ...activity_logs insert (unchanged)...
+
+      // ✅ log activity
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: (await supabase.auth.getUser()).data.user?.email,
+          user_role: "admin",
+          action: "Add Item",
+          details: {
+            sku: newItem.sku,
+            product_name: newItem.product_name,
+          },
+          created_at: new Date().toISOString(),
+        },
+      ]);
     }
 
-    // reset + refresh (unchanged)
+    // reset + refresh
     setNewItem({
       sku: "",
       product_name: "",
@@ -216,9 +244,10 @@ const handleSubmitItem = async () => {
     console.error("Update error:", err);
     toast.error(`❌ Error saving item: ${err.message || JSON.stringify(err)}`);
   } finally {
-    setSaving(false); //  stop loading
+    setSaving(false);
   }
 };
+
 
 
   const filteredItems = items
