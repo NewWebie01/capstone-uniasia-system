@@ -10,7 +10,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing email" }, { status: 400 });
     }
 
-    // Compose the email content
     const subject = "Your UNIASIA Account Has Been Approved!";
     const html = `
       <div style="font-family:Arial,sans-serif;">
@@ -24,20 +23,20 @@ export async function POST(req: Request) {
       </div>
     `;
 
-    // Send the email using Resend onboarding sender
+    // Make sure this is EXACTLY your Resend verified domain!
     const data = await resend.emails.send({
-      from: "UNIASIA <onboarding@resend.dev>",
+      from: "noreply@uniasia.shop", // This must be set up in Resend!
       to,
       subject,
       html,
     });
 
-    console.log("Resend email result:", data); // Debug
-
-    if (data.error) throw new Error(data.error.message || "Unknown send error");
+    // Debug: log the data object from Resend
+    if (data.error) throw new Error(JSON.stringify(data.error));
     return NextResponse.json({ success: true });
   } catch (e: any) {
-    console.error("[EMAIL ROUTE ERROR]", e);
-    return NextResponse.json({ error: e.message || "Email failed" }, { status: 500 });
+    // Log the full error object
+    console.error("[EMAIL ROUTE ERROR]", e, e?.message, e?.response?.data, e?.error);
+    return NextResponse.json({ error: e.message || "Email failed", details: e }, { status: 500 });
   }
 }

@@ -88,12 +88,12 @@ export default function AccountRequestPage() {
     return (
       <motion.span
         className={
-          "flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold " +
+          "flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border " +
           (status === "Approved"
-            ? "bg-green-100 text-green-700"
+            ? "bg-[#dcfce7] text-green-800 border-green-200"
             : status === "Rejected"
-            ? "bg-red-100 text-red-600"
-            : "bg-yellow-100 text-yellow-700")
+            ? "bg-[#fee2e2] text-red-700 border-red-200"
+            : "bg-[#fef9c3] text-yellow-800 border-yellow-200")
         }
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -170,45 +170,40 @@ export default function AccountRequestPage() {
     }
   };
 
-  // --- Modern Table, Modal, Sticky Head, and Search
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#fff8e1] to-[#ececec] py-8 px-2">
-      <div className="max-w-6xl mx-auto">
-        <motion.h1
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.5 }}
-          className="text-3xl md:text-4xl font-bold text-neutral-900 mb-1"
-        >
-          Account Requests
-        </motion.h1>
-        <p className="text-gray-700 mb-6 text-sm md:text-base">
-          View, approve, or reject new account signups in real time.
-        </p>
+    <div className="px-4 pb-6 pt-1 min-h-screen bg-gradient-to-br from-[#fff8e1] to-[#ececec]">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="pt-2 pb-1">
+          <h1 className="text-3xl font-bold mb-1">Account Requests</h1>
+          <p className="text-sm text-gray-500 mb-2">
+            View, approve, or reject new account signups in real time.
+          </p>
+        </div>
 
-        {/* Search */}
-        <div className="flex flex-wrap items-center gap-3 mb-4">
+        {/* Search bar */}
+        <div className="flex flex-wrap items-center gap-3 mb-5">
           <input
             type="text"
-            className="w-full md:w-96 px-5 py-3 rounded-full text-sm outline-none border border-gray-200 focus:ring-2 focus:ring-[#ffba20] transition-all"
+            className="w-full md:w-[22rem] px-4 py-2 rounded-xl border border-gray-200 bg-white shadow-sm text-sm outline-none focus:ring-2 focus:ring-[#ffba20] transition-all"
             placeholder="Search by name, email, contact, or status…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
 
-        {/* Table */}
-        <div className="bg-white rounded-2xl shadow-xl overflow-x-auto border border-yellow-200/40">
-          <table className="min-w-full text-[13.5px]">
-            <thead className="sticky top-0 z-10">
-              <tr className="bg-[#ffe174]/90 text-neutral-900 font-bold">
-                <th className="py-2 px-3 font-semibold rounded-tl-2xl text-left">Date</th>
-                <th className="py-2 px-3 font-semibold text-left">Name</th>
-                <th className="py-2 px-3 font-semibold text-left">Email</th>
-                <th className="py-2 px-3 font-semibold text-left">Contact #</th>
-                <th className="py-2 px-3 font-semibold text-left">Status</th>
-                <th className="py-2 px-3 font-semibold text-left">Role</th>
-                <th className="py-2 px-3 font-semibold rounded-tr-2xl text-left">Action</th>
+        {/* Table - styled like Activity Log */}
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-[13.5px] rounded-2xl overflow-hidden">
+            <thead>
+              <tr className="bg-[#ffd033] text-neutral-900 font-bold rounded-t-2xl">
+                <th className="py-3 px-4 font-semibold text-left rounded-tl-2xl">Date</th>
+                <th className="py-3 px-4 font-semibold text-left">Name</th>
+                <th className="py-3 px-4 font-semibold text-left">Email</th>
+                <th className="py-3 px-4 font-semibold text-left">Contact #</th>
+                <th className="py-3 px-4 font-semibold text-left">Status</th>
+                <th className="py-3 px-4 font-semibold text-left">Role</th>
+                <th className="py-3 px-4 font-semibold text-left rounded-tr-2xl">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -229,30 +224,28 @@ export default function AccountRequestPage() {
                   <tr
                     key={req.id}
                     className={
-                      "align-middle transition " +
+                      "transition " +
                       (i % 2 === 0
                         ? "bg-[#fffbe7] hover:bg-yellow-50"
                         : "bg-white hover:bg-yellow-50")
                     }
                   >
                     {/* Date */}
-                    <td className="py-2 px-3 align-middle" title={req.date_created}>
-                      <span className="whitespace-nowrap font-mono text-[13px]">
-                        {formatPHDate(req.date_created)}
-                      </span>
+                    <td className="py-2 px-4 align-middle font-mono text-[13px] whitespace-nowrap">
+                      {formatPHDate(req.date_created)}
                     </td>
                     {/* Name */}
-                    <td className="py-2 px-3 align-middle text-[13.5px]">{req.name}</td>
+                    <td className="py-2 px-4 align-middle">{req.name}</td>
                     {/* Email */}
-                    <td className="py-2 px-3 align-middle whitespace-nowrap text-[13.5px]">{req.email}</td>
+                    <td className="py-2 px-4 align-middle whitespace-nowrap">{req.email}</td>
                     {/* Contact number */}
-                    <td className="py-2 px-3 align-middle whitespace-nowrap text-[13.5px]">{req.contact_number}</td>
+                    <td className="py-2 px-4 align-middle whitespace-nowrap">{req.contact_number}</td>
                     {/* Status */}
-                    <td className="py-2 px-3 align-middle">
+                    <td className="py-2 px-4 align-middle">
                       <StatusBadge status={req.status} />
                     </td>
                     {/* Role (dropdown only if pending) */}
-                    <td className="py-2 px-3 align-middle">
+                    <td className="py-2 px-4 align-middle">
                       {req.status === "Pending" ? (
                         <select
                           className="border rounded px-2 py-1 bg-gray-50 outline-none focus:ring-2 focus:ring-[#ffba20] transition text-[13px]"
@@ -269,7 +262,7 @@ export default function AccountRequestPage() {
                       )}
                     </td>
                     {/* Approve/Reject buttons */}
-                    <td className="py-2 px-3 align-middle">
+                    <td className="py-2 px-4 align-middle">
                       {req.status === "Pending" && (
                         <div className="flex gap-2">
                           <button
