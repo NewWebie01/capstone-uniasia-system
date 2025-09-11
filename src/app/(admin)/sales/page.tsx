@@ -1337,7 +1337,7 @@ setPickingStatus((prev) => [
     >
       {selectedOrder.customers.payment_type || "N/A"}
     </span>
-    <div className="text-xs text-gray-500 ml-1">Customer&apos;s chosen payment method</div>
+    <div className="text-xs text-gray-500 ml-1">Customer chosen payment method</div>
   </div>
 
   {/* TERMS (only for Credit) */}
