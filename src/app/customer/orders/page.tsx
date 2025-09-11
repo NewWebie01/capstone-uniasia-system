@@ -1,6 +1,7 @@
 // src/app/customer/track/page.tsx
 "use client";
 
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
@@ -71,6 +72,7 @@ type Delivery = {
   date_received?: string | null;
   driver?: string | null;
   participants?: string[] | null;
+  shipping_fee?: number | null;
 };
 
 /* ------------------------------- UI helpers ------------------------------- */
@@ -142,6 +144,10 @@ export default function TrackPage() {
     Record<number, Delivery>
   >({});
 
+  //MODAL STATE
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState<number | null>(null);
+
   // For realtime subscriptions
   const [orderIds, setOrderIds] = useState<number[]>([]);
   const [deliveryIds, setDeliveryIds] = useState<number[]>([]);
@@ -187,7 +193,7 @@ export default function TrackPage() {
     if (!ids.length) return;
     const { data, error } = await supabase
       .from("truck_deliveries")
-      .select("id, status, schedule_date, eta_date, date_received, driver, participants")
+      .select("id, status, schedule_date, eta_date, date_received, driver, participants, shipping_fee")
       .in("id", ids);
     if (!error && data) {
       setDeliveriesById((prev) => {
@@ -551,6 +557,12 @@ export default function TrackPage() {
                             {deliv && (
                               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                                 <p>
+                                  <span className="text-gray-500">Shipping Fee:</span>{" "}
+                                  {typeof deliv.shipping_fee === "number"
+                                    ? `₱${deliv.shipping_fee.toFixed(2)}`
+                                    : "—"}
+                                </p>
+                                <p>
                                   <span className="text-gray-500">
                                     Schedule:
                                   </span>{" "}
@@ -592,27 +604,9 @@ export default function TrackPage() {
                         {deliv?.status === "To Receive" && (
                           <div className="mt-3">
                             <button
-                              onClick={async () => {
-                                const confirm = window.confirm("Confirm that you have received this order?");
-                                if (!confirm) return;
-
-                                const { error } = await supabase
-                                  .from("truck_deliveries")
-                                  .update({
-                                    status: "Delivered", 
-                                    date_received: new Date().toISOString(),
-                                  })
-                                  .eq("id", deliv.id);
-
-                                if (error) {
-                                  toast.error("Failed to confirm delivery. Please try again.");
-                                  if (error) {
-                                    console.error("Delivery update failed:", error);
-                                    toast.error("❌ Failed to confirm delivery. Please try again.");
-                                  }
-                                } else {
-                                  toast.success("Thank you! Delivery has been confirmed.");
-                                }
+                              onClick={() => {
+                                setSelectedDeliveryId(deliv.id);
+                                setConfirmOpen(true);
                               }}
                               className="px-4 py-2 text-sm font-medium bg-green-600 text-white rounded hover:bg-green-700 transition"
                             >
@@ -688,6 +682,49 @@ export default function TrackPage() {
           </div>
         )}
       </div>
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <h2 className="text-lg font-semibold mb-2">Confirm Delivery</h2>
+          <p className="text-sm text-gray-600">
+            Are you sure you want to mark this delivery as <strong>Received</strong>?
+          </p>
+
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              onClick={() => setConfirmOpen(false)}
+              className="px-4 py-2 border rounded hover:bg-gray-100"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={async () => {
+                if (!selectedDeliveryId) return;
+
+                const { error } = await supabase
+                  .from("truck_deliveries")
+                  .update({
+                    status: "Delivered",
+                    date_received: new Date().toISOString(),
+                  })
+                  .eq("id", selectedDeliveryId);
+
+                if (error) {
+                  console.error("Delivery update failed:", error);
+                  toast.error("❌ Failed to confirm delivery. Please try again.");
+                } else {
+                  toast.success("✅ Thank you! Delivery has been confirmed.");
+                }
+
+                setConfirmOpen(false);
+                setSelectedDeliveryId(null);
+              }}
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+            >
+              Confirm
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
