@@ -18,7 +18,9 @@ type InventoryItem = {
   unit: string;
   quantity: number;
   unit_price: number;
+  cost_price?: number;
   amount: number;
+  profit?: number;
 };
 
 type FastMovingProduct = {
@@ -66,6 +68,7 @@ type OrderWithDetails = {
       unit: string;
       quantity: number;
       unit_price: number;
+      cost_price?: number;
       amount?: number;
     };
   }[];
@@ -283,10 +286,12 @@ const totalDiscount = selectedOrder
   const totalOrders = orders.length;
 
   // Fetch all inventory items
-  const fetchItems = async () => {
-    const { data, error } = await supabase.from("inventory").select("*");
-    if (!error) setItems(data || []);
-  };
+ const fetchItems = async () => {
+  const { data, error } = await supabase
+    .from("inventory")
+    .select("*, profit");
+  if (!error) setItems(data || []);
+};
 
   // Fetch orders with related customer & items
   const fetchOrders = async () => {
@@ -324,7 +329,8 @@ const totalDiscount = selectedOrder
             subcategory,
             unit,
             quantity,
-            unit_price
+            unit_price,
+            cost_price
           )
         )
       `
@@ -1056,53 +1062,68 @@ setPickingStatus((prev) => [
 
       {/* Inventory Table */}
       <div className="overflow-x-auto rounded-lg shadow mb-6">
-        <table className="min-w-full bg-white text-sm">
-          <thead className="bg-[#ffba20] text-black text-left">
-            <tr>
-              <th className="py-2 px-4">SKU</th>
-              <th className="py-2 px-4">Product</th>
-              <th className="py-2 px-4">Category</th>
-              <th className="py-2 px-4">Subcategory</th>
-              <th className="py-2 px-4">Unit</th>
-              <th className="py-2 px-4 text-right">Quantity</th>
-              <th className="py-2 px-4 text-right">Unit Price</th>
-              <th className="py-2 px-4 text-right">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items
-              .filter((it) =>
-                it.product_name
-                  .toLowerCase()
-                  .includes(searchQuery.toLowerCase())
-              )
-              .map((it) => (
-                <tr
-                  key={it.id}
-                  className={
-                    "border-b hover:bg-gray-100 " +
-                    (it.quantity === 0
-                      ? "bg-red-100 text-red-700 font-semibold"
-                      : "")
-                  }
-                >
-                  <td className="py-2 px-4">{it.sku}</td>
-                  <td className="py-2 px-4">{it.product_name}</td>
-                  <td className="py-2 px-4">{it.category}</td>
-                  <td className="py-2 px-4">{it.subcategory}</td>
-                  <td className="py-2 px-4">{it.unit}</td>
-                  <td className="py-2 px-4 text-right">{it.quantity}</td>
-                  <td className="py-2 px-4 text-right">
-                    ₱{it.unit_price?.toLocaleString()}
-                  </td>
-                  <td className="py-2 px-4 text-right">
-                    ₱{(it.unit_price * it.quantity).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
-      </div>
+  <table className="min-w-full bg-white text-sm">
+    <thead className="bg-[#ffba20] text-black text-left">
+      <tr>
+        <th className="py-2 px-4">SKU</th>
+        <th className="py-2 px-4">Product</th>
+        <th className="py-2 px-4">Category</th>
+        <th className="py-2 px-4">Subcategory</th>
+        <th className="py-2 px-4">Unit</th>
+        <th className="py-2 px-4 text-right">Quantity</th>
+        <th className="py-2 px-4 text-right">Unit Price</th>
+        <th className="py-2 px-4 text-right">Cost Price</th>
+        <th className="py-2 px-4 text-right">Total</th>
+        <th className="py-2 px-4 text-right">Profit</th>
+
+      </tr>
+    </thead>
+    <tbody>
+      {items
+        .filter((it) =>
+          it.product_name
+            .toLowerCase()
+            .includes(searchQuery.toLowerCase())
+        )
+        .map((it) => (
+          <tr
+            key={it.id}
+            className={
+              "border-b hover:bg-gray-100 " +
+              (it.quantity === 0
+                ? "bg-red-100 text-red-700 font-semibold"
+                : "")
+            }
+          >
+            <td className="py-2 px-4">{it.sku}</td>
+            <td className="py-2 px-4">{it.product_name}</td>
+            <td className="py-2 px-4">{it.category}</td>
+            <td className="py-2 px-4">{it.subcategory}</td>
+            <td className="py-2 px-4">{it.unit}</td>
+            <td className="py-2 px-4 text-right">{it.quantity}</td>
+            <td className="py-2 px-4 text-right">
+              ₱{it.unit_price?.toLocaleString()}
+            </td>
+            <td className="py-2 px-4 text-right">
+              {it.cost_price !== undefined && it.cost_price !== null
+                ? `₱${it.cost_price.toLocaleString()}`
+                : "—"}
+            </td>
+            <td className="py-2 px-4 text-right">
+              ₱{(it.unit_price * it.quantity).toLocaleString()}
+            </td>
+            <td className="py-2 px-4 text-right">
+  ₱
+  {(it.profit ??
+    ((it.unit_price ?? 0) - (it.cost_price ?? 0)) * (it.quantity ?? 0)
+  ).toLocaleString()}
+</td>
+          </tr>
+        ))}
+    </tbody>
+  </table>
+</div>
+
 
       {/* Orders List */}
       <div
@@ -1483,10 +1504,12 @@ setPickingStatus((prev) => [
     <th className="py-2 px-3 text-left">Description</th>
     <th className="py-2 px-3 text-left">Notes</th>
     <th className="py-2 px-3 text-right">Unit Price</th>
+    <th className="py-2 px-3 text-right">Cost Price</th>
     <th className="py-2 px-3 text-right">Discount (%)</th>
     <th className="py-2 px-3 text-right">Amount</th>
   </tr>
 </thead>
+
 
 
                     <tbody>
@@ -1557,10 +1580,17 @@ setPickingStatus((prev) => [
 </td>
 
 
-      {/* Unit Price */}
-      <td className="py-2 px-3 text-right">
-        ₱{price.toLocaleString()}
-      </td>
+     {/* Unit Price */}
+<td className="py-2 px-3 text-right">
+  ₱{price.toLocaleString()}
+</td>
+{/* Cost Price */}
+<td className="py-2 px-3 text-right">
+  {item.inventory.cost_price !== undefined && item.inventory.cost_price !== null
+    ? `₱${item.inventory.cost_price.toLocaleString()}`
+    : "—"}
+</td>
+
 
       {/* Discount/Add (%) */}
 <td className="py-2 px-3 text-right">
@@ -1851,10 +1881,12 @@ setPickingStatus((prev) => [
     <th className="py-1 px-2 text-left">Description</th>
     <th className="py-1 px-2 text-left">Notes</th>
     <th className="py-1 px-2 text-right">Unit Price</th>
+    <th className="py-1 px-2 text-right">Cost Price</th>
     <th className="py-1 px-2 text-right">Discount</th>
     <th className="py-1 px-2 text-right">Amount</th>
   </tr>
 </thead>
+
 
 
                 <tbody>
@@ -1883,12 +1915,14 @@ const insufficient = qty > stock || stock === 0; // ← our rule
       <span className="text-green-600">Available</span>
     )}
   </td>
-  <td className="py-1 px-2 text-right">₱{price.toLocaleString()}</td>
   <td className="py-1 px-2 text-right">
-    {editedDiscounts[idx]
-      ? `-${Math.abs(editedDiscounts[idx])}%`
-      : "0%"}
-  </td>
+  ₱{price.toLocaleString()}
+</td>
+<td className="py-1 px-2 text-right">
+  {item.inventory.cost_price !== undefined && item.inventory.cost_price !== null
+    ? `₱${item.inventory.cost_price.toLocaleString()}`
+    : "—"}
+</td>
   <td className="py-1 px-2 text-right font-semibold">
     ₱
     {amount.toLocaleString(undefined, {

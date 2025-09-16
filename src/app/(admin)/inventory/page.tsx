@@ -10,15 +10,15 @@ type InventoryItem = {
   product_name: string;
   category: string;
   subcategory: string;
-  unit: string; // e.g. Piece, Dozen, Box, Pack, Kg (or custom)
+  unit: string;
   quantity: number;
   unit_price: number;
+  cost_price: number | null;
   amount: number;
+  profit: number | null;
   date_created: string;
   status: string;
   image_url?: string | null;
-
-  // NEW FIELDS
   weight_per_piece_kg: number | null;
   pieces_per_unit: number | null;
   total_weight_kg: number | null;
@@ -44,7 +44,6 @@ export default function InventoryPage() {
   const [subcategoryOptions, setSubcategoryOptions] = useState<string[]>([]);
   const [unitOptions, setUnitOptions] = useState<string[]>([]);
 
-  // Image upload state
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
 
@@ -56,12 +55,12 @@ export default function InventoryPage() {
     subcategory: "",
     unit: "",
     unit_price: 0,
+    cost_price: 0,
     amount: 0,
+    profit: 0,
     date_created: new Date().toISOString(),
     status: "",
     image_url: null,
-
-    // NEW
     weight_per_piece_kg: null,
     pieces_per_unit: null,
     total_weight_kg: null,
@@ -74,9 +73,23 @@ export default function InventoryPage() {
     unit: false,
     quantity: false,
     unit_price: false,
-    pieces_per_unit: false, // NEW
-    weight_per_piece_kg: false, // NEW
+    cost_price: false,
+    pieces_per_unit: false,
+    weight_per_piece_kg: false,
   });
+
+  useEffect(() => {
+    const unit_price = Number(newItem.unit_price) || 0;
+    const cost_price = Number(newItem.cost_price) || 0;
+    const quantity = Number(newItem.quantity) || 0;
+    const amount = unit_price * quantity;
+    const profit = (unit_price - cost_price) * quantity;
+    setNewItem((prev) => ({
+      ...prev,
+      amount,
+      profit,
+    }));
+  }, [newItem.unit_price, newItem.cost_price, newItem.quantity]);
 
   useEffect(() => {
     setValidationErrors((prev) => ({
@@ -85,8 +98,14 @@ export default function InventoryPage() {
       category: !newItem.category.trim(),
       subcategory: !newItem.subcategory.trim(),
       unit: !newItem.unit.trim(),
-      quantity: newItem.quantity < 0, // 0 is allowed
-      unit_price: newItem.unit_price < 0, // 0 is allowed
+      quantity: newItem.quantity < 0,
+      unit_price: newItem.unit_price < 0,
+      cost_price:
+        newItem.cost_price === null ||
+        newItem.cost_price === undefined ||
+        newItem.cost_price < 0 ||
+        (newItem.unit_price !== undefined &&
+          newItem.cost_price > newItem.unit_price),
       pieces_per_unit:
         (newItem.unit === "Box" || newItem.unit === "Pack") &&
         (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
@@ -97,18 +116,9 @@ export default function InventoryPage() {
     }));
   }, [newItem]);
 
-  // Compute amount whenever price or quantity changes
-  useEffect(() => {
-    const amount = newItem.unit_price * newItem.quantity;
-    setNewItem((prev) => ({ ...prev, amount }));
-  }, [newItem.unit_price, newItem.quantity]);
-
-  // Auto-default pieces_per_unit based on unit
   useEffect(() => {
     const u = newItem.unit;
-
     if (u === "Kg") {
-      // Treat piece as 1kg
       setNewItem((prev) => ({
         ...prev,
         pieces_per_unit: 1,
@@ -116,16 +126,13 @@ export default function InventoryPage() {
       }));
       return;
     }
-
     if (u === "Piece") {
       setNewItem((prev) => ({
         ...prev,
         pieces_per_unit: 1,
-        // keep weight_per_piece_kg as is (optional)
       }));
       return;
     }
-
     if (u === "Dozen") {
       setNewItem((prev) => ({
         ...prev,
@@ -133,12 +140,8 @@ export default function InventoryPage() {
       }));
       return;
     }
-
-    // Box / Pack (or any other custom unit): keep whatever user sets
-    // Do not overwrite pieces_per_unit here.
   }, [newItem.unit]);
 
-  // Compute total weight whenever any dependency changes
   useEffect(() => {
     const weightPerPiece =
       newItem.unit === "Kg" ? 1 : Number(newItem.weight_per_piece_kg) || 0;
@@ -148,12 +151,10 @@ export default function InventoryPage() {
         : Number(newItem.pieces_per_unit) ||
           (newItem.unit === "Piece" ? 1 : newItem.unit === "Dozen" ? 12 : 0);
     const qty = Number(newItem.quantity) || 0;
-
     const total =
       weightPerPiece > 0 && piecesPerUnit > 0 && qty > 0
         ? weightPerPiece * piecesPerUnit * qty
         : 0;
-
     setNewItem((prev) => ({
       ...prev,
       total_weight_kg: total || null,
@@ -215,22 +216,18 @@ export default function InventoryPage() {
     const ext = file.name.split(".").pop() || "jpg";
     const safeSku = (skuForName || "item").replace(/\s+/g, "-").toLowerCase();
     const path = `${safeSku}-${Date.now()}.${ext}`;
-
     const { error: uploadErr } = await supabase.storage
       .from(BUCKET)
       .upload(path, file, { cacheControl: "3600", upsert: false });
     if (uploadErr) throw uploadErr;
-
     const { data: publicUrlData } = supabase.storage
       .from(BUCKET)
       .getPublicUrl(path);
     return publicUrlData.publicUrl;
   };
 
-  // Normalize fields before save (enforce the concept consistently)
   const normalizeForSave = () => {
     let { unit, pieces_per_unit, weight_per_piece_kg, quantity } = newItem;
-
     if (unit === "Kg") {
       pieces_per_unit = 1;
       weight_per_piece_kg = 1;
@@ -239,15 +236,12 @@ export default function InventoryPage() {
     } else if (unit === "Dozen") {
       pieces_per_unit = 12;
     }
-    // Box/Pack/custom → respect user input
-
     const total_weight_kg =
       pieces_per_unit && weight_per_piece_kg
         ? Number(pieces_per_unit) *
           Number(weight_per_piece_kg) *
           Number(quantity || 0)
         : null;
-
     return {
       pieces_per_unit: pieces_per_unit ?? null,
       weight_per_piece_kg: weight_per_piece_kg ?? null,
@@ -263,7 +257,13 @@ export default function InventoryPage() {
         subcategory: !newItem.subcategory,
         unit: !newItem.unit,
         quantity: newItem.quantity < 0,
-        unit_price: newItem.unit_price < 0, // allow 0
+        unit_price: newItem.unit_price < 0,
+        cost_price:
+          newItem.cost_price === null ||
+          newItem.cost_price === undefined ||
+          newItem.cost_price < 0 ||
+          (newItem.unit_price !== undefined &&
+            newItem.cost_price > newItem.unit_price),
         pieces_per_unit:
           (newItem.unit === "Box" || newItem.unit === "Pack") &&
           (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
@@ -275,12 +275,18 @@ export default function InventoryPage() {
       setValidationErrors(errors);
       const hasErrors = Object.values(errors).some(Boolean);
       if (hasErrors) {
-        toast.error("Please fill in all required fields correctly.");
+        toast.error("Costing Price should be lower than Unit Price.");
         return;
       }
-
+      if (
+        newItem.cost_price !== null &&
+        newItem.unit_price !== null &&
+        newItem.cost_price > newItem.unit_price
+      ) {
+        toast.error("Cost price cannot be greater than unit price. Please check your values.");
+        return;
+      }
       setSaving(true);
-
       let finalImageUrl = newItem.image_url || null;
       if (imageFile) {
         finalImageUrl = await uploadImageAndGetUrl(
@@ -288,25 +294,22 @@ export default function InventoryPage() {
           newItem.sku || newItem.product_name
         );
       }
-
       const normalized = normalizeForSave();
-
+      const profit = (Number(newItem.unit_price) - Number(newItem.cost_price)) * Number(newItem.quantity);
       const dataToSave = {
         ...newItem,
         ...normalized,
         image_url: finalImageUrl,
         date_created: new Date().toISOString(),
+        profit,
       };
-
       if (editingItemId !== null) {
         const { error } = await supabase
           .from("inventory")
           .update(dataToSave)
           .eq("id", editingItemId);
         if (error) throw error;
-
         toast.success("Item updated successfully!");
-
         await supabase.from("activity_logs").insert([
           {
             user_email: (await supabase.auth.getUser()).data.user?.email,
@@ -323,9 +326,7 @@ export default function InventoryPage() {
       } else {
         const { error } = await supabase.from("inventory").insert([dataToSave]);
         if (error) throw error;
-
         toast.success("New item added successfully!");
-
         await supabase.from("activity_logs").insert([
           {
             user_email: (await supabase.auth.getUser()).data.user?.email,
@@ -339,8 +340,6 @@ export default function InventoryPage() {
           },
         ]);
       }
-
-      // reset + refresh
       setNewItem({
         sku: "",
         product_name: "",
@@ -349,7 +348,9 @@ export default function InventoryPage() {
         subcategory: "",
         unit: "",
         unit_price: 0,
+        cost_price: 0,
         amount: 0,
+        profit: 0,
         date_created: new Date().toISOString(),
         status: "",
         image_url: null,
@@ -361,13 +362,12 @@ export default function InventoryPage() {
       setImagePreview(null);
       setShowForm(false);
       setEditingItemId(null);
-
       fetchItems();
       fetchDropdownOptions();
     } catch (err: any) {
       console.error("Update error:", err);
       toast.error(
-        `❌ Error saving item: ${err.message || JSON.stringify(err)}`
+        `Error saving item: ${err.message || JSON.stringify(err)}`
       );
     } finally {
       setSaving(false);
@@ -382,7 +382,6 @@ export default function InventoryPage() {
 
   const totalPages = Math.ceil(items.length / itemsPerPage);
 
-  // Image modal state
   const [showImageModal, setShowImageModal] = useState(false);
   const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(
     null
@@ -397,7 +396,6 @@ export default function InventoryPage() {
     setImageModalItem(null);
   };
 
-  // Cell utility classes for consistent alignment
   const cell = "px-4 py-2 text-left align-middle";
   const cellNowrap = `${cell} whitespace-nowrap`;
 
@@ -407,7 +405,6 @@ export default function InventoryPage() {
       <p className="text-neutral-500 text-sm mb-4">
         Manage and view all inventory items, categories, and stock levels.
       </p>
-
       <div className="flex gap-4 mb-4">
         <input
           className="border px-4 py-2 w-full max-w-md rounded"
@@ -428,7 +425,9 @@ export default function InventoryPage() {
               subcategory: "",
               unit: "",
               unit_price: 0,
+              cost_price: 0,
               amount: 0,
+              profit: 0,
               date_created: new Date().toISOString(),
               status: "",
               image_url: null,
@@ -443,7 +442,6 @@ export default function InventoryPage() {
           Add New Item
         </button>
       </div>
-
       <div className="overflow-auto rounded-lg shadow">
         <table className="min-w-full bg-white text-sm">
           <thead className="bg-[#ffba20] text-black text-left">
@@ -455,9 +453,10 @@ export default function InventoryPage() {
               <th className={cellNowrap}>Unit</th>
               <th className={cellNowrap}>Quantity</th>
               <th className={cellNowrap}>Unit Price</th>
+              <th className={cellNowrap}>Cost Price</th>
               <th className={cellNowrap}>Total</th>
-              <th className={cellNowrap}>Total Weight</th>{" "}
-              {/* NEW (optional) */}
+              <th className={cellNowrap}>Profit</th>
+              <th className={cellNowrap}>Total Weight</th>
               <th className={cellNowrap}>Status</th>
               <th className={cellNowrap}>Date</th>
               <th className={cellNowrap}>Actions</th>
@@ -467,7 +466,6 @@ export default function InventoryPage() {
             {filteredItems.map((item) => (
               <tr key={item.id} className="border-b hover:bg-gray-50">
                 <td className={cellNowrap}>{item.sku}</td>
-
                 <td className="px-4 py-2 whitespace-normal break-words max-w-xs">
                   {item.image_url ? (
                     <button
@@ -483,17 +481,22 @@ export default function InventoryPage() {
                     </span>
                   )}
                 </td>
-
                 <td className={cellNowrap}>{item.category}</td>
                 <td className={cellNowrap}>{item.subcategory}</td>
                 <td className={cellNowrap}>{item.unit}</td>
                 <td className={cellNowrap}>{item.quantity}</td>
-
                 <td className={cellNowrap}>
                   ₱{item.unit_price.toLocaleString()}
                 </td>
+                <td className={cellNowrap}>
+                  {item.cost_price !== null && item.cost_price !== undefined
+                    ? `₱${item.cost_price.toLocaleString()}`
+                    : "—"}
+                </td>
                 <td className={cellNowrap}>₱{item.amount.toLocaleString()}</td>
-
+                <td className={cellNowrap}>
+                  ₱{(item.profit ?? (item.unit_price - (item.cost_price ?? 0)) * item.quantity).toLocaleString()}
+                </td>
                 <td className={cellNowrap}>
                   {item.total_weight_kg
                     ? `${item.total_weight_kg.toLocaleString(undefined, {
@@ -501,7 +504,6 @@ export default function InventoryPage() {
                       })} kg`
                     : "—"}
                 </td>
-
                 <td className={cellNowrap}>
                   <span
                     className={`font-semibold px-2 py-1 rounded ${
@@ -513,18 +515,22 @@ export default function InventoryPage() {
                     {item.status}
                   </span>
                 </td>
-
                 <td className={cellNowrap}>
                   {new Date(item.date_created).toLocaleString("en-PH")}
                 </td>
-
                 <td className={cellNowrap}>
                   <button
                     className="text-blue-600 hover:underline"
                     onClick={() => {
                       setShowForm(true);
                       setEditingItemId(item.id);
-                      setNewItem({ ...item });
+                      setNewItem({
+                        ...item,
+                        cost_price:
+                          item.cost_price !== null && item.cost_price !== undefined
+                            ? item.cost_price
+                            : 0,
+                      });
                       setImageFile(null);
                       setImagePreview(item.image_url || null);
                     }}
@@ -538,7 +544,7 @@ export default function InventoryPage() {
               <tr>
                 <td
                   className="px-4 py-6 text-center text-gray-500"
-                  colSpan={12}
+                  colSpan={14}
                 >
                   No items found.
                 </td>
@@ -547,7 +553,6 @@ export default function InventoryPage() {
           </tbody>
         </table>
       </div>
-
       <div className="mt-4 flex justify-between items-center">
         <button
           disabled={currentPage === 1}
@@ -567,8 +572,6 @@ export default function InventoryPage() {
           Next →
         </button>
       </div>
-
-      {/* IMAGE MODAL */}
       {showImageModal && imageModalItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white rounded-lg max-w-md w-full overflow-hidden">
@@ -648,15 +651,12 @@ export default function InventoryPage() {
           </div>
         </div>
       )}
-
-      {/* ADD/EDIT FORM MODAL */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
           <div className="bg-white p-8 rounded-lg max-w-xl w-full max-h-[90vh] overflow-y-auto space-y-4">
             <h2 className="text-lg font-semibold">
               {editingItemId ? "Edit Item" : "Add New Item"}
             </h2>
-
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
                 SKU<span className="text-red-500">*</span>
@@ -670,7 +670,6 @@ export default function InventoryPage() {
                 }
               />
             </div>
-
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
                 Product Name <span className="text-red-500">*</span>
@@ -687,8 +686,6 @@ export default function InventoryPage() {
                 }
               />
             </div>
-
-            {/* CATEGORY */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
                 Category<span className="text-red-500">*</span>
@@ -736,8 +733,6 @@ export default function InventoryPage() {
                 </label>
               </div>
             </div>
-
-            {/* SUBCATEGORY */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
                 Subcategory<span className="text-red-500">*</span>
@@ -785,8 +780,6 @@ export default function InventoryPage() {
                 </label>
               </div>
             </div>
-
-            {/* UNIT */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
                 Unit<span className="text-red-500">*</span>
@@ -810,17 +803,13 @@ export default function InventoryPage() {
                     className="flex-1 border px-4 py-2 rounded"
                   >
                     <option value="">Select Unit</option>
-                    {/* Fixed options first (Shopee/Lazada style) */}
                     {FIXED_UNIT_OPTIONS.map((u) => (
                       <option key={u} value={u}>
                         {u}
                       </option>
                     ))}
-                    {/* Dynamic options from DB (avoid duplicating fixed ones) */}
                     {unitOptions
-                      .filter(
-                        (u) => !FIXED_UNIT_OPTIONS.includes(u as FixedUnit)
-                      )
+                      .filter((u) => !FIXED_UNIT_OPTIONS.includes(u as FixedUnit))
                       .map((u) => (
                         <option key={u} value={u}>
                           {u}
@@ -838,8 +827,6 @@ export default function InventoryPage() {
                 </label>
               </div>
             </div>
-
-            {/* PIECES PER UNIT (only for Box/Pack or custom where needed) */}
             {newItem.unit &&
               newItem.unit !== "Piece" &&
               newItem.unit !== "Dozen" &&
@@ -869,8 +856,6 @@ export default function InventoryPage() {
                   />
                 </div>
               )}
-
-            {/* WEIGHT PER PIECE (kg) */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
                 Weight / piece (kg)
@@ -885,9 +870,7 @@ export default function InventoryPage() {
                 placeholder={
                   newItem.unit === "Kg" ? "1 (auto for Kg items)" : "e.g. 0.45"
                 }
-                value={
-                  newItem.unit === "Kg" ? 1 : newItem.weight_per_piece_kg ?? ""
-                }
+                value={newItem.unit === "Kg" ? 1 : newItem.weight_per_piece_kg ?? ""}
                 disabled={newItem.unit === "Kg"}
                 onChange={(e) =>
                   setNewItem((prev) => ({
@@ -900,8 +883,6 @@ export default function InventoryPage() {
                 }
               />
             </div>
-
-            {/* QUANTITY */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
                 Quantity<span className="text-red-500">*</span>
@@ -927,8 +908,6 @@ export default function InventoryPage() {
                 }
               />
             </div>
-
-            {/* UNIT PRICE */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
                 Unit Price<span className="text-red-500">*</span>
@@ -950,8 +929,27 @@ export default function InventoryPage() {
                 }
               />
             </div>
-
-            {/* TOTAL PRICE */}
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">
+                Cost Price<span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                min={0}
+                className={`flex-1 border px-4 py-2 rounded ${
+                  validationErrors.cost_price ? "border-red-500" : ""
+                }`}
+                placeholder="₱ cost per unit"
+                value={newItem.cost_price ?? ""}
+                onFocus={e => e.target.select()}
+                onChange={e =>
+                  setNewItem(prev => ({
+                    ...prev,
+                    cost_price: Math.max(0, parseFloat(e.target.value) || 0),
+                  }))
+                }
+              />
+            </div>
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Total Price</label>
               <input
@@ -962,8 +960,18 @@ export default function InventoryPage() {
                 disabled
               />
             </div>
-
-            {/* TOTAL WEIGHT (read-only) */}
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">Profit</label>
+              <input
+                type="text"
+                className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
+                value={`₱${(
+                  (newItem.unit_price - (newItem.cost_price ?? 0)) * newItem.quantity
+                ).toLocaleString()}`}
+                readOnly
+                disabled
+              />
+            </div>
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Total Weight</label>
               <input
@@ -980,8 +988,6 @@ export default function InventoryPage() {
                 disabled
               />
             </div>
-
-            {/* IMAGE */}
             <input
               type="file"
               accept="image/png, image/jpeg, image/webp, image/gif"
@@ -1019,7 +1025,6 @@ export default function InventoryPage() {
             <p className="text-xs text-gray-500 mt-1">
               Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
             </p>
-
             {imagePreview && (
               <button
                 type="button"
@@ -1029,7 +1034,6 @@ export default function InventoryPage() {
                 Remove selected image
               </button>
             )}
-
             <div className="flex justify-end gap-2 pt-4">
               <button
                 onClick={() => {
@@ -1041,7 +1045,6 @@ export default function InventoryPage() {
               >
                 Cancel
               </button>
-
               <button
                 onClick={handleSubmitItem}
                 disabled={saving}
