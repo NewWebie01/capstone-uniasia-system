@@ -632,16 +632,26 @@ setPickingStatus((prev) => [
 
       await Promise.all([fetchOrders(), fetchItems()]);
       toast.success("Order successfully completed!");
-    } catch (err: any) {
-      console.error("Failed completing order:", err);
-      toast.error(
-        `Failed to complete order: ${err?.message ?? "Unexpected error"}`
-      );
-    } finally {
       setIsCompletingOrder(false);
-    }
+     } catch (err: any) {
+  if (
+    err?.message &&
+    err.message.includes('unique constraint "unique_po_number"')
+  ) {
+    toast.error("PO Number is already used, try another.");
+    setIsCompletingOrder(false);
+    setShowFinalConfirm(false);
+    setShowSalesOrderModal(true);
+    return;
+  }
+  toast.error(
+    `Failed to complete order: ${err?.message ?? "Unexpected error"}`
+  );
+  setIsCompletingOrder(false);
+  setShowFinalConfirm(false);
+  setShowSalesOrderModal(true);
+}
   };
-
   const handleOrderConfirm = async () => {
     if (!selectedOrder) return;
     setShowFinalConfirm(true);
@@ -1340,22 +1350,26 @@ setPickingStatus((prev) => [
     <div className="text-xs text-gray-500 ml-1">Customer chosen payment method</div>
   </div>
 
-  {/* TERMS (only for Credit) */}
-  {selectedOrder.customers.payment_type === "Credit" && (
-    <div>
-      <label className="font-semibold mr-2">Terms:</label>
-      <input
-        type="number"
-        min={1}
-        value={numberOfTerms}
-        onChange={(e) => setNumberOfTerms(Math.max(1, Number(e.target.value)))}
-        className="border rounded px-2 py-1 w-20 text-center"
-      />
-      <div className="text-xs text-gray-500 ml-1">
-        Number of months to pay (credit terms)
-      </div>
+{selectedOrder.customers.payment_type === "Credit" && (
+  <div>
+    <label className="font-semibold mr-2">Terms:</label>
+    <input
+      type="number"
+      min={1}
+      max={48}
+      value={numberOfTerms}
+      onChange={(e) => {
+        let val = Math.max(1, Math.min(48, Number(e.target.value)));
+        setNumberOfTerms(val);
+      }}
+      className="border rounded px-2 py-1 w-20 text-center"
+    />
+    <div className="text-xs text-gray-500 ml-1">
+      Number of months to pay (max 48 months / 4 years)
     </div>
-  )}
+  </div>
+)}
+
 
   {/* INTEREST % (only for Credit) */}
   {selectedOrder.customers.payment_type === "Credit" && (
