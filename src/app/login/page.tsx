@@ -17,6 +17,10 @@ const dmSans = DM_Sans({
   variable: "--font-dm-sans",
 });
 
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -26,9 +30,11 @@ export default function LoginPage() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-
   const didNavigate = useRef(false);
   const [checking, setChecking] = useState(true);
+
+  // Privacy modal
+  const [showPrivacy, setShowPrivacy] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -49,6 +55,17 @@ export default function LoginPage() {
     };
   }, []);
 
+  function shouldBypassOtp(email: string): boolean {
+    const otpVerified = localStorage.getItem("otpVerified") === "true";
+    const otpVerifiedEmail = localStorage.getItem("otpVerifiedEmail");
+    const otpVerifiedExpiry = parseInt(localStorage.getItem("otpVerifiedExpiry") || "0", 10);
+    return (
+      otpVerified &&
+      otpVerifiedEmail === email.trim() &&
+      Date.now() < otpVerifiedExpiry
+    );
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLoading || didNavigate.current) return;
@@ -56,6 +73,7 @@ export default function LoginPage() {
     setIsLoading(true);
     setErrorMessage("");
 
+    // 1. Password check
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
@@ -80,42 +98,69 @@ export default function LoginPage() {
     const user = data?.user;
     const role = (user?.user_metadata?.role as string | undefined) ?? undefined;
 
-    supabase
-      .from("activity_logs")
-      .insert([
-        {
-          user_email: user?.email ?? null,
-          user_role: role ?? null,
-          action: "Login",
-          details: {},
-          created_at: new Date().toISOString(),
-        },
-      ])
-      .then(({ error: logError }) => {
-        if (logError) console.error("Failed to insert activity log:", logError);
-      });
-
-    if (!didNavigate.current) {
+    // 2. Check skip-OTP logic (1hr)
+    if (shouldBypassOtp(email)) {
       didNavigate.current = true;
-      if (role === "admin") {
-        router.replace("/dashboard");
-      } else if (role === "customer") {
-        router.replace("/customer/product-catalog");
-      } else {
+      supabase
+        .from("activity_logs")
+        .insert([
+          {
+            user_email: user?.email ?? null,
+            user_role: role ?? null,
+            action: "Login",
+            details: {},
+            created_at: new Date().toISOString(),
+          },
+        ])
+        .then(({ error: logError }) => {
+          if (logError) console.error("Failed to insert activity log:", logError);
+        });
+      if (role === "admin") router.replace("/dashboard");
+      else if (role === "customer") router.replace("/customer/product-catalog");
+      else {
         setErrorMessage("Access denied: No role found for this account.");
         await supabase.auth.signOut();
         didNavigate.current = false;
         setIsLoading(false);
       }
+      return;
     }
+
+    // 3. OTP required: generate and redirect
+    const newOtp = generateOTP();
+    const otpExpiry = Date.now() + 60 * 60 * 1000; // 1 hour
+
+    localStorage.setItem("otpCode", newOtp);
+    localStorage.setItem("otpExpiry", (Date.now() + 5 * 60 * 1000).toString()); // 5 mins to enter code
+    localStorage.setItem("otpEmail", email.trim());
+    localStorage.setItem("otpVerified", "false");
+    localStorage.setItem("otpVerifiedEmail", email.trim());
+    localStorage.setItem("otpVerifiedExpiry", otpExpiry.toString());
+
+    try {
+      const res = await fetch("/api/send-otp", {
+        method: "POST",
+        body: JSON.stringify({ email: email.trim(), otp: newOtp }),
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        setErrorMessage("Failed to send OTP. Please try again.");
+        setIsLoading(false);
+        return;
+      }
+    } catch {
+      setErrorMessage("Failed to send OTP. Please try again.");
+      setIsLoading(false);
+      return;
+    }
+
+    router.replace(`/otp-verification?email=${encodeURIComponent(email.trim())}`);
   };
 
   if (checking) return null;
 
   return (
-    <div
-      className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}
-    >
+    <div className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}>
       {/* Loading Overlay */}
       <AnimatePresence>
         {isLoading && (
@@ -133,14 +178,11 @@ export default function LoginPage() {
               className="bg-white rounded-xl shadow-2xl px-8 py-6 flex items-center gap-3"
             >
               <span className="h-5 w-5 rounded-full border-2 border-gray-300 border-t-transparent animate-spin" />
-              <span className="text-sm font-medium text-gray-700">
-                Signing in…
-              </span>
+              <span className="text-sm font-medium text-gray-700">Signing in…</span>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
-
       {/* Header */}
       <header className="sticky top-0 backdrop-blur-sm z-20">
         <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
@@ -148,7 +190,6 @@ export default function LoginPage() {
             <p>UNIASIA - Reliable Hardware Supplier in the Philippines</p>
           </div>
         </div>
-
         <div className="py-5">
           <div className="container">
             <div className="flex items-center justify-between relative">
@@ -167,13 +208,10 @@ export default function LoginPage() {
                   className="cursor-pointer"
                 />
               </motion.button>
-
-              {/* Mobile Menu */}
               <MenuIcon
                 className="h-5 w-5 md:hidden cursor-pointer"
                 onClick={() => setIsMenuOpen(!isMenuOpen)}
               />
-
               <AnimatePresence>
                 {isMenuOpen && (
                   <motion.div
@@ -196,7 +234,6 @@ export default function LoginPage() {
           </div>
         </div>
       </header>
-
       {/* Login Section */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
@@ -234,7 +271,6 @@ export default function LoginPage() {
                   disabled={isLoading}
                 />
               </div>
-
               {/* Password Field */}
               <div className="flex flex-col text-left">
                 <label
@@ -254,13 +290,9 @@ export default function LoginPage() {
                   disabled={isLoading}
                 />
               </div>
-
-              {/* Error */}
               {errorMessage && (
                 <p className="text-red-600 text-sm -mt-3">{errorMessage}</p>
               )}
-
-              {/* Remember Me */}
               <div className="flex gap-2 items-center">
                 <input
                   id="remember"
@@ -273,8 +305,6 @@ export default function LoginPage() {
                   Remember Password
                 </label>
               </div>
-
-              {/* Submit */}
               <motion.button
                 type="submit"
                 whileTap={{ scale: 0.95 }}
@@ -293,8 +323,6 @@ export default function LoginPage() {
                 )}
               </motion.button>
             </form>
-
-            {/* Sign Up Link */}
             <p className="text-sm text-gray-600">
               Don’t have an account?{" "}
               <button
@@ -305,9 +333,14 @@ export default function LoginPage() {
                 Sign Up
               </button>
             </p>
+            <button
+              type="button"
+              onClick={() => setShowPrivacy(true)}
+              className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mt-2"
+            >
+              Privacy Policy
+            </button>
           </div>
-
-          {/* Splash Image */}
           <Image
             src={splashImage}
             alt="Splash Image"
@@ -315,6 +348,50 @@ export default function LoginPage() {
             priority
           />
         </div>
+        <AnimatePresence>
+          {showPrivacy && (
+            <motion.div
+              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                initial={{ scale: 0.98, y: 40, opacity: 0 }}
+                animate={{ scale: 1, y: 0, opacity: 1 }}
+                exit={{ scale: 0.98, y: 40, opacity: 0 }}
+                className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-xl relative"
+              >
+                <button
+                  onClick={() => setShowPrivacy(false)}
+                  className="absolute top-4 right-4 text-gray-400 hover:text-gray-900 transition-colors"
+                  aria-label="Close"
+                >
+                  <span className="sr-only">Close</span>
+                  <svg width={20} height={20} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <h2 className="text-2xl font-bold mb-2 text-[#181918]">Privacy Policy</h2>
+                <div className="text-gray-700 text-sm leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+                  <p>
+                    <b>UniAsia Hardware & Electrical Marketing Corp</b> values your privacy.
+                    We collect only the necessary information (such as email and password) to authenticate your account and provide access to our services.
+                  </p>
+                  <p>
+                    Your credentials are never shared or sold. We may use your email to communicate important account information or security alerts.
+                  </p>
+                  <p>
+                    For support or more details, contact <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">support@uniasia.com</a>.
+                  </p>
+                  <p className="mt-2 text-xs text-gray-400">
+                    Last updated: September 2025
+                  </p>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.section>
     </div>
   );
