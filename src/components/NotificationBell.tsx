@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { BellIcon } from "@heroicons/react/24/solid";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { toast } from "sonner";
+import { emit } from "@/utils/eventEmitter";
 
 type OrderItem = {
   product_name: string;
@@ -30,7 +31,7 @@ export default function NotificationBell() {
   const supabase = createClientComponentClient();
   const router = useRouter();
 
-  // ✅ Deduplication guard
+  // Deduplication guard
   const lastOrderId = useRef<string | null>(null);
 
   useEffect(() => {
@@ -44,7 +45,6 @@ export default function NotificationBell() {
           table: "orders",
         },
         async (payload) => {
-          // 🚫 Skip duplicate events
           if (payload.new.id === lastOrderId.current) return;
           lastOrderId.current = payload.new.id;
 
@@ -104,18 +104,18 @@ export default function NotificationBell() {
     };
   }, [supabase]);
 
-  const handleClick = () => {
-    setIsModalOpen(true);
-  };
-
-  const handleGoToSales = (orderId: string) => {
+  // NEW: Always navigate to /sales then emit scroll-to-order event
+  const handleGoToSales = async (orderId: string) => {
     setOrders((prev) =>
       prev.map((order) =>
         order.id === orderId ? { ...order, read: true } : order
       )
     );
     setIsModalOpen(false);
-    router.push(`/sales?order=${orderId}`);
+    await router.push("/sales");
+    setTimeout(() => {
+      emit("scroll-to-order", orderId);
+    }, 400);
   };
 
   return (
@@ -124,7 +124,7 @@ export default function NotificationBell() {
       <div
         className="fixed top-16 right-12 z-50 bg-white shadow-lg rounded-full p-3 cursor-pointer transition-transform hover:scale-110"
         title="Notifications"
-        onClick={handleClick}
+        onClick={() => setIsModalOpen(true)}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
@@ -144,7 +144,6 @@ export default function NotificationBell() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
           <div className="bg-white rounded-lg p-6 max-w-xl w-full shadow-lg max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-semibold mb-4">🛒 Recent Orders</h2>
-
             {orders.length === 0 ? (
               <div className="text-gray-500">No new orders</div>
             ) : (
@@ -176,8 +175,7 @@ export default function NotificationBell() {
                     <ul className="list-disc list-inside text-sm space-y-1 mb-2">
                       {order.items.map((item, idx) => (
                         <li key={idx}>
-                          <strong>{item.product_name}</strong> — {item.quantity}{" "}
-                          pcs ({item.category} / {item.subcategory})
+                          <strong>{item.product_name}</strong> — {item.quantity} pcs ({item.category} / {item.subcategory})
                         </li>
                       ))}
                     </ul>
@@ -185,7 +183,6 @@ export default function NotificationBell() {
                 ))}
               </div>
             )}
-
             <div className="mt-6 text-right">
               <button
                 className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-800"

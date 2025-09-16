@@ -7,6 +7,7 @@ import { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 import PageLoader from "@/components/PageLoader";
 import { toast } from "sonner";
+import { on as onEvent } from "@/utils/eventEmitter";
 
 type InventoryItem = {
   id: number;
@@ -74,6 +75,7 @@ type PickingOrder = {
   orderId: string;
   status: "accepted" | "rejected";
 };
+
 
 function SalesPageContent() {
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -157,6 +159,15 @@ function SalesPageContent() {
     })();
   }, []);
 
+  useEffect(() => {
+  // Register event: listen for "scroll-to-order"
+  const unsubscribe = onEvent("scroll-to-order", (orderId: string) => {
+    scrollToOrder(orderId); // this function already exists in your code
+  });
+  return () => unsubscribe();
+}, []);
+
+
   async function fetchActivityLogs(orderId: string) {
     setLogsLoading(true);
     setLogOrderId(orderId);
@@ -230,6 +241,16 @@ const subtotalBeforeDiscount = selectedOrder
       0
     )
   : 0;
+
+function scrollToOrder(orderId: string) {
+  const el = orderRefs.current[orderId];
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Optionally add a highlight for visibility:
+    el.classList.add("ring-2", "ring-blue-500");
+    setTimeout(() => el.classList.remove("ring-2", "ring-blue-500"), 1200);
+  }
+}
 
 
 // Total discount/add
