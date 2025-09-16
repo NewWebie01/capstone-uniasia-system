@@ -103,61 +103,74 @@ export default function AccountCreationPage() {
     setHasScrolledToBottom(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const newErrors: Record<string, string> = {};
+ const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  const newErrors: Record<string, string> = {};
 
-    if (!formData.name.trim()) newErrors.name = "Name is required";
-    if (!EMAIL_REGEX.test(formData.email))
-      newErrors.email = "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
-    if (!/^\d{10}$/.test(formData.contact_number))
-      newErrors.contact_number = "Enter 10 digits after +63 (e.g., 9201234567)";
+  if (!formData.name.trim()) newErrors.name = "Name is required";
+  if (!EMAIL_REGEX.test(formData.email))
+    newErrors.email = "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
+  if (!/^\d{10}$/.test(formData.contact_number))
+    newErrors.contact_number = "Enter 10 digits after +63 (e.g., 9201234567)";
 
-    const personalInfo = [formData.name, formData.email, "+63" + formData.contact_number];
-    const pwStrength = getPasswordStrength(formData.password, personalInfo);
-    if (["Weak", "Too Personal", "Invalid"].includes(pwStrength)) {
-      newErrors.password =
-        pwStrength === "Too Personal"
-          ? "Password must not include your name, email, or contact."
-          : "Password is too weak. Use a mix of letters, numbers, special symbols (10+ chars).";
-    }
-    if (formData.password !== formData.confirmPassword)
-      newErrors.confirmPassword = "Passwords do not match";
+  const personalInfo = [formData.name, formData.email, "+63" + formData.contact_number];
+  const pwStrength = getPasswordStrength(formData.password, personalInfo);
+  if (["Weak", "Too Personal", "Invalid"].includes(pwStrength)) {
+    newErrors.password =
+      pwStrength === "Too Personal"
+        ? "Password must not include your name, email, or contact."
+        : "Password is too weak. Use a mix of letters, numbers, special symbols (10+ chars).";
+  }
+  if (formData.password !== formData.confirmPassword)
+    newErrors.confirmPassword = "Passwords do not match";
 
-    if (!policyAccepted) {
-      newErrors.privacy = "You must read and accept the Privacy Policy.";
-    }
+  if (!policyAccepted) {
+    newErrors.privacy = "You must read and accept the Privacy Policy.";
+  }
 
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
+  if (Object.keys(newErrors).length > 0) {
+    setErrors(newErrors);
+    return;
+  }
+
+  setIsLoading(true);
+  try {
+    const contactNumber = "+63" + formData.contact_number;
+    const { error } = await supabase.from("account_requests").insert([
+      {
+        name: formData.name,
+        email: formData.email,
+        contact_number: contactNumber,
+        role: "customer",
+        password: formData.password,
+        status: "Pending",
+        date_created: getPHISOString(),
+      },
+    ]);
+    if (error) {
+      // ⭐ Handle duplicate email error based on your unique constraint name:
+      if (
+        error.message?.toLowerCase().includes("unique") &&
+        error.message?.toLowerCase().includes("email")
+      ) {
+        setErrors({ email: "This email address is already registered. Please use a different email." });
+        toast.error("This email address is already registered. Please use a different email.");
+      } else {
+        toast.error("Unexpected error: " + (error.message || "Unknown error"));
+      }
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const contactNumber = "+63" + formData.contact_number;
-      const { error } = await supabase.from("account_requests").insert([
-        {
-          name: formData.name,
-          email: formData.email,
-          contact_number: contactNumber,
-          role: "customer",
-          password: formData.password,
-          status: "Pending",
-          date_created: getPHISOString(),
-        },
-      ]);
-      if (error) throw error;
+    toast.success("Account request submitted! Please wait for admin approval.");
+    handleReset();
+  } catch (err: any) {
+    console.error(err);
+    toast.error("Unexpected error: " + (err?.message || "Unknown error"));
+  } finally {
+    setIsLoading(false);
+  }
+};
 
-      toast.success("Account request submitted! Please wait for admin approval.");
-      handleReset();
-    } catch (err: any) {
-      console.error(err);
-      toast.error("Unexpected error: " + (err?.message || "Unknown error"));
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const personalInfo = [formData.name, formData.email, "+63" + formData.contact_number];
   const passwordStrength = getPasswordStrength(formData.password, personalInfo);
