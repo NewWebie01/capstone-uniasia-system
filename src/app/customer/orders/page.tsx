@@ -13,6 +13,7 @@ import {
   MapPin,
   Phone,
   Mail,
+  Info,
 } from "lucide-react";
 
 /* ----------------------------- Date formatter ----------------------------- */
@@ -32,15 +33,27 @@ const formatPH = (
       }).format(new Date(d))
     : "—";
 
+/* ------------------------------ Money helper ------------------------------ */
+const formatCurrency = (n: number) =>
+  n.toLocaleString("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    minimumFractionDigits: 2,
+  });
+
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
   quantity: number;
   price: number;
+  discount_percent?: number | null; // ← NEW
   inventory?: {
     product_name?: string | null;
     category?: string | null;
     subcategory?: string | null;
     status?: string | null;
+    unit?: string | null; // ← used for UNIT column
+    unit_price?: number | null; // ← fallback pricing
+    quantity?: number | null; // ← for in-stock flag
   } | null;
 };
 
@@ -49,6 +62,10 @@ type OrderRow = {
   total_amount: number | null;
   status: string | null; // fallback only; prefer truck_deliveries.status
   truck_delivery_id?: number | null;
+  // NEW: admin-saved totals/fields
+  grand_total_with_interest?: number | null;
+  sales_tax?: number | null;
+  per_term_amount?: number | null;
   order_items?: ItemRow[];
 };
 
@@ -80,12 +97,12 @@ const DeliveryBadge = ({ status }: { status?: string | null }) => {
   const s = (status || "").trim().toLowerCase();
 
   if (s === "to receive")
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-green-100 text-green-800">
-      <CheckCircle2 className="h-3.5 w-3.5" />
-      To Receive
-    </span>
-  );
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-green-100 text-green-800">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        To Receive
+      </span>
+    );
 
   if (s === "delivered")
     return (
@@ -130,11 +147,10 @@ const DeliveryBadge = ({ status }: { status?: string | null }) => {
 };
 
 // Normalize status string to check if it's "To Ship"
-const isToShip = (s?: string | null) => {
-  return !!(s && /^(to[-_ ]?ship)$/i.test(s.trim()));
-};
+const isToShip = (s?: string | null) =>
+  !!(s && /^(to[-_ ]?ship)$/i.test(s.trim()));
 
-
+/* -------------------------------- Component -------------------------------- */
 export default function TrackPage() {
   const [loading, setLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState<string | null>(null);
@@ -144,11 +160,13 @@ export default function TrackPage() {
     Record<number, Delivery>
   >({});
 
-  //MODAL STATE
+  // Confirm modal
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [selectedDeliveryId, setSelectedDeliveryId] = useState<number | null>(null);
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState<number | null>(
+    null
+  );
 
-  // For realtime subscriptions
+  // Realtime
   const [orderIds, setOrderIds] = useState<number[]>([]);
   const [deliveryIds, setDeliveryIds] = useState<number[]>([]);
   const ordersSubKey = useRef<string>("");
@@ -163,16 +181,14 @@ export default function TrackPage() {
 
   /* ----------------------------- Pagination (TXN cards) ----------------------------- */
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5; // adjust how many TXN cards per page
+  const itemsPerPage = 5;
 
-  // Reset to first page when the data set changes
   useEffect(() => {
     setCurrentPage(1);
   }, [txns.length]);
 
   const totalPages = Math.max(1, Math.ceil(txns.length / itemsPerPage));
 
-  // Clamp current page if the count shrinks
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
@@ -193,7 +209,9 @@ export default function TrackPage() {
     if (!ids.length) return;
     const { data, error } = await supabase
       .from("truck_deliveries")
-      .select("id, status, schedule_date, eta_date, date_received, driver, participants, shipping_fee")
+      .select(
+        "id, status, schedule_date, eta_date, date_received, driver, participants, shipping_fee"
+      )
       .in("id", ids);
     if (!error && data) {
       setDeliveriesById((prev) => {
@@ -226,15 +244,37 @@ export default function TrackPage() {
 
         const { data: customers, error } = await supabase
           .from("customers")
-          .select(`
+          .select(
+            `
             id, name, code, contact_person, email, phone, address, date,
             orders (
-              id, total_amount, status, truck_delivery_id,
-              order_items ( quantity, price, inventory:inventory_id ( product_name, category, subcategory, status ) )
+              id,
+              total_amount,
+              status,
+              truck_delivery_id,
+              grand_total_with_interest,
+              sales_tax,
+              per_term_amount,
+order_items (
+  quantity,
+  price,
+  discount_percent,
+  inventory:inventory_id (
+    product_name,
+    category,
+    subcategory,
+    status,
+    unit,
+    unit_price,
+    quantity
+  )
+)
+
             )
-          `)
+          `
+          )
           .eq("email", email)
-          .order("date", { ascending: false })
+          .order("date", { ascending: false });
 
         if (error || !customers) {
           setTxns([]);
@@ -247,7 +287,7 @@ export default function TrackPage() {
         const txList = customers as CustomerTx[];
         setTxns(txList);
 
-        // Collect order IDs and delivery IDs
+        // Collect order & delivery IDs
         const oset = new Set<number>();
         const dset = new Set<number>();
         for (const t of txList) {
@@ -261,7 +301,6 @@ export default function TrackPage() {
         setOrderIds(oids);
         setDeliveryIds(dids);
 
-        // Fetch initial delivery rows
         if (dids.length) await fetchDeliveriesByIds(dids);
       } finally {
         setLoading(false);
@@ -334,11 +373,14 @@ export default function TrackPage() {
           id: number;
           status: string | null;
           truck_delivery_id: number | null;
+          grand_total_with_interest?: number | null;
+          sales_tax?: number | null;
+          per_term_amount?: number | null;
         };
 
         const changedOrderId = newRow?.id;
 
-        // Update local orders (status + delivery link)
+        // Update local orders (status + delivery link + totals)
         setTxns((prev) =>
           prev.map((cust) => ({
             ...cust,
@@ -349,13 +391,19 @@ export default function TrackPage() {
                     status: newRow?.status ?? o.status,
                     truck_delivery_id:
                       newRow?.truck_delivery_id ?? o.truck_delivery_id,
+                    grand_total_with_interest:
+                      newRow?.grand_total_with_interest ??
+                      o.grand_total_with_interest,
+                    sales_tax: newRow?.sales_tax ?? o.sales_tax,
+                    per_term_amount:
+                      newRow?.per_term_amount ?? o.per_term_amount,
                   }
                 : o
             ),
           }))
         );
 
-        // If order got linked to a delivery, fetch & subscribe that delivery
+        // If order linked to a delivery, ensure we fetched that delivery
         if (newRow && newRow.truck_delivery_id != null) {
           const id: number = newRow.truck_delivery_id;
           setDeliveryIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
@@ -373,7 +421,6 @@ export default function TrackPage() {
   return (
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
-        {/* Title + subtitle (matches Product Catalog style) */}
         <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
           Track Your Delivery
         </h1>
@@ -480,6 +527,38 @@ export default function TrackPage() {
                       : undefined;
                     const rowStatus = deliv?.status ?? o.status ?? "Pending";
 
+                    // show table only when admin has saved totals
+                    // show details when the order is completed (works for Cash & Credit)
+                    const showDetails =
+                      (o.status || "").toLowerCase() === "completed";
+
+                    // robust totals (works even if grand_total_with_interest is NULL)
+                    const items = o.order_items ?? [];
+
+                    const subtotal = items.reduce((s, it) => {
+                      const unitPrice =
+                        Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
+                      const qty = Number(it.quantity || 0);
+                      return s + unitPrice * qty;
+                    }, 0);
+
+                    const totalDiscount = items.reduce((s, it) => {
+                      const unitPrice =
+                        Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
+                      const qty = Number(it.quantity || 0);
+                      const pct = Number(it.discount_percent ?? 0);
+                      return s + (unitPrice * qty * pct) / 100;
+                    }, 0);
+
+                    const salesTax = Number(o.sales_tax ?? 0);
+
+                    const grandTotal =
+                      typeof o.grand_total_with_interest === "number"
+                        ? Number(o.grand_total_with_interest)
+                        : Math.max(subtotal - totalDiscount, 0) + salesTax;
+
+                    const perTerm = Number(o.per_term_amount ?? 0);
+
                     return (
                       <div key={o.id} className="px-5 pb-4">
                         {/* Clickable header to toggle details */}
@@ -487,9 +566,6 @@ export default function TrackPage() {
                           className="mt-2 flex items-center justify-between cursor-pointer hover:bg-gray-50 rounded-lg px-3 py-2"
                           onClick={() => toggleExpanded(o.id)}
                         >
-                          <div className="text-sm font-semibold text-gray-800">
-                            Order #{o.id}
-                          </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-gray-600">
                               Delivery:
@@ -504,60 +580,195 @@ export default function TrackPage() {
                         {/* Expandable body */}
                         {expanded[o.id] && (
                           <div className="mt-2">
-                            {/* Items table */}
-                            <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
-                              <table className="w-full text-sm">
-                                <thead className="bg-gray-100">
-                                  <tr className="text-gray-700">
-                                    <th className="py-2.5 px-3 text-left font-semibold">
-                                      Product
-                                    </th>
-                                    <th className="py-2.5 px-3 text-left font-semibold">
-                                      Category
-                                    </th>
-                                    <th className="py-2.5 px-3 text-left font-semibold">
-                                      Subcategory
-                                    </th>
-                                    <th className="py-2.5 px-3 text-left font-semibold">
-                                      Qty
-                                    </th>
-                                    <th className="py-2.5 px-3 text-left font-semibold">
-                                      Inv. Status
-                                    </th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {(o.order_items ?? []).map((it, idx) => (
-                                    <tr
-                                      key={idx}
-                                      className="border-t hover:bg-gray-50/60"
-                                    >
-                                      <td className="py-2.5 px-3">
-                                        {it.inventory?.product_name ?? "—"}
-                                      </td>
-                                      <td className="py-2.5 px-3">
-                                        {it.inventory?.category ?? "—"}
-                                      </td>
-                                      <td className="py-2.5 px-3">
-                                        {it.inventory?.subcategory ?? "—"}
-                                      </td>
-                                      <td className="py-2.5 px-3">
-                                        {it.quantity}
-                                      </td>
-                                      <td className="py-2.5 px-3">
-                                        {it.inventory?.status ?? "—"}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
+                            {!showDetails ? (
+                              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-900 px-4 py-3">
+                                <Info className="h-4 w-4 mt-0.5" />
+                                <div className="text-sm">
+                                  <b>
+                                    Awaiting admin to finalize pricing &
+                                    discounts.
+                                  </b>{" "}
+                                  Once completed, your detailed item table and
+                                  totals will appear here.
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                {/* Items table */}
+                                <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
+                                  <table className="w-full text-sm align-middle">
+                                    <thead>
+                                      <tr
+                                        className="text-black uppercase tracking-wider text-[11px]"
+                                        style={{ background: "#ffba20" }}
+                                      >
+                                        <th className="py-2.5 px-3 text-center font-bold">
+                                          QTY
+                                        </th>
+                                        <th className="py-2.5 px-3 text-center font-bold">
+                                          UNIT
+                                        </th>
+                                        <th className="py-2.5 px-3 text-left font-bold">
+                                          ITEM DESCRIPTION
+                                        </th>
+                                        <th className="py-2.5 px-3 text-center font-bold">
+                                          REMARKS
+                                        </th>
+                                        <th className="py-2.5 px-3 text-center font-bold">
+                                          UNIT PRICE
+                                        </th>
+                                        <th className="py-2.5 px-3 text-center font-bold">
+                                          DISCOUNT/ADD (%)
+                                        </th>
+                                        <th className="py-2.5 px-3 text-center font-bold">
+                                          AMOUNT
+                                        </th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(o.order_items ?? []).map((it, idx) => {
+                                        const unit =
+                                          it.inventory?.unit?.trim() || "pcs";
+                                        const desc =
+                                          it.inventory?.product_name ?? "—";
+                                        const unitPrice =
+                                          Number(
+                                            it.price ??
+                                              it.inventory?.unit_price ??
+                                              0
+                                          ) || 0;
+                                        const qty = Number(it.quantity || 0);
+                                        const amount = qty * unitPrice;
+
+                                        const inStockFlag =
+                                          typeof it.inventory?.quantity ===
+                                          "number"
+                                            ? (it.inventory?.quantity ?? 0) > 0
+                                            : (it.inventory?.status || "")
+                                                .toLowerCase()
+                                                .includes("in stock");
+
+                                        return (
+                                          <tr
+                                            key={idx}
+                                            className={
+                                              idx % 2 === 0
+                                                ? "bg-white"
+                                                : "bg-neutral-50"
+                                            }
+                                          >
+                                            <td className="py-2.5 px-3 text-center font-mono">
+                                              {qty}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center font-mono">
+                                              {unit}
+                                            </td>
+                                            <td className="py-2.5 px-3">
+                                              <span className="font-semibold">
+                                                {desc}
+                                              </span>
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center">
+                                              {inStockFlag
+                                                ? "✓"
+                                                : it.inventory?.status
+                                                ? it.inventory.status
+                                                : "✗"}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
+                                              {formatCurrency(unitPrice)}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
+                                              {typeof it.discount_percent ===
+                                              "number"
+                                                ? `${it.discount_percent}%`
+                                                : ""}
+                                            </td>
+
+                                            <td className="py-2.5 px-3 text-center font-mono font-bold whitespace-nowrap">
+                                              {formatCurrency(amount)}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                      {(o.order_items ?? []).length === 0 && (
+                                        <tr>
+                                          <td
+                                            colSpan={7}
+                                            className="text-center py-8 text-neutral-400"
+                                          >
+                                            No items found.
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+
+                                {/* Totals box (matches your screenshot labels) */}
+                                <div className="flex flex-row gap-4 mt-5">
+                                  <div className="w-2/3 text-xs pr-4">
+                                    {/* Optional notes or leave empty */}
+                                  </div>
+                                  <div className="flex flex-col items-end text-xs mt-1 w-1/3">
+                                    <table className="text-right w-full">
+                                      <tbody>
+                                        <tr>
+                                          <td className="font-semibold py-0.5">
+                                            Subtotal (Before Discount):
+                                          </td>
+                                          <td className="pl-2 font-mono">
+                                            {formatCurrency(subtotal)}
+                                          </td>
+                                        </tr>
+                                        <tr>
+                                          <td className="font-semibold py-0.5">
+                                            Discount
+                                          </td>
+                                          <td className="pl-2 font-mono">
+                                            {formatCurrency(totalDiscount)}
+                                          </td>
+                                        </tr>
+                                        <tr>
+                                          <td className="font-semibold py-0.5">
+                                            Sales Tax (12%):
+                                          </td>
+                                          <td className="pl-2 font-mono">
+                                            {formatCurrency(salesTax)}
+                                          </td>
+                                        </tr>
+                                        <tr>
+                                          <td className="font-bold py-1.5">
+                                            Grand Total:
+                                          </td>
+                                          <td className="pl-2 font-bold text-green-700 font-mono">
+                                            {formatCurrency(grandTotal)}
+                                          </td>
+                                        </tr>
+                                        {perTerm > 0 && (
+                                          <tr>
+                                            <td className="font-semibold py-0.5">
+                                              Per Term:
+                                            </td>
+                                            <td className="pl-2 font-bold text-blue-700 font-mono">
+                                              {formatCurrency(perTerm)}
+                                            </td>
+                                          </tr>
+                                        )}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </>
+                            )}
 
                             {/* Delivery details */}
                             {deliv && (
                               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                                 <p>
-                                  <span className="text-gray-500">Shipping Fee:</span>{" "}
+                                  <span className="text-gray-500">
+                                    Shipping Fee:
+                                  </span>{" "}
                                   {typeof deliv.shipping_fee === "number"
                                     ? `₱${deliv.shipping_fee.toFixed(2)}`
                                     : "—"}
@@ -577,12 +788,14 @@ export default function TrackPage() {
                                     : "Not yet received"}
                                 </p>
                                 {/* ETA line for To Ship */}
-                                  {isToShip(rowStatus) && (
-                                    <p className="md:col-span-2">
-                                      <span className="text-gray-500">ETA:</span>{" "}
-                                      {deliv.eta_date ? formatPH(deliv.eta_date, "date") : "—"}
-                                    </p>
-                                  )}
+                                {isToShip(rowStatus) && (
+                                  <p className="md:col-span-2">
+                                    <span className="text-gray-500">ETA:</span>{" "}
+                                    {deliv.eta_date
+                                      ? formatPH(deliv.eta_date, "date")
+                                      : "—"}
+                                  </p>
+                                )}
                                 <p>
                                   <span className="text-gray-500">Driver:</span>{" "}
                                   {deliv.driver ?? "—"}
@@ -599,8 +812,8 @@ export default function TrackPage() {
                               </div>
                             )}
                           </div>
-                          
                         )}
+
                         {deliv?.status === "To Receive" && (
                           <div className="mt-3">
                             <button
@@ -622,7 +835,7 @@ export default function TrackPage() {
             })}
         </div>
 
-        {/* Pagination controls — inline, no gradient */}
+        {/* Pagination controls */}
         {!loading && hasData && (
           <div className="mt-4">
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -682,11 +895,14 @@ export default function TrackPage() {
           </div>
         )}
       </div>
+
+      {/* Confirm Received Modal */}
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent className="max-w-md">
           <h2 className="text-lg font-semibold mb-2">Confirm Delivery</h2>
           <p className="text-sm text-gray-600">
-            Are you sure you want to mark this delivery as <strong>Received</strong>?
+            Are you sure you want to mark this delivery as{" "}
+            <strong>Received</strong>?
           </p>
 
           <div className="mt-4 flex justify-end gap-2">
@@ -710,7 +926,9 @@ export default function TrackPage() {
 
                 if (error) {
                   console.error("Delivery update failed:", error);
-                  toast.error("❌ Failed to confirm delivery. Please try again.");
+                  toast.error(
+                    "❌ Failed to confirm delivery. Please try again."
+                  );
                 } else {
                   toast.success("✅ Thank you! Delivery has been confirmed.");
                 }
