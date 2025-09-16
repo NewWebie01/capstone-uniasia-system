@@ -111,6 +111,15 @@ const DeliveryBadge = ({ status }: { status?: string | null }) => {
         Delivered
       </span>
     );
+
+  if (s === "to ship")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-yellow-200 text-yellow-900">
+        <Truck className="h-3.5 w-3.5" />
+        To Ship
+      </span>
+    );
+
   if (s === "ongoing" || s === "on going" || s === "in transit")
     return (
       <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-amber-200 text-amber-900">
@@ -118,6 +127,7 @@ const DeliveryBadge = ({ status }: { status?: string | null }) => {
         Ongoing
       </span>
     );
+
   if (s === "scheduled" || s === "schedule")
     return (
       <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-blue-200 text-blue-900">
