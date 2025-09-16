@@ -53,6 +53,9 @@ export default function AccountCreationPage() {
   const [policyChecked, setPolicyChecked] = useState(false);
   const [policyAccepted, setPolicyAccepted] = useState(false);
 
+  // Success modal
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+
   // Open privacy policy
   function handleOpenPrivacy(e?: React.MouseEvent | React.KeyboardEvent) {
     if (e) e.preventDefault();
@@ -73,7 +76,6 @@ export default function AccountCreationPage() {
   function handleAcceptPolicy() {
     setPolicyAccepted(true);
     setShowPrivacy(false);
-    toast.success("Privacy Policy accepted.");
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -103,74 +105,72 @@ export default function AccountCreationPage() {
     setHasScrolledToBottom(false);
   };
 
- const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  const newErrors: Record<string, string> = {};
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const newErrors: Record<string, string> = {};
 
-  if (!formData.name.trim()) newErrors.name = "Name is required";
-  if (!EMAIL_REGEX.test(formData.email))
-    newErrors.email = "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
-  if (!/^\d{10}$/.test(formData.contact_number))
-    newErrors.contact_number = "Enter 10 digits after +63 (e.g., 9201234567)";
+    if (!formData.name.trim()) newErrors.name = "Name is required";
+    if (!EMAIL_REGEX.test(formData.email))
+      newErrors.email = "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
+    if (!/^\d{10}$/.test(formData.contact_number))
+      newErrors.contact_number = "Enter 10 digits after +63 (e.g., 9201234567)";
 
-  const personalInfo = [formData.name, formData.email, "+63" + formData.contact_number];
-  const pwStrength = getPasswordStrength(formData.password, personalInfo);
-  if (["Weak", "Too Personal", "Invalid"].includes(pwStrength)) {
-    newErrors.password =
-      pwStrength === "Too Personal"
-        ? "Password must not include your name, email, or contact."
-        : "Password is too weak. Use a mix of letters, numbers, special symbols (10+ chars).";
-  }
-  if (formData.password !== formData.confirmPassword)
-    newErrors.confirmPassword = "Passwords do not match";
+    const personalInfo = [formData.name, formData.email, "+63" + formData.contact_number];
+    const pwStrength = getPasswordStrength(formData.password, personalInfo);
+    if (["Weak", "Too Personal", "Invalid"].includes(pwStrength)) {
+      newErrors.password =
+        pwStrength === "Too Personal"
+          ? "Password must not include your name, email, or contact."
+          : "Password is too weak. Use a mix of letters, numbers, special symbols (10+ chars).";
+    }
+    if (formData.password !== formData.confirmPassword)
+      newErrors.confirmPassword = "Passwords do not match";
 
-  if (!policyAccepted) {
-    newErrors.privacy = "You must read and accept the Privacy Policy.";
-  }
+    if (!policyAccepted) {
+      newErrors.privacy = "You must read and accept the Privacy Policy.";
+    }
 
-  if (Object.keys(newErrors).length > 0) {
-    setErrors(newErrors);
-    return;
-  }
-
-  setIsLoading(true);
-  try {
-    const contactNumber = "+63" + formData.contact_number;
-    const { error } = await supabase.from("account_requests").insert([
-      {
-        name: formData.name,
-        email: formData.email,
-        contact_number: contactNumber,
-        role: "customer",
-        password: formData.password,
-        status: "Pending",
-        date_created: getPHISOString(),
-      },
-    ]);
-    if (error) {
-      // ⭐ Handle duplicate email error based on your unique constraint name:
-      if (
-        error.message?.toLowerCase().includes("unique") &&
-        error.message?.toLowerCase().includes("email")
-      ) {
-        setErrors({ email: "This email address is already registered. Please use a different email." });
-        toast.error("This email address is already registered. Please use a different email.");
-      } else {
-        toast.error("Unexpected error: " + (error.message || "Unknown error"));
-      }
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
       return;
     }
 
-    toast.success("Account request submitted! Please wait for admin approval.");
-    handleReset();
-  } catch (err: any) {
-    console.error(err);
-    toast.error("Unexpected error: " + (err?.message || "Unknown error"));
-  } finally {
-    setIsLoading(false);
-  }
-};
+    setIsLoading(true);
+    try {
+      const contactNumber = "+63" + formData.contact_number;
+      const { error } = await supabase.from("account_requests").insert([
+        {
+          name: formData.name,
+          email: formData.email,
+          contact_number: contactNumber,
+          role: "customer",
+          password: formData.password,
+          status: "Pending",
+          date_created: getPHISOString(),
+        },
+      ]);
+      if (error) {
+        if (
+          error.message?.toLowerCase().includes("unique") &&
+          error.message?.toLowerCase().includes("email")
+        ) {
+          setErrors({ email: "This email address is already registered. Please use a different email." });
+          toast.error("This email address is already registered. Please use a different email.");
+        } else {
+          toast.error("Unexpected error: " + (error.message || "Unknown error"));
+        }
+        return;
+      }
 
+      setShowSuccessModal(true); // <-- Open success modal!
+      handleReset();
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Unexpected error: " + (err?.message || "Unknown error"));
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const personalInfo = [formData.name, formData.email, "+63" + formData.contact_number];
   const passwordStrength = getPasswordStrength(formData.password, personalInfo);
@@ -382,126 +382,157 @@ export default function AccountCreationPage() {
         </div>
 
         {/* --- PRIVACY POLICY MODAL --- */}
-<AnimatePresence>
-  {showPrivacy && (
-    <motion.div
-      className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-    >
-      <motion.div
-        initial={{ scale: 0.98, y: 40, opacity: 0 }}
-        animate={{ scale: 1, y: 0, opacity: 1 }}
-        exit={{ scale: 0.98, y: 40, opacity: 0 }}
-        className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-xl relative"
-        style={{ maxHeight: '90vh' }}
-      >
-        {/* Close button */}
-        <button
-          onClick={() => setShowPrivacy(false)}
-          className="absolute top-4 right-4 text-gray-400 hover:text-gray-900 transition-colors"
-          aria-label="Close"
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
-          </svg>
-        </button>
-        <h2 className="text-2xl font-bold mb-3 text-[#181918]">Privacy Policy</h2>
-        <div
-          className="text-gray-700 text-sm leading-relaxed space-y-3 max-h-[65vh] overflow-y-auto pr-1 border border-gray-200 rounded p-3"
-          style={{ scrollbarWidth: "thin" }}
-          onScroll={handleScroll}
-          tabIndex={0}
-        >
-          <p>
-            <strong>Last updated:</strong> September 2025
-          </p>
-          <p>
-            This Privacy Policy applies to the collection, use, and processing of personal information by <b>UniAsia Hardware & Electrical Marketing Corp.</b> (“UniAsia”, “we”, “our”, “us”), in compliance with Republic Act No. 10173, otherwise known as the Data Privacy Act of 2012 and its Implementing Rules and Regulations.
-          </p>
-          <h3 className="font-semibold text-base mt-4 mb-1">1. Collection of Personal Information</h3>
-          <ul className="list-disc pl-6 space-y-2">
-            <li>
-              <b>Personal Data:</b> We collect your full name, email address, contact number, and password when you register for an account or use our services.
-            </li>
-            <li>
-              <b>Additional Information:</b> We may also collect information such as delivery addresses and transaction history for order processing and after-sales service.
-            </li>
-            <li>
-              <b>Automatic Collection:</b> Our website may automatically collect technical information such as your device type, browser, IP address, and usage logs for security and analytics purposes.
-            </li>
-          </ul>
-          <h3 className="font-semibold text-base mt-4 mb-1">2. Purpose and Use</h3>
-          <ul className="list-disc pl-6 space-y-2">
-            <li>To process your account creation and manage your profile;</li>
-            <li>To communicate with you regarding your orders, deliveries, and customer service concerns;</li>
-            <li>To improve our products and services, including data analytics and website security;</li>
-            <li>To comply with legal, regulatory, and contractual obligations.</li>
-          </ul>
-          <h3 className="font-semibold text-base mt-4 mb-1">3. Data Sharing and Disclosure</h3>
-          <ul className="list-disc pl-6 space-y-2">
-            <li>
-              We do <b>not</b> sell, trade, or rent your personal information to third parties.
-            </li>
-            <li>
-              We may share data with trusted service providers (e.g., courier, payment gateways, IT support) only as necessary to fulfill our services, subject to strict confidentiality.
-            </li>
-            <li>
-              We may disclose personal data if required by law, subpoena, or government request, or to protect our rights and property.
-            </li>
-          </ul>
-          <h3 className="font-semibold text-base mt-4 mb-1">4. Data Retention and Security</h3>
-          <ul className="list-disc pl-6 space-y-2">
-            <li>
-              Your information is retained only for as long as necessary for the purposes stated above, or as required by applicable law.
-            </li>
-            <li>
-              We implement appropriate organizational, physical, and technical security measures (such as SSL, restricted access, audit logs) to safeguard your data from unauthorized access, alteration, or destruction.
-            </li>
-          </ul>
-          <h3 className="font-semibold text-base mt-4 mb-1">5. Your Rights</h3>
-          <ul className="list-disc pl-6 space-y-2">
-            <li>
-              Under the Data Privacy Act, you have the right to be informed, to access, correct, and update your personal data, to object to processing, to request deletion or blocking, and to withdraw your consent at any time, subject to legal and contractual restrictions.
-            </li>
-            <li>
-              You may contact us to exercise these rights or for privacy-related concerns by emailing <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">support@uniasia.com</a>.
-            </li>
-          </ul>
-          <h3 className="font-semibold text-base mt-4 mb-1">6. Changes to This Policy</h3>
-          <p>
-            We may revise this Privacy Policy to reflect changes in the law or our practices. Any significant changes will be posted on this page and, where appropriate, notified to you by email.
-          </p>
-          <h3 className="font-semibold text-base mt-4 mb-1">7. Consent</h3>
-          <p>
-            By creating an account, you acknowledge that you have read and understood this Privacy Policy and consent to the collection and processing of your personal data as described above.
-          </p>
-          <h3 className="font-semibold text-base mt-4 mb-1">8. Contact Information</h3>
-          <p>
-            For any privacy-related inquiries or requests, please contact our Data Privacy Officer:<br />
-            <b>Email:</b> <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">support@uniasia.com</a>
-          </p>
-        </div>
-        <button
-          type="button"
-          className={`mt-4 w-full bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] transition disabled:opacity-60`}
-          disabled={!hasScrolledToBottom}
-          onClick={handleAcceptPolicy}
-        >
-          Accept and Close
-        </button>
-        {!hasScrolledToBottom && (
-          <div className="pt-2 pb-1 text-center">
-            <span className="text-[11px] text-gray-400">Scroll to bottom to enable.</span>
-          </div>
-        )}
-      </motion.div>
-    </motion.div>
-  )}
-</AnimatePresence>
+        <AnimatePresence>
+          {showPrivacy && (
+            <motion.div
+              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                initial={{ scale: 0.98, y: 40, opacity: 0 }}
+                animate={{ scale: 1, y: 0, opacity: 1 }}
+                exit={{ scale: 0.98, y: 40, opacity: 0 }}
+                className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-xl relative"
+                style={{ maxHeight: '90vh' }}
+              >
+                {/* Close button */}
+                <button
+                  onClick={() => setShowPrivacy(false)}
+                  className="absolute top-4 right-4 text-gray-400 hover:text-gray-900 transition-colors"
+                  aria-label="Close"
+                >
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+                  </svg>
+                </button>
+                <h2 className="text-2xl font-bold mb-3 text-[#181918]">Privacy Policy</h2>
+                <div
+                  className="text-gray-700 text-sm leading-relaxed space-y-3 max-h-[65vh] overflow-y-auto pr-1 border border-gray-200 rounded p-3"
+                  style={{ scrollbarWidth: "thin" }}
+                  onScroll={handleScroll}
+                  tabIndex={0}
+                >
+                  <p>
+                    <strong>Last updated:</strong> September 2025
+                  </p>
+                  <p>
+                    This Privacy Policy applies to the collection, use, and processing of personal information by <b>UniAsia Hardware & Electrical Marketing Corp.</b> (“UniAsia”, “we”, “our”, “us”), in compliance with Republic Act No. 10173, otherwise known as the Data Privacy Act of 2012 and its Implementing Rules and Regulations.
+                  </p>
+                  <h3 className="font-semibold text-base mt-4 mb-1">1. Collection of Personal Information</h3>
+                  <ul className="list-disc pl-6 space-y-2">
+                    <li>
+                      <b>Personal Data:</b> We collect your full name, email address, contact number, and password when you register for an account or use our services.
+                    </li>
+                    <li>
+                      <b>Additional Information:</b> We may also collect information such as delivery addresses and transaction history for order processing and after-sales service.
+                    </li>
+                    <li>
+                      <b>Automatic Collection:</b> Our website may automatically collect technical information such as your device type, browser, IP address, and usage logs for security and analytics purposes.
+                    </li>
+                  </ul>
+                  <h3 className="font-semibold text-base mt-4 mb-1">2. Purpose and Use</h3>
+                  <ul className="list-disc pl-6 space-y-2">
+                    <li>To process your account creation and manage your profile;</li>
+                    <li>To communicate with you regarding your orders, deliveries, and customer service concerns;</li>
+                    <li>To improve our products and services, including data analytics and website security;</li>
+                    <li>To comply with legal, regulatory, and contractual obligations.</li>
+                  </ul>
+                  <h3 className="font-semibold text-base mt-4 mb-1">3. Data Sharing and Disclosure</h3>
+                  <ul className="list-disc pl-6 space-y-2">
+                    <li>
+                      We do <b>not</b> sell, trade, or rent your personal information to third parties.
+                    </li>
+                    <li>
+                      We may share data with trusted service providers (e.g., courier, payment gateways, IT support) only as necessary to fulfill our services, subject to strict confidentiality.
+                    </li>
+                    <li>
+                      We may disclose personal data if required by law, subpoena, or government request, or to protect our rights and property.
+                    </li>
+                  </ul>
+                  <h3 className="font-semibold text-base mt-4 mb-1">4. Data Retention and Security</h3>
+                  <ul className="list-disc pl-6 space-y-2">
+                    <li>
+                      Your information is retained only for as long as necessary for the purposes stated above, or as required by applicable law.
+                    </li>
+                    <li>
+                      We implement appropriate organizational, physical, and technical security measures (such as SSL, restricted access, audit logs) to safeguard your data from unauthorized access, alteration, or destruction.
+                    </li>
+                  </ul>
+                  <h3 className="font-semibold text-base mt-4 mb-1">5. Your Rights</h3>
+                  <ul className="list-disc pl-6 space-y-2">
+                    <li>
+                      Under the Data Privacy Act, you have the right to be informed, to access, correct, and update your personal data, to object to processing, to request deletion or blocking, and to withdraw your consent at any time, subject to legal and contractual restrictions.
+                    </li>
+                    <li>
+                      You may contact us to exercise these rights or for privacy-related concerns by emailing <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">support@uniasia.com</a>.
+                    </li>
+                  </ul>
+                  <h3 className="font-semibold text-base mt-4 mb-1">6. Changes to This Policy</h3>
+                  <p>
+                    We may revise this Privacy Policy to reflect changes in the law or our practices. Any significant changes will be posted on this page and, where appropriate, notified to you by email.
+                  </p>
+                  <h3 className="font-semibold text-base mt-4 mb-1">7. Consent</h3>
+                  <p>
+                    By creating an account, you acknowledge that you have read and understood this Privacy Policy and consent to the collection and processing of your personal data as described above.
+                  </p>
+                  <h3 className="font-semibold text-base mt-4 mb-1">8. Contact Information</h3>
+                  <p>
+                    For any privacy-related inquiries or requests, please contact our Data Privacy Officer:<br />
+                    <b>Email:</b> <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">support@uniasia.com</a>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={`mt-4 w-full bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] transition disabled:opacity-60`}
+                  disabled={!hasScrolledToBottom}
+                  onClick={handleAcceptPolicy}
+                >
+                  Accept and Close
+                </button>
+                {!hasScrolledToBottom && (
+                  <div className="pt-2 pb-1 text-center">
+                    <span className="text-[11px] text-gray-400">Scroll to bottom to enable.</span>
+                  </div>
+                )}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-
+        {/* --- SUCCESS MODAL --- */}
+        <AnimatePresence>
+          {showSuccessModal && (
+            <motion.div
+              className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center relative"
+                initial={{ scale: 0.98, y: 40, opacity: 0 }}
+                animate={{ scale: 1, y: 0, opacity: 1 }}
+                exit={{ scale: 0.98, y: 40, opacity: 0 }}
+              >
+                <h2 className="text-2xl font-bold text-[#181918] mb-2">Account Request Submitted!</h2>
+                <p className="text-gray-700 mb-6 text-sm">
+                  Please wait for admin approval before logging in.
+                </p>
+                <button
+                  className="w-full bg-[#181918] text-white py-2 rounded hover:text-[#ffba20] transition"
+                  onClick={() => {
+                    setShowSuccessModal(false);
+                    router.push("/login");
+                  }}
+                >
+                  OK
+                </button>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.section>
     </div>
   );
