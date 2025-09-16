@@ -945,8 +945,6 @@ export default function TruckDeliveryPage() {
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(" ");
 
-    if (value.endsWith(" ")) formatted += " ";
-
     setNewDelivery((prev) => ({ ...prev, driver: formatted }));
   };
 

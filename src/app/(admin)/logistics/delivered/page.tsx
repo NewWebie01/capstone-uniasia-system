@@ -43,7 +43,7 @@ type OrderWithCustomer = {
   terms?: string | null;
   collection?: string | null;
   salesman?: string | null;
-  customer: Customer; // joined
+  customer: Customer;
   order_items?: Array<{
     quantity: number;
     price: number;
