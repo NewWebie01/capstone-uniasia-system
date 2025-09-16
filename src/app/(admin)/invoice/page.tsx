@@ -261,10 +261,27 @@ function DeliveryReceiptModern({
 
   const salesTaxOut =
     typeof totals?.salesTax === "number" ? totals!.salesTax : computedSalesTax;
-  const grandTotalOut =
-    typeof totals?.grandTotalWithInterest === "number"
-      ? totals!.grandTotalWithInterest
-      : computedGrandTotal;
+  const isCash = (terms || "").toLowerCase().includes("cash");
+const isCredit = (terms || "").toLowerCase().includes("net");
+
+
+let grandTotalOut: number;
+if (isCredit) {
+
+  if (
+    typeof totals?.grandTotalWithInterest === "number" &&
+    totals.grandTotalWithInterest > 0
+  ) {
+    grandTotalOut = totals.grandTotalWithInterest;
+  } else {
+    grandTotalOut = computedGrandTotal;
+  }
+} else {
+  
+  grandTotalOut = computedGrandTotal;
+}
+
+
   const perTermOut =
     typeof totals?.perTermAmount === "number" ? totals!.perTermAmount : 0;
 
