@@ -103,7 +103,7 @@ type CustomerInfo = {
   date?: string;
   transaction?: string;
   status?: "pending" | "completed" | "rejected";
-  payment_type?: "Credit" | "Balance" | "Cash";
+  payment_type?: "Credit" | "Cash";
   customer_type?: "New Customer" | "Existing Customer";
 };
 
@@ -186,6 +186,14 @@ function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
   if (fallbackEmail && fallbackEmail.includes("@"))
     return fallbackEmail.split("@")[0];
   return "";
+}
+function formatPeso(n: number | undefined | null) {
+  const v = Number(n ?? 0);
+  return new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    maximumFractionDigits: 2,
+  }).format(v);
 }
 
 /* -------------------------------- Component ------------------------------- */
@@ -434,7 +442,7 @@ export default function CustomerInventoryPage() {
   /* --------------------- Inventory load + realtime --------------------- */
   const fetchInventory = useCallback(async () => {
     setLoading(true);
-    // ⬇️ pull the weight-related fields too
+    // ⬇️ pull the weight-related fields too (unit_price already present)
     const { data, error } = await supabase
       .from("inventory")
       .select(
@@ -501,14 +509,8 @@ export default function CustomerInventoryPage() {
     setCustomerInfo((prev) => ({
       ...prev,
       customer_type: type,
-      payment_type:
-        type === "Existing Customer"
-          ? prev.payment_type === "Credit"
-            ? "Credit"
-            : prev.payment_type === "Balance"
-            ? "Balance"
-            : "Cash"
-          : "Cash",
+      // NEW: For Existing customers, automatically set to Credit only.
+      payment_type: type === "Existing Customer" ? "Credit" : "Cash",
     }));
   }, []);
 
@@ -628,15 +630,8 @@ export default function CustomerInventoryPage() {
     if (customerInfo.customer_type === "New Customer") {
       setCustomerInfo((prev) => ({ ...prev, payment_type: "Cash" }));
     } else if (customerInfo.customer_type === "Existing Customer") {
-      setCustomerInfo((prev) => ({
-        ...prev,
-        payment_type:
-          prev.payment_type === "Credit"
-            ? "Credit"
-            : prev.payment_type === "Balance"
-            ? "Balance"
-            : "Cash",
-      }));
+      // NEW: Existing customer => always Credit (Balance removed)
+      setCustomerInfo((prev) => ({ ...prev, payment_type: "Credit" }));
     }
   }, [customerInfo.customer_type]);
 
@@ -728,7 +723,68 @@ export default function CustomerInventoryPage() {
     setShowCartPopup(true);
   };
 
+  /* ------------------ VALIDATION: required fields for Submit Order ------------------ */
+  const missingFields = useMemo(() => {
+    const missing: string[] = [];
+
+    if (!customerInfo.name || !customerInfo.name.trim()) {
+      missing.push("Customer Name");
+    }
+    if (!customerInfo.email || !customerInfo.email.includes("@")) {
+      missing.push("Email");
+    }
+    if (!isValidPhone(customerInfo.phone || "")) {
+      missing.push("Phone (11 digits)");
+    }
+    if (!houseStreet || !houseStreet.trim()) {
+      missing.push("House & Street");
+    }
+    if (!regionCode) {
+      missing.push("Region");
+    }
+    // Province required only when not NCR
+    if (!isNCR && !provinceCode) {
+      missing.push("Province");
+    }
+    if (!cityCode) {
+      missing.push("City / Municipality");
+    }
+    if (!barangayCode) {
+      missing.push("Barangay");
+    }
+    if (!cart || cart.length === 0) {
+      missing.push("Cart (add at least one item)");
+    }
+
+    return missing;
+  }, [
+    customerInfo.name,
+    customerInfo.email,
+    customerInfo.phone,
+    houseStreet,
+    regionCode,
+    provinceCode,
+    cityCode,
+    barangayCode,
+    cart,
+    isNCR,
+  ]);
+
+  const isConfirmOrderEnabled = missingFields.length === 0;
+
+  /* ------------------ end validation ------------------ */
+
   const handleOpenFinalModal = () => {
+    // enforce validation client-side as well
+    if (!isConfirmOrderEnabled) {
+      toast.error(
+        `Please complete required fields before submitting: ${missingFields
+          .slice(0, 3)
+          .join(", ")}${missingFields.length > 3 ? "…" : ""}`
+      );
+      return;
+    }
+
     // distinct items
     if (cart.length > TRUCK_LIMITS.maxDistinctItems) {
       toast.error(LIMIT_TOAST);
@@ -747,6 +803,12 @@ export default function CustomerInventoryPage() {
 
   const handleConfirmOrder = async () => {
     if (!finalOrderDetails || placingOrder) return;
+    // last-line guard
+    if (!isConfirmOrderEnabled) {
+      toast.error("Please complete all required details before confirming.");
+      return;
+    }
+
     setPlacingOrder(true);
 
     const { customer, items } = finalOrderDetails;
@@ -971,11 +1033,12 @@ export default function CustomerInventoryPage() {
             <table className="w-full table-fixed bg-white text-sm">
               <thead className="bg-[#ffba20] text-black text-left">
                 <tr>
-                  <th className="py-2 px-4 w-1/5">Product Name</th>
-                  <th className="py-2 px-4 w-1/5">Category</th>
-                  <th className="py-2 px-4 w-1/5">Subcategory</th>
-                  <th className="py-2 px-4 w-1/5">Status</th>
-                  <th className="py-2 px-4 w-1/5">Action</th>
+                  <th className="py-2 px-4 w-2/6">Product Name</th>
+                  <th className="py-2 px-4 w-1/6">Category</th>
+                  <th className="py-2 px-4 w-1/6">Subcategory</th>
+                  <th className="py-2 px-4 w-1/6">Unit Price</th>
+                  <th className="py-2 px-4 w-1/6">Status</th>
+                  <th className="py-2 px-4 w-1/6">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -997,6 +1060,9 @@ export default function CustomerInventoryPage() {
                     </td>
                     <td className="py-2 px-4 text-left">{item.category}</td>
                     <td className="py-2 px-4 text-left">{item.subcategory}</td>
+                    <td className="py-2 px-4 text-left">
+                      {formatPeso(item.unit_price)}
+                    </td>
                     <td className="py-2 px-4 text-left">{item.status}</td>
                     <td className="py-2 px-4">
                       <button
@@ -1010,7 +1076,7 @@ export default function CustomerInventoryPage() {
                 ))}
                 {pageItems.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="text-center py-6 text-gray-500">
+                    <td colSpan={6} className="text-center py-6 text-gray-500">
                       No products found.
                     </td>
                   </tr>
@@ -1120,6 +1186,10 @@ export default function CustomerInventoryPage() {
                   <span className="font-medium">Status:</span>{" "}
                   {imageModalItem.status || "—"}
                 </div>
+                <div>
+                  <span className="font-medium">Unit Price:</span>{" "}
+                  {formatPeso(imageModalItem.unit_price)}
+                </div>
               </div>
             </div>
             <div className="px-4 py-3 border-t text-right">
@@ -1144,6 +1214,7 @@ export default function CustomerInventoryPage() {
             <p>Category: {selectedItem.category}</p>
             <p>Subcategory: {selectedItem.subcategory}</p>
             <p>Status: {selectedItem.status}</p>
+            <p>Unit Price: {formatPeso(selectedItem.unit_price)}</p>
             <div className="mt-4">
               <label className="block mb-1">Quantity to Order</label>
               <input
@@ -1199,6 +1270,7 @@ export default function CustomerInventoryPage() {
                 <th className="py-2 px-4 pl-6 text-left">Product Name</th>
                 <th className="py-2 px-4">Category</th>
                 <th className="py-2 px-4">Subcategory</th>
+                <th className="py-2 px-4">Unit Price</th>
                 <th className="py-2 px-4">Qty</th>
                 <th className="py-2 px-4">Status</th>
                 <th className="py-2 px-4">Remove</th>
@@ -1210,6 +1282,9 @@ export default function CustomerInventoryPage() {
                   <td className="py-2 px-4">{ci.item.product_name}</td>
                   <td className="py-2 px-4">{ci.item.category}</td>
                   <td className="py-2 px-4">{ci.item.subcategory}</td>
+                  <td className="py-2 px-4">
+                    {formatPeso(ci.item.unit_price)}
+                  </td>
                   <td className="py-2 px-4">
                     <div className="flex items-center gap-2">
                       <button
@@ -1453,7 +1528,7 @@ export default function CustomerInventoryPage() {
                   <label className="block mb-1">Payment Type</label>
                   <div className="flex gap-4">
                     {(customerInfo.customer_type === "Existing Customer"
-                      ? ["Credit", "Balance"]
+                      ? ["Credit"]
                       : ["Cash"]
                     ).map((type) => (
                       <label key={type} className="flex items-center gap-2">
@@ -1465,10 +1540,7 @@ export default function CustomerInventoryPage() {
                           onChange={(e) =>
                             setCustomerInfo({
                               ...customerInfo,
-                              payment_type: e.target.value as
-                                | "Cash"
-                                | "Credit"
-                                | "Balance",
+                              payment_type: e.target.value as "Cash" | "Credit",
                             })
                           }
                         />
@@ -1487,6 +1559,7 @@ export default function CustomerInventoryPage() {
                       <th className="py-2 px-3 text-left">Product</th>
                       <th className="py-2 px-3 text-left">Category</th>
                       <th className="py-2 px-3 text-left">Subcategory</th>
+                      <th className="py-2 px-3 text-left">Unit Price</th>
                       <th className="py-2 px-3 text-left">Qty</th>
                       <th className="py-2 px-3 text-left">Status</th>
                     </tr>
@@ -1497,6 +1570,9 @@ export default function CustomerInventoryPage() {
                         <td className="py-2 px-3">{ci.item.product_name}</td>
                         <td className="py-2 px-3">{ci.item.category}</td>
                         <td className="py-2 px-3">{ci.item.subcategory}</td>
+                        <td className="py-2 px-3">
+                          {formatPeso(ci.item.unit_price)}
+                        </td>
                         <td className="py-2 px-3">{ci.quantity}</td>
                         <td className="py-2 px-3">{ci.item.status}</td>
                       </tr>
@@ -1505,6 +1581,15 @@ export default function CustomerInventoryPage() {
                 </table>
               </div>
             </div>
+
+            {/* Show missing fields (if any) */}
+            {missingFields.length > 0 && (
+              <div className="mt-3 text-sm text-red-600">
+                <strong>Required:</strong>{" "}
+                {missingFields.slice(0, 5).join(", ")}
+                {missingFields.length > 5 ? "..." : ""}
+              </div>
+            )}
 
             <div className="shrink-0 flex justify-end gap-2 mt-4">
               <button
@@ -1515,7 +1600,13 @@ export default function CustomerInventoryPage() {
               </button>
               <button
                 onClick={handleOpenFinalModal}
-                className="px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 active:translate-y-px transition"
+                className={`px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 active:translate-y-px transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2`}
+                disabled={!isConfirmOrderEnabled}
+                title={
+                  !isConfirmOrderEnabled
+                    ? "Please complete required fields before submitting"
+                    : "Submit order"
+                }
               >
                 Submit Order
               </button>
@@ -1593,6 +1684,7 @@ export default function CustomerInventoryPage() {
                       <th className="py-2 px-3 text-left">Product</th>
                       <th className="py-2 px-3 text-left">Category</th>
                       <th className="py-2 px-3 text-left">Subcategory</th>
+                      <th className="py-2 px-3 text-left">Unit Price</th>
                       <th className="py-2 px-3 text-left">Qty</th>
                       <th className="py-2 px-3 text-left">Status</th>
                     </tr>
@@ -1603,6 +1695,9 @@ export default function CustomerInventoryPage() {
                         <td className="py-2 px-3">{ci.item.product_name}</td>
                         <td className="py-2 px-3">{ci.item.category}</td>
                         <td className="py-2 px-3">{ci.item.subcategory}</td>
+                        <td className="py-2 px-3">
+                          {formatPeso(ci.item.unit_price)}
+                        </td>
                         <td className="py-2 px-3">{ci.quantity}</td>
                         <td className="py-2 px-3">{ci.item.status}</td>
                       </tr>
@@ -1611,6 +1706,15 @@ export default function CustomerInventoryPage() {
                 </table>
               </div>
             </div>
+
+            {/* show missing fields here too (shouldn't happen if flow enforced) */}
+            {missingFields.length > 0 && (
+              <div className="mt-3 text-sm text-red-600">
+                <strong>Missing required fields:</strong>{" "}
+                {missingFields.slice(0, 5).join(", ")}
+                {missingFields.length > 5 ? "..." : ""}
+              </div>
+            )}
 
             <div className="shrink-0 flex justify-end gap-2 mt-4">
               <button
@@ -1624,9 +1728,11 @@ export default function CustomerInventoryPage() {
               </button>
               <button
                 onClick={handleConfirmOrder}
-                disabled={placingOrder}
+                disabled={placingOrder || !isConfirmOrderEnabled}
                 className={`px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition inline-flex items-center gap-2 ${
-                  placingOrder ? "opacity-70 cursor-not-allowed" : ""
+                  placingOrder || !isConfirmOrderEnabled
+                    ? "opacity-70 cursor-not-allowed"
+                    : ""
                 }`}
               >
                 {placingOrder ? (
