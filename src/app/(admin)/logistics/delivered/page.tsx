@@ -71,7 +71,7 @@ export default function DeliveredPage() {
   // filters
   const [query, setQuery] = useState<string>(""); // matches destination/driver/plate
   const [dateFrom, setDateFrom] = useState<string>(""); // YYYY-MM-DD
-  const [dateTo, setDateTo] = useState<string>("");     // YYYY-MM-DD
+  const [dateTo, setDateTo] = useState<string>(""); // YYYY-MM-DD
   const [loading, setLoading] = useState<boolean>(false);
 
   const isLocked = (status: string) => status === "To Receive";
@@ -145,7 +145,8 @@ export default function DeliveredPage() {
         const ids = list.map((d) => d.id);
         const { data: oData, error: oErr } = await supabase
           .from("orders")
-          .select(`
+          .select(
+            `
             id, total_amount, status, truck_delivery_id, salesman, terms, accepted_at,
             customer:customer_id (
               id, name, code, address, contact_person, phone, status, date, created_at
@@ -154,7 +155,8 @@ export default function DeliveredPage() {
               quantity, price,
               inventory:inventory_id ( product_name, category, subcategory, status )
             )
-          `)
+          `
+          )
           .in("truck_delivery_id", ids)
           .order("accepted_at", { ascending: false });
 
@@ -178,7 +180,8 @@ export default function DeliveredPage() {
             order_items: oRaw.order_items ?? [],
           };
           if (!o.truck_delivery_id) return;
-          if (!byDelivery.has(o.truck_delivery_id)) byDelivery.set(o.truck_delivery_id, []);
+          if (!byDelivery.has(o.truck_delivery_id))
+            byDelivery.set(o.truck_delivery_id, []);
           byDelivery.get(o.truck_delivery_id)!.push(o);
         });
 
@@ -199,7 +202,7 @@ export default function DeliveredPage() {
     fetchDelivered(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, dateFrom, dateTo]);
-  
+
   // search submit (debounce could be added; simplest: re-fetch on submit)
   const onSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -217,7 +220,7 @@ export default function DeliveredPage() {
       {/* Header */}
       <div className="flex items-end justify-between mb-6 gap-4">
         <div>
-          <h1 className="text-3xl font-bold">To Receive (History)</h1>
+          <h1 className="text-3xl font-bold">Delivery History</h1>
           <p className="text-sm text-slate-500">
             View delivered trucks with filters and pagination.
           </p>
@@ -382,6 +385,9 @@ export default function DeliveredPage() {
                   <div className="col-span-12 lg:col-span-2">
                     <div className="flex lg:flex-col gap-2 justify-end lg:justify-start">
                       <div className="inline-flex items-center gap-2">
+                        {delivery.status === "Delivered" && (
+                          <CheckCircle className="text-green-700" />
+                        )}
                         {delivery.status === "To Receive" && (
                           <CheckCircle className="text-emerald-600" />
                         )}
@@ -397,7 +403,8 @@ export default function DeliveredPage() {
                           disabled
                           className="border rounded-md px-2 py-1 text-sm bg-gray-100 text-gray-500 cursor-not-allowed"
                         >
-                          <option>To Receive</option>
+                          <option value="To Receive">To Receive</option>
+                          <option value="Delivered">Delivered</option>
                         </select>
                       </div>
 

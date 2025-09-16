@@ -48,7 +48,7 @@ type Delivery = {
   eta_date?: string | null;
   participants?: string[] | null;
   created_at?: string;
-  shipping_fee?: number | null; 
+  shipping_fee?: number | null;
   _orders?: OrderWithCustomer[];
 };
 
@@ -131,6 +131,8 @@ export default function TruckDeliveryPage() {
   }
 
   const [assignOpen, setAssignOpen] = useState(false);
+  const [prefillOrderId, setPrefillOrderId] = useState<number | null>(null);
+  const [prefillOrderAddress, setPrefillOrderAddress] = useState<string>("");
   const [assignForDeliveryId, setAssignForDeliveryId] = useState<number | null>(
     null
   );
@@ -148,6 +150,7 @@ export default function TruckDeliveryPage() {
     driver: "",
     participants: [] as string[],
   });
+
   // TODO: LOCATION HERE
   // Region / Province pickers for Destination
   const [regions, setRegions] = useState<PSGCRegion[]>([]);
@@ -221,7 +224,6 @@ export default function TruckDeliveryPage() {
       //.in("status", ["Scheduled", "To Ship", "To Receive"])
       .order("schedule_date", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false });
-
 
     if (dErr) {
       console.error("Fetch deliveries error:", dErr);
@@ -566,48 +568,91 @@ export default function TruckDeliveryPage() {
     setRegionCode("");
     setProvinceCode("");
   };
+  function openFormPrefilledFromOrder(order: OrderWithCustomer) {
+    const addr = order?.customer?.address?.trim() || "";
+    setPrefillOrderId(order.id);
+    setPrefillOrderAddress(addr);
 
-  const handleAddDelivery = async (e: React.FormEvent) => {
-  e.preventDefault();
-  const region = regions.find((r) => r.code === regionCode)?.name || "";
-  const province = provinces.find((p) => p.code === provinceCode)?.name || "";
-  const destinationComposed =
-    newDelivery.destination?.trim() ||
-    [region, province].filter(Boolean).join(", ");
+    setNewDelivery((prev) => ({
+      ...prev,
+      destination: addr,
+      plateNumber: "",
+      driver: "",
+      participants: [],
+      status: "Scheduled",
+      scheduleDate: "",
+      arrivalDate: "",
+    }));
 
-  const { error } = await supabase.from("truck_deliveries").insert([{
-    destination: destinationComposed,
-    plate_number: newDelivery.plateNumber,
-    driver: newDelivery.driver,
-    participants: newDelivery.participants,
-    status: newDelivery.status,           // "Scheduled"
-    schedule_date: newDelivery.scheduleDate,
-    arrival_date: newDelivery.arrivalDate || null,
-  }]);
-
-  if (error) {
-    console.error("Insert error:", error);
-    toast.error("Failed to add delivery");
-    return;
+    setAssignOpen(false);
+    setRegionCode("");
+    setProvinceCode("");
+    setFormVisible(true);
   }
 
-  toast.success("Delivery schedule added");
+  const handleAddDelivery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const region = regions.find((r) => r.code === regionCode)?.name || "";
+    const province = provinces.find((p) => p.code === provinceCode)?.name || "";
+    const destinationComposed =
+      newDelivery.destination?.trim() ||
+      [region, province].filter(Boolean).join(", ");
 
-  // ✅ ACTIVITY LOG ON SAVE
-  await logActivity("Added Delivery Schedule", {
-    destination: destinationComposed,
-    plate_number: newDelivery.plateNumber,
-    driver: newDelivery.driver,
-    participants: newDelivery.participants,
-    status: newDelivery.status,
-    schedule_date: newDelivery.scheduleDate,
-    arrival_date: newDelivery.arrivalDate || null,
-  });
+    const { error: insErr, data: insData } = await supabase
+      .from("truck_deliveries")
+      .insert([
+        {
+          destination: destinationComposed,
+          plate_number: newDelivery.plateNumber,
+          driver: newDelivery.driver,
+          participants: newDelivery.participants,
+          status: newDelivery.status,
+          schedule_date: newDelivery.scheduleDate,
+          arrival_date: newDelivery.arrivalDate || null,
+        },
+      ])
+      .select("id")
+      .single();
 
-  await fetchDeliveriesAndAssignments();
-  hideForm();
-};
+    if (insErr) {
+      console.error("Insert error:", insErr);
+      toast.error("Failed to add delivery");
+      return;
+    }
 
+    // 👇 NEW: Assign to order if opened via "Create Delivery"
+    if (prefillOrderId) {
+      const { error: linkErr } = await supabase
+        .from("orders")
+        .update({ truck_delivery_id: insData.id })
+        .eq("id", prefillOrderId)
+        .is("truck_delivery_id", null);
+
+      if (linkErr) {
+        console.error("Link order error:", linkErr);
+        toast.error("Delivery created, but failed to link the invoice.");
+      } else {
+        toast.success("Invoice linked to the new truck.");
+      }
+
+      setPrefillOrderId(null);
+      setPrefillOrderAddress("");
+    }
+
+    // ✅ ACTIVITY LOG ON SAVE
+    await logActivity("Added Delivery Schedule", {
+      destination: destinationComposed,
+      plate_number: newDelivery.plateNumber,
+      driver: newDelivery.driver,
+      participants: newDelivery.participants,
+      status: newDelivery.status,
+      schedule_date: newDelivery.scheduleDate,
+      arrival_date: newDelivery.arrivalDate || null,
+    });
+
+    await fetchDeliveriesAndAssignments();
+    hideForm();
+  };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -629,41 +674,41 @@ export default function TruckDeliveryPage() {
   };
 
   const confirmStatusChange = async () => {
-  const { id, newStatus } = confirmDialog;
-  if (id == null) return;
+    const { id, newStatus } = confirmDialog;
+    if (id == null) return;
 
-  const { error } = await supabase
-    .from("truck_deliveries")
-    .update({ status: newStatus })
-    .eq("id", id);
+    const { error } = await supabase
+      .from("truck_deliveries")
+      .update({ status: newStatus })
+      .eq("id", id);
 
-  if (error) {
-    console.error("Update error:", error);
-    toast.error("Failed to update delivery status");
-  } else {
-    if (newStatus === "To Receive") {
-      setDeliveries((prev) => prev.filter((d) => d.id !== id));
-      toast.success("Marked as Delivered — moved to Delivered History.");
+    if (error) {
+      console.error("Update error:", error);
+      toast.error("Failed to update delivery status");
     } else {
-      updateDeliveryStatusInState(id, newStatus);
-      toast.success("Delivery status changed successfully");
+      if (newStatus === "To Receive") {
+        setDeliveries((prev) => prev.filter((d) => d.id !== id));
+        toast.success("Marked as Delivered — moved to Delivered History.");
+      } else {
+        updateDeliveryStatusInState(id, newStatus);
+        toast.success("Delivery status changed successfully");
+      }
+
+      // ✅ ACTIVITY LOG FOR STATUS CHANGE
+      await logActivity("Changed Delivery Status", {
+        delivery_id: id,
+        new_status: newStatus,
+      });
     }
 
-    // ✅ ACTIVITY LOG FOR STATUS CHANGE
-    await logActivity("Changed Delivery Status", {
-      delivery_id: id,
-      new_status: newStatus,
-    });
-  }
-
-  setConfirmDialog({ open: false, id: null, newStatus: "" });
-};
-
+    setConfirmDialog({ open: false, id: null, newStatus: "" });
+  };
 
   const addParticipant = () => {
     if (!newPerson.trim()) return;
     // optional safety: max 3
-    if (newDelivery.participants.length >= 2) return toast.error("Up to 2 participants only.");
+    if (newDelivery.participants.length >= 2)
+      return toast.error("Up to 2 participants only.");
     setNewDelivery((prev) => ({
       ...prev,
       participants: [...prev.participants, newPerson.trim()],
@@ -672,78 +717,79 @@ export default function TruckDeliveryPage() {
   };
 
   /** Update arrival_date (a.k.a. Date Received) */
-const updateArrivalDate = async (deliveryId: number, date: string) => {
-  const { error } = await supabase
-    .from("truck_deliveries")
-    .update({ arrival_date: date })
-    .eq("id", deliveryId);
+  const updateArrivalDate = async (deliveryId: number, date: string) => {
+    const { error } = await supabase
+      .from("truck_deliveries")
+      .update({ arrival_date: date })
+      .eq("id", deliveryId);
 
-  if (error) {
-    toast.error("Failed to update Date Received");
-    return;
-  }
+    if (error) {
+      toast.error("Failed to update Date Received");
+      return;
+    }
 
-  setDeliveries((prev) =>
-    prev.map((d) => (d.id === deliveryId ? { ...d, arrival_date: date } : d))
-  );
-  toast.success("Date Received updated");
+    setDeliveries((prev) =>
+      prev.map((d) => (d.id === deliveryId ? { ...d, arrival_date: date } : d))
+    );
+    toast.success("Date Received updated");
 
-  // ✅ ACTIVITY LOG FOR DATE RECEIVED
-  await logActivity("Updated Delivery Date Received", {
-    delivery_id: deliveryId,
-    arrival_date: date,
-  });
-};
+    // ✅ ACTIVITY LOG FOR DATE RECEIVED
+    await logActivity("Updated Delivery Date Received", {
+      delivery_id: deliveryId,
+      arrival_date: date,
+    });
+  };
 
-/** Update eta_date (Estimated Arrival for Ongoing) */
-const updateEtaDate = async (deliveryId: number, date: string) => {
-  const { error } = await supabase
-    .from("truck_deliveries")
-    .update({ eta_date: date })
-    .eq("id", deliveryId);
+  /** Update eta_date (Estimated Arrival for Ongoing) */
+  const updateEtaDate = async (deliveryId: number, date: string) => {
+    const { error } = await supabase
+      .from("truck_deliveries")
+      .update({ eta_date: date })
+      .eq("id", deliveryId);
 
-  if (error) {
-    console.error("ETA update failed:", error);
-    toast.error("Failed to update Estimated Arrival. Make sure 'eta_date' exists in truck_deliveries.");
-    return;
-  }
+    if (error) {
+      console.error("ETA update failed:", error);
+      toast.error(
+        "Failed to update Estimated Arrival. Make sure 'eta_date' exists in truck_deliveries."
+      );
+      return;
+    }
 
-  setDeliveries((prev) =>
-    prev.map((d) => (d.id === deliveryId ? { ...d, eta_date: date } : d))
-  );
-  toast.success("Estimated Arrival updated");
-  
-  // Optional activity log
-  await logActivity("Updated Estimated Arrival", {
-    delivery_id: deliveryId,
-    eta_date: date,
-  });
-};
+    setDeliveries((prev) =>
+      prev.map((d) => (d.id === deliveryId ? { ...d, eta_date: date } : d))
+    );
+    toast.success("Estimated Arrival updated");
 
-//SHIPPING FEE HANDLER
-const handleShippingFeeChange = async (deliveryId: number, value: number) => {
-  const { error } = await supabase
-    .from("truck_deliveries")
-    .update({ shipping_fee: value })
-    .eq("id", deliveryId);
+    // Optional activity log
+    await logActivity("Updated Estimated Arrival", {
+      delivery_id: deliveryId,
+      eta_date: date,
+    });
+  };
 
-  if (error) {
-    toast.error("Failed to update Shipping Fee");
-    return;
-  }
+  //SHIPPING FEE HANDLER
+  const handleShippingFeeChange = async (deliveryId: number, value: number) => {
+    const { error } = await supabase
+      .from("truck_deliveries")
+      .update({ shipping_fee: value })
+      .eq("id", deliveryId);
 
-  setDeliveries((prev) =>
-    prev.map((d) => (d.id === deliveryId ? { ...d, shipping_fee: value } : d))
-  );
+    if (error) {
+      toast.error("Failed to update Shipping Fee");
+      return;
+    }
 
-  toast.success("Shipping Fee updated");
+    setDeliveries((prev) =>
+      prev.map((d) => (d.id === deliveryId ? { ...d, shipping_fee: value } : d))
+    );
 
-  await logActivity("Updated Shipping Fee", {
-    delivery_id: deliveryId,
-    shipping_fee: value,
-  });
-};
+    toast.success("Shipping Fee updated");
 
+    await logActivity("Updated Shipping Fee", {
+      delivery_id: deliveryId,
+      shipping_fee: value,
+    });
+  };
 
   /* =========================
      GROUP BY schedule_date
@@ -829,12 +875,11 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
   };
 
   const isLocked = (status: string) => status === "To Receive";
-  const isActiveStatus = (s?: string) =>
-  s === "Scheduled" || s === "To Ship";
+  const isActiveStatus = (s?: string) => s === "Scheduled" || s === "To Ship";
   const statusRank = (s?: string) => {
-  if (s === "Scheduled") return 0;
-  if (s === "To Ship") return 1;
-  return 2; // To Receive / Delivered / others
+    if (s === "Scheduled") return 0;
+    if (s === "To Ship") return 1;
+    return 2; // To Receive / Delivered / others
   };
 
   type Groups = Record<string, Delivery[]>;
@@ -855,14 +900,14 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
   const listToShow = deliveries.filter((d) => isActiveStatus(d.status));
 
   const sortedActive = useMemo(() => {
-  return [...listToShow].sort((a, b) => {
-    const r = statusRank(a.status) - statusRank(b.status);
-    if (r !== 0) return r;
-    const ta = a.schedule_date ? new Date(a.schedule_date).getTime() : 0;
-    const tb = b.schedule_date ? new Date(b.schedule_date).getTime() : 0;
-    return tb - ta; // latest first
-  });
-}, [listToShow]);
+    return [...listToShow].sort((a, b) => {
+      const r = statusRank(a.status) - statusRank(b.status);
+      if (r !== 0) return r;
+      const ta = a.schedule_date ? new Date(a.schedule_date).getTime() : 0;
+      const tb = b.schedule_date ? new Date(b.schedule_date).getTime() : 0;
+      return tb - ta; // latest first
+    });
+  }, [listToShow]);
   // Group each bucket by date
   const groupedActive = useMemo(
     () => groupByDate(sortedActive),
@@ -883,11 +928,10 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
     return n > 0 ? `₱${n}` : "";
   };
 
-
   // Valicade name to avoid numbers and special characters
   const handleDriverChange = (value: string) => {
-  // Allow only letters and spaces
-  const regex = /^[A-Za-z\s]*$/;
+    // Allow only letters and spaces
+    const regex = /^[A-Za-z\s]*$/;
 
     if (!regex.test(value)) {
       toast.error("Driver name can only contain letters and spaces");
@@ -898,12 +942,10 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
     let formatted = value
       .replace(/\s+/g, " ")
       .split(" ")
-      .map(
-        (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-      )
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(" ");
 
-      if (value.endsWith(" ")) formatted += " ";
+    if (value.endsWith(" ")) formatted += " ";
 
     setNewDelivery((prev) => ({ ...prev, driver: formatted }));
   };
@@ -938,10 +980,13 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
         </div>
 
         <button
-          onClick={showForm}
+          onClick={() => {
+            setAssignOpen(true);
+            fetchUnassignedOrders();
+          }}
           className="shrink-0 bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] flex items-center gap-2"
         >
-          <Plus size={18} /> Add Delivery Schedule
+          <Plus size={18} /> Assign Invoice
         </button>
       </div>
 
@@ -1014,21 +1059,23 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                       </div>
                       {/* If Ongoing, show ETA date picker */}
                       {/* ETA picker for Ongoing */}
-                        {delivery.status === "To Ship" && (
-                          <div className="mt-3">
-                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
-                              Estimated Arrival
-                            </label>
-                            <input
-                              type="date"
-                              value={delivery.eta_date || ""}
-                              onChange={(e) => updateEtaDate(delivery.id, e.target.value)}
-                              className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
-                            />
-                          </div>
-                        )}
+                      {delivery.status === "To Ship" && (
+                        <div className="mt-3">
+                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
+                            Estimated Arrival
+                          </label>
+                          <input
+                            type="date"
+                            value={delivery.eta_date || ""}
+                            onChange={(e) =>
+                              updateEtaDate(delivery.id, e.target.value)
+                            }
+                            className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
+                          />
+                        </div>
+                      )}
 
-                        {delivery.status === "Scheduled" && (
+                      {delivery.status === "Scheduled" && (
                         <div className="mt-3">
                           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
                             Shipping Fee (₱)
@@ -1038,12 +1085,15 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                             className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
                             value={delivery.shipping_fee ?? ""} // You may need to support this field in your database
                             onChange={(e) =>
-                              handleShippingFeeChange(delivery.id, parseFloat(e.target.value))
+                              handleShippingFeeChange(
+                                delivery.id,
+                                parseFloat(e.target.value)
+                              )
                             }
                             placeholder="Enter shipping fee"
                           />
                         </div>
-)}
+                      )}
 
                       {/* If Delivered (rare here), keep read-only date */}
                       {delivery.status === "Delivered" && (
@@ -1063,7 +1113,7 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                       {(delivery.participants?.length ?? 0) > 0 && (
                         <p className="mt-3 text-sm">
                           <span className="text-slate-500 uppercase tracking-wide text-xs">
-                            Assistants: 
+                            Assistants:
                           </span>
                           <br />
                           <span className="font-medium">
@@ -1137,7 +1187,13 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
 
                         <select
                           value={delivery.status}
-                          onChange={(e) => setConfirmDialog({ open: true, id: delivery.id, newStatus: e.target.value })}
+                          onChange={(e) =>
+                            setConfirmDialog({
+                              open: true,
+                              id: delivery.id,
+                              newStatus: e.target.value,
+                            })
+                          }
                           disabled={isLocked(delivery.status)}
                           className="border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
                         >
@@ -1146,30 +1202,6 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                           <option value="To Receive">To Receive</option>
                         </select>
                       </div>
-
-                      <button
-                        onClick={() => openAssignDialog(delivery.id)}
-                        disabled={isLocked(delivery.status)}
-                        className={`px-3 py-2 rounded-md border text-sm hover:bg-slate-50 transition ${
-                          isLocked(delivery.status)
-                            ? "opacity-60 cursor-not-allowed"
-                            : ""
-                        }`}
-                      >
-                        Assign Invoices
-                      </button>
-
-                      <button
-                        onClick={() => handleClearInvoices(delivery.id)}
-                        disabled={isLocked(delivery.status)}
-                        className={`px-3 py-2 rounded-md border border-red-400 text-red-600 text-sm hover:bg-red-50 transition ${
-                          isLocked(delivery.status)
-                            ? "opacity-60 cursor-not-allowed"
-                            : ""
-                        }`}
-                      >
-                        Clear Invoices
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -1245,12 +1277,18 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                   {unassignedOrders.map((o) => (
                     <tr key={o.id} className="border-t">
                       <td className="p-2">
-                        <input
-                          type="checkbox"
-                          checked={selectedOrderIds.includes(o.id)}
-                          onChange={() => toggleSelectOrder(o.id)}
-                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="text-xs px-2 py-1 border rounded hover:bg-gray-50"
+                            title="Create delivery for this invoice and auto-fill address"
+                            onClick={() => openFormPrefilledFromOrder(o)}
+                          >
+                            Create Delivery
+                          </button>
+                        </div>
                       </td>
+
                       <td className="p-2 font-mono">{o.customer?.code}</td>
                       <td className="p-2">{o.customer?.name}</td>
                       <td className="p-2">₱{o.total_amount ?? 0}</td>
@@ -1493,52 +1531,65 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
             <form onSubmit={handleAddDelivery} className="space-y-4">
               <div className="grid grid-cols-2 gap-x-6 gap-y-4">
                 <div className="flex items-center gap-2">
-                  {/* Destination: Region + Province */}
                   <label className="w-32 text-sm font-medium">
                     Destination
                   </label>
-                  <div className="grid grid-cols-2 gap-2 w-full">
-                    <select
-                      className="border p-2 rounded"
-                      value={regionCode}
-                      onChange={(e) => setRegionCode(e.target.value)}
-                      required
-                    >
-                      <option value="">Select region</option>
-                      {regions.map((r) => (
-                        <option key={r.code} value={r.code}>
-                          {r.name}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="w-full">
+                    {prefillOrderId && newDelivery.destination ? (
+                      <input
+                        type="text"
+                        value={newDelivery.destination}
+                        className="w-full border p-2 rounded bg-gray-100 text-gray-700 cursor-not-allowed"
+                        disabled
+                      />
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                        <select
+                          className="border p-2 rounded"
+                          value={regionCode}
+                          onChange={(e) => setRegionCode(e.target.value)}
+                          required
+                        >
+                          <option value="">Select region</option>
+                          {regions.map((r) => (
+                            <option key={r.code} value={r.code}>
+                              {r.name}
+                            </option>
+                          ))}
+                        </select>
 
-                    <select
-                      className="border p-2 rounded"
-                      value={provinceCode}
-                      onChange={(e) => setProvinceCode(e.target.value)}
-                      // NCR has no provinces -> disable + not required
-                      disabled={!regionCode || regionCode.startsWith("13")}
-                      required={!regionCode.startsWith("13") && !!regionCode}
-                    >
-                      <option value="">
-                        {regionCode
-                          ? regionCode.startsWith("13")
-                            ? "NCR has no provinces"
-                            : "Select province"
-                          : "Select region first"}
-                      </option>
-                      {!regionCode.startsWith("13") &&
-                        provinces.map((p) => (
-                          <option key={p.code} value={p.code}>
-                            {p.name}
+                        <select
+                          className="border p-2 rounded"
+                          value={provinceCode}
+                          onChange={(e) => setProvinceCode(e.target.value)}
+                          disabled={!regionCode || regionCode.startsWith("13")}
+                          required={
+                            !regionCode.startsWith("13") && !!regionCode
+                          }
+                        >
+                          <option value="">
+                            {regionCode
+                              ? regionCode.startsWith("13")
+                                ? "NCR has no provinces"
+                                : "Select province"
+                              : "Select region first"}
                           </option>
-                        ))}
-                    </select>
+                          {!regionCode.startsWith("13") &&
+                            provinces.map((p) => (
+                              <option key={p.code} value={p.code}>
+                                {p.name}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">Plate Number</label>
+                  <label className="w-32 text-sm font-medium">
+                    Plate Number
+                  </label>
                   <input
                     type="text"
                     value={newDelivery.plateNumber}
@@ -1560,9 +1611,7 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <label className="w-32 text-sm font-medium">
-                    Assistant
-                  </label>
+                  <label className="w-32 text-sm font-medium">Assistant</label>
                   <div className="flex gap-2 w-full">
                     <input
                       type="text"
@@ -1591,7 +1640,8 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                   <select
                     value="Scheduled"
                     disabled
-                    className="w-full border p-2 rounded bg-gray-100 text-gray-500 cursor-not-allowed">
+                    className="w-full border p-2 rounded bg-gray-100 text-gray-500 cursor-not-allowed"
+                  >
                     <option>Scheduled</option>
                   </select>
                 </div>
