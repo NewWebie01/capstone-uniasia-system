@@ -147,10 +147,10 @@ const DeliveryBadge = ({ status }: { status?: string | null }) => {
 };
 
 // Normalize status string to check if it's "To Ship"
-const isToShip = (s?: string | null) =>
-  !!(s && /^(to[-_ ]?ship)$/i.test(s.trim()));
+const isToShip = (s?: string | null) => {
+  return !!(s && /^(to[-_ ]?ship)$/i.test(s.trim()));
+};
 
-/* -------------------------------- Component -------------------------------- */
 export default function TrackPage() {
   const [loading, setLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState<string | null>(null);
