@@ -80,12 +80,12 @@ const DeliveryBadge = ({ status }: { status?: string | null }) => {
   const s = (status || "").trim().toLowerCase();
 
   if (s === "to receive")
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-green-100 text-green-800">
-      <CheckCircle2 className="h-3.5 w-3.5" />
-      To Receive
-    </span>
-  );
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-green-100 text-green-800">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        To Receive
+      </span>
+    );
 
   if (s === "delivered")
     return (
@@ -134,7 +134,6 @@ const isToShip = (s?: string | null) => {
   return !!(s && /^(to[-_ ]?ship)$/i.test(s.trim()));
 };
 
-
 export default function TrackPage() {
   const [loading, setLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState<string | null>(null);
@@ -146,7 +145,9 @@ export default function TrackPage() {
 
   //MODAL STATE
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [selectedDeliveryId, setSelectedDeliveryId] = useState<number | null>(null);
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState<number | null>(
+    null
+  );
 
   // For realtime subscriptions
   const [orderIds, setOrderIds] = useState<number[]>([]);
@@ -193,7 +194,9 @@ export default function TrackPage() {
     if (!ids.length) return;
     const { data, error } = await supabase
       .from("truck_deliveries")
-      .select("id, status, schedule_date, eta_date, date_received, driver, participants, shipping_fee")
+      .select(
+        "id, status, schedule_date, eta_date, date_received, driver, participants, shipping_fee"
+      )
       .in("id", ids);
     if (!error && data) {
       setDeliveriesById((prev) => {
@@ -226,15 +229,17 @@ export default function TrackPage() {
 
         const { data: customers, error } = await supabase
           .from("customers")
-          .select(`
+          .select(
+            `
             id, name, code, contact_person, email, phone, address, date,
             orders (
               id, total_amount, status, truck_delivery_id,
               order_items ( quantity, price, inventory:inventory_id ( product_name, category, subcategory, status ) )
             )
-          `)
+          `
+          )
           .eq("email", email)
-          .order("date", { ascending: false })
+          .order("date", { ascending: false });
 
         if (error || !customers) {
           setTxns([]);
@@ -557,7 +562,9 @@ export default function TrackPage() {
                             {deliv && (
                               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                                 <p>
-                                  <span className="text-gray-500">Shipping Fee:</span>{" "}
+                                  <span className="text-gray-500">
+                                    Shipping Fee:
+                                  </span>{" "}
                                   {typeof deliv.shipping_fee === "number"
                                     ? `₱${deliv.shipping_fee.toFixed(2)}`
                                     : "—"}
@@ -577,12 +584,14 @@ export default function TrackPage() {
                                     : "Not yet received"}
                                 </p>
                                 {/* ETA line for To Ship */}
-                                  {isToShip(rowStatus) && (
-                                    <p className="md:col-span-2">
-                                      <span className="text-gray-500">ETA:</span>{" "}
-                                      {deliv.eta_date ? formatPH(deliv.eta_date, "date") : "—"}
-                                    </p>
-                                  )}
+                                {isToShip(rowStatus) && (
+                                  <p className="md:col-span-2">
+                                    <span className="text-gray-500">ETA:</span>{" "}
+                                    {deliv.eta_date
+                                      ? formatPH(deliv.eta_date, "date")
+                                      : "—"}
+                                  </p>
+                                )}
                                 <p>
                                   <span className="text-gray-500">Driver:</span>{" "}
                                   {deliv.driver ?? "—"}
@@ -599,7 +608,6 @@ export default function TrackPage() {
                               </div>
                             )}
                           </div>
-                          
                         )}
                         {deliv?.status === "To Receive" && (
                           <div className="mt-3">
@@ -686,7 +694,8 @@ export default function TrackPage() {
         <DialogContent className="max-w-md">
           <h2 className="text-lg font-semibold mb-2">Confirm Delivery</h2>
           <p className="text-sm text-gray-600">
-            Are you sure you want to mark this delivery as <strong>Received</strong>?
+            Are you sure you want to mark this delivery as{" "}
+            <strong>Received</strong>?
           </p>
 
           <div className="mt-4 flex justify-end gap-2">
@@ -710,7 +719,9 @@ export default function TrackPage() {
 
                 if (error) {
                   console.error("Delivery update failed:", error);
-                  toast.error("❌ Failed to confirm delivery. Please try again.");
+                  toast.error(
+                    "❌ Failed to confirm delivery. Please try again."
+                  );
                 } else {
                   toast.success("✅ Thank you! Delivery has been confirmed.");
                 }
