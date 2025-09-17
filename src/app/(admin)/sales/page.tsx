@@ -266,7 +266,12 @@ const totalDiscount = selectedOrder
     }, 0)
   : 0;
 
-
+function getPHISOString() {
+  const now = new Date();
+  // Add 8 hours to UTC
+  const ph = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return ph.toISOString().replace("T", " ").slice(0, 19); // "YYYY-MM-DD HH:mm:ss"
+}
 
   const totalSales = useMemo(
     () =>
@@ -436,7 +441,7 @@ const totalDiscount = selectedOrder
         accepted_by_name:
           processor?.name ?? (user?.email ? user.email.split("@")[0] : null),
         accepted_by_role: processor?.role ?? user?.user_metadata?.role ?? null,
-        accepted_at: new Date().toISOString(),
+        accepted_at: getPHISOString(),
       })
       .eq("id", order.id);
 
@@ -461,7 +466,7 @@ const totalDiscount = selectedOrder
             total_amount: order.total_amount,
             payment_type: order.customers.payment_type,
           },
-          created_at: new Date().toISOString(),
+          created_at: getPHISOString(),
         },
       ]);
     } catch (err) {
@@ -514,7 +519,7 @@ setPickingStatus((prev) => [
             total_amount: order.total_amount,
             payment_type: order.customers.payment_type,
           },
-          created_at: new Date().toISOString(),
+          created_at: getPHISOString(),
         },
       ]);
     } catch (err) {
@@ -544,7 +549,7 @@ setPickingStatus((prev) => [
 
     setIsCompletingOrder(true);
     try {
-      for (let i = 0; i < selectedOrder.order_items.length; i++) {
+for (let i = 0; i < selectedOrder.order_items.length; i++) {
   const oi = selectedOrder.order_items[i];
   if (oi.inventory.quantity === 0) continue;
   const invId = oi.inventory.id;
@@ -571,22 +576,31 @@ setPickingStatus((prev) => [
     .eq("order_id", selectedOrder.id)
     .eq("inventory_id", invId);
 
-  // 3. Insert to sales as usual
+  // 3. Calculate earnings (profit per item)
+  const qty = editedQuantities[i];
+  const unitPrice = oi.price;
+  const discountPercent = editedDiscounts[i] || 0;
+  const costPrice = oi.inventory.cost_price || 0; // fallback if cost_price is null
+  const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
+
+  // 4. Insert to sales table
   await supabase.from("sales").insert([
     {
       inventory_id: invId,
-      quantity_sold: editedQuantities[i],
-      amount: editedQuantities[i] * oi.price * (1 - (editedDiscounts[i] || 0) / 100),
-      date: new Date().toISOString(),
+      quantity_sold: qty,
+      amount: qty * unitPrice * (1 - discountPercent / 100),
+      earnings, // <-- Now defined and computed!
+      date: getPHISOString(),
     },
   ]);
 }
 
 
+
       const isCredit = selectedOrder.customers.payment_type === "Credit";
       const updateFields = {
         status: "completed",
-        date_completed: new Date().toISOString(),
+        date_completed: getPHISOString(),
         sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
         po_number: poNumber,
         salesman: repName,
@@ -603,7 +617,7 @@ setPickingStatus((prev) => [
         processed_by_email: processor?.email ?? "unknown",
         processed_by_name: processor?.name ?? "unknown",
         processed_by_role: processor?.role ?? "unknown",
-        processed_at: new Date().toISOString(),
+        processed_at: getPHISOString(),
       } as const;
 
       const { error: ordersErr } = await supabase
@@ -638,7 +652,7 @@ setPickingStatus((prev) => [
               total_amount: getGrandTotalWithInterest(),
               payment_type: selectedOrder.customers.payment_type,
             },
-            created_at: new Date().toISOString(),
+            created_at: getPHISOString(),
           },
         ]);
       } catch (err) {
@@ -1074,7 +1088,7 @@ setPickingStatus((prev) => [
         <th className="py-2 px-4 text-right">Unit Price</th>
         <th className="py-2 px-4 text-right">Cost Price</th>
         <th className="py-2 px-4 text-right">Total</th>
-        <th className="py-2 px-4 text-right">Profit</th>
+        
 
       </tr>
     </thead>
@@ -1112,12 +1126,6 @@ setPickingStatus((prev) => [
             <td className="py-2 px-4 text-right">
               ₱{(it.unit_price * it.quantity).toLocaleString()}
             </td>
-            <td className="py-2 px-4 text-right">
-  ₱
-  {(it.profit ??
-    ((it.unit_price ?? 0) - (it.cost_price ?? 0)) * (it.quantity ?? 0)
-  ).toLocaleString()}
-</td>
           </tr>
         ))}
     </tbody>

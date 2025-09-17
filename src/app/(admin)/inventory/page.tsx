@@ -455,7 +455,6 @@ export default function InventoryPage() {
               <th className={cellNowrap}>Unit Price</th>
               <th className={cellNowrap}>Cost Price</th>
               <th className={cellNowrap}>Total</th>
-              <th className={cellNowrap}>Profit</th>
               <th className={cellNowrap}>Total Weight</th>
               <th className={cellNowrap}>Status</th>
               <th className={cellNowrap}>Date</th>
@@ -494,9 +493,6 @@ export default function InventoryPage() {
                     : "—"}
                 </td>
                 <td className={cellNowrap}>₱{item.amount.toLocaleString()}</td>
-                <td className={cellNowrap}>
-                  ₱{(item.profit ?? (item.unit_price - (item.cost_price ?? 0)) * item.quantity).toLocaleString()}
-                </td>
                 <td className={cellNowrap}>
                   {item.total_weight_kg
                     ? `${item.total_weight_kg.toLocaleString(undefined, {
@@ -956,18 +952,6 @@ export default function InventoryPage() {
                 type="text"
                 className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
                 value={`₱${newItem.amount.toLocaleString()}`}
-                readOnly
-                disabled
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">Profit</label>
-              <input
-                type="text"
-                className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
-                value={`₱${(
-                  (newItem.unit_price - (newItem.cost_price ?? 0)) * newItem.quantity
-                ).toLocaleString()}`}
                 readOnly
                 disabled
               />

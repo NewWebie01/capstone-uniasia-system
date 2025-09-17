@@ -23,11 +23,6 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 
-type RawSale = {
-  amount: number;
-  date: string;
-};
-
 type ChartPoint = {
   label: string;
   total: number;
@@ -37,7 +32,7 @@ const periodOptions = [
   { key: "Daily", label: "Last 7 Days" },
   { key: "Weekly", label: "Last 6 Weeks" },
   { key: "Monthly", label: "Last 6 Months" },
-  { key: "YTD", label: "Year to Date" }, // Full display text here
+  { key: "YTD", label: "Year to Date" },
   { key: "Annually", label: "Last 6 Years" },
 ] as const;
 
@@ -54,6 +49,7 @@ const Bargraph: React.FC = () => {
       const buckets: Record<string, number> = {};
       const timeline: Bucket[] = [];
 
+      // Setup timeline buckets
       if (period === "Daily") {
         for (let i = 6; i >= 0; i--) {
           const dt = new Date(now);
@@ -92,22 +88,18 @@ const Bargraph: React.FC = () => {
       } else if (period === "Monthly") {
         for (let i = 5; i >= 0; i--) {
           const dt = new Date(now.getFullYear(), now.getMonth() - i, 1);
-          const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(
-            2,
-            "0"
-          )}`;
+          const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
           const label = dt.toLocaleString("en-US", { month: "short" });
           buckets[key] = 0;
           timeline.push({ key, label });
         }
       } else if (period === "YTD") {
-        // From Jan 1 to today (daily), abbreviated month/day
         const startOfYear = new Date(now.getFullYear(), 0, 1);
         let dt = new Date(startOfYear);
         while (dt <= now) {
           const key = dt.toISOString().slice(0, 10);
           const label = dt.toLocaleDateString("en-US", {
-            month: "short", // abbreviated month
+            month: "short",
             day: "numeric",
           });
           buckets[key] = 0;
@@ -115,6 +107,7 @@ const Bargraph: React.FC = () => {
           dt.setDate(dt.getDate() + 1);
         }
       } else {
+        // Annually
         for (let i = 5; i >= 0; i--) {
           const year = now.getFullYear() - i;
           const key = `${year}`;
@@ -141,9 +134,10 @@ const Bargraph: React.FC = () => {
           ? startKey
           : `${startKey}-01-01`;
 
-      const { data: rowsRaw, error } = await supabase
+      // --- Get SALES (earnings) ---
+      const { data: sales, error } = await supabase
         .from("sales")
-        .select("amount, date")
+        .select("date, earnings")
         .gte("date", startDate);
 
       if (error) {
@@ -151,8 +145,9 @@ const Bargraph: React.FC = () => {
         return;
       }
 
-      (rowsRaw ?? []).forEach(({ amount, date }) => {
-        const dt = new Date(date);
+      // --- Sum up earnings per period ---
+      (sales ?? []).forEach((row: any) => {
+        const dt = new Date(row.date);
         let key = "";
         if (period === "Daily" || period === "YTD") {
           key = dt.toISOString().slice(0, 10);
@@ -163,14 +158,11 @@ const Bargraph: React.FC = () => {
           monday.setHours(0, 0, 0, 0);
           key = monday.toISOString().slice(0, 10);
         } else if (period === "Monthly") {
-          key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(
-            2,
-            "0"
-          )}`;
+          key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
         } else {
           key = `${dt.getFullYear()}`;
         }
-        if (buckets[key] !== undefined) buckets[key] += Number(amount) || 0;
+        if (buckets[key] !== undefined) buckets[key] += row.earnings || 0;
       });
 
       setData(
@@ -196,7 +188,7 @@ const Bargraph: React.FC = () => {
       <CardHeader>
         <div className="flex justify-between items-center w-full">
           <div>
-            <CardTitle>Sales Overview</CardTitle>
+            <CardTitle>Profit Overview</CardTitle>
             <CardDescription>
               {periodOptions.find((o) => o.key === period)!.label}
             </CardDescription>
@@ -208,7 +200,7 @@ const Bargraph: React.FC = () => {
           >
             {periodOptions.map((o) => (
               <option key={o.key} value={o.key}>
-                {o.label} {/* Full label display */}
+                {o.label}
               </option>
             ))}
           </select>
@@ -222,7 +214,7 @@ const Bargraph: React.FC = () => {
             <XAxis dataKey="label" tickLine={false} axisLine={false} />
             <YAxis width={60} tickFormatter={formatPHP} />
             <Tooltip formatter={(v: number) => formatPHP(v)} />
-            <Bar dataKey="total" fill="#ffba20" radius={4} />
+            <Bar dataKey="total" fill="#43a047" radius={4} />
           </BarChart>
         </ResponsiveContainer>
       </CardContent>

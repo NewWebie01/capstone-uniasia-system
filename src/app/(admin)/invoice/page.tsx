@@ -257,33 +257,28 @@ function DeliveryReceiptModern({
   }, 0);
   const afterDiscount = subtotal - totalDiscount;
   const computedSalesTax = afterDiscount * TAX_RATE;
-  const computedGrandTotal = afterDiscount + computedSalesTax;
 
   const salesTaxOut =
     typeof totals?.salesTax === "number" ? totals!.salesTax : computedSalesTax;
-  const isCash = (terms || "").toLowerCase().includes("cash");
-const isCredit = (terms || "").toLowerCase().includes("net");
+  const isCredit = (terms || "").toLowerCase().includes("net");
 
-
-let grandTotalOut: number;
-if (isCredit) {
-
-  if (
-    typeof totals?.grandTotalWithInterest === "number" &&
-    totals.grandTotalWithInterest > 0
-  ) {
-    grandTotalOut = totals.grandTotalWithInterest;
-  } else {
-    grandTotalOut = computedGrandTotal;
-  }
-} else {
-  
-  grandTotalOut = computedGrandTotal;
-}
-
-
+  const computedGrandTotal = afterDiscount + salesTaxOut;
+  const grandTotalOut =
+    isCredit && typeof totals?.grandTotalWithInterest === "number" && totals.grandTotalWithInterest > 0
+      ? totals.grandTotalWithInterest
+      : computedGrandTotal;
   const perTermOut =
     typeof totals?.perTermAmount === "number" ? totals!.perTermAmount : 0;
+
+  // INTEREST calculation
+  const interestAmount =
+    isCredit && typeof totals?.grandTotalWithInterest === "number"
+      ? totals.grandTotalWithInterest - (afterDiscount + salesTaxOut)
+      : 0;
+  const interestPercent =
+    afterDiscount + salesTaxOut > 0 && interestAmount > 0
+      ? (interestAmount / (afterDiscount + salesTaxOut)) * 100
+      : 0;
 
   return (
     <div className="w-full max-w-4xl mx-auto bg-white p-7 rounded-xl shadow print:shadow-none print:p-8 print:max-w-none print:w-[100%] text-black">
@@ -410,10 +405,7 @@ if (isCredit) {
         <div className="w-2/3 text-xs pr-4">
           <b>NOTE:</b>
           <ul className="list-decimal ml-6 space-y-0.5 mt-1">
-            <li>
-              All goods are checked in good condition and complete after
-              received and signed.
-            </li>
+            <li>All goods are checked in good condition and complete after received and signed.</li>
             <li>Cash advances to salesman not allowed.</li>
             <li>All checks payable to By–Grace Trading only.</li>
           </ul>
@@ -431,14 +423,23 @@ if (isCredit) {
                 <td className="font-semibold py-0.5">
                   Discount
                 </td>
-                <td className="pl-2 font-mono">
-                  {formatCurrency(totalDiscount)}
+                <td className="pl-2 font-mono text-red-600 font-bold">
+                  -{formatCurrency(totalDiscount)}
                 </td>
               </tr>
               <tr>
                 <td className="font-semibold py-0.5">Sales Tax (12%):</td>
                 <td className="pl-2 font-mono">
                   {formatCurrency(salesTaxOut)}
+                </td>
+              </tr>
+              <tr>
+                <td className="font-semibold py-0.5">
+                  Interest
+                  {interestPercent > 0 ? ` (${interestPercent.toFixed(2)}%)` : ""}
+                </td>
+                <td className="pl-2 font-mono text-blue-600 font-bold">
+                  {interestAmount > 0 ? formatCurrency(interestAmount) : "—"}
                 </td>
               </tr>
               <tr>
@@ -594,24 +595,23 @@ export default function InvoiceMergedPage() {
     setCurrentStatus(order.status || null);
 
     // fetch items
-  const { data: rows, error } = await supabase
-  .from("order_items")
-  .select(`
-    id,
-    order_id,
-    inventory_id,
-    quantity,
-    price,
-    discount_percent,
-    inventory:inventory_id (
-      product_name,
-      unit,
-      unit_price,
-      quantity
-    )
-  `)
-  .eq("order_id", order.id);
-
+    const { data: rows, error } = await supabase
+      .from("order_items")
+      .select(`
+        id,
+        order_id,
+        inventory_id,
+        quantity,
+        price,
+        discount_percent,
+        inventory:inventory_id (
+          product_name,
+          unit,
+          unit_price,
+          quantity
+        )
+      `)
+      .eq("order_id", order.id);
 
     // fetch saved totals (same row as order)
     const { data: orderRow, error: orderErr } = await supabase
