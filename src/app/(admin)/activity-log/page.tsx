@@ -1,4 +1,3 @@
-// src/app/admin/activity-log/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -92,12 +91,10 @@ function activityChip(action: string) {
   );
 }
 
-/* ---------- Quick Action Tabs (like Returns quick chips) ---------- */
 const ACTION_TABS = [
   { key: "all", label: "All" },
   { key: "login", label: "Login" },
   { key: "completed", label: "Completed" },
-  // { key: "pending", label: "Pending" }, // <--- REMOVED
   { key: "update", label: "Update" },
   { key: "add", label: "Add" },
   { key: "reject", label: "Rejected" },
@@ -126,14 +123,13 @@ export default function ActivityLogPage() {
       const { data, error } = await supabase
         .from("activity_logs")
         .select("id, user_email, user_role, action, details, created_at")
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false }); // Newest first!
       if (!error) setActivities(data ?? []);
       setLoading(false);
     }
     initialLoad();
   }, []);
 
-  // reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, quick]);
@@ -162,14 +158,12 @@ export default function ActivityLogPage() {
       }
     });
 
-    // map formatted date/time for display
     arr = arr.map((a) => ({
       ...a,
       date: formatPHDate(a.created_at),
       time: formatPHTime(a.created_at),
     })) as any;
 
-    // text search
     if (q) {
       arr = arr.filter((a: any) => {
         const detailsText = a.details ? JSON.stringify(a.details).toLowerCase() : "";
@@ -182,7 +176,6 @@ export default function ActivityLogPage() {
       });
     }
 
-    // sort
     if (sortConfig) {
       const { key, direction } = sortConfig;
       arr.sort((a: any, b: any) => {
@@ -222,52 +215,51 @@ export default function ActivityLogPage() {
   const paged = filtered.slice(pageStart, pageStart + itemsPerPage);
 
   // Export current page
-async function handleExport() {
-  setShowExport(false);
-  // Fetch ALL records from activity_logs
-  let allActivities: Activity[] = [];
-  setLoading(true);
-  try {
-    const { data } = await supabase
-      .from("activity_logs")
-      .select("id, user_email, user_role, action, details, created_at")
-      .order("created_at", { ascending: false });
-    allActivities = data ?? [];
-  } catch {}
-  setLoading(false);
+  async function handleExport() {
+    setShowExport(false);
+    let allActivities: Activity[] = [];
+    setLoading(true);
+    try {
+      const { data } = await supabase
+        .from("activity_logs")
+        .select("id, user_email, user_role, action, details, created_at")
+        .order("created_at", { ascending: false });
+      allActivities = data ?? [];
+    } catch {}
+    setLoading(false);
 
-  try {
-    const { data } = await supabase.auth.getUser();
-    const userEmail = data?.user?.email || "unknown";
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        user_role: "admin",
-        action: "Exported Activity Log (ALL)",
-        details: {
-          rows: allActivities.length,
-          filter: "ALL",
+    try {
+      const { data } = await supabase.auth.getUser();
+      const userEmail = data?.user?.email || "unknown";
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: userEmail,
+          user_role: "admin",
+          action: "Exported Activity Log (ALL)",
+          details: {
+            rows: allActivities.length,
+            filter: "ALL",
+          },
+          created_at: new Date().toISOString(),
         },
-        created_at: new Date().toISOString(),
-      },
-    ]);
-  } catch {}
+      ]);
+    } catch {}
 
-  const headerRow = ["User", "Account Type", "Activity", "Date", "Time"];
-  const exportRows = allActivities.map((a) => [
-    a.user_email,
-    !a.user_role || a.user_role.toLowerCase() === "authenticated"
-      ? "Admin"
-      : a.user_role.charAt(0).toUpperCase() + a.user_role.slice(1),
-    a.action,
-    formatPHDate(a.created_at),
-    formatPHTime(a.created_at),
-  ]);
-  const ws = XLSX.utils.aoa_to_sheet([headerRow, ...exportRows]);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
-  XLSX.writeFile(wb, `Activity_Log_${new Date().toISOString().slice(0, 10)}.xlsx`);
-}
+    const headerRow = ["User", "Account Type", "Activity", "Date", "Time"];
+    const exportRows = allActivities.map((a) => [
+      a.user_email,
+      !a.user_role || a.user_role.toLowerCase() === "authenticated"
+        ? "Admin"
+        : a.user_role.charAt(0).toUpperCase() + a.user_role.slice(1),
+      a.action,
+      formatPHDate(a.created_at),
+      formatPHTime(a.created_at),
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...exportRows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
+    XLSX.writeFile(wb, `Activity_Log_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
 
   return (
     <div className={`${dmSans.className} px-4 pb-6 pt-1`}>
@@ -315,7 +307,6 @@ async function handleExport() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-
             <button
               className="px-4 py-2 rounded-xl border bg-black text-white hover:opacity-90 shadow-sm text-sm"
               onClick={() => setShowExport(true)}
@@ -323,7 +314,6 @@ async function handleExport() {
               Export
             </button>
           </div>
-
           <div className="text-sm text-gray-600">
             Showing <span className="font-medium">{filtered.length}</span>{" "}
             record{filtered.length === 1 ? "" : "s"}
@@ -331,7 +321,7 @@ async function handleExport() {
         </div>
       </div>
 
-      {/* Table styled like Returns with amber header + rounded corners */}
+      {/* Table */}
       <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -354,7 +344,6 @@ async function handleExport() {
                     </button>
                   </div>
                 </th>
-
                 <th>
                   <div className="flex items-center gap-1">
                     <span>Account Type</span>
@@ -372,7 +361,6 @@ async function handleExport() {
                     </button>
                   </div>
                 </th>
-
                 <th>
                   <div className="flex items-center gap-1">
                     <span>Activity</span>
@@ -390,7 +378,6 @@ async function handleExport() {
                     </button>
                   </div>
                 </th>
-
                 <th>
                   <div className="flex items-center gap-1">
                     <span>Date</span>
@@ -408,7 +395,6 @@ async function handleExport() {
                     </button>
                   </div>
                 </th>
-
                 <th>
                   <div className="flex items-center gap-1">
                     <span>Time</span>
@@ -428,7 +414,6 @@ async function handleExport() {
                 </th>
               </tr>
             </thead>
-
             <tbody>
               {loading ? (
                 <tr>
@@ -457,8 +442,7 @@ async function handleExport() {
             </tbody>
           </table>
         </div>
-
-        {/* Footer like Returns: numbered + Prev/Next */}
+        {/* Footer */}
         <div className="flex items-center justify-between px-3 py-2 border-t bg-white text-sm">
           <div>
             Page <span className="font-medium">{currentPage}</span> of{" "}
@@ -499,16 +483,14 @@ async function handleExport() {
           </div>
         </div>
       </div>
-
       {/* Export modal */}
       {showExport && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
             <h3 className="text-base font-semibold mb-2 text-center">Export Activity Log?</h3>
             <p className="text-sm text-gray-700 text-center mb-5">
-  This will export <b>ALL activity log records</b> in one file.
-</p>
-
+              This will export <b>ALL activity log records</b> in one file.
+            </p>
             <div className="flex gap-3 justify-center">
               <button
                 className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm"

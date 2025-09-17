@@ -19,6 +19,25 @@ type AccountRequest = {
   role?: string;
 };
 
+// --- Activity Logger (reused from Activity Log Page) ---
+async function logActivity(action: string, details: any = {}) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: data?.user?.email || "",
+        user_role: "admin",
+        action,
+        details,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  } catch (e) {
+    // Optional: handle error
+    console.error("logActivity failed:", e);
+  }
+}
+
 // --- Show only DATE (not time)
 function formatPHDate(d?: string | number | Date | null) {
   if (!d) return "—";
@@ -112,7 +131,7 @@ export default function AccountRequestPage() {
     setShowModal(true);
   };
 
-  // --- Modal Approve Confirm
+  // --- Modal Approve Confirm (with activity log)
   const handleModalApprove = async () => {
     if (!modalReq) return;
     setIsProcessing(true);
@@ -141,7 +160,16 @@ export default function AccountRequestPage() {
         .update({ status: "Approved", role })
         .eq("id", id);
 
-      // 3. Send approval email notification
+      // 3. Log Activity (NEW)
+      await logActivity("Approved Account Request", {
+        request_id: modalReq.id,
+        name: modalReq.name,
+        email: modalReq.email,
+        contact_number: modalReq.contact_number,
+        approved_role: role,
+      });
+
+      // 4. Send approval email notification
       await fetch("/api/send-approval-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -157,13 +185,23 @@ export default function AccountRequestPage() {
     }
   };
 
-  // Reject handler
+  // Reject handler (with activity log)
   const handleReject = async (req: AccountRequest) => {
     try {
       await supabase
         .from("account_requests")
         .update({ status: "Rejected" })
         .eq("id", req.id);
+
+      // Log Activity (NEW)
+      await logActivity("Rejected Account Request", {
+        request_id: req.id,
+        name: req.name,
+        email: req.email,
+        contact_number: req.contact_number,
+        prev_status: req.status,
+      });
+
       toast.success("Request rejected.");
     } catch {
       toast.error("Failed to reject.");

@@ -10,6 +10,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Cell, // <<---- Don't forget this!
 } from "recharts";
 import { TrendingUp } from "lucide-react";
 import supabase from "@/config/supabaseClient";
@@ -37,6 +38,17 @@ const periodOptions = [
 ] as const;
 
 type Period = (typeof periodOptions)[number]["key"];
+
+// Helper: interpolate color from green to yellow
+function lerpColor(a: string, b: string, t: number) {
+  const ah = parseInt(a.slice(1), 16), bh = parseInt(b.slice(1), 16);
+  const ar = (ah >> 16) & 0xff, ag = (ah >> 8) & 0xff, ab = ah & 0xff;
+  const br = (bh >> 16) & 0xff, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
+  const rr = Math.round(ar + (br - ar) * t);
+  const rg = Math.round(ag + (bg - ag) * t);
+  const rb = Math.round(ab + (bb - ab) * t);
+  return `#${((1 << 24) | (rr << 16) | (rg << 8) | rb).toString(16).slice(1)}`;
+}
 
 const Bargraph: React.FC = () => {
   const [period, setPeriod] = useState<Period>("Monthly");
@@ -176,6 +188,16 @@ const Bargraph: React.FC = () => {
     load();
   }, [period]);
 
+  // ---- Color logic for bars ----
+  const values = data.map(d => d.total);
+  const min = values.length ? Math.min(...values) : 0;
+  const max = values.length ? Math.max(...values) : 1;
+  const getBarColor = (value: number) => {
+    if (max === min) return "#43a047"; // Default green
+    const t = (value - min) / (max - min);
+    return lerpColor("#43a047", "#ffd600", t); // Green to yellow
+  };
+
   const formatPHP = (v: number) =>
     new Intl.NumberFormat("en-PH", {
       style: "currency",
@@ -214,7 +236,11 @@ const Bargraph: React.FC = () => {
             <XAxis dataKey="label" tickLine={false} axisLine={false} />
             <YAxis width={60} tickFormatter={formatPHP} />
             <Tooltip formatter={(v: number) => formatPHP(v)} />
-            <Bar dataKey="total" fill="#43a047" radius={4} />
+            <Bar dataKey="total" radius={4}>
+              {data.map((entry, idx) => (
+                <Cell key={`cell-${idx}`} fill={getBarColor(entry.total)} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </CardContent>
