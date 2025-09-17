@@ -1,9 +1,7 @@
-export const dynamic = "force-dynamic";
-
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { DM_Sans } from "next/font/google";
 import "@/styles/globals.css";
 import splashImage from "@/assets/tools-log-in-splash.jpg";
@@ -19,24 +17,22 @@ const dmSans = DM_Sans({
   variable: "--font-dm-sans",
 });
 
+export const dynamic = "force-dynamic"; // fix for Vercel/app dir
+
 export default function OtpVerificationPage() {
   const router = useRouter();
-  const params = useSearchParams();
-
   const [otpEmail, setOtpEmail] = useState("");
   const [inputOtp, setInputOtp] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
+  // 🔥 ONLY localStorage (no useSearchParams)
   useEffect(() => {
-    let email = localStorage.getItem("otpEmail") || "";
-    if (!email) {
-      email = params.get("email") || "";
-    }
+    const email = localStorage.getItem("otpEmail") || "";
     setOtpEmail(email);
-  }, [params]);
+  }, []);
 
-  // Optional: timer display
+  // Timer logic unchanged
   const [expiryDisplay, setExpiryDisplay] = useState("");
   useEffect(() => {
     const expiry = parseInt(localStorage.getItem("otpExpiry") || "0", 10);
@@ -57,7 +53,6 @@ export default function OtpVerificationPage() {
     setIsLoading(true);
     setErrorMessage("");
 
-    // Check OTP expiry
     const expiry = parseInt(localStorage.getItem("otpExpiry") || "0", 10);
     if (!expiry || Date.now() > expiry) {
       setErrorMessage("OTP expired. Please login again.");
@@ -65,29 +60,24 @@ export default function OtpVerificationPage() {
       setTimeout(() => router.replace("/login"), 1800);
       return;
     }
-    // Check code
     const code = localStorage.getItem("otpCode") || "";
     if (inputOtp.trim() !== code) {
       setErrorMessage("Incorrect OTP. Please try again.");
       setIsLoading(false);
       return;
     }
-
-    // OTP valid: save flags (valid for 1 hour on this device/email)
-    const otpVerifiedExpiry = parseInt(localStorage.getItem("otpVerifiedExpiry") || "0", 10);
+    // Set verified flag with 1 hour expiry
+    const verifiedExpiry = Date.now() + 3600_000;
     localStorage.setItem("otpVerified", "true");
     localStorage.setItem("otpVerifiedEmail", otpEmail);
-    localStorage.setItem("otpVerifiedExpiry", otpVerifiedExpiry.toString());
-    // Remove temp otp fields for security
+    localStorage.setItem("otpVerifiedExpiry", verifiedExpiry.toString());
     localStorage.removeItem("otpCode");
     localStorage.removeItem("otpExpiry");
     localStorage.removeItem("otpEmail");
 
-    // Fetch role for redirect
     const { data } = await supabase.auth.getUser();
     const role = (data?.user?.user_metadata?.role as string | undefined) ?? undefined;
 
-    // Log activity
     supabase
       .from("activity_logs")
       .insert([
@@ -103,7 +93,6 @@ export default function OtpVerificationPage() {
         if (logError) console.error("Failed to insert activity log:", logError);
       });
 
-    // Redirect
     if (role === "admin") router.replace("/dashboard");
     else if (role === "customer") router.replace("/customer/product-catalog");
     else {
@@ -167,6 +156,8 @@ export default function OtpVerificationPage() {
               className="flex flex-col gap-6 w-full max-w-sm"
             >
               <input
+                type="text"
+                pattern="\d{6}"
                 value={inputOtp}
                 onChange={e => setInputOtp(e.target.value.replace(/\D/g, ""))}
                 className="w-full border p-2 mb-2 rounded text-xl tracking-widest text-center"
@@ -174,6 +165,7 @@ export default function OtpVerificationPage() {
                 autoFocus
                 inputMode="numeric"
                 disabled={isLoading}
+                required
               />
               <div className="flex justify-between w-full text-xs text-gray-400">
                 <span>Code expires in: {expiryDisplay}</span>
