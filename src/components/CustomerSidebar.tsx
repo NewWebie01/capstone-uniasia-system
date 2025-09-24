@@ -19,6 +19,7 @@ import {
   RotateCcw,
   BadgeCheck,
   PackageCheck,
+  ReceiptText, // ← NEW
 } from "lucide-react";
 
 // shared link wrapper (same as admin)
@@ -43,6 +44,9 @@ const Menus: MenuItem[] = [
     icon: ShoppingBag,
   },
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
+
+  // NEW: Payments
+  { title: "Payments", href: "/customer/payments", icon: ReceiptText },
 
   // Returns flows
   { title: "Returns / Issues", href: "/customer/returns", icon: RotateCcw },
@@ -134,6 +138,7 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
             const highlightTitles = new Set([
               "Product catalog",
               "My orders",
+              "Payments", // ← NEW so it uses amber icon color
               "Returns / Issues",
               "Return Status",
               "Returned Items",
