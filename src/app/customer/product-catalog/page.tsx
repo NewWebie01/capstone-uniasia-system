@@ -100,6 +100,7 @@ type CustomerInfo = {
   contact_person?: string;
   code?: string;
   area?: string;
+  landmark?: string;
   date?: string;
   transaction?: string;
   status?: "pending" | "completed" | "rejected";
@@ -247,6 +248,7 @@ export default function CustomerInventoryPage() {
     area: "",
     payment_type: "Cash",
     customer_type: undefined,
+    landmark: "",
   });
 
   /* ----------------------------- PSGC state ----------------------------- */
@@ -835,6 +837,7 @@ export default function CustomerInventoryPage() {
 
     const customerPayload: Partial<CustomerInfo> = {
       ...customer,
+      landmark: customer.landmark || "",
       date: phTime,
       status: "pending",
       transaction: items
@@ -1500,6 +1503,17 @@ export default function CustomerInventoryPage() {
                   className="border px-3 py-2 rounded col-span-2"
                   value={houseStreet}
                   onChange={(e) => setHouseStreet(e.target.value)}
+                />
+                <input
+                  placeholder="Landmark"
+                  className="border px-3 py-2 rounded col-span-2"
+                  value={customerInfo.landmark || ""}
+                  onChange={(e) =>
+                    setCustomerInfo({
+                      ...customerInfo,
+                      landmark: e.target.value,
+                    })
+                  }
                 />
                 <input
                   className="border px-3 py-2 rounded col-span-2 bg-gray-50"
