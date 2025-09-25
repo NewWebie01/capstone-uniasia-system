@@ -26,6 +26,13 @@ const daysBetween = (a?: string | Date | null, b?: string | Date | null) => {
   return Math.floor((d2 - d1) / (1000 * 60 * 60 * 24));
 };
 
+const addDays = (d?: string | Date | null, n = 0) => {
+  if (!d) return null;
+  const dt = new Date(d);
+  dt.setDate(dt.getDate() + n);
+  return dt;
+};
+
 /* ------------------------ Return types + normalizer ---------------------- */
 type ReturnReason =
   | "Damaged/Defective"
@@ -100,7 +107,7 @@ type OrderRow = {
 
 type CustomerTx = {
   id: string;
-  code: string | null; // <-- TXN code
+  code: string | null; // TXN code
   email: string | null;
   name: string | null;
   phone: string | null;
@@ -131,7 +138,7 @@ export default function CustomerReturnsPage() {
         ? "bg-red-100 text-red-700 border-red-200"
         : s === "processing" || s === "review"
         ? "bg-blue-100 text-blue-700 border-blue-200"
-        : "bg-gray-100 text-gray-700 border-gray-200"; // requested, etc.
+        : "bg-gray-100 text-gray-700 border-gray-200";
     return (
       <span
         className={`inline-block px-2 py-0.5 rounded-full text-xs border ${styles}`}
@@ -150,7 +157,7 @@ export default function CustomerReturnsPage() {
   const [deliveryStatusById, setDeliveryStatusById] = useState<
     Record<string, string>
   >({});
-  // Map order_id -> TXN code (for grouping returns)
+  // Map order_id -> TXN code
   const [orderIdToTxn, setOrderIdToTxn] = useState<Record<string, string>>({});
 
   // Keep ids around for subscriptions
@@ -170,6 +177,19 @@ export default function CustomerReturnsPage() {
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
   const [files, setFiles] = useState<FileList | null>(null);
+
+  // Policy (link → modal) confirmation state
+  const [showPolicy, setShowPolicy] = useState(false);
+  const [policyScrolled, setPolicyScrolled] = useState(false);
+  const [policyAgreed, setPolicyAgreed] = useState(false);
+  const policyBoxRef = useRef<HTMLDivElement | null>(null);
+
+  const handlePolicyScroll = () => {
+    const el = policyBoxRef.current;
+    if (!el) return;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+    if (atBottom && !policyScrolled) setPolicyScrolled(true);
+  };
 
   // Local previews for confirmation modal (object URLs)
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -212,7 +232,6 @@ export default function CustomerReturnsPage() {
           return;
         }
 
-        // 1) customers -> orders -> items (also truck_delivery_id)
         const { data: customers, error } = await supabase
           .from("customers")
           .select(
@@ -255,7 +274,6 @@ export default function CustomerReturnsPage() {
           const list = customers as CustomerTx[];
           setTxns(list);
 
-          // gather ids + build order->TXN map
           const dIds = new Set<string>();
           const oIds = new Set<string>();
           const orderToTxn: Record<string, string> = {};
@@ -273,7 +291,6 @@ export default function CustomerReturnsPage() {
           orderIdsRef.current = oIds;
           setOrderIdToTxn(orderToTxn);
 
-          // 2) fetch delivery statuses
           if (dIds.size > 0) {
             const { data: deliveries } = await supabase
               .from("truck_deliveries")
@@ -289,11 +306,9 @@ export default function CustomerReturnsPage() {
             setDeliveryStatusById({});
           }
 
-          // 3) load returns for the user’s orders
           await refreshReturns();
         }
 
-        // 4) realtime
         setupRealtime();
       } finally {
         setLoading(false);
@@ -388,7 +403,6 @@ export default function CustomerReturnsPage() {
     const normalized = normalizeReturns(rtns ?? []);
     setReturnsList(normalized);
 
-    // Build returned quantity map per order_item_id
     const qtyMap: Record<number, number> = {};
     normalized.forEach((r) => {
       r.return_items.forEach((ri) => {
@@ -422,7 +436,6 @@ export default function CustomerReturnsPage() {
           const remaining = Math.max(0, (it.quantity || 0) - alreadyReturned);
           if (remaining <= 0) continue;
 
-          // Push a copy where quantity reflects the remaining eligible qty
           out.push({ txn: t, order: o, item: { ...it, quantity: remaining } });
         }
       }
@@ -459,9 +472,8 @@ export default function CustomerReturnsPage() {
   );
 
   const [currentPage, setCurrentPage] = useState(1);
-  const groupsPerPage = 5; // how many TXN cards per page
+  const groupsPerPage = 5;
 
-  // reset to first page whenever groups change
   useEffect(() => {
     setCurrentPage(1);
   }, [eligibleGroups.length]);
@@ -471,7 +483,6 @@ export default function CustomerReturnsPage() {
     Math.ceil(eligibleGroups.length / groupsPerPage)
   );
 
-  // clamp page if groups shrink
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
@@ -497,6 +508,12 @@ export default function CustomerReturnsPage() {
     setQty(1);
     setNote("");
     setFiles(null);
+
+    // reset policy confirmations per item
+    setShowPolicy(false);
+    setPolicyScrolled(false);
+    setPolicyAgreed(false);
+
     setOpen(true);
     setConfirmOpen(false);
   };
@@ -507,14 +524,17 @@ export default function CustomerReturnsPage() {
     return `RTN-${yyyymmdd}-${rnd}`;
   };
 
-  // First-step validation + open confirmation
   const openConfirmModal = () => {
     if (!sel.item) return;
 
-    const maxQty = sel.item.quantity ?? 1; // remaining qty shown in modal
+    if (!policyAgreed) {
+      toast.error("Please read and agree to the Return Policy first.");
+      return;
+    }
+
+    const maxQty = sel.item.quantity ?? 1;
     const q = Number(qty) || 0;
 
-    // REQUIRED: reason, qty within bounds, note non-empty, at least 1 photo
     if (!reason) {
       toast.error("Please select a reason for the return.");
       return;
@@ -537,14 +557,10 @@ export default function CustomerReturnsPage() {
 
   const handleFiles = (files: FileList | null) => {
     if (!files) return;
-
     const valid = Array.from(files).filter((f) => f.type.startsWith("image/"));
-
     if (valid.length !== files.length) {
       toast.error("Only image files are allowed (jpg, png, gif, webp).");
     }
-
-    // If at least one valid file, keep them, otherwise reset
     setFiles(valid.length ? (valid as unknown as FileList) : null);
   };
 
@@ -556,6 +572,26 @@ export default function CustomerReturnsPage() {
       order: OrderRow;
       item: ItemRow;
     };
+
+    // 7-day + delivered safeguard
+    const now = new Date();
+    const within7 = daysBetween(txn.date, now) <= 7;
+    const delivId =
+      order.truck_delivery_id != null ? String(order.truck_delivery_id) : null;
+    const delivStatus = delivId
+      ? (deliveryStatusById[delivId] || "").toLowerCase()
+      : "";
+    const delivered = delivStatus === "delivered";
+    if (!delivered) {
+      toast.error("This order is not marked as Delivered yet.");
+      return;
+    }
+    if (!within7) {
+      toast.error(
+        "Return window has expired. Items can only be returned within 7 days of delivery."
+      );
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -579,7 +615,7 @@ export default function CustomerReturnsPage() {
         .single();
       if (e1 || !rtn) throw e1 || new Error("Failed to create return");
 
-      // 2) upload photos (required ≥1, up to 5)
+      // 2) upload photos
       let urls: string[] = [];
       if (files && files.length > 0) {
         const bucket = supabase.storage.from("returns");
@@ -616,14 +652,12 @@ export default function CustomerReturnsPage() {
 
       toast.success("Return submitted. We’ll review it shortly.");
 
-      // Optimistic updates:
-      // - update returned qty map for this order_item
+      // optimistic updates
       setReturnedQtyByItem((prev) => ({
         ...prev,
         [item.id]: (prev[item.id] || 0) + qty,
       }));
 
-      // - add to returns list (so history shows immediately)
       setReturnsList((prev) => [
         {
           id: String(rtn.id),
@@ -645,7 +679,6 @@ export default function CustomerReturnsPage() {
         ...prev,
       ]);
 
-      // Close both modals
       setConfirmOpen(false);
       setOpen(false);
     } catch (e: any) {
@@ -665,6 +698,23 @@ export default function CustomerReturnsPage() {
         Manage your return requests, report issues with delivered items, and
         track the status of your submissions.
       </p>
+
+      {/* Reminder card (optional, not required to agree here) */}
+      <div className="bg-white border rounded-2xl p-4 shadow-sm mb-6">
+        <h2 className="font-semibold text-lg">Return Policy (Summary)</h2>
+        <ul className="text-sm text-gray-700 mt-2 space-y-1 list-disc list-inside">
+          <li>
+            Items are eligible for return <strong>within 7 days</strong> of{" "}
+            <strong>delivery</strong>.
+          </li>
+          <li>
+            Order must be marked as <strong>Delivered</strong> in your account.
+          </li>
+          <li>
+            Provide a short note and at least <strong>one photo</strong> (max 5).
+          </li>
+        </ul>
+      </div>
 
       {!authEmail && !loading && (
         <div className="bg-white border rounded p-4 shadow-sm">
@@ -693,60 +743,76 @@ export default function CustomerReturnsPage() {
             </div>
           ) : (
             <>
-              {pagedEligibleGroups.map(([txnCode, rows]) => (
-                <div
-                  key={txnCode}
-                  className="bg-white border rounded-2xl p-4 shadow-sm mb-6"
-                >
-                  <div className="flex items-center justify-between">
-                    <h2 className="font-semibold text-lg">
-                      Eligible for Return • TXN:{" "}
-                      <span className="tracking-wider">{txnCode}</span>
-                    </h2>
-                    <span className="text-sm text-gray-500">
-                      {rows.length} item(s)
-                    </span>
-                  </div>
+              {pagedEligibleGroups.map(([txnCode, rows]) => {
+                const txnDate = rows[0]?.txn?.date ?? null;
+                const windowEnd = addDays(txnDate, 7);
+                const daysUsed = daysBetween(txnDate, new Date());
+                const daysLeft =
+                  Number.isFinite(daysUsed) ? Math.max(0, 7 - daysUsed) : 0;
 
-                  <div className="mt-3 border rounded overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-100">
-                        <tr>
-                          <th className="py-2 px-3 text-left">Product</th>
-                          <th className="py-2 px-3 text-left">Order Date</th>
-                          <th className="py-2 px-3 text-left">Remaining Qty</th>
-                          <th className="py-2 px-3 text-right">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.map(({ txn, order, item }) => (
-                          <tr key={item.id} className="border-t">
-                            <td className="py-2 px-3">
-                              {item.inventory?.product_name ?? "—"}
-                            </td>
-                            <td className="py-2 px-3">{formatPH(txn.date)}</td>
-                            <td className="py-2 px-3">{item.quantity}</td>
-                            <td className="py-2 px-3 text-right">
-                              <button
-                                className="px-3 py-1 rounded-xl text-white hover:opacity-90"
-                                style={{ background: "#000" }}
-                                onClick={() => openModal({ txn, order, item })}
-                              >
-                                Return / Report issue
-                              </button>
-                            </td>
+                return (
+                  <div
+                    key={txnCode}
+                    className="bg-white border rounded-2xl p-4 shadow-sm mb-6"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                      <h2 className="font-semibold text-lg">
+                        Eligible for Return • TXN:{" "}
+                        <span className="tracking-wider">{txnCode}</span>
+                      </h2>
+                      <div className="text-xs sm:text-sm text-gray-600">
+                        Window ends:{" "}
+                        <strong>
+                          {windowEnd ? formatPH(windowEnd) : "—"}
+                        </strong>{" "}
+                        • <strong>{daysLeft}</strong> day
+                        {daysLeft === 1 ? "" : "s"} left
+                      </div>
+                    </div>
+
+                    <div className="mt-3 border rounded overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-100">
+                          <tr>
+                            <th className="py-2 px-3 text-left">Product</th>
+                            <th className="py-2 px-3 text-left">Order Date</th>
+                            <th className="py-2 px-3 text-left">
+                              Remaining Qty
+                            </th>
+                            <th className="py-2 px-3 text-right">Action</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {rows.map(({ txn, order, item }) => (
+                            <tr key={item.id} className="border-t">
+                              <td className="py-2 px-3">
+                                {item.inventory?.product_name ?? "—"}
+                              </td>
+                              <td className="py-2 px-3">{formatPH(txn.date)}</td>
+                              <td className="py-2 px-3">{item.quantity}</td>
+                              <td className="py-2 px-3 text-right">
+                                <button
+                                  className="px-3 py-1 rounded-xl text-white hover:opacity-90"
+                                  style={{ background: "#000" }}
+                                  onClick={() =>
+                                    openModal({ txn, order, item })
+                                  }
+                                >
+                                  Return / Report issue
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
-              {/* Pagination controls — inline, no gradient */}
+              {/* Pagination */}
               <div className="mt-4">
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-                  {/* Prev */}
                   <button
                     onClick={() => goToPage(currentPage - 1)}
                     disabled={currentPage === 1}
@@ -755,14 +821,11 @@ export default function CustomerReturnsPage() {
                                 hover:bg-white active:translate-y-px transition
                                 text-gray-800
                                 disabled:opacity-50 disabled:cursor-not-allowed`}
-                    aria-label="Previous page"
-                    title="Previous page"
                   >
                     <span className="text-lg">←</span>
                     <span className="font-medium">Prev</span>
                   </button>
 
-                  {/* Center status */}
                   <div className="text-sm sm:text-base font-medium text-gray-900/90 text-center">
                     Page <span className="font-bold">{currentPage}</span> of{" "}
                     <span className="font-bold">{totalPages}</span>
@@ -787,7 +850,6 @@ export default function CustomerReturnsPage() {
                     </span>
                   </div>
 
-                  {/* Next */}
                   <button
                     onClick={() => goToPage(currentPage + 1)}
                     disabled={currentPage >= totalPages}
@@ -796,8 +858,6 @@ export default function CustomerReturnsPage() {
                                 hover:bg-white active:translate-y-px transition
                                 text-gray-800
                                 disabled:opacity-50 disabled:cursor-not-allowed`}
-                    aria-label="Next page"
-                    title="Next page"
                   >
                     <span className="font-medium">Next</span>
                     <span className="text-lg">→</span>
@@ -819,6 +879,7 @@ export default function CustomerReturnsPage() {
             </p>
 
             <div className="mt-4 space-y-3">
+              {/* Reason */}
               <div>
                 <label className="block text-sm mb-1">
                   Reason <span className="text-red-500">*</span>
@@ -836,6 +897,7 @@ export default function CustomerReturnsPage() {
                 </select>
               </div>
 
+              {/* Qty */}
               <div>
                 <label className="block text-sm mb-1">
                   Quantity (max {sel.item.quantity}){" "}
@@ -861,6 +923,7 @@ export default function CustomerReturnsPage() {
                 />
               </div>
 
+              {/* Notes */}
               <div>
                 <label className="block text-sm mb-1">
                   Notes <span className="text-red-500">*</span>
@@ -874,6 +937,7 @@ export default function CustomerReturnsPage() {
                 />
               </div>
 
+              {/* Photos */}
               <div>
                 <label className="block text-sm mb-1">
                   Photos (required, up to 5){" "}
@@ -887,6 +951,45 @@ export default function CustomerReturnsPage() {
                   className="block w-full text-sm"
                 />
               </div>
+
+              {/* Policy link + status */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowPolicy(true)}
+                  className="text-xs underline text-blue-600 hover:text-blue-700"
+                >
+                  Read Return Policy
+                </button>
+                <span
+                  className={`ml-2 text-[11px] ${
+                    policyAgreed ? "text-green-700" : "text-gray-500"
+                  }`}
+                >
+                  {policyAgreed ? "Agreed" : "Not agreed"}
+                </span>
+              </div>
+            </div>
+
+            {/* Window hints */}
+            <div className="flex justify-between items-center mt-3">
+              <p className="text-xs text-gray-600">
+                Window ends:&nbsp;
+                <strong>
+                  {sel.txn.date ? formatPH(addDays(sel.txn.date, 7)) : "—"}
+                </strong>
+              </p>
+              <p className="text-xs text-gray-600">
+                Days left:&nbsp;
+                <strong>
+                  {(() => {
+                    const used = daysBetween(sel.txn.date, new Date());
+                    return Number.isFinite(used)
+                      ? Math.max(0, 7 - used)
+                      : 0;
+                  })()}
+                </strong>
+              </p>
             </div>
 
             <div className="flex justify-end gap-2 mt-6">
@@ -899,18 +1002,127 @@ export default function CustomerReturnsPage() {
               </button>
               <button
                 onClick={openConfirmModal}
-                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition"
-                disabled={submitting}
+                className={`px-4 py-2 rounded-xl shadow-lg active:translate-y-px transition ${
+                  policyAgreed
+                    ? "bg-[#ffba20] text-black hover:brightness-95"
+                    : "bg-gray-200 text-gray-500 cursor-not-allowed"
+                }`}
+                disabled={submitting || !policyAgreed}
+                aria-disabled={!policyAgreed}
+                title={
+                  policyAgreed
+                    ? "Review & Submit"
+                    : "Please read and agree to the policy first"
+                }
               >
                 Review & Submit
               </button>
             </div>
 
             <p className="text-xs text-gray-500 mt-3">
-              Returns are accepted within 7 days of purchase for delivered
-              orders. We’ll review your request and contact you with the next
-              steps.
+              Returns are accepted within 7 days of delivery. We’ll review your
+              request and contact you with the next steps.
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Policy (opens from text link) */}
+      {showPolicy && (
+        <div className="fixed inset-0 z-[55] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl ring-1 ring-black/5 p-6">
+            <h3 className="text-xl font-semibold">Return Policy</h3>
+
+            <div
+              ref={policyBoxRef}
+              onScroll={handlePolicyScroll}
+              className="mt-3 border rounded-md p-3 max-h-60 overflow-y-auto text-xs text-gray-700 space-y-2"
+            >
+              <p>
+                <strong>Eligibility:</strong> Returns are accepted within{" "}
+                <strong>7 days</strong> from the date the order is marked{" "}
+                <strong>Delivered</strong> in your account.
+              </p>
+              <p>
+                <strong>Requirements:</strong> Provide a brief note describing
+                the issue and at least <strong>one clear photo</strong> (maximum
+                of five).
+              </p>
+              <p>
+                <strong>Reasons:</strong> Damaged/Defective, Wrong Item, Missing
+                Item/Part, Expired, or Other (with explanation).
+              </p>
+              <p>
+                <strong>Inspection:</strong> All returns are subject to review.
+                We may contact you for additional details or photos.
+              </p>
+              <p>
+                <strong>Outcome:</strong> Approved returns may be replaced,
+                repaired, or refunded according to store policy and item
+                condition. Rejected returns will include a reason.
+              </p>
+              <p>
+                <strong>Notes:</strong> The 7-day window is strict. Items used
+                beyond normal testing, missing parts, or without proof of issue
+                may be rejected.
+              </p>
+            </div>
+
+            <div className="flex items-start gap-2 mt-3">
+              <input
+                id="agreePolicy"
+                type="checkbox"
+                className="mt-0.5"
+                disabled={!policyScrolled}
+                checked={policyAgreed}
+                onChange={(e) => setPolicyAgreed(e.target.checked)}
+              />
+              <label
+                htmlFor="agreePolicy"
+                className={`text-xs ${
+                  policyScrolled ? "text-gray-700" : "text-gray-400"
+                }`}
+              >
+                I have read and agree to the Return Policy.
+                {!policyScrolled && (
+                  <span className="ml-1 italic">
+                    (Scroll to the end to enable)
+                  </span>
+                )}
+              </label>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => {
+                  // If they haven't checked agree, keep it open
+                  if (!policyAgreed) {
+                    toast.error("Please agree to the policy to continue.");
+                    return;
+                  }
+                  setShowPolicy(false);
+                }}
+                className={`px-4 py-2 rounded-xl shadow-sm active:translate-y-px transition ${
+                  policyAgreed
+                    ? "bg-black text-white hover:opacity-90"
+                    : "bg-gray-200 text-gray-500 cursor-not-allowed"
+                }`}
+                disabled={!policyAgreed}
+                title={
+                  policyAgreed
+                    ? "Close policy"
+                    : "Please agree to the policy first"
+                }
+              >
+                Agree & Close
+              </button>
+              <button
+                onClick={() => setShowPolicy(false)}
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
