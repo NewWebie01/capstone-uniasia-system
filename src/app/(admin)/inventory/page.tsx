@@ -12,8 +12,9 @@ type InventoryItem = {
   subcategory: string;
   unit: string;
   quantity: number;
-  unit_price: number;
-  cost_price: number | null;
+  unit_price: number;        // Selling price (auto computed)
+  cost_price: number;        // Capital
+  markup_percent: number;    // Markup (percentage)
   amount: number;
   profit: number | null;
   date_created: string;
@@ -54,8 +55,9 @@ export default function InventoryPage() {
     quantity: 0,
     subcategory: "",
     unit: "",
-    unit_price: 0,
+    unit_price: 0,       // will be auto-calculated
     cost_price: 0,
+    markup_percent: 50,  // default to 50%
     amount: 0,
     profit: 0,
     date_created: new Date().toISOString(),
@@ -72,24 +74,24 @@ export default function InventoryPage() {
     subcategory: false,
     unit: false,
     quantity: false,
-    unit_price: false,
     cost_price: false,
+    markup_percent: false,
     pieces_per_unit: false,
     weight_per_piece_kg: false,
   });
 
+  // --- Auto-calculate Unit Price on cost/markup change ---
   useEffect(() => {
-    const unit_price = Number(newItem.unit_price) || 0;
-    const cost_price = Number(newItem.cost_price) || 0;
-    const quantity = Number(newItem.quantity) || 0;
-    const amount = unit_price * quantity;
-    const profit = (unit_price - cost_price) * quantity;
+    const cost = Number(newItem.cost_price) || 0;
+    const markup = Number(newItem.markup_percent) || 0;
+    const selling = cost + (cost * markup / 100);
     setNewItem((prev) => ({
       ...prev,
-      amount,
-      profit,
+      unit_price: parseFloat(selling.toFixed(2)), // round to 2 decimals
+      amount: selling * (Number(prev.quantity) || 0),
+      profit: (selling - cost) * (Number(prev.quantity) || 0),
     }));
-  }, [newItem.unit_price, newItem.cost_price, newItem.quantity]);
+  }, [newItem.cost_price, newItem.markup_percent, newItem.quantity]);
 
   useEffect(() => {
     setValidationErrors((prev) => ({
@@ -99,13 +101,8 @@ export default function InventoryPage() {
       subcategory: !newItem.subcategory.trim(),
       unit: !newItem.unit.trim(),
       quantity: newItem.quantity < 0,
-      unit_price: newItem.unit_price < 0,
-      cost_price:
-        newItem.cost_price === null ||
-        newItem.cost_price === undefined ||
-        newItem.cost_price < 0 ||
-        (newItem.unit_price !== undefined &&
-          newItem.cost_price > newItem.unit_price),
+      cost_price: newItem.cost_price === null || newItem.cost_price < 0,
+      markup_percent: newItem.markup_percent === null || newItem.markup_percent < 0,
       pieces_per_unit:
         (newItem.unit === "Box" || newItem.unit === "Pack") &&
         (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
@@ -257,13 +254,8 @@ export default function InventoryPage() {
         subcategory: !newItem.subcategory,
         unit: !newItem.unit,
         quantity: newItem.quantity < 0,
-        unit_price: newItem.unit_price < 0,
-        cost_price:
-          newItem.cost_price === null ||
-          newItem.cost_price === undefined ||
-          newItem.cost_price < 0 ||
-          (newItem.unit_price !== undefined &&
-            newItem.cost_price > newItem.unit_price),
+        cost_price: newItem.cost_price === null || newItem.cost_price < 0,
+        markup_percent: newItem.markup_percent === null || newItem.markup_percent < 0,
         pieces_per_unit:
           (newItem.unit === "Box" || newItem.unit === "Pack") &&
           (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
@@ -275,15 +267,7 @@ export default function InventoryPage() {
       setValidationErrors(errors);
       const hasErrors = Object.values(errors).some(Boolean);
       if (hasErrors) {
-        toast.error("Costing Price should be lower than Unit Price.");
-        return;
-      }
-      if (
-        newItem.cost_price !== null &&
-        newItem.unit_price !== null &&
-        newItem.cost_price > newItem.unit_price
-      ) {
-        toast.error("Cost price cannot be greater than unit price. Please check your values.");
+        toast.error("Please fill all required fields correctly.");
         return;
       }
       setSaving(true);
@@ -295,13 +279,11 @@ export default function InventoryPage() {
         );
       }
       const normalized = normalizeForSave();
-      const profit = (Number(newItem.unit_price) - Number(newItem.cost_price)) * Number(newItem.quantity);
       const dataToSave = {
         ...newItem,
         ...normalized,
         image_url: finalImageUrl,
         date_created: new Date().toISOString(),
-        profit,
       };
       if (editingItemId !== null) {
         const { error } = await supabase
@@ -349,6 +331,7 @@ export default function InventoryPage() {
         unit: "",
         unit_price: 0,
         cost_price: 0,
+        markup_percent: 50,
         amount: 0,
         profit: 0,
         date_created: new Date().toISOString(),
@@ -426,6 +409,7 @@ export default function InventoryPage() {
               unit: "",
               unit_price: 0,
               cost_price: 0,
+              markup_percent: 50,
               amount: 0,
               profit: 0,
               date_created: new Date().toISOString(),
@@ -452,8 +436,9 @@ export default function InventoryPage() {
               <th className={cellNowrap}>Subcategory</th>
               <th className={cellNowrap}>Unit</th>
               <th className={cellNowrap}>Quantity</th>
-              <th className={cellNowrap}>Unit Price</th>
               <th className={cellNowrap}>Cost Price</th>
+              <th className={cellNowrap}>Markup %</th>
+              <th className={cellNowrap}>Unit Price</th>
               <th className={cellNowrap}>Total</th>
               <th className={cellNowrap}>Total Weight</th>
               <th className={cellNowrap}>Status</th>
@@ -485,12 +470,17 @@ export default function InventoryPage() {
                 <td className={cellNowrap}>{item.unit}</td>
                 <td className={cellNowrap}>{item.quantity}</td>
                 <td className={cellNowrap}>
-                  ₱{item.unit_price.toLocaleString()}
-                </td>
-                <td className={cellNowrap}>
                   {item.cost_price !== null && item.cost_price !== undefined
                     ? `₱${item.cost_price.toLocaleString()}`
                     : "—"}
+                </td>
+                <td className={cellNowrap}>
+                  {item.markup_percent !== null && item.markup_percent !== undefined
+                    ? `${item.markup_percent}%`
+                    : "—"}
+                </td>
+                <td className={cellNowrap}>
+                  ₱{item.unit_price.toLocaleString()}
                 </td>
                 <td className={cellNowrap}>₱{item.amount.toLocaleString()}</td>
                 <td className={cellNowrap}>
@@ -522,10 +512,8 @@ export default function InventoryPage() {
                       setEditingItemId(item.id);
                       setNewItem({
                         ...item,
-                        cost_price:
-                          item.cost_price !== null && item.cost_price !== undefined
-                            ? item.cost_price
-                            : 0,
+                        cost_price: item.cost_price ?? 0,
+                        markup_percent: item.markup_percent ?? 50,
                       });
                       setImageFile(null);
                       setImagePreview(item.image_url || null);
@@ -904,27 +892,7 @@ export default function InventoryPage() {
                 }
               />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-36 text-sm text-gray-700">
-                Unit Price<span className="text-red-500">*</span>
-              </label>
-              <input
-                type="number"
-                min={0}
-                className={`flex-1 border px-4 py-2 rounded ${
-                  validationErrors.unit_price ? "border-red-500" : ""
-                }`}
-                placeholder="₱ per unit"
-                value={newItem.unit_price}
-                onFocus={(e) => e.target.select()}
-                onChange={(e) =>
-                  setNewItem((prev) => ({
-                    ...prev,
-                    unit_price: Math.max(0, parseFloat(e.target.value) || 0),
-                  }))
-                }
-              />
-            </div>
+            {/* COST PRICE */}
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">
                 Cost Price<span className="text-red-500">*</span>
@@ -935,8 +903,8 @@ export default function InventoryPage() {
                 className={`flex-1 border px-4 py-2 rounded ${
                   validationErrors.cost_price ? "border-red-500" : ""
                 }`}
-                placeholder="₱ cost per unit"
-                value={newItem.cost_price ?? ""}
+                placeholder="₱ capital per unit"
+                value={newItem.cost_price}
                 onFocus={e => e.target.select()}
                 onChange={e =>
                   setNewItem(prev => ({
@@ -944,6 +912,41 @@ export default function InventoryPage() {
                     cost_price: Math.max(0, parseFloat(e.target.value) || 0),
                   }))
                 }
+              />
+            </div>
+            {/* MARKUP */}
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">
+                Markup (%)<span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                min={0}
+                className={`flex-1 border px-4 py-2 rounded ${
+                  validationErrors.markup_percent ? "border-red-500" : ""
+                }`}
+                placeholder="e.g. 50"
+                value={newItem.markup_percent}
+                onFocus={e => e.target.select()}
+                onChange={e =>
+                  setNewItem(prev => ({
+                    ...prev,
+                    markup_percent: Math.max(0, parseFloat(e.target.value) || 0),
+                  }))
+                }
+              />
+            </div>
+            {/* UNIT PRICE (readonly) */}
+            <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">
+                Unit Price (auto)
+              </label>
+              <input
+                type="text"
+                className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
+                value={`₱${(newItem.unit_price || 0).toLocaleString()}`}
+                readOnly
+                disabled
               />
             </div>
             <div className="flex items-center gap-2">
@@ -1006,7 +1009,7 @@ export default function InventoryPage() {
               }}
               className="block w-full text-sm text-gray-700"
             />
-            <p className="text-xs text-gray-500 mt-1">
+                        <p className="text-xs text-gray-500 mt-1">
               Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
             </p>
             {imagePreview && (
@@ -1070,3 +1073,4 @@ export default function InventoryPage() {
     </div>
   );
 }
+
