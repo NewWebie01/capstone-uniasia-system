@@ -63,6 +63,7 @@ type Customer = {
   date?: string | null;
   created_at?: string | null;
   status?: string | null;
+  landmark?: string | null;
 };
 
 type OrderWithCustomer = {
@@ -270,6 +271,7 @@ export default function TruckDeliveryPage() {
       name,
       code,
       address,
+      landmark,
       contact_person,
       phone,
       status,
@@ -1021,6 +1023,13 @@ export default function TruckDeliveryPage() {
                         )}
                       </span>
                     </h2>
+                    {/* ✅ Landmark display below destination */}
+                    {delivery._orders?.[0]?.customer?.landmark && (
+                      <p className="text-sm mt-1 text-gray-500">
+                        <strong>Landmark:</strong>{" "}
+                        {delivery._orders[0].customer.landmark}
+                      </p>
+                    )}
 
                     <div className="mt-3 text-sm leading-6">
                       <div className="grid grid-cols-2 gap-y-2">
@@ -1152,6 +1161,11 @@ export default function TruckDeliveryPage() {
                               <div className="text-xs text-slate-500 truncate">
                                 {o.customer?.address ?? ""}
                               </div>
+                              {o.customer?.landmark && (
+                                <div className="text-xs text-slate-400 italic truncate">
+                                  Landmark: {o.customer.landmark}
+                                </div>
+                              )}
                             </div>
 
                             <div className="col-span-12 sm:col-span-3 text-right">
@@ -1354,6 +1368,12 @@ export default function TruckDeliveryPage() {
                         <strong>ADDRESS: </strong>{" "}
                         {selectedOrderForInvoice.customer.address}
                       </p>
+                      {selectedOrderForInvoice.customer.landmark && (
+                        <p className="col-span-2">
+                          <strong>LANDMARK: </strong>{" "}
+                          {selectedOrderForInvoice.customer.landmark}
+                        </p>
+                      )}
                       <p>
                         <strong>CONTACT PERSON: </strong>{" "}
                         {selectedOrderForInvoice.customer.contact_person}

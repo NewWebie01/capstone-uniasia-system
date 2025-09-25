@@ -27,6 +27,7 @@ type Customer = {
   name: string;
   code: string;
   address?: string | null;
+  landmark?: string | null;
   contact_person?: string | null;
   phone?: string | null;
   transaction?: string | null;
@@ -149,7 +150,7 @@ export default function DeliveredPage() {
             `
             id, total_amount, status, truck_delivery_id, salesman, terms, accepted_at,
             customer:customer_id (
-              id, name, code, address, contact_person, phone, status, date, created_at
+              id, name, code, address, landmark, contact_person, phone, status, date, created_at
             ),
             order_items (
               quantity, price,
@@ -289,6 +290,12 @@ export default function DeliveredPage() {
                         )}
                       </span>
                     </h2>
+                    {delivery._orders?.[0]?.customer?.landmark && (
+                      <p className="text-sm text-gray-500 mt-1">
+                        <strong>Landmark:</strong>{" "}
+                        {delivery._orders[0].customer.landmark}
+                      </p>
+                    )}
 
                     <div className="mt-3 text-sm leading-6">
                       <div className="grid grid-cols-2 gap-y-2">
@@ -361,6 +368,11 @@ export default function DeliveredPage() {
                               <div className="text-xs text-slate-500 truncate">
                                 {o.customer?.address ?? ""}
                               </div>
+                              {o.customer?.landmark && (
+                                <div className="text-xs text-slate-400 italic truncate">
+                                  Landmark: {o.customer.landmark}
+                                </div>
+                              )}
                             </div>
 
                             <div className="col-span-12 sm:col-span-3 text-right">
