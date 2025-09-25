@@ -59,7 +59,9 @@ function accountTypeBadge(role: string | null) {
     color = "bg-gray-100 text-gray-600 border border-gray-200";
   }
   return (
-    <span className={`inline-block px-2 py-0.5 text-xs rounded-full border ${color}`}>
+    <span
+      className={`inline-block px-2 py-0.5 text-xs rounded-full border ${color}`}
+    >
       {text}
     </span>
   );
@@ -85,7 +87,9 @@ function activityChip(action: string) {
     color = "bg-[#e0f2fe] text-blue-800 border border-blue-200";
 
   return (
-    <span className={`inline-block px-2.5 py-0.5 text-xs rounded-full ${color}`}>
+    <span
+      className={`inline-block px-2.5 py-0.5 text-xs rounded-full ${color}`}
+    >
       {action}
     </span>
   );
@@ -102,6 +106,109 @@ const ACTION_TABS = [
 ] as const;
 type ActionTabKey = (typeof ACTION_TABS)[number]["key"];
 
+/* ----------------------------- PH time helpers ---------------------------- */
+/** Philippines is UTC+8 all year (no DST). */
+const PH_OFFSET_HOURS = 8;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Convert a Date (UTC) to an equivalent Date representing PH local midnight of the same PH date. */
+function startOfPHDay(dUTC: Date): Date {
+  const msLocal = dUTC.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
+  const dayLocal = new Date(Math.floor(msLocal / MS_PER_DAY) * MS_PER_DAY);
+  // convert back to UTC
+  return new Date(dayLocal.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
+}
+function endOfPHDay(dUTC: Date): Date {
+  const start = startOfPHDay(dUTC);
+  return new Date(start.getTime() + MS_PER_DAY - 1);
+}
+
+function startOfPHWeek(dUTC: Date): Date {
+  // Week starts Monday
+  const startDay = startOfPHDay(dUTC);
+  const msLocal = startDay.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
+  const local = new Date(msLocal);
+  const day = local.getUTCDay(); // 0=Sun ... 6=Sat  (still safe since we coerced to "local" via offset)
+  // Convert to Monday=1..Sunday=0/7
+  const mondayDelta = (day + 6) % 7; // days since Monday
+  const localMonday = new Date(local.getTime() - mondayDelta * MS_PER_DAY);
+  return new Date(localMonday.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
+}
+function endOfPHWeek(dUTC: Date): Date {
+  const start = startOfPHWeek(dUTC);
+  return new Date(start.getTime() + 7 * MS_PER_DAY - 1);
+}
+function startOfPHMonth(dUTC: Date): Date {
+  const msLocal = dUTC.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
+  const local = new Date(msLocal);
+  const firstLocal = new Date(
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1)
+  );
+  return new Date(firstLocal.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
+}
+function endOfPHMonth(dUTC: Date): Date {
+  const msLocal = dUTC.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
+  const local = new Date(msLocal);
+  const firstNextLocal = new Date(
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 1)
+  );
+  return new Date(firstNextLocal.getTime() - PH_OFFSET_HOURS * 3600 * 1000 - 1);
+}
+function startOfPHYear(dUTC: Date): Date {
+  const msLocal = dUTC.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
+  const local = new Date(msLocal);
+  const firstLocal = new Date(Date.UTC(local.getUTCFullYear(), 0, 1));
+  return new Date(firstLocal.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
+}
+function endOfPHYear(dUTC: Date): Date {
+  const msLocal = dUTC.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
+  const local = new Date(msLocal);
+  const firstNextLocal = new Date(Date.UTC(local.getUTCFullYear() + 1, 0, 1));
+  return new Date(firstNextLocal.getTime() - PH_OFFSET_HOURS * 3600 * 1000 - 1);
+}
+/** Build PH-local day start from `YYYY-MM-DD` (local) and return UTC Date. */
+function startOfPHDateString(yyyy_mm_dd: string): Date {
+  // interpret as PH local midnight
+  const [y, m, d] = yyyy_mm_dd.split("-").map((n) => parseInt(n, 10));
+  const localMidnightUTC = new Date(Date.UTC(y, m - 1, d));
+  return new Date(localMidnightUTC.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
+}
+function endOfPHDateString(yyyy_mm_dd: string): Date {
+  const start = startOfPHDateString(yyyy_mm_dd);
+  return new Date(start.getTime() + MS_PER_DAY - 1);
+}
+
+type ExportChoice =
+  | "today"
+  | "this_week"
+  | "this_month"
+  | "this_year"
+  | "custom"
+  | "all";
+
+function describeRange(choice: ExportChoice, start?: Date, end?: Date) {
+  const fmt = (d: Date) =>
+    new Date(d.getTime() + PH_OFFSET_HOURS * 3600 * 1000)
+      .toISOString()
+      .slice(0, 10);
+  switch (choice) {
+    case "today":
+      return `TODAY: ${fmt(start!)} (${fmt(start!)} 00:00–${fmt(
+        end!
+      )} 23:59 PH)`;
+    case "this_week":
+      return `THIS_WEEK: ${fmt(start!)} — ${fmt(end!)}`;
+    case "this_month":
+      return `THIS_MONTH: ${fmt(start!)} — ${fmt(end!)}`;
+    case "this_year":
+      return `THIS_YEAR: ${fmt(start!)} — ${fmt(end!)}`;
+    case "custom":
+      return `CUSTOM: ${fmt(start!)} — ${fmt(end!)}`;
+    default:
+      return "ALL";
+  }
+}
+
 export default function ActivityLogPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,8 +221,18 @@ export default function ActivityLogPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
-  const [sortConfig, setSortConfig] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
+  const [sortConfig, setSortConfig] = useState<{
+    key: string;
+    direction: "asc" | "desc";
+  } | null>(null);
+
+  // Export modal & options
   const [showExport, setShowExport] = useState(false);
+  const [exportChoice, setExportChoice] = useState<ExportChoice>("today");
+  const [customStart, setCustomStart] = useState<string>(""); // YYYY-MM-DD (PH local)
+  const [customEnd, setCustomEnd] = useState<string>(""); // YYYY-MM-DD (PH local)
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string>("");
 
   useEffect(() => {
     async function initialLoad() {
@@ -123,7 +240,7 @@ export default function ActivityLogPage() {
       const { data, error } = await supabase
         .from("activity_logs")
         .select("id, user_email, user_role, action, details, created_at")
-        .order("created_at", { ascending: false }); // Newest first!
+        .order("created_at", { ascending: false });
       if (!error) setActivities(data ?? []);
       setLoading(false);
     }
@@ -166,7 +283,9 @@ export default function ActivityLogPage() {
 
     if (q) {
       arr = arr.filter((a: any) => {
-        const detailsText = a.details ? JSON.stringify(a.details).toLowerCase() : "";
+        const detailsText = a.details
+          ? JSON.stringify(a.details).toLowerCase()
+          : "";
         return (
           (a.user_email ?? "").toLowerCase().includes(q) ||
           (a.user_role ?? "").toLowerCase().includes(q) ||
@@ -214,51 +333,129 @@ export default function ActivityLogPage() {
   const pageStart = (currentPage - 1) * itemsPerPage;
   const paged = filtered.slice(pageStart, pageStart + itemsPerPage);
 
-  // Export current page
-  async function handleExport() {
-    setShowExport(false);
-    let allActivities: Activity[] = [];
-    setLoading(true);
+  /** Resolve the UTC start/end based on selected exportChoice. */
+  function resolveRange(): { start?: Date; end?: Date; label: string } {
+    const nowUTC = new Date();
+    if (exportChoice === "all") return { label: "ALL" };
+
+    if (exportChoice === "today") {
+      const start = startOfPHDay(nowUTC);
+      const end = endOfPHDay(nowUTC);
+      return { start, end, label: describeRange("today", start, end) };
+    }
+    if (exportChoice === "this_week") {
+      const start = startOfPHWeek(nowUTC);
+      const end = endOfPHWeek(nowUTC);
+      return { start, end, label: describeRange("this_week", start, end) };
+    }
+    if (exportChoice === "this_month") {
+      const start = startOfPHMonth(nowUTC);
+      const end = endOfPHMonth(nowUTC);
+      return { start, end, label: describeRange("this_month", start, end) };
+    }
+    if (exportChoice === "this_year") {
+      const start = startOfPHYear(nowUTC);
+      const end = endOfPHYear(nowUTC);
+      return { start, end, label: describeRange("this_year", start, end) };
+    }
+    // custom
+    if (!customStart || !customEnd) {
+      return { label: "CUSTOM: (invalid)" };
+    }
+    const start = startOfPHDateString(customStart);
+    const end = endOfPHDateString(customEnd);
+    return { start, end, label: describeRange("custom", start, end) };
+  }
+
+  async function handleExportNow() {
+    setExportError("");
+    setExporting(true);
     try {
-      const { data } = await supabase
+      const { start, end, label } = resolveRange();
+      let query = supabase
         .from("activity_logs")
         .select("id, user_email, user_role, action, details, created_at")
         .order("created_at", { ascending: false });
-      allActivities = data ?? [];
-    } catch {}
-    setLoading(false);
 
-    try {
-      const { data } = await supabase.auth.getUser();
-      const userEmail = data?.user?.email || "unknown";
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          user_role: "admin",
-          action: "Exported Activity Log (ALL)",
-          details: {
-            rows: allActivities.length,
-            filter: "ALL",
+      if (exportChoice !== "all") {
+        if (!start || !end) {
+          setExportError("Please provide a valid date range.");
+          setExporting(false);
+          return;
+        }
+        query = query
+          .gte("created_at", start.toISOString())
+          .lte("created_at", end.toISOString());
+      }
+
+      const { data: rows, error } = await query;
+      if (error) throw error;
+
+      // Log the export action
+      try {
+        const { data } = await supabase.auth.getUser();
+        const userEmail = data?.user?.email || "unknown";
+        await supabase.from("activity_logs").insert([
+          {
+            user_email: userEmail,
+            user_role: "admin",
+            action:
+              exportChoice === "all"
+                ? "Exported Activity Log (ALL)"
+                : `Exported Activity Log (${label})`,
+            details: {
+              rows: rows?.length ?? 0,
+              filter: exportChoice,
+              ...(exportChoice !== "all"
+                ? {
+                    start_utc: resolveRange().start?.toISOString(),
+                    end_utc: resolveRange().end?.toISOString(),
+                  }
+                : {}),
+            },
+            created_at: new Date().toISOString(),
           },
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    } catch {}
+        ]);
+      } catch {
+        // ignore insert failure
+      }
 
-    const headerRow = ["User", "Account Type", "Activity", "Date", "Time"];
-    const exportRows = allActivities.map((a) => [
-      a.user_email,
-      !a.user_role || a.user_role.toLowerCase() === "authenticated"
-        ? "Admin"
-        : a.user_role.charAt(0).toUpperCase() + a.user_role.slice(1),
-      a.action,
-      formatPHDate(a.created_at),
-      formatPHTime(a.created_at),
-    ]);
-    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...exportRows]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
-    XLSX.writeFile(wb, `Activity_Log_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      // Build and download workbook
+      const headerRow = ["User", "Account Type", "Activity", "Date", "Time"];
+      const exportRows =
+        rows?.map((a) => [
+          a.user_email,
+          !a.user_role || a.user_role.toLowerCase() === "authenticated"
+            ? "Admin"
+            : a.user_role.charAt(0).toUpperCase() + a.user_role.slice(1),
+          a.action,
+          formatPHDate(a.created_at),
+          formatPHTime(a.created_at),
+        ]) ?? [];
+
+      const ws = XLSX.utils.aoa_to_sheet([headerRow, ...exportRows]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
+
+      const fileSuffix =
+        exportChoice === "all"
+          ? "ALL"
+          : resolveRange()
+              .label.replace(/[^\dA-Z_ -]/gi, "")
+              .replace(/\s+/g, "_");
+      XLSX.writeFile(
+        wb,
+        `Activity_Log_${fileSuffix}_${new Date()
+          .toISOString()
+          .slice(0, 10)}.xlsx`
+      );
+
+      setShowExport(false);
+    } catch (err: any) {
+      setExportError(err?.message || "Export failed.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -424,7 +621,10 @@ export default function ActivityLogPage() {
                 </tr>
               ) : paged.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-6 text-center text-gray-400 text-sm">
+                  <td
+                    colSpan={5}
+                    className="py-6 text-center text-gray-400 text-sm"
+                  >
                     No activities found.
                   </td>
                 </tr>
@@ -432,10 +632,16 @@ export default function ActivityLogPage() {
                 paged.map((act) => (
                   <tr key={act.id} className="border-t hover:bg-gray-50">
                     <td className="py-2 px-3">{act.user_email ?? "—"}</td>
-                    <td className="py-2 px-3">{accountTypeBadge(act.user_role)}</td>
+                    <td className="py-2 px-3">
+                      {accountTypeBadge(act.user_role)}
+                    </td>
                     <td className="py-2 px-3">{activityChip(act.action)}</td>
-                    <td className="py-2 px-3">{formatPHDate(act.created_at)}</td>
-                    <td className="py-2 px-3">{formatPHTime(act.created_at)}</td>
+                    <td className="py-2 px-3">
+                      {formatPHDate(act.created_at)}
+                    </td>
+                    <td className="py-2 px-3">
+                      {formatPHTime(act.created_at)}
+                    </td>
                   </tr>
                 ))
               )}
@@ -483,24 +689,100 @@ export default function ActivityLogPage() {
           </div>
         </div>
       </div>
+
       {/* Export modal */}
       {showExport && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-            <h3 className="text-base font-semibold mb-2 text-center">Export Activity Log?</h3>
-            <p className="text-sm text-gray-700 text-center mb-5">
-              This will export <b>ALL activity log records</b> in one file.
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg">
+            <h3 className="text-base font-semibold mb-2 text-center">
+              Export Activity Log
+            </h3>
+            <p className="text-sm text-gray-700 text-center mb-4">
+              Choose a time frame to include in the Excel export.
             </p>
+
+            <div className="space-y-3 mb-4">
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { key: "today", label: "Today" },
+                  { key: "this_week", label: "This Week" },
+                  { key: "this_month", label: "This Month" },
+                  { key: "this_year", label: "This Year" },
+                  { key: "custom", label: "Custom Range" },
+                  { key: "all", label: "All" },
+                ].map((opt) => (
+                  <label
+                    key={opt.key}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer ${
+                      exportChoice === (opt.key as ExportChoice)
+                        ? "border-black bg-gray-50"
+                        : "hover:bg-gray-50"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="exportChoice"
+                      value={opt.key}
+                      checked={exportChoice === (opt.key as ExportChoice)}
+                      onChange={() => setExportChoice(opt.key as ExportChoice)}
+                    />
+                    <span className="text-sm">{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+
+              {exportChoice === "custom" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-gray-600 block mb-1">
+                      Start date (PH)
+                    </label>
+                    <input
+                      type="date"
+                      className="border rounded-lg px-3 py-2 w-full"
+                      value={customStart}
+                      onChange={(e) => setCustomStart(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600 block mb-1">
+                      End date (PH)
+                    </label>
+                    <input
+                      type="date"
+                      className="border rounded-lg px-3 py-2 w-full"
+                      value={customEnd}
+                      onChange={(e) => setCustomEnd(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {exportError && (
+                <div className="text-xs text-red-600">{exportError}</div>
+              )}
+            </div>
+
             <div className="flex gap-3 justify-center">
               <button
-                className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm"
-                onClick={handleExport}
+                className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
+                onClick={handleExportNow}
+                disabled={
+                  exporting ||
+                  (exportChoice === "custom" && (!customStart || !customEnd))
+                }
               >
-                Yes, Export
+                {exporting ? "Exporting…" : "Export Now"}
               </button>
               <button
                 className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
-                onClick={() => setShowExport(false)}
+                onClick={() => {
+                  setShowExport(false);
+                  setExportChoice("today");
+                  setCustomStart("");
+                  setCustomEnd("");
+                  setExportError("");
+                }}
               >
                 Cancel
               </button>
