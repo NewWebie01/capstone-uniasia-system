@@ -722,21 +722,22 @@ for (let i = 0; i < selectedOrder.order_items.length; i++) {
 
   const handleIncrement = (idx: number) => {
     setEditedDiscounts((prev) =>
-      prev.map((d, i) => (i === idx ? Math.min(100, (Number(d) || 0) + 1) : d))
+       prev.map((d, i) => (i === idx ? Math.min(50, (Number(d) || 0) + 1) : d))  // 50% max
     );
   };
   const handleDecrement = (idx: number) => {
     setEditedDiscounts((prev) =>
-      prev.map((d, i) => (i === idx ? Math.max(-100, (Number(d) || 0) - 1) : d))
+      prev.map((d, i) => (i === idx ? Math.max(0, (Number(d) || 0) - 1) : d))
     );
   };
-  const handleDiscountInput = (idx: number, value: string) => {
-    let percent = parseFloat(value.replace(/[^0-9\-]/g, ""));
-    if (isNaN(percent)) percent = 0;
-    if (percent > 100) percent = 100;
-    if (percent < -100) percent = -100;
-    setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? percent : d)));
-  };
+const handleDiscountInput = (idx: number, value: string) => {
+  let percent = parseFloat(value.replace(/[^0-9\-]/g, ""));
+  if (isNaN(percent)) percent = 0;
+  if (percent > 50) percent = 50;
+  if (percent < 0) percent = 0;
+  setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? percent : d)));
+};
+
 
   const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
 
@@ -1605,24 +1606,24 @@ for (let i = 0; i < selectedOrder.order_items.length; i++) {
   <div className="flex flex-col items-center gap-1">
     <div className="flex items-center justify-end gap-1">
       <input
-        type="number"
-        value={percent}
-        onChange={(e) => {
-          let p = parseFloat(e.target.value.replace(/[^0-9]/g, ""));
-          if (isNaN(p)) p = 0;
-          if (p > 100) p = 100;
-          if (p < 0) p = 0;
-          setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
-        }}
-        className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
-        min={0}
-        max={100}
-        step={1}
-        style={{
-          fontWeight: 600,
-          color: "#222",
-        }}
-      />
+  type="number"
+  value={percent}
+  onChange={(e) => {
+    let p = parseFloat(e.target.value.replace(/[^0-9]/g, ""));
+    if (isNaN(p)) p = 0;
+    if (p > 50) p = 50;    // MAX 50%
+    if (p < 0) p = 0;
+    setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
+  }}
+  className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
+  min={0}
+  max={50}
+  step={1}
+  style={{
+    fontWeight: 600,
+    color: "#222",
+  }}
+/>
       <span className="ml-1">%</span>
     </div>
     <button
