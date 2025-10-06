@@ -23,6 +23,7 @@ type InventoryItem = {
   weight_per_piece_kg: number | null;
   pieces_per_unit: number | null;
   total_weight_kg: number | null;
+  expiration_date?: string | null; 
 };
 
 const FIXED_UNIT_OPTIONS = ["Piece", "Dozen", "Box", "Pack", "Kg"] as const;
@@ -427,115 +428,125 @@ export default function InventoryPage() {
         </button>
       </div>
       <div className="overflow-auto rounded-lg shadow">
-        <table className="min-w-full bg-white text-sm">
-          <thead className="bg-[#ffba20] text-black text-left">
-            <tr>
-              <th className={cellNowrap}>SKU</th>
-              <th className={cellNowrap}>Product</th>
-              <th className={cellNowrap}>Category</th>
-              <th className={cellNowrap}>Subcategory</th>
-              <th className={cellNowrap}>Unit</th>
-              <th className={cellNowrap}>Quantity</th>
-              <th className={cellNowrap}>Cost Price</th>
-              <th className={cellNowrap}>Markup %</th>
-              <th className={cellNowrap}>Unit Price</th>
-              <th className={cellNowrap}>Total</th>
-              <th className={cellNowrap}>Total Weight</th>
-              <th className={cellNowrap}>Status</th>
-              <th className={cellNowrap}>Date</th>
-              <th className={cellNowrap}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredItems.map((item) => (
-              <tr key={item.id} className="border-b hover:bg-gray-50">
-                <td className={cellNowrap}>{item.sku}</td>
-                <td className="px-4 py-2 whitespace-normal break-words max-w-xs">
-                  {item.image_url ? (
-                    <button
-                      className="text-blue-600 hover:underline font-medium text-left"
-                      onClick={() => openImageModal(item)}
-                      title="Click to view image"
-                    >
-                      {item.product_name}
-                    </button>
-                  ) : (
-                    <span className="text-gray-800 font-medium text-left">
-                      {item.product_name}
-                    </span>
-                  )}
-                </td>
-                <td className={cellNowrap}>{item.category}</td>
-                <td className={cellNowrap}>{item.subcategory}</td>
-                <td className={cellNowrap}>{item.unit}</td>
-                <td className={cellNowrap}>{item.quantity}</td>
-                <td className={cellNowrap}>
-                  {item.cost_price !== null && item.cost_price !== undefined
-                    ? `₱${item.cost_price.toLocaleString()}`
-                    : "—"}
-                </td>
-                <td className={cellNowrap}>
-                  {item.markup_percent !== null && item.markup_percent !== undefined
-                    ? `${item.markup_percent}%`
-                    : "—"}
-                </td>
-                <td className={cellNowrap}>
-                  ₱{item.unit_price.toLocaleString()}
-                </td>
-                <td className={cellNowrap}>₱{item.amount.toLocaleString()}</td>
-                <td className={cellNowrap}>
-                  {item.total_weight_kg
-                    ? `${item.total_weight_kg.toLocaleString(undefined, {
-                        maximumFractionDigits: 3,
-                      })} kg`
-                    : "—"}
-                </td>
-                <td className={cellNowrap}>
-                  <span
-                    className={`font-semibold px-2 py-1 rounded ${
-                      item.status === "In Stock"
-                        ? "text-green-600"
-                        : "text-red-600"
-                    }`}
-                  >
-                    {item.status}
-                  </span>
-                </td>
-                <td className={cellNowrap}>
-                  {new Date(item.date_created).toLocaleString("en-PH")}
-                </td>
-                <td className={cellNowrap}>
-                  <button
-                    className="text-blue-600 hover:underline"
-                    onClick={() => {
-                      setShowForm(true);
-                      setEditingItemId(item.id);
-                      setNewItem({
-                        ...item,
-                        cost_price: item.cost_price ?? 0,
-                        markup_percent: item.markup_percent ?? 50,
-                      });
-                      setImageFile(null);
-                      setImagePreview(item.image_url || null);
-                    }}
-                  >
-                    Edit
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {filteredItems.length === 0 && !loading && (
-              <tr>
-                <td
-                  className="px-4 py-6 text-center text-gray-500"
-                  colSpan={14}
-                >
-                  No items found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+<table className="min-w-full bg-white text-sm">
+  <thead className="bg-[#ffba20] text-black text-left">
+    <tr>
+      <th className={cellNowrap}>SKU</th>
+      <th className={cellNowrap}>Product</th>
+      <th className={cellNowrap}>Category</th>
+      <th className={cellNowrap}>Subcategory</th>
+      <th className={cellNowrap}>Unit</th>
+      <th className={cellNowrap}>Quantity</th>
+      <th className={cellNowrap}>Cost Price</th>
+      <th className={cellNowrap}>Markup %</th>
+      <th className={cellNowrap}>Unit Price</th>
+      <th className={cellNowrap}>Total</th>
+      <th className={cellNowrap}>Expiration Date</th>
+      <th className={cellNowrap}>Total Weight</th>
+      <th className={cellNowrap}>Status</th>
+      <th className={cellNowrap}>Date</th>
+      <th className={cellNowrap}>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {filteredItems.map((item) => (
+      <tr key={item.id} className="border-b hover:bg-gray-50">
+        <td className={cellNowrap}>{item.sku}</td>
+        <td className="px-4 py-2 whitespace-normal break-words max-w-xs">
+          {item.image_url ? (
+            <button
+              className="text-blue-600 hover:underline font-medium text-left"
+              onClick={() => openImageModal(item)}
+              title="Click to view image"
+            >
+              {item.product_name}
+            </button>
+          ) : (
+            <span className="text-gray-800 font-medium text-left">
+              {item.product_name}
+            </span>
+          )}
+        </td>
+        <td className={cellNowrap}>{item.category}</td>
+        <td className={cellNowrap}>{item.subcategory}</td>
+        <td className={cellNowrap}>{item.unit}</td>
+        <td className={cellNowrap}>{item.quantity}</td>
+        <td className={cellNowrap}>
+          {item.cost_price !== null && item.cost_price !== undefined
+            ? `₱${item.cost_price.toLocaleString()}`
+            : "—"}
+        </td>
+        <td className={cellNowrap}>
+          {item.markup_percent !== null && item.markup_percent !== undefined
+            ? `${item.markup_percent}%`
+            : "—"}
+        </td>
+        <td className={cellNowrap}>
+          ₱{item.unit_price.toLocaleString()}
+        </td>
+        <td className={cellNowrap}>₱{item.amount.toLocaleString()}</td>
+        <td className={cellNowrap}>
+          {item.expiration_date
+            ? new Date(item.expiration_date).toLocaleDateString("en-PH", {
+                year: "numeric",
+                month: "short",
+                day: "2-digit",
+              })
+            : "—"}
+        </td>
+        <td className={cellNowrap}>
+          {item.total_weight_kg
+            ? `${item.total_weight_kg.toLocaleString(undefined, {
+                maximumFractionDigits: 3,
+              })} kg`
+            : "—"}
+        </td>
+        <td className={cellNowrap}>
+          <span
+            className={`font-semibold px-2 py-1 rounded ${
+              item.status === "In Stock"
+                ? "text-green-600"
+                : "text-red-600"
+            }`}
+          >
+            {item.status}
+          </span>
+        </td>
+        <td className={cellNowrap}>
+          {new Date(item.date_created).toLocaleString("en-PH")}
+        </td>
+        <td className={cellNowrap}>
+          <button
+            className="text-blue-600 hover:underline"
+            onClick={() => {
+              setShowForm(true);
+              setEditingItemId(item.id);
+              setNewItem({
+                ...item,
+                cost_price: item.cost_price ?? 0,
+                markup_percent: item.markup_percent ?? 50,
+              });
+              setImageFile(null);
+              setImagePreview(item.image_url || null);
+            }}
+          >
+            Edit
+          </button>
+        </td>
+      </tr>
+    ))}
+    {filteredItems.length === 0 && !loading && (
+      <tr>
+        <td
+          className="px-4 py-6 text-center text-gray-500"
+          colSpan={15}
+        >
+          No items found.
+        </td>
+      </tr>
+    )}
+  </tbody>
+</table>
       </div>
       <div className="mt-4 flex justify-between items-center">
         <button
@@ -958,6 +969,41 @@ export default function InventoryPage() {
                 readOnly
                 disabled
               />
+            </div>
+                        <div className="flex items-center gap-2">
+              <label className="w-36 text-sm text-gray-700">
+                Expiration Date
+              </label>
+              <input
+                type="date"
+                className="flex-1 border px-4 py-2 rounded"
+                value={
+                  newItem.expiration_date
+                    ? newItem.expiration_date.slice(0, 10)
+                    : ""
+                }
+                onChange={e =>
+                  setNewItem(prev => ({
+                    ...prev,
+                    expiration_date: e.target.value ? e.target.value : null,
+                  }))
+                }
+              />
+              {newItem.expiration_date && (
+                <button
+                  className="ml-2 text-xs text-red-500 underline"
+                  type="button"
+                  onClick={() =>
+                    setNewItem(prev => ({
+                      ...prev,
+                      expiration_date: null,
+                    }))
+                  }
+                  title="Clear date"
+                >
+                  Clear
+                </button>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <label className="w-36 text-sm text-gray-700">Total Weight</label>
