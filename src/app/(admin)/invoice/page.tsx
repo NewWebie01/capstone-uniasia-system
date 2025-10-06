@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
-import DeliveryReceiptModern, { InvoiceItem, CustomerInfo } from "@/app/(admin)/delivery-receipt/DeliveryReceiptModern";
+import DeliveryReceiptModern, {
+  InvoiceItem,
+  CustomerInfo,
+} from "@/app/(admin)/delivery-receipt/DeliveryReceiptModern";
 import { Eye } from "lucide-react";
 import { motion } from "framer-motion";
 import supabase from "@/config/supabaseClient";
@@ -201,35 +204,136 @@ export default function InvoicePage() {
 
   // modal header state
   const [items, setItems] = useState<InvoiceItem[] | null>(null);
-  const [customerForOrder, setCustomerForOrder] = useState<CustomerInfo | null>(null);
+  const [customerForOrder, setCustomerForOrder] = useState<CustomerInfo | null>(
+    null
+  );
   const [initialDate, setInitialDate] = useState<string | null>(null);
   const [currentTerms, setCurrentTerms] = useState<string | null>(null);
   const [currentSalesman, setCurrentSalesman] = useState<string | null>(null);
   const [currentPoNumber, setCurrentPoNumber] = useState<string | null>(null);
-  const [currentDateCompleted, setCurrentDateCompleted] = useState<string | null>(null);
+  const [currentDateCompleted, setCurrentDateCompleted] = useState<
+    string | null
+  >(null);
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [loadingItems, setLoadingItems] = useState(false);
 
   // edit mode/remarks state
   const [editMode, setEditMode] = useState(false);
-  const [editedRemarks, setEditedRemarks] = useState<Record<string, string>>({});
+  const [editedRemarks, setEditedRemarks] = useState<Record<string, string>>(
+    {}
+  );
   const [savingAll, setSavingAll] = useState(false);
 
   // detail route state
-  const [detailCustomer, setDetailCustomer] = useState<CustomerInfo | null>(null);
+  const [detailCustomer, setDetailCustomer] = useState<CustomerInfo | null>(
+    null
+  );
   const [detailItems, setDetailItems] = useState<InvoiceItem[] | null>(null);
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const [detailTerms, setDetailTerms] = useState<string | null>(null);
   const [detailSalesman, setDetailSalesman] = useState<string | null>(null);
   const [detailPoNumber, setDetailPoNumber] = useState<string | null>(null);
-  const [detailDateCompleted, setDetailDateCompleted] = useState<string | null>(null);
+  const [detailDateCompleted, setDetailDateCompleted] = useState<string | null>(
+    null
+  );
   const [detailStatus, setDetailStatus] = useState<string | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(true);
 
   // saved totals (for both modal & detail)
-  const [grandTotalWithInterest, setGrandTotalWithInterest] = useState<number>(0);
+  const [grandTotalWithInterest, setGrandTotalWithInterest] =
+    useState<number>(0);
   const [perTermAmount, setPerTermAmount] = useState<number>(0);
   const [salesTaxSaved, setSalesTaxSaved] = useState<number>(0);
+
+  // --- Password re-auth (for PRINT PDF) ---
+  const [showReauth, setShowReauth] = useState(false);
+  const [reauthEmail, setReauthEmail] = useState<string>("");
+  const [reauthPassword, setReauthPassword] = useState("");
+  const [reauthing, setReauthing] = useState(false);
+  const [reauthError, setReauthError] = useState("");
+
+  // remember success for a short window
+  const [lastReauthAt, setLastReauthAt] = useState<number | null>(null);
+  const REAUTH_TTL_MS = 5 * 60 * 1000; // <-- recalibrate here (e.g. 30*1000 for 30s)
+  const needsReauth = () =>
+    !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
+
+  // what we plan to print after reauth
+  const [pendingPrint, setPendingPrint] = useState<null | {
+    nodeId: string;
+    paper: PaperKey;
+    filenameBase: string;
+    orderId: string;
+    txn: string;
+  }>(null);
+
+  // trigger from button
+  async function handlePrintClick(args: {
+    nodeId: string;
+    paper: PaperKey;
+    filenameBase: string;
+    orderId: string;
+    txn: string;
+  }) {
+    if (needsReauth()) {
+      const { data } = await supabase.auth.getUser();
+      setReauthEmail(data?.user?.email || "");
+      setPendingPrint(args);
+      setShowReauth(true);
+      return;
+    }
+    await doPrint(args);
+  }
+
+  async function confirmReauth() {
+    setReauthError("");
+    setReauthing(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: reauthEmail,
+        password: reauthPassword,
+      });
+      if (error) throw error;
+
+      setLastReauthAt(Date.now());
+      setShowReauth(false);
+      setReauthPassword("");
+
+      if (pendingPrint) {
+        await doPrint(pendingPrint);
+        setPendingPrint(null);
+      }
+    } catch (e: any) {
+      setReauthError(e?.message || "Authentication failed.");
+    } finally {
+      setReauthing(false);
+    }
+  }
+
+  async function doPrint(args: {
+    nodeId: string;
+    paper: PaperKey;
+    filenameBase: string;
+    orderId: string;
+    txn: string;
+  }) {
+    const node = document.getElementById(args.nodeId);
+    if (!node) return;
+
+    // generate PDF
+    await exportNodeToPDF(node, args.paper, args.filenameBase);
+
+    // log activity
+    await logActivity("Exported Invoice PDF", {
+      order_id: args.orderId,
+      txn: args.txn,
+      paper: args.paper,
+      items: items?.length ?? 0,
+      sales_tax: salesTaxSaved,
+      grand_total_with_interest: grandTotalWithInterest,
+      per_term_amount: perTermAmount,
+    });
+  }
 
   const GlobalPrintCSS = () => (
     <style jsx global>{`
@@ -326,7 +430,8 @@ export default function InvoicePage() {
     // fetch items
     const { data: rows, error } = await supabase
       .from("order_items")
-      .select(`
+      .select(
+        `
         id,
         order_id,
         inventory_id,
@@ -341,7 +446,8 @@ export default function InvoicePage() {
           unit_price,
           quantity
         )
-      `)
+      `
+      )
       .eq("order_id", order.id);
 
     // fetch saved totals (same row as order)
@@ -368,9 +474,10 @@ export default function InvoicePage() {
       const mapped: InvoiceItem[] = (rows as unknown as OrderItemRow[]).map(
         (r) => ({
           id: r.id,
-          qty: typeof r.fulfilled_quantity === "number"
-            ? r.fulfilled_quantity
-            : Number(r.quantity || 0),
+          qty:
+            typeof r.fulfilled_quantity === "number"
+              ? r.fulfilled_quantity
+              : Number(r.quantity || 0),
           orderedQty: Number(r.quantity || 0),
           unit: r.inventory?.unit || "pcs",
           description: r.inventory?.product_name || "",
@@ -384,7 +491,7 @@ export default function InvoicePage() {
 
       // Initialize remarks for editing
       const remap: Record<string, string> = {};
-      mapped.forEach(it => (remap[it.id] = it.remarks ?? ""));
+      mapped.forEach((it) => (remap[it.id] = it.remarks ?? ""));
       setEditedRemarks(remap);
       setEditMode(false);
     } else {
@@ -407,7 +514,7 @@ export default function InvoicePage() {
   function handleStartEdit() {
     if (!items) return;
     const remap: Record<string, string> = {};
-    items.forEach(it => (remap[it.id] = it.remarks ?? ""));
+    items.forEach((it) => (remap[it.id] = it.remarks ?? ""));
     setEditedRemarks(remap);
     setEditMode(true);
   }
@@ -420,9 +527,9 @@ export default function InvoicePage() {
       )
     );
     // Update parent state to force rerender
-    setItems(prev =>
+    setItems((prev) =>
       prev
-        ? prev.map(it =>
+        ? prev.map((it) =>
             editedRemarks[it.id] !== undefined
               ? { ...it, remarks: editedRemarks[it.id] }
               : it
@@ -494,9 +601,10 @@ export default function InvoicePage() {
 
         const mapped: InvoiceItem[] = (row.order_items || []).map((it) => ({
           id: it.id,
-          qty: typeof it.fulfilled_quantity === "number"
-            ? it.fulfilled_quantity
-            : Number(it.quantity || 0),
+          qty:
+            typeof it.fulfilled_quantity === "number"
+              ? it.fulfilled_quantity
+              : Number(it.quantity || 0),
           unit: it.inventory?.unit || "pcs",
           description: it.inventory?.product_name || "",
           unitPrice: Number(it.price ?? it.inventory?.unit_price ?? 0),
@@ -738,32 +846,19 @@ export default function InvoicePage() {
                               </select>
                               <button
                                 className="bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-                                onClick={async () => {
-                                  const node = document.getElementById(
-                                    `invoice-capture-${order.id}`
-                                  );
-                                  if (!node) return;
-                                  await exportNodeToPDF(
-                                    node,
-                                    paperSize,
-                                    `UNIASIA_${txn}`
-                                  );
-
-                                  // ✅ log "Exported Invoice PDF"
-                                  await logActivity("Exported Invoice PDF", {
-                                    order_id: order.id,
-                                    txn,
+                                onClick={() =>
+                                  handlePrintClick({
+                                    nodeId: `invoice-capture-${order.id}`,
                                     paper: paperSize,
-                                    items: items?.length ?? 0,
-                                    sales_tax: salesTaxSaved,
-                                    grand_total_with_interest:
-                                      grandTotalWithInterest,
-                                    per_term_amount: perTermAmount,
-                                  });
-                                }}
+                                    filenameBase: `UNIASIA_${txn}`,
+                                    orderId: order.id,
+                                    txn,
+                                  })
+                                }
                               >
                                 PRINT PDF
                               </button>
+
                               {/* EDIT/SAVE BUTTON (never appears in print/pdf) */}
                               <span className="no-print">
                                 {!editMode ? (
@@ -857,6 +952,73 @@ export default function InvoicePage() {
             </tbody>
           </table>
         </motion.div>
+        {/* Re-auth modal for PRINT PDF */}
+        {showReauth && (
+          <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+              <h3 className="text-base font-semibold mb-2 text-center">
+                Confirm Your Identity
+              </h3>
+              <p className="text-sm text-neutral-700 text-center mb-4">
+                For security, please re-enter your password to print this
+                invoice PDF.
+              </p>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs text-neutral-600 mb-1">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={reauthEmail}
+                    disabled
+                    aria-disabled="true"
+                    tabIndex={-1}
+                    className="border rounded-lg px-3 py-2 w-full bg-gray-100 text-gray-500 cursor-not-allowed opacity-70"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-neutral-600 mb-1">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    className="border rounded-lg px-3 py-2 w-full"
+                    value={reauthPassword}
+                    onChange={(e) => setReauthPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    autoFocus
+                  />
+                </div>
+                {reauthError && (
+                  <div className="text-xs text-red-600">{reauthError}</div>
+                )}
+              </div>
+
+              <div className="flex gap-3 justify-center mt-5">
+                <button
+                  className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
+                  onClick={confirmReauth}
+                  disabled={reauthing || !reauthPassword}
+                >
+                  {reauthing ? "Verifying…" : "Verify & Continue"}
+                </button>
+                <button
+                  className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
+                  onClick={() => {
+                    setShowReauth(false);
+                    setReauthPassword("");
+                    setReauthError("");
+                    setPendingPrint(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </motion.div>
   );

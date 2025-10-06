@@ -128,8 +128,7 @@ function startOfPHWeek(dUTC: Date): Date {
   const startDay = startOfPHDay(dUTC);
   const msLocal = startDay.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
   const local = new Date(msLocal);
-  const day = local.getUTCDay(); // 0=Sun ... 6=Sat  (still safe since we coerced to "local" via offset)
-  // Convert to Monday=1..Sunday=0/7
+  const day = local.getUTCDay(); // 0=Sun ... 6=Sat
   const mondayDelta = (day + 6) % 7; // days since Monday
   const localMonday = new Date(local.getTime() - mondayDelta * MS_PER_DAY);
   return new Date(localMonday.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
@@ -233,6 +232,17 @@ export default function ActivityLogPage() {
   const [customEnd, setCustomEnd] = useState<string>(""); // YYYY-MM-DD (PH local)
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string>("");
+
+  // Re-auth states (security)
+  const [showReauth, setShowReauth] = useState(false);
+  const [reauthEmail, setReauthEmail] = useState<string>("");
+  const [reauthPassword, setReauthPassword] = useState("");
+  const [reauthing, setReauthing] = useState(false);
+  const [reauthError, setReauthError] = useState("");
+  const [lastReauthAt, setLastReauthAt] = useState<number | null>(null);
+  const REAUTH_TTL_MS = 0.5 * 60 * 1000; // 5 minutes
+  const needsReauth = () =>
+    !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
 
   useEffect(() => {
     async function initialLoad() {
@@ -367,8 +377,43 @@ export default function ActivityLogPage() {
     return { start, end, label: describeRange("custom", start, end) };
   }
 
+  // ---- PASSWORD GATE ----
   async function handleExportNow() {
     setExportError("");
+    // ask for password unless recently verified
+    if (needsReauth()) {
+      const { data } = await supabase.auth.getUser();
+      setReauthEmail(data?.user?.email || "");
+      setShowReauth(true);
+      return;
+    }
+    await doExportNow();
+  }
+
+  async function confirmReauth() {
+    setReauthError("");
+    setReauthing(true);
+    try {
+      // verify current session email + supplied password
+      const { error } = await supabase.auth.signInWithPassword({
+        email: reauthEmail,
+        password: reauthPassword,
+      });
+      if (error) throw error;
+
+      setLastReauthAt(Date.now());
+      setShowReauth(false);
+      setReauthPassword("");
+      await doExportNow();
+    } catch (e: any) {
+      setReauthError(e?.message || "Authentication failed.");
+    } finally {
+      setReauthing(false);
+    }
+  }
+
+  // ---- ACTUAL EXPORT (unchanged UI, fixed filter) ----
+  async function doExportNow() {
     setExporting(true);
     try {
       const { start, end, label } = resolveRange();
@@ -383,15 +428,17 @@ export default function ActivityLogPage() {
           setExporting(false);
           return;
         }
+        // FIX: exclusive upper bound to avoid cutting off same-day rows
+        const endExclusive = new Date(end.getTime() + 1);
         query = query
           .gte("created_at", start.toISOString())
-          .lte("created_at", end.toISOString());
+          .lt("created_at", endExclusive.toISOString());
       }
 
       const { data: rows, error } = await query;
       if (error) throw error;
 
-      // Log the export action
+      // Log the export action (best-effort)
       try {
         const { data } = await supabase.auth.getUser();
         const userEmail = data?.user?.email || "unknown";
@@ -408,8 +455,8 @@ export default function ActivityLogPage() {
               filter: exportChoice,
               ...(exportChoice !== "all"
                 ? {
-                    start_utc: resolveRange().start?.toISOString(),
-                    end_utc: resolveRange().end?.toISOString(),
+                    start_utc: start?.toISOString(),
+                    end_utc: end?.toISOString(),
                   }
                 : {}),
             },
@@ -782,6 +829,72 @@ export default function ActivityLogPage() {
                   setCustomStart("");
                   setCustomEnd("");
                   setExportError("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Re-auth modal */}
+      {showReauth && (
+        <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+            <h3 className="text-base font-semibold mb-2 text-center">
+              Confirm Your Identity
+            </h3>
+            <p className="text-sm text-gray-700 text-center mb-4">
+              For security, please re-enter your password to export logs.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={reauthEmail}
+                  disabled
+                  aria-disabled="true"
+                  tabIndex={-1}
+                  className="border rounded-lg px-3 py-2 w-full bg-gray-100 text-gray-500 cursor-not-allowed opacity-70"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  className="border rounded-lg px-3 py-2 w-full"
+                  value={reauthPassword}
+                  onChange={(e) => setReauthPassword(e.target.value)}
+                  placeholder="Enter your password"
+                  autoFocus
+                />
+              </div>
+              {reauthError && (
+                <div className="text-xs text-red-600">{reauthError}</div>
+              )}
+            </div>
+
+            <div className="flex gap-3 justify-center mt-5">
+              <button
+                className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
+                onClick={confirmReauth}
+                disabled={reauthing || !reauthPassword}
+              >
+                {reauthing ? "Verifying…" : "Verify & Continue"}
+              </button>
+              <button
+                className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
+                onClick={() => {
+                  setShowReauth(false);
+                  setReauthPassword("");
+                  setReauthError("");
                 }}
               >
                 Cancel

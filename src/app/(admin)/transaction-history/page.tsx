@@ -17,6 +17,8 @@ type Transaction = {
   total_amount: number | null;
 };
 
+// REAUTH FOR EXPORT (sensitive data)
+
 /* ------------------------ PH Time Utilities ----------------------- */
 // Philippines is UTC+8 year-round (no DST).
 const PH_OFFSET_HOURS = 8;
@@ -114,6 +116,19 @@ export default function TransactionHistoryPage() {
   const [customEnd, setCustomEnd] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
+
+  // --- Re-auth (password gate) ---
+  const [showReauth, setShowReauth] = useState(false);
+  const [reauthEmail, setReauthEmail] = useState<string>("");
+  const [reauthPassword, setReauthPassword] = useState("");
+  const [reauthing, setReauthing] = useState(false);
+  const [reauthError, setReauthError] = useState("");
+
+  // remember a successful reauth for a short window
+  const [lastReauthAt, setLastReauthAt] = useState<number | null>(null);
+  const REAUTH_TTL_MS = 0.5 * 60 * 1000; // adjust this to recalibrate
+  const needsReauth = () =>
+    !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
 
   // Load initial list (no date filters here; the modal fetches its own filtered rows)
   useEffect(() => {
@@ -236,8 +251,43 @@ export default function TransactionHistoryPage() {
     return { start: s, end: e, label: describeRangeLabel("custom", s, e) };
   }
 
+  // Gate: ask for password unless recently verified
   async function handleExportNow() {
     setExportError("");
+
+    if (needsReauth()) {
+      const { data } = await supabase.auth.getUser();
+      setReauthEmail(data?.user?.email || "");
+      setShowReauth(true);
+      return; // stop here; continue after password verification
+    }
+
+    await doExportNow();
+  }
+
+  async function confirmReauth() {
+    setReauthError("");
+    setReauthing(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: reauthEmail,
+        password: reauthPassword,
+      });
+      if (error) throw error;
+
+      setLastReauthAt(Date.now());
+      setShowReauth(false);
+      setReauthPassword("");
+
+      await doExportNow();
+    } catch (e: any) {
+      setReauthError(e?.message || "Authentication failed.");
+    } finally {
+      setReauthing(false);
+    }
+  }
+
+  async function doExportNow() {
     setExporting(true);
     try {
       const { start, end, label } = resolveRange();
@@ -263,14 +313,17 @@ export default function TransactionHistoryPage() {
           return;
         }
 
-        // Use PH-local, NO time zone strings and an exclusive upper bound
-        // (endExclusive = end + 1 ms means next tick after the PH 23:59:59.999)
+        // Exclusive upper bound (end + 1ms) to include the whole PH day
         const endExclusive = new Date(end.getTime() + 1);
 
+        // date_created is usually TIMESTAMP (no TZ) — compare using PH-local strings
         const startPH = toPHSqlNoTZ(start);
         const endPH = toPHSqlNoTZ(endExclusive);
-
         q = q.gte("date_created", startPH).lt("date_created", endPH);
+
+        // If your column is TIMESTAMPTZ instead, use:
+        // q = q.gte("date_created", start.toISOString())
+        //      .lt("date_created", endExclusive.toISOString());
       }
 
       const { data, error } = await q;
@@ -278,7 +331,6 @@ export default function TransactionHistoryPage() {
 
       // Map to rows
       const rows = (data ?? []).map((o: any) => {
-        // TXN code in export too (same rule used in UI)
         const date = new Date(o.date_created);
         const dateCode = date.toISOString().split("T")[0].replace(/-/g, "");
         const shortId = String(o.id).split("-")[0].toUpperCase();
@@ -309,7 +361,7 @@ export default function TransactionHistoryPage() {
       const safeLabel = label.replace(/[^\w\-]+/g, "_");
       XLSX.writeFile(wb, `Transaction_History_${safeLabel}_${todayStamp}.xlsx`);
 
-      // Log export in activity_logs (like Activity Log export)
+      // Log export (best-effort)
       try {
         const { data: u } = await supabase.auth.getUser();
         await supabase.from("activity_logs").insert([
@@ -509,6 +561,72 @@ export default function TransactionHistoryPage() {
                   setCustomStart("");
                   setCustomEnd("");
                   setExportError("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Re-auth modal */}
+      {showReauth && (
+        <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+            <h3 className="text-base font-semibold mb-2 text-center">
+              Confirm Your Identity
+            </h3>
+            <p className="text-sm text-gray-700 text-center mb-4">
+              For security, please re-enter your password to export
+              transactions.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={reauthEmail}
+                  disabled
+                  aria-disabled="true"
+                  tabIndex={-1}
+                  className="border rounded-lg px-3 py-2 w-full bg-gray-100 text-gray-500 cursor-not-allowed opacity-70"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  className="border rounded-lg px-3 py-2 w-full"
+                  value={reauthPassword}
+                  onChange={(e) => setReauthPassword(e.target.value)}
+                  placeholder="Enter your password"
+                  autoFocus
+                />
+              </div>
+              {reauthError && (
+                <div className="text-xs text-red-600">{reauthError}</div>
+              )}
+            </div>
+
+            <div className="flex gap-3 justify-center mt-5">
+              <button
+                className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
+                onClick={confirmReauth}
+                disabled={reauthing || !reauthPassword}
+              >
+                {reauthing ? "Verifying…" : "Verify & Continue"}
+              </button>
+              <button
+                className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
+                onClick={() => {
+                  setShowReauth(false);
+                  setReauthPassword("");
+                  setReauthError("");
                 }}
               >
                 Cancel
