@@ -197,6 +197,14 @@ function formatPeso(n: number | undefined | null) {
   }).format(v);
 }
 
+/* ------------------------ Pricing helpers (NEW) ------------------------ */
+function lineTotal(ci: CartItem) {
+  return (ci.item.unit_price || 0) * ci.quantity;
+}
+function cartSum(list: CartItem[]) {
+  return list.reduce((s, ci) => s + lineTotal(ci), 0);
+}
+
 /* -------------------------------- Component ------------------------------- */
 export default function CustomerInventoryPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -516,42 +524,41 @@ export default function CustomerInventoryPage() {
     }));
   }, []);
 
-  // Pre-fill name/email if logged in and compute type once
- useEffect(() => {
-  (async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user) {
-      const displayName = getDisplayNameFromMetadata(
-        user.user_metadata,
-        user.email || undefined
-      );
-      const email = user.email || "";
+  // Pre-fill name/email/phone if logged in and compute type once
+  useEffect(() => {
+    (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        const displayName = getDisplayNameFromMetadata(
+          user.user_metadata,
+          user.email || undefined
+        );
+        const email = user.email || "";
 
-      // Fetch from account_requests to get contact_number
-      const { data: customerData, error } = await supabase
-        .from("account_requests")
-        .select("contact_number")
-        .eq("email", email)
-        .maybeSingle();
+        // Fetch from account_requests to get contact_number
+        const { data: customerData } = await supabase
+          .from("account_requests")
+          .select("contact_number")
+          .eq("email", email)
+          .maybeSingle();
 
-      const contactNumber = customerData?.contact_number || "";
+        const contactNumber = customerData?.contact_number || "";
 
-      setAuthDefaults({ name: displayName || "", email });
+        setAuthDefaults({ name: displayName || "", email });
 
-      setCustomerInfo((prev) => ({
-        ...prev,
-        name: prev.name || displayName || "",
-        email: prev.email || email,
-        phone: prev.phone || contactNumber, // ✅ auto-fill phone
-      }));
+        setCustomerInfo((prev) => ({
+          ...prev,
+          name: prev.name || displayName || "",
+          email: prev.email || email,
+          phone: prev.phone || contactNumber, // auto-fill phone
+        }));
 
-      await setTypeFromHistory(email);
-    }
-  })();
-}, [setTypeFromHistory]);
-
+        await setTypeFromHistory(email);
+      }
+    })();
+  }, [setTypeFromHistory]);
 
   // Debounce re-check if email ever changes elsewhere (kept for safety)
   useEffect(() => {
@@ -749,9 +756,7 @@ export default function CustomerInventoryPage() {
     if (!customerInfo.email || !customerInfo.email.includes("@")) {
       missing.push("Email");
     }
-    // if (!isValidPhone(customerInfo.phone || "")) {
-    //   missing.push("Phone (11 digits)");
-    // }
+    // Phone validation removed (it's auto-filled & locked)
     if (!houseStreet || !houseStreet.trim()) {
       missing.push("House & Street");
     }
@@ -776,7 +781,6 @@ export default function CustomerInventoryPage() {
   }, [
     customerInfo.name,
     customerInfo.email,
-    // customerInfo.phone,
     houseStreet,
     regionCode,
     provinceCode,
@@ -868,10 +872,7 @@ export default function CustomerInventoryPage() {
       if (custErr) throw custErr;
 
       const customerId = cust.id;
-      const totalAmount = items.reduce(
-        (sum, ci) => sum + (ci.item.unit_price || 0) * ci.quantity,
-        0
-      );
+      const totalAmount = cartSum(items);
 
       const { data: ord, error: ordErr } = await supabase
         .from("orders")
@@ -1048,56 +1049,60 @@ export default function CustomerInventoryPage() {
         <>
           <div className="overflow-x-auto rounded-lg shadow mb-3">
             <table className="w-full table-fixed bg-white text-sm">
-<thead className="bg-[#ffba20] text-black text-left">
-  <tr>
-    <th className="py-2 px-4 w-2/6">Product Name</th>
-    <th className="py-2 px-4 w-1/6">Category</th>
-    <th className="py-2 px-4 w-1/6">Subcategory</th>
-    <th className="py-2 px-4 w-1/6">Unit</th> {/* NEW */}
-    <th className="py-2 px-4 w-1/6">Unit Price</th>
-    <th className="py-2 px-4 w-1/6">Status</th>
-    <th className="py-2 px-4 w-1/6">Action</th>
-  </tr>
-</thead>
+              <thead className="bg-[#ffba20] text-black text-left">
+                <tr>
+                  <th className="py-2 px-4 w-2/6">Product Name</th>
+                  <th className="py-2 px-4 w-1/6">Category</th>
+                  <th className="py-2 px-4 w-1/6">Subcategory</th>
+                  <th className="py-2 px-4 w-1/6">Unit</th>
+                  <th className="py-2 px-4 w-1/6">Unit Price</th>
+                  <th className="py-2 px-4 w-1/6">Status</th>
+                  <th className="py-2 px-4 w-1/6">Action</th>
+                </tr>
+              </thead>
 
-<tbody>
-  {pageItems.map((item) => (
-    <tr key={item.id} className="border-b hover:bg-gray-100">
-      <td className="py-2 px-4 pl-6 text-left">
-        <button
-          className="text-[#2f63b7] hover:underline font-normal text-left"
-          onClick={() => openImageModal(item)}
-          title={item.image_url ? "View product image" : "No image available"}
-          style={{ wordBreak: "break-word" }}
-        >
-          {item.product_name}
-        </button>
-      </td>
-      <td className="py-2 px-4 text-left">{item.category}</td>
-      <td className="py-2 px-4 text-left">{item.subcategory}</td>
-      <td className="py-2 px-4 text-left">{item.unit || "—"}</td> {/* NEW */}
-      <td className="py-2 px-4 text-left">{formatPeso(item.unit_price)}</td>
-      <td className="py-2 px-4 text-left">{item.status}</td>
-      <td className="py-2 px-4">
-        <button
-          className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
-          onClick={() => handleAddToCartClick(item)}
-        >
-          Add to Cart
-        </button>
-      </td>
-    </tr>
-  ))}
-  {/* Empty state stays at the end */}
-  {pageItems.length === 0 && (
-    <tr>
-      <td colSpan={7} className="text-center py-6 text-gray-500">
-        No products found.
-      </td>
-    </tr>
-  )}
-</tbody>
-
+              <tbody>
+                {pageItems.map((item) => (
+                  <tr key={item.id} className="border-b hover:bg-gray-100">
+                    <td className="py-2 px-4 pl-6 text-left">
+                      <button
+                        className="text-[#2f63b7] hover:underline font-normal text-left"
+                        onClick={() => openImageModal(item)}
+                        title={
+                          item.image_url
+                            ? "View product image"
+                            : "No image available"
+                        }
+                        style={{ wordBreak: "break-word" }}
+                      >
+                        {item.product_name}
+                      </button>
+                    </td>
+                    <td className="py-2 px-4 text-left">{item.category}</td>
+                    <td className="py-2 px-4 text-left">{item.subcategory}</td>
+                    <td className="py-2 px-4 text-left">{item.unit || "—"}</td>
+                    <td className="py-2 px-4 text-left">
+                      {formatPeso(item.unit_price)}
+                    </td>
+                    <td className="py-2 px-4 text-left">{item.status}</td>
+                    <td className="py-2 px-4">
+                      <button
+                        className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
+                        onClick={() => handleAddToCartClick(item)}
+                      >
+                        Add to Cart
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {pageItems.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="text-center py-6 text-gray-500">
+                      No products found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
             </table>
           </div>
 
@@ -1369,7 +1374,7 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* First Confirm Order Modal (name/email are READ-ONLY) */}
+      {/* First Confirm Order Modal (name/email/phone are READ-ONLY) */}
       {showCartPopup && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -1398,15 +1403,16 @@ export default function CustomerInventoryPage() {
                   value={customerInfo.email}
                   readOnly
                 />
-                {/* Editable phone & contact */}
-<input
-  type="tel"
-  placeholder="Phone (11 digits)"
-  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-  value={customerInfo.phone}
-  readOnly
-/>
+                {/* Phone is auto-filled & read-only */}
+                <input
+                  type="tel"
+                  placeholder="Phone (11 digits)"
+                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+                  value={customerInfo.phone}
+                  readOnly
+                />
 
+                {/* Contact Person (editable, optional) */}
                 <input
                   placeholder="Contact Person"
                   className="border px-3 py-2 rounded"
@@ -1583,6 +1589,7 @@ export default function CustomerInventoryPage() {
                       <th className="py-2 px-3 text-left">Unit Price</th>
                       <th className="py-2 px-3 text-left">Qty</th>
                       <th className="py-2 px-3 text-left">Status</th>
+                      <th className="py-2 px-3 text-left">Line Total</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1596,10 +1603,27 @@ export default function CustomerInventoryPage() {
                         </td>
                         <td className="py-2 px-3">{ci.quantity}</td>
                         <td className="py-2 px-3">{ci.item.status}</td>
+                        <td className="py-2 px-3 font-medium">
+                          {formatPeso(lineTotal(ci))}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+
+                {/* Estimated total + note */}
+                <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
+                  <div className="text-xs text-gray-500">
+                    * Final price may change if an admin applies a discount during
+                    order processing.
+                  </div>
+                  <div className="text-sm">
+                    <span className="mr-2 text-gray-600">Estimated Total:</span>
+                    <span className="font-semibold">
+                      {formatPeso(cartSum(cart))}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1708,6 +1732,7 @@ export default function CustomerInventoryPage() {
                       <th className="py-2 px-3 text-left">Unit Price</th>
                       <th className="py-2 px-3 text-left">Qty</th>
                       <th className="py-2 px-3 text-left">Status</th>
+                      <th className="py-2 px-3 text-left">Line Total</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1721,10 +1746,27 @@ export default function CustomerInventoryPage() {
                         </td>
                         <td className="py-2 px-3">{ci.quantity}</td>
                         <td className="py-2 px-3">{ci.item.status}</td>
+                        <td className="py-2 px-3 font-medium">
+                          {formatPeso(lineTotal(ci))}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+
+                {/* Estimated total + note */}
+                <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
+                  <div className="text-xs text-gray-500">
+                    * Final price may change if an admin applies a discount during
+                    order processing.
+                  </div>
+                  <div className="text-sm">
+                    <span className="mr-2 text-gray-600">Estimated Total:</span>
+                    <span className="font-semibold">
+                      {formatPeso(cartSum(finalOrderDetails.items))}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
 
