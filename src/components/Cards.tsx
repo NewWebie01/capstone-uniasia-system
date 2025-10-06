@@ -1,4 +1,3 @@
-// components/Cards.tsx
 "use client";
 
 import React, { useEffect, useState } from "react";
@@ -7,14 +6,17 @@ import {
   FaExclamationTriangle,
   FaTruck,
   FaUserFriends,
+  FaClock,
 } from "react-icons/fa";
 import supabase from "@/config/supabaseClient";
 
-type InventoryItem = { id: number; product_name: string; quantity: number };
+// Types
+type InventoryItem = { id: number; product_name: string; quantity: number; expiration_date?: string };
 type Delivery = { id: number; destination: string };
 type Customer = { id: number; name: string };
 
-type ModalType = "outOfStock" | "deliveries" | "customers" | null;
+// Add "expNotify" to ModalType
+type ModalType = "outOfStock" | "deliveries" | "customers" | "expNotify" | null;
 
 const pluralize = (n: number, one: string, many: string) =>
   `${n} ${n === 1 ? one : many}`;
@@ -24,6 +26,7 @@ const Cards: React.FC = () => {
   const [outOfStockItems, setOutOfStockItems] = useState<InventoryItem[] | null>(null);
   const [ongoingDeliveries, setOngoingDeliveries] = useState<Delivery[] | null>(null);
   const [existingCustomers, setExistingCustomers] = useState<Customer[] | null>(null);
+  const [expiringSoon, setExpiringSoon] = useState<InventoryItem[] | null>(null);
 
   const [modal, setModal] = useState<ModalType>(null);
 
@@ -34,8 +37,7 @@ const Cards: React.FC = () => {
           supabase.from("sales").select("amount"),
           supabase
             .from("inventory")
-            .select("id, product_name, quantity")
-            .eq("quantity", 0)
+            .select("id, product_name, quantity, expiration_date")
             .order("product_name", { ascending: true }),
           supabase
             .from("truck_deliveries")
@@ -57,7 +59,29 @@ const Cards: React.FC = () => {
           setTotalSales(sum);
         }
 
-        if (!invRes.error && invRes.data) setOutOfStockItems(invRes.data as InventoryItem[]);
+        if (!invRes.error && invRes.data) {
+          // Out of stock
+          setOutOfStockItems(
+            (invRes.data as InventoryItem[]).filter((i) => i.quantity === 0)
+          );
+
+          // ExpNotify: Items expiring in 7 days
+          const DAYS_AHEAD = 7;
+          const today = new Date();
+          const until = new Date(Date.now() + DAYS_AHEAD * 86400000);
+          setExpiringSoon(
+            (invRes.data as InventoryItem[]).filter((i) => {
+              if (!i.expiration_date) return false;
+              const exp = new Date(i.expiration_date);
+              // Use only the date portion for comparison
+              exp.setHours(0, 0, 0, 0);
+              today.setHours(0, 0, 0, 0);
+              until.setHours(0, 0, 0, 0);
+              return exp >= today && exp <= until;
+            })
+          );
+        }
+
         if (!delivRes.error && delivRes.data) setOngoingDeliveries(delivRes.data as Delivery[]);
         if (!custRes.error && custRes.data) {
           // dedupe by name
@@ -97,7 +121,7 @@ const Cards: React.FC = () => {
 
   return (
     <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-5 gap-4 mb-6 w-full overflow-x-auto">
         {/* Total Sales (non-clickable) */}
         <div className="bg-white p-5 rounded-xl shadow-sm flex items-start gap-4 overflow-hidden">
           <FaDollarSign className="text-3xl text-green-600 mt-1" />
@@ -162,6 +186,27 @@ const Cards: React.FC = () => {
             Click to view details
           </div>
         </div>
+
+        {/* ExpNotify (clickable -> modal) */}
+        <div {...cardButtonProps("expNotify")}>
+          <div className="flex items-center gap-4 mb-2">
+            <FaClock className="text-3xl text-yellow-500" />
+            <div className="leading-tight">
+              <div className="font-semibold text-base md:text-lg">Expiring Items</div>
+              <div className="text-sm md:text-base text-gray-600">
+                {Array.isArray(expiringSoon)
+                  ? pluralize(expiringSoon.length, "item", "items")
+                  : "Loading…"}
+              </div>
+              <div className="text-xs md:text-sm text-gray-400">
+                (7 days)
+              </div>
+            </div>
+          </div>
+          <div className="text-xs md:text-sm text-gray-400">
+            Click to view details
+          </div>
+        </div>
       </div>
 
       {/* Modal */}
@@ -170,19 +215,37 @@ const Cards: React.FC = () => {
           {modal === "outOfStock" && (
             <ListSection
               emptyText="No out-of-stock items."
-              items={outOfStockItems?.map((i) => i.product_name) ?? null}
+              items={outOfStockItems?.map((i) => i.product_name) ?? []}
             />
           )}
           {modal === "deliveries" && (
             <ListSection
               emptyText="No ongoing deliveries."
-              items={ongoingDeliveries?.map((d) => d.destination) ?? null}
+              items={ongoingDeliveries?.map((d) => d.destination) ?? []}
             />
           )}
           {modal === "customers" && (
             <ListSection
               emptyText="No existing customers."
-              items={existingCustomers?.map((c) => c.name) ?? null}
+              items={existingCustomers?.map((c) => c.name) ?? []}
+            />
+          )}
+          {modal === "expNotify" && (
+            <ListSection
+              emptyText="No items expiring in 7 days."
+              items={
+                Array.isArray(expiringSoon)
+                  ? expiringSoon.map((i) =>
+                      i.product_name +
+                      (i.expiration_date
+                        ? ` (expires ${new Date(i.expiration_date).toLocaleDateString("en-PH", {
+                            month: "short",
+                            day: "numeric",
+                          })})`
+                        : "")
+                    )
+                  : []
+              }
             />
           )}
         </Modal>
@@ -201,6 +264,8 @@ function modalTitle(type: ModalType) {
       return "Ongoing Deliveries";
     case "customers":
       return "Existing Customers";
+    case "expNotify":
+      return "Expiring Soon (Next 7 Days)";
     default:
       return "";
   }
