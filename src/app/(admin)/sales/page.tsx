@@ -530,216 +530,221 @@ setPickingStatus((prev) => [
   };
 
   // --- 🎯 THE VALIDATED "COMPLETE" HANDLER ---
-  const handleOrderComplete = async () => {
-    if (!selectedOrder || isCompletingOrder) return;
+ const handleOrderComplete = async () => {
+  if (!selectedOrder || isCompletingOrder) return;
 
-    // Reset errors before checking
-    setFieldErrors({ poNumber: false, repName: false });
+  // Reset errors before checking
+  setFieldErrors({ poNumber: false, repName: false });
 
-    let errors: any = {};
-    if (!poNumber || !poNumber.trim()) errors.poNumber = true;
-    if (!repName || !repName.trim()) errors.repName = true;
-    // add more checks if needed
+  let errors: any = {};
+  if (!poNumber || !poNumber.trim()) errors.poNumber = true;
+  if (!repName || !repName.trim()) errors.repName = true;
+  // add more checks if needed
 
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors);
-      toast.error("Please fill all required fields!");
-      return;
-    }
-
-    setIsCompletingOrder(true);
-    try {
-for (let i = 0; i < selectedOrder.order_items.length; i++) {
-  const oi = selectedOrder.order_items[i];
-  if (oi.inventory.quantity === 0) continue;
-  const invId = oi.inventory.id;
-  const remaining = oi.inventory.quantity - editedQuantities[i];
-
-  if (remaining < 0) {
-    toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
-    setShowFinalConfirm(false);
-    throw new Error("Insufficient stock");
-  }
-
-  // 1. Update inventory
-  await supabase
-    .from("inventory")
-    .update({ quantity: remaining })
-    .eq("id", invId);
-
-  // 2. Update discount_percent in order_items
-  await supabase
-    .from("order_items")
-    .update({
-      discount_percent: editedDiscounts[i] || 0,
-    })
-    .eq("order_id", selectedOrder.id)
-    .eq("inventory_id", invId);
-
-  // 3. Calculate earnings (profit per item)
-  const qty = editedQuantities[i];
-  const unitPrice = oi.price;
-  const discountPercent = editedDiscounts[i] || 0;
-  const costPrice = oi.inventory.cost_price || 0; // fallback if cost_price is null
-  const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
-
-  // 4. Insert to sales table
-  await supabase.from("sales").insert([
-    {
-      inventory_id: invId,
-      quantity_sold: qty,
-      amount: qty * unitPrice * (1 - discountPercent / 100),
-      earnings, // <-- Now defined and computed!
-      date: getPHISOString(),
-    },
-  ]);
-}
-
-
-
-      const isCredit = selectedOrder.customers.payment_type === "Credit";
-      const updateFields = {
-        status: "completed",
-        date_completed: getPHISOString(),
-        sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
-        po_number: poNumber,
-        salesman: repName,
-        terms: isCredit
-          ? `Net ${numberOfTerms} Monthly`
-          : selectedOrder.customers.payment_type,
-        payment_terms: isCredit ? numberOfTerms : null,
-        interest_percent: isCredit ? interestPercent : null,
-        grand_total_with_interest: isCredit
-          ? getGrandTotalWithInterest()
-          : null,
-        per_term_amount: isCredit ? getPerTermAmount() : null,
-        forwarder,
-        processed_by_email: processor?.email ?? "unknown",
-        processed_by_name: processor?.name ?? "unknown",
-        processed_by_role: processor?.role ?? "unknown",
-        processed_at: getPHISOString(),
-      } as const;
-
-      const { error: ordersErr } = await supabase
-        .from("orders")
-        .update(updateFields)
-        .eq("id", selectedOrder.id);
-      if (ordersErr) throw ordersErr;
-
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        const userEmail = user?.email || "unknown";
-        const userRole = user?.user_metadata?.role || "unknown";
-
-        await supabase.from("activity_logs").insert([
-          {
-            user_email: userEmail,
-            user_role: userRole,
-            action: "Complete Sales Order",
-            details: {
-              order_id: selectedOrder.id,
-              customer_name: selectedOrder.customers.name,
-              customer_email: selectedOrder.customers.email,
-              items: selectedOrder.order_items.map((oi, idx) => ({
-                product_name: oi.inventory.product_name,
-                ordered_qty: oi.quantity,
-                fulfilled_qty: editedQuantities[idx],
-                unit_price: oi.price,
-                discount_percent: editedDiscounts[idx] || 0,
-              })),
-              total_amount: getGrandTotalWithInterest(),
-              payment_type: selectedOrder.customers.payment_type,
-            },
-            created_at: getPHISOString(),
-          },
-        ]);
-      } catch (err) {
-        console.error(
-          "Failed to log activity for sales order completion:",
-          err
-        );
-      }
-
-      setShowSalesOrderModal(false);
-      setShowModal(false);
-      setShowFinalConfirm(false);
-      resetSalesForm();
-      setSelectedOrder(null);
-      setPickingStatus((prev) =>
-        prev.filter((p) => p.orderId !== selectedOrder.id)
-      );
-
-      await Promise.all([fetchOrders(), fetchItems()]);
-      toast.success("Order successfully completed!");
-      setIsCompletingOrder(false);
-     } catch (err: any) {
-  if (
-    err?.message &&
-    err.message.includes('unique constraint "unique_po_number"')
-  ) {
-    toast.error("PO Number is already used, try another.");
-    setIsCompletingOrder(false);
-    setShowFinalConfirm(false);
-    setShowSalesOrderModal(true);
+  if (Object.keys(errors).length > 0) {
+    setFieldErrors(errors);
+    toast.error("Please fill all required fields!");
     return;
   }
-  toast.error(
-    `Failed to complete order: ${err?.message ?? "Unexpected error"}`
-  );
-  setIsCompletingOrder(false);
-  setShowFinalConfirm(false);
-  setShowSalesOrderModal(true);
-}
-  };
-  const handleOrderConfirm = async () => {
-    if (!selectedOrder) return;
-    setShowFinalConfirm(true);
-  };
 
-  const handleBackModal = () => {
+  setIsCompletingOrder(true);
+  try {
+    // 1. UPDATE FULFILLED QUANTITY for each item
+    for (let i = 0; i < selectedOrder.order_items.length; i++) {
+      const oi = selectedOrder.order_items[i];
+      await supabase
+        .from("order_items")
+        .update({ fulfilled_quantity: editedQuantities[i] })
+        .eq("order_id", selectedOrder.id)
+        .eq("inventory_id", oi.inventory.id);
+    }
+
+    // 2. Update Inventory, Sales, etc (your existing logic)
+    for (let i = 0; i < selectedOrder.order_items.length; i++) {
+      const oi = selectedOrder.order_items[i];
+      if (oi.inventory.quantity === 0) continue;
+      const invId = oi.inventory.id;
+      const remaining = oi.inventory.quantity - editedQuantities[i];
+
+      if (remaining < 0) {
+        toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
+        setShowFinalConfirm(false);
+        throw new Error("Insufficient stock");
+      }
+
+      // Update inventory
+      await supabase
+        .from("inventory")
+        .update({ quantity: remaining })
+        .eq("id", invId);
+
+      // Update discount_percent in order_items
+      await supabase
+        .from("order_items")
+        .update({
+          discount_percent: editedDiscounts[i] || 0,
+        })
+        .eq("order_id", selectedOrder.id)
+        .eq("inventory_id", invId);
+
+      // Calculate earnings (profit per item)
+      const qty = editedQuantities[i];
+      const unitPrice = oi.price;
+      const discountPercent = editedDiscounts[i] || 0;
+      const costPrice = oi.inventory.cost_price || 0; // fallback if cost_price is null
+      const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
+
+      // Insert to sales table
+      await supabase.from("sales").insert([{
+        inventory_id: invId,
+        quantity_sold: qty,
+        amount: qty * unitPrice * (1 - discountPercent / 100),
+        earnings,
+        date: getPHISOString(),
+      }]);
+    }
+
+    // ...The rest of your existing order completion logic...
+    const isCredit = selectedOrder.customers.payment_type === "Credit";
+    const updateFields = {
+      status: "completed",
+      date_completed: getPHISOString(),
+      sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
+      po_number: poNumber,
+      salesman: repName,
+      terms: isCredit
+        ? `Net ${numberOfTerms} Monthly`
+        : selectedOrder.customers.payment_type,
+      payment_terms: isCredit ? numberOfTerms : null,
+      interest_percent: isCredit ? interestPercent : null,
+      grand_total_with_interest: isCredit ? getGrandTotalWithInterest() : null,
+      per_term_amount: isCredit ? getPerTermAmount() : null,
+      forwarder,
+      processed_by_email: processor?.email ?? "unknown",
+      processed_by_name: processor?.name ?? "unknown",
+      processed_by_role: processor?.role ?? "unknown",
+      processed_at: getPHISOString(),
+    } as const;
+
+    const { error: ordersErr } = await supabase
+      .from("orders")
+      .update(updateFields)
+      .eq("id", selectedOrder.id);
+    if (ordersErr) throw ordersErr;
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const userEmail = user?.email || "unknown";
+      const userRole = user?.user_metadata?.role || "unknown";
+
+      await supabase.from("activity_logs").insert([{
+        user_email: userEmail,
+        user_role: userRole,
+        action: "Complete Sales Order",
+        details: {
+          order_id: selectedOrder.id,
+          customer_name: selectedOrder.customers.name,
+          customer_email: selectedOrder.customers.email,
+          items: selectedOrder.order_items.map((oi, idx) => ({
+            product_name: oi.inventory.product_name,
+            ordered_qty: oi.quantity,
+            fulfilled_qty: editedQuantities[idx], // <-- now logs fulfilled
+            unit_price: oi.price,
+            discount_percent: editedDiscounts[idx] || 0,
+          })),
+          total_amount: getGrandTotalWithInterest(),
+          payment_type: selectedOrder.customers.payment_type,
+        },
+        created_at: getPHISOString(),
+      }]);
+    } catch (err) {
+      console.error(
+        "Failed to log activity for sales order completion:",
+        err
+      );
+    }
+
     setShowSalesOrderModal(false);
-    setShowModal(true);
-  };
-
-  const handleCancelModal = () => {
     setShowModal(false);
-    setShowSalesOrderModal(false);
     setShowFinalConfirm(false);
     resetSalesForm();
     setSelectedOrder(null);
     setPickingStatus((prev) =>
-      selectedOrder ? prev.filter((p) => p.orderId !== selectedOrder.id) : prev
+      prev.filter((p) => p.orderId !== selectedOrder.id)
     );
-  };
 
-  const handleResetDiscount = (idx: number) => {
-    setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
-  };
-
-  const timersRef = useRef<{ [key: number]: NodeJS.Timeout }>({});
-
-  const handleIncrement = (idx: number) => {
-    setEditedDiscounts((prev) =>
-       prev.map((d, i) => (i === idx ? Math.min(50, (Number(d) || 0) + 1) : d))  // 50% max
+    await Promise.all([fetchOrders(), fetchItems()]);
+    toast.success("Order successfully completed!");
+    setIsCompletingOrder(false);
+  } catch (err: any) {
+    if (
+      err?.message &&
+      err.message.includes('unique constraint "unique_po_number"')
+    ) {
+      toast.error("PO Number is already used, try another.");
+      setIsCompletingOrder(false);
+      setShowFinalConfirm(false);
+      setShowSalesOrderModal(true);
+      return;
+    }
+    toast.error(
+      `Failed to complete order: ${err?.message ?? "Unexpected error"}`
     );
-  };
-  const handleDecrement = (idx: number) => {
-    setEditedDiscounts((prev) =>
-      prev.map((d, i) => (i === idx ? Math.max(0, (Number(d) || 0) - 1) : d))
-    );
-  };
-const handleDiscountInput = (idx: number, value: string) => {
-  let percent = parseFloat(value.replace(/[^0-9\-]/g, ""));
-  if (isNaN(percent)) percent = 0;
-  if (percent > 50) percent = 50;
-  if (percent < 0) percent = 0;
-  setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? percent : d)));
+    setIsCompletingOrder(false);
+    setShowFinalConfirm(false);
+    setShowSalesOrderModal(true);
+  }
 };
 
+      const handleOrderConfirm = async () => {
+        if (!selectedOrder) return;
+        setShowFinalConfirm(true);
+      };
 
-  const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
+      const handleBackModal = () => {
+        setShowSalesOrderModal(false);
+        setShowModal(true);
+      };
+
+      const handleCancelModal = () => {
+        setShowModal(false);
+        setShowSalesOrderModal(false);
+        setShowFinalConfirm(false);
+        resetSalesForm();
+        setSelectedOrder(null);
+        setPickingStatus((prev) =>
+          selectedOrder ? prev.filter((p) => p.orderId !== selectedOrder.id) : prev
+        );
+      };
+
+      const handleResetDiscount = (idx: number) => {
+        setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
+      };
+
+      const timersRef = useRef<{ [key: number]: NodeJS.Timeout }>({});
+
+      const handleIncrement = (idx: number) => {
+        setEditedDiscounts((prev) =>
+          prev.map((d, i) => (i === idx ? Math.min(50, (Number(d) || 0) + 1) : d))  // 50% max
+        );
+      };
+      const handleDecrement = (idx: number) => {
+        setEditedDiscounts((prev) =>
+          prev.map((d, i) => (i === idx ? Math.max(0, (Number(d) || 0) - 1) : d))
+        );
+      };
+    const handleDiscountInput = (idx: number, value: string) => {
+      let percent = parseFloat(value.replace(/[^0-9\-]/g, ""));
+      if (isNaN(percent)) percent = 0;
+      if (percent > 50) percent = 50;
+      if (percent < 0) percent = 0;
+      setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? percent : d)));
+    };
+
+
+    const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
 
   // --- RENDER ---
   return (

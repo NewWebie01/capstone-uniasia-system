@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
+import DeliveryReceiptModern, { InvoiceItem, CustomerInfo } from "@/app/(admin)/delivery-receipt/DeliveryReceiptModern";
 import { Eye } from "lucide-react";
 import { motion } from "framer-motion";
 import supabase from "@/config/supabaseClient";
+import { toast } from "sonner";
 
 /* -------------------- Activity Logger -------------------- */
 async function logActivity(action: string, details: any = {}) {
@@ -25,26 +27,7 @@ async function logActivity(action: string, details: any = {}) {
   }
 }
 
-/* -------------------- Types -------------------- */
-type InvoiceItem = {
-  id: string;
-  qty: number;
-  unit: string;
-  description: string;
-  unitPrice: number;
-  discount: number; // percent
-  inStock?: boolean;
-};
-
-type CustomerInfo = {
-  name: string;
-  address?: string;
-  code?: string;
-  email?: string;
-  phone?: string;
-  area?: string;
-};
-
+/* -------------------- Local Types -------------------- */
 type OrderForList = {
   id: string;
   status: string | null;
@@ -53,15 +36,7 @@ type OrderForList = {
   salesman: string | null;
   terms: string | null;
   po_number: string | null;
-  customer: {
-    id: string;
-    name: string | null;
-    address: string | null;
-    code: string | null;
-    email?: string | null;
-    phone?: string | null;
-    area?: string | null;
-  } | null;
+  customer: CustomerInfo | null;
 };
 
 type OrderItemRow = {
@@ -70,7 +45,9 @@ type OrderItemRow = {
   inventory_id: string;
   quantity: number;
   price: number | null;
-  discount_percent?: number | null;  
+  discount_percent?: number | null;
+  remarks?: string | null;
+  fulfilled_quantity?: number | null;
   inventory?: {
     product_name: string | null;
     unit?: string | null;
@@ -91,13 +68,7 @@ type OrderDetailRow = {
   interest_percent: number | null;
   sales_tax: number | null;
   status?: string | null;
-  customers: { 
-    name: string | null; 
-    address: string | null; 
-    email?: string | null; 
-    phone?: string | null; 
-    area?: string | null;
-  } | null;
+  customers: CustomerInfo | null;
   order_items: OrderItemRow[];
 };
 
@@ -121,8 +92,6 @@ function formatDate(date?: string | null) {
     return "—";
   }
 }
-const TAX_RATE = 0.12;
-
 function statusColor(status?: string | null) {
   const v = (status || "").toLowerCase();
   if (v === "completed") return "bg-green-100 text-green-700 border-green-300";
@@ -220,257 +189,12 @@ async function exportNodeToPDF(
   pdf.save(`${safeName}_${PAPER_SPECS[paper].filename}.pdf`);
 }
 
-/* -------------------- Modern Delivery Receipt -------------------- */
-function DeliveryReceiptModern({
-  customer,
-  initialItems,
-  initialDate,
-  terms,
-  salesman,
-  poNo,
-  totals,
-  txn,
-  status,
-}: {
-  customer: CustomerInfo;
-  initialItems: InvoiceItem[];
-  initialDate?: string | null;
-  terms?: string | null;
-  salesman?: string | null;
-  poNo?: string | null;
-  totals?: {
-    salesTax?: number;
-    grandTotalWithInterest?: number;
-    perTermAmount?: number;
-  };
-  txn?: string;
-  status?: string | null;
-}) {
-  // Only count items NOT marked as out of stock (inStock !== false)
-  const rows = initialItems || [];
-  const inStockRows = rows.filter(i => i.inStock !== false);
-
-  const subtotal = inStockRows.reduce((s, i) => s + i.qty * i.unitPrice, 0);
-  const totalDiscount = inStockRows.reduce((s, i) => {
-    const line = i.qty * i.unitPrice;
-    return s + (line * (i.discount || 0)) / 100;
-  }, 0);
-  const afterDiscount = subtotal - totalDiscount;
-  const computedSalesTax = afterDiscount * TAX_RATE;
-
-  const salesTaxOut =
-    typeof totals?.salesTax === "number" ? totals!.salesTax : computedSalesTax;
-  const isCredit = (terms || "").toLowerCase().includes("net");
-
-  const computedGrandTotal = afterDiscount + salesTaxOut;
-  const grandTotalOut =
-    isCredit && typeof totals?.grandTotalWithInterest === "number" && totals.grandTotalWithInterest > 0
-      ? totals.grandTotalWithInterest
-      : computedGrandTotal;
-  const perTermOut =
-    typeof totals?.perTermAmount === "number" ? totals!.perTermAmount : 0;
-
-  // INTEREST calculation
-  const interestAmount =
-    isCredit && typeof totals?.grandTotalWithInterest === "number"
-      ? totals.grandTotalWithInterest - (afterDiscount + salesTaxOut)
-      : 0;
-  const interestPercent =
-    afterDiscount + salesTaxOut > 0 && interestAmount > 0
-      ? (interestAmount / (afterDiscount + salesTaxOut)) * 100
-      : 0;
-
-  return (
-    <div className="w-full max-w-4xl mx-auto bg-white p-7 rounded-xl shadow print:shadow-none print:p-8 print:max-w-none print:w-[100%] text-black">
-      <div className="relative mb-10">
-        <div className="flex flex-col items-center justify-center text-center">
-          <h2 className="text-4xl font-extrabold tracking-tight text-neutral-900 mb-1 -mt-3">
-            UNIASIA
-          </h2>
-          <div className="text-base font-small text-neutral-500 mb-2">
-            SITIO II MANGGAHAN BAHAY PARE, MEYCAUAYAN CITY BULACAN
-          </div>
-          <div className="text-x2 font-bold text-yellow-600 tracking-widest mb-1">
-            DELIVERY RECEIPT
-          </div>
-        </div>
-      </div>
-      {/* Details */}
-      <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs mb-4 border border-neutral-300 rounded-lg p-3">
-        <div>
-          <div>
-            <b>CUSTOMER:</b> {customer?.name || "—"}
-          </div>
-          <div>
-            <b>ADDRESS:</b> {customer?.address || "—"}
-          </div>
-          <div>
-            <b>FORWARDER:</b>
-          </div>
-          <div>
-            <b>SALESMAN:</b> {salesman || "—"}
-          </div>
-          {customer?.email && (
-            <div>
-              <b>EMAIL:</b> {customer.email}
-            </div>
-          )}
-          {customer?.phone && (
-            <div>
-              <b>PHONE:</b> {customer.phone}
-            </div>
-          )}
-          {customer?.area && (
-            <div>
-              <b>AREA:</b> {customer.area}
-            </div>
-          )}
-        </div>
-        <div>
-          <div>
-            <b>DATE:</b> {initialDate ? initialDate : "—"}
-          </div>
-          <div>
-            <b>TERMS:</b> {terms || "—"}
-          </div>
-          <div>
-            <b>P.O NO:</b> {poNo || "—"}
-          </div>
-          {status?.toLowerCase() === "completed" && (
-            <div>
-              <b>STATUS:</b>{" "}
-              <span className="text-green-700 font-bold px-2 py-0.5">
-                Completed
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-      {/* Items */}
-      <div className="border border-neutral-300 rounded-lg overflow-x-auto mt-2 mb-2">
-        <table className="min-w-full text-xs align-middle">
-          <thead>
-            <tr
-              className="text-black uppercase tracking-wider text-[11px]"
-              style={{ background: "#ffba20" }}
-            >
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">QTY</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">ITEM DESCRIPTION</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">REMARKS</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT PRICE</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">DISCOUNT/ADD (%)</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">AMOUNT</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={7} className="text-center py-8 text-neutral-400">
-                  No items found.
-                </td>
-              </tr>
-            )}
-            {rows.map((item, idx) => {
-              const line = item.qty * item.unitPrice;
-              const lineAfter = line - (line * (item.discount || 0)) / 100;
-              return (
-                <tr
-                  key={item.id}
-                  className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
-                >
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.qty}</td>
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.unit}</td>
-                  <td className="px-2.5 py-1.5 text-left align-middle">
-                    <span className="font-semibold">{item.description}</span>
-                  </td>
-                  <td className="px-2.5 py-1.5 text-center align-middle">
-                    {item.inStock === true ? "✓" : item.inStock === false ? "✗" : ""}
-                  </td>
-                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">{formatCurrency(item.unitPrice)}</td>
-                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
-                    {item.discount && item.discount !== 0 ? `${item.discount}%` : ""}
-                  </td>
-                  <td className="px-2.5 py-1.5 text-center font-mono font-bold align-middle whitespace-nowrap">
-                    {item.inStock === false ? formatCurrency(0) : formatCurrency(lineAfter)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      {/* Notes + Summary */}
-      <div className="flex flex-row gap-4 mt-5 print:gap-2">
-        <div className="w-2/3 text-xs pr-4">
-          <b>NOTE:</b>
-          <ul className="list-decimal ml-6 space-y-0.5 mt-1">
-            <li>All goods are checked in good condition and complete after received and signed.</li>
-            <li>Cash advances to salesman not allowed.</li>
-            <li>All checks payable to By–Grace Trading only.</li>
-          </ul>
-        </div>
-        <div className="flex flex-col items-end text-xs mt-1 w-1/3">
-          <table className="text-right w-full">
-            <tbody>
-              <tr>
-                <td className="font-semibold py-0.5">
-                  Subtotal (Before Discount):
-                </td>
-                <td className="pl-2 font-mono">{formatCurrency(subtotal)}</td>
-              </tr>
-              <tr>
-                <td className="font-semibold py-0.5">
-                  Discount
-                </td>
-                <td className="pl-2 font-mono text-red-600 font-bold">
-                  -{formatCurrency(totalDiscount)}
-                </td>
-              </tr>
-              <tr>
-                <td className="font-semibold py-0.5">Sales Tax (12%):</td>
-                <td className="pl-2 font-mono">
-                  {formatCurrency(salesTaxOut)}
-                </td>
-              </tr>
-              <tr>
-                <td className="font-semibold py-0.5">
-                  Interest
-                  {interestPercent > 0 ? ` (${interestPercent.toFixed(2)}%)` : ""}
-                </td>
-                <td className="pl-2 font-mono text-blue-600 font-bold">
-                  {interestAmount > 0 ? formatCurrency(interestAmount) : "—"}
-                </td>
-              </tr>
-              <tr>
-                <td className="font-bold py-1.5">Grand Total:</td>
-                <td className="pl-2 font-bold text-green-700 font-mono">
-                  {formatCurrency(grandTotalOut)}
-                </td>
-              </tr>
-              {perTermOut > 0 && (
-                <tr>
-                  <td className="font-semibold py-0.5">Per Term:</td>
-                  <td className="pl-2 font-bold text-blue-700 font-mono">
-                    {formatCurrency(perTermOut)}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------- Main Page (with Modal) -------------------- */
-export default function InvoiceMergedPage() {
+export default function InvoicePage() {
   const params = useParams<{ id?: string }>();
   const router = useRouter();
   const orderId = params?.id;
 
-  const [paperSize, setPaperSize] = useState<"a4" | "letter" | "legal">("a4");
+  const [paperSize, setPaperSize] = useState<PaperKey>("a4");
   const [orders, setOrders] = useState<OrderForList[]>([]);
   const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -485,6 +209,11 @@ export default function InvoiceMergedPage() {
   const [currentDateCompleted, setCurrentDateCompleted] = useState<string | null>(null);
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [loadingItems, setLoadingItems] = useState(false);
+
+  // edit mode/remarks state
+  const [editMode, setEditMode] = useState(false);
+  const [editedRemarks, setEditedRemarks] = useState<Record<string, string>>({});
+  const [savingAll, setSavingAll] = useState(false);
 
   // detail route state
   const [detailCustomer, setDetailCustomer] = useState<CustomerInfo | null>(null);
@@ -604,6 +333,8 @@ export default function InvoiceMergedPage() {
         quantity,
         price,
         discount_percent,
+        fulfilled_quantity,
+        remarks,
         inventory:inventory_id (
           product_name,
           unit,
@@ -637,15 +368,25 @@ export default function InvoiceMergedPage() {
       const mapped: InvoiceItem[] = (rows as unknown as OrderItemRow[]).map(
         (r) => ({
           id: r.id,
-          qty: Number(r.quantity || 0),
+          qty: typeof r.fulfilled_quantity === "number"
+            ? r.fulfilled_quantity
+            : Number(r.quantity || 0),
+          orderedQty: Number(r.quantity || 0),
           unit: r.inventory?.unit || "pcs",
           description: r.inventory?.product_name || "",
           unitPrice: Number(r.price ?? r.inventory?.unit_price ?? 0),
           discount: Number(r.discount_percent ?? 0),
           inStock: (r.inventory?.quantity ?? 0) > 0,
+          remarks: r.remarks ?? undefined,
         })
       );
       setItems(mapped);
+
+      // Initialize remarks for editing
+      const remap: Record<string, string> = {};
+      mapped.forEach(it => (remap[it.id] = it.remarks ?? ""));
+      setEditedRemarks(remap);
+      setEditMode(false);
     } else {
       if (error) console.error("Invoice items fetch error:", error);
       setItems([
@@ -661,6 +402,37 @@ export default function InvoiceMergedPage() {
     }
     setLoadingItems(false);
   };
+
+  // -------- Edit/Save logic for Remarks --------
+  function handleStartEdit() {
+    if (!items) return;
+    const remap: Record<string, string> = {};
+    items.forEach(it => (remap[it.id] = it.remarks ?? ""));
+    setEditedRemarks(remap);
+    setEditMode(true);
+  }
+
+  async function handleSaveAllRemarks() {
+    setSavingAll(true);
+    await Promise.all(
+      Object.entries(editedRemarks).map(([id, remark]) =>
+        supabase.from("order_items").update({ remarks: remark }).eq("id", id)
+      )
+    );
+    // Update parent state to force rerender
+    setItems(prev =>
+      prev
+        ? prev.map(it =>
+            editedRemarks[it.id] !== undefined
+              ? { ...it, remarks: editedRemarks[it.id] }
+              : it
+          )
+        : prev
+    );
+    setEditMode(false);
+    setSavingAll(false);
+    toast.success("Saved!");
+  }
 
   // -------- Detail route (/invoice/[id]) --------
   useEffect(() => {
@@ -692,8 +464,10 @@ export default function InvoiceMergedPage() {
           order_items (
             id,
             quantity,
+            fulfilled_quantity,
             price,
             discount_percent,
+            remarks,
             inventory:inventory_id ( product_name, unit, unit_price, quantity )
           )
         `
@@ -720,12 +494,15 @@ export default function InvoiceMergedPage() {
 
         const mapped: InvoiceItem[] = (row.order_items || []).map((it) => ({
           id: it.id,
-          qty: Number(it.quantity || 0),
+          qty: typeof it.fulfilled_quantity === "number"
+            ? it.fulfilled_quantity
+            : Number(it.quantity || 0),
           unit: it.inventory?.unit || "pcs",
           description: it.inventory?.product_name || "",
           unitPrice: Number(it.price ?? it.inventory?.unit_price ?? 0),
           discount: Number(it.discount_percent ?? 0),
           inStock: (it.inventory?.quantity ?? 0) > 0,
+          remarks: it.remarks ?? undefined,
         }));
 
         setDetailItems(
@@ -894,6 +671,7 @@ export default function InvoiceMergedPage() {
                       if (!open) {
                         setOpenId(null);
                         setItems(null);
+                        setEditMode(false);
                       } else {
                         openInvoice(order);
                       }
@@ -925,7 +703,7 @@ export default function InvoiceMergedPage() {
                         <div className="p-8 text-sm">Fetching items…</div>
                       ) : (
                         <div>
-                          {/* Modal header with TXN, paper size, print */}
+                          {/* Modal header with TXN, paper size, print, edit/save */}
                           <div className="flex items-center justify-between px-4 pt-4 pb-2 border-b border-neutral-100">
                             <div className="flex items-center gap-3">
                               <span
@@ -945,7 +723,7 @@ export default function InvoiceMergedPage() {
                               <select
                                 value={paperSize}
                                 onChange={(e) =>
-                                  setPaperSize(e.target.value as any)
+                                  setPaperSize(e.target.value as PaperKey)
                                 }
                                 className="border rounded px-2 py-1 text-xs"
                                 title="Paper size for printing"
@@ -986,6 +764,26 @@ export default function InvoiceMergedPage() {
                               >
                                 PRINT PDF
                               </button>
+                              {/* EDIT/SAVE BUTTON (never appears in print/pdf) */}
+                              <span className="no-print">
+                                {!editMode ? (
+                                  <button
+                                    className="text-xs bg-yellow-400 hover:bg-yellow-500 text-black font-bold px-4 py-1 rounded shadow ml-1"
+                                    onClick={handleStartEdit}
+                                    disabled={!items}
+                                  >
+                                    ✏️ Edit Receipt
+                                  </button>
+                                ) : (
+                                  <button
+                                    className="text-xs bg-green-600 hover:bg-green-700 text-white font-bold px-4 py-1 rounded shadow ml-1"
+                                    disabled={savingAll}
+                                    onClick={handleSaveAllRemarks}
+                                  >
+                                    💾 Save Changes
+                                  </button>
+                                )}
+                              </span>
                             </div>
                           </div>
                           <div className="px-4 pt-2 pb-4 text-xs text-right text-neutral-700">
@@ -1001,6 +799,10 @@ export default function InvoiceMergedPage() {
                             <DeliveryReceiptModern
                               customer={customerForOrder}
                               initialItems={items}
+                              editMode={editMode}
+                              savingAll={savingAll}
+                              editedRemarks={editedRemarks}
+                              setEditedRemarks={setEditedRemarks}
                               initialDate={initialDate}
                               terms={currentTerms || undefined}
                               salesman={currentSalesman || undefined}
