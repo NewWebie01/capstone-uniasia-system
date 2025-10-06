@@ -517,27 +517,41 @@ export default function CustomerInventoryPage() {
   }, []);
 
   // Pre-fill name/email if logged in and compute type once
-  useEffect(() => {
-    (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        const displayName = getDisplayNameFromMetadata(
-          user.user_metadata,
-          user.email || undefined
-        );
-        const email = user.email || "";
-        setAuthDefaults({ name: displayName || "", email });
-        setCustomerInfo((prev) => ({
-          ...prev,
-          name: prev.name || displayName || "",
-          email: prev.email || email,
-        }));
-        await setTypeFromHistory(email);
-      }
-    })();
-  }, [setTypeFromHistory]);
+ useEffect(() => {
+  (async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      const displayName = getDisplayNameFromMetadata(
+        user.user_metadata,
+        user.email || undefined
+      );
+      const email = user.email || "";
+
+      // Fetch from account_requests to get contact_number
+      const { data: customerData, error } = await supabase
+        .from("account_requests")
+        .select("contact_number")
+        .eq("email", email)
+        .maybeSingle();
+
+      const contactNumber = customerData?.contact_number || "";
+
+      setAuthDefaults({ name: displayName || "", email });
+
+      setCustomerInfo((prev) => ({
+        ...prev,
+        name: prev.name || displayName || "",
+        email: prev.email || email,
+        phone: prev.phone || contactNumber, // ✅ auto-fill phone
+      }));
+
+      await setTypeFromHistory(email);
+    }
+  })();
+}, [setTypeFromHistory]);
+
 
   // Debounce re-check if email ever changes elsewhere (kept for safety)
   useEffect(() => {
@@ -735,9 +749,9 @@ export default function CustomerInventoryPage() {
     if (!customerInfo.email || !customerInfo.email.includes("@")) {
       missing.push("Email");
     }
-    if (!isValidPhone(customerInfo.phone || "")) {
-      missing.push("Phone (11 digits)");
-    }
+    // if (!isValidPhone(customerInfo.phone || "")) {
+    //   missing.push("Phone (11 digits)");
+    // }
     if (!houseStreet || !houseStreet.trim()) {
       missing.push("House & Street");
     }
@@ -762,7 +776,7 @@ export default function CustomerInventoryPage() {
   }, [
     customerInfo.name,
     customerInfo.email,
-    customerInfo.phone,
+    // customerInfo.phone,
     houseStreet,
     regionCode,
     provinceCode,
@@ -1034,57 +1048,56 @@ export default function CustomerInventoryPage() {
         <>
           <div className="overflow-x-auto rounded-lg shadow mb-3">
             <table className="w-full table-fixed bg-white text-sm">
-              <thead className="bg-[#ffba20] text-black text-left">
-                <tr>
-                  <th className="py-2 px-4 w-2/6">Product Name</th>
-                  <th className="py-2 px-4 w-1/6">Category</th>
-                  <th className="py-2 px-4 w-1/6">Subcategory</th>
-                  <th className="py-2 px-4 w-1/6">Unit Price</th>
-                  <th className="py-2 px-4 w-1/6">Status</th>
-                  <th className="py-2 px-4 w-1/6">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pageItems.map((item) => (
-                  <tr key={item.id} className="border-b hover:bg-gray-100">
-                    <td className="py-2 px-4 pl-6 text-left">
-                      <button
-                        className="text-[#2f63b7] hover:underline font-normal text-left"
-                        onClick={() => openImageModal(item)}
-                        title={
-                          item.image_url
-                            ? "View product image"
-                            : "No image available"
-                        }
-                        style={{ wordBreak: "break-word" }}
-                      >
-                        {item.product_name}
-                      </button>
-                    </td>
-                    <td className="py-2 px-4 text-left">{item.category}</td>
-                    <td className="py-2 px-4 text-left">{item.subcategory}</td>
-                    <td className="py-2 px-4 text-left">
-                      {formatPeso(item.unit_price)}
-                    </td>
-                    <td className="py-2 px-4 text-left">{item.status}</td>
-                    <td className="py-2 px-4">
-                      <button
-                        className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
-                        onClick={() => handleAddToCartClick(item)}
-                      >
-                        Add to Cart
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {pageItems.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="text-center py-6 text-gray-500">
-                      No products found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
+<thead className="bg-[#ffba20] text-black text-left">
+  <tr>
+    <th className="py-2 px-4 w-2/6">Product Name</th>
+    <th className="py-2 px-4 w-1/6">Category</th>
+    <th className="py-2 px-4 w-1/6">Subcategory</th>
+    <th className="py-2 px-4 w-1/6">Unit</th> {/* NEW */}
+    <th className="py-2 px-4 w-1/6">Unit Price</th>
+    <th className="py-2 px-4 w-1/6">Status</th>
+    <th className="py-2 px-4 w-1/6">Action</th>
+  </tr>
+</thead>
+
+<tbody>
+  {pageItems.map((item) => (
+    <tr key={item.id} className="border-b hover:bg-gray-100">
+      <td className="py-2 px-4 pl-6 text-left">
+        <button
+          className="text-[#2f63b7] hover:underline font-normal text-left"
+          onClick={() => openImageModal(item)}
+          title={item.image_url ? "View product image" : "No image available"}
+          style={{ wordBreak: "break-word" }}
+        >
+          {item.product_name}
+        </button>
+      </td>
+      <td className="py-2 px-4 text-left">{item.category}</td>
+      <td className="py-2 px-4 text-left">{item.subcategory}</td>
+      <td className="py-2 px-4 text-left">{item.unit || "—"}</td> {/* NEW */}
+      <td className="py-2 px-4 text-left">{formatPeso(item.unit_price)}</td>
+      <td className="py-2 px-4 text-left">{item.status}</td>
+      <td className="py-2 px-4">
+        <button
+          className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
+          onClick={() => handleAddToCartClick(item)}
+        >
+          Add to Cart
+        </button>
+      </td>
+    </tr>
+  ))}
+  {/* Empty state stays at the end */}
+  {pageItems.length === 0 && (
+    <tr>
+      <td colSpan={7} className="text-center py-6 text-gray-500">
+        No products found.
+      </td>
+    </tr>
+  )}
+</tbody>
+
             </table>
           </div>
 
@@ -1386,20 +1399,14 @@ export default function CustomerInventoryPage() {
                   readOnly
                 />
                 {/* Editable phone & contact */}
-                <input
-                  type="tel"
-                  placeholder="Phone (11 digits)"
-                  className="border px-3 py-2 rounded"
-                  inputMode="numeric"
-                  pattern="\d*"
-                  maxLength={11}
-                  value={customerInfo.phone}
-                  onChange={(e) => {
-                    const value = e.target.value.replace(/\D/g, "");
-                    if (value.length <= 11)
-                      setCustomerInfo({ ...customerInfo, phone: value });
-                  }}
-                />
+<input
+  type="tel"
+  placeholder="Phone (11 digits)"
+  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+  value={customerInfo.phone}
+  readOnly
+/>
+
                 <input
                   placeholder="Contact Person"
                   className="border px-3 py-2 rounded"
