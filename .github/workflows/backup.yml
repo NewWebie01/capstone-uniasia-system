@@ -1,67 +1,38 @@
+# .github/workflows/backup.yml
 name: Supabase DB Backup
 
 on:
   schedule:
-    # ~01:00 AM Asia/Manila (UTC+8)
-    - cron: "0 17 * * *"
+    - cron: "0 17 * * *"   # ~01:00 AM Asia/Manila
   workflow_dispatch:
 
 jobs:
   backup:
     runs-on: ubuntu-latest
     steps:
-      - name: Install tools (pg client + dnsutils)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client dnsutils
+      - name: Install pg client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: Dump database (force IPv4 + SSL, robust DNS)
+      - name: Dump database (Supavisor IPv4 pooler)
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -e
-
           if [ -z "$DATABASE_URL" ]; then
-            echo "ERROR: SUPABASE_DB_URL secret is not set"
-            exit 1
+            echo "ERROR: SUPABASE_DB_URL secret is missing"; exit 1
           fi
+          # Guard: fail fast if you accidentally pasted a Direct (IPv6) host
+          HOST=$(echo "$DATABASE_URL" | sed -E 's#.*@([^:/?]+).*#\1#')
+          case "$HOST" in
+            *.pooler.supabase.com) echo "Using Supavisor pooler (IPv4): $HOST" ;;
+            *) echo "ERROR: Your URL host is '$HOST' (Direct/IPv6). In CI use Supavisor Session mode from Connect."; exit 1 ;;
+          esac
 
-          URI="$DATABASE_URL"
-
-          # Parse connection pieces from the URI
-          HOST=$(echo "$URI" | sed -E 's#.*@([^:/?]+).*#\1#')
-          PORT=$(echo "$URI" | sed -E 's#.*:([0-9]+)/.*#\1#')
-          DB=$(echo "$URI"   | sed -E 's#.*/([^/?]+).*#\1#')
-          USER=$(echo "$URI" | sed -E 's#postgresql://([^:]+):.*#\1#')
-          PASS=$(echo "$URI" | sed -E 's#postgresql://[^:]+:([^@]+)@.*#\1#')
-
-          # Fallback if port not present
-          if [ -z "$PORT" ]; then PORT=5432; fi
-
-          # Resolve IPv4 address to avoid IPv6 "Network is unreachable" on runners
-          ADDR=$(getent ahostsv4 "$HOST" | awk '{print $1; exit}') || true
-          if [ -z "$ADDR" ]; then
-            echo "getent failed; trying dig..."
-            ADDR=$(dig +short A "$HOST" | head -n1) || true
-          fi
-          if [ -z "$ADDR" ]; then
-            echo "ERROR: Could not resolve an IPv4 address for $HOST"
-            exit 1
-          fi
-
-          echo "Resolved $HOST -> $ADDR (IPv4)"
-
-          # Build a key/value DSN forcing IPv4 and SSL
-          CONN="hostaddr=$ADDR host=$HOST port=$PORT dbname=$DB user=$USER password=$PASS sslmode=require"
-
+          export PGSSLMODE=require
           mkdir -p backups
           TS=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
-
-          # Dump schema and data separately (you can switch to a single dump file if you prefer)
-          pg_dump "$CONN" --schema-only > "backups/schema_$TS.sql"
-          pg_dump "$CONN" --data-only  > "backups/data_$TS.sql"
-
-          # Pack into one artifact
+          pg_dump "$DATABASE_URL" --schema-only > "backups/schema_$TS.sql"
+          pg_dump "$DATABASE_URL" --data-only  > "backups/data_$TS.sql"
           tar -czf "supabase-backup_$TS.tar.gz" -C backups .
           rm -rf backups
 
