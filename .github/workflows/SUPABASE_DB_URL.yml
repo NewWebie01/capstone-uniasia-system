@@ -1,0 +1,31 @@
+name: Supabase DB Backup
+
+on:
+  schedule:
+    - cron: "0 17 * * *"   # runs ~01:00 AM Asia/Manila
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install pg client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Dump database
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          mkdir -p backups
+          TS=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
+          pg_dump "$DATABASE_URL" --format=plain --schema-only > backups/schema_$TS.sql
+          pg_dump "$DATABASE_URL" --format=plain --data-only  > backups/data_$TS.sql
+          tar -czf supabase-backup_$TS.tar.gz -C backups .
+          rm -rf backups
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-backup
+          path: supabase-backup_*.tar.gz
+          retention-days: 7
