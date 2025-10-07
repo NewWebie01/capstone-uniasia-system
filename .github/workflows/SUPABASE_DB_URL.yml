@@ -1,31 +1,33 @@
-name: Supabase DB Backup
+- name: Dump database (force IPv4 + SSL)
+  env:
+    DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+  run: |
+    set -e
 
-on:
-  schedule:
-    - cron: "0 17 * * *"   # runs ~01:00 AM Asia/Manila
-  workflow_dispatch:
+    # 1) Extract host/port/db/user/pass from the URI (basic, works for standard Supabase URIs)
+    URI="$DATABASE_URL"
+    HOST=$(echo "$URI" | sed -E 's#.*@([^:/?]+).*#\1#')
+    PORT=$(echo "$URI" | sed -E 's#.*:([0-9]+)/.*#\1#')
+    DB=$(echo "$URI"   | sed -E 's#.*/([^/?]+).*#\1#')
+    USER=$(echo "$URI" | sed -E 's#postgresql://([^:]+):.*#\1#')
+    PASS=$(echo "$URI" | sed -E 's#postgresql://[^:]+:([^@]+)@.*#\1#')
 
-jobs:
-  backup:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install pg client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+    # 2) Resolve **IPv4** address (avoid IPv6 on runners)
+    ADDR=$(getent ahostsv4 "$HOST" | awk '{print $1; exit}')
+    echo "Resolved $HOST -> $ADDR (IPv4)"
 
-      - name: Dump database
-        env:
-          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
-        run: |
-          mkdir -p backups
-          TS=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
-          pg_dump "$DATABASE_URL" --format=plain --schema-only > backups/schema_$TS.sql
-          pg_dump "$DATABASE_URL" --format=plain --data-only  > backups/data_$TS.sql
-          tar -czf supabase-backup_$TS.tar.gz -C backups .
-          rm -rf backups
+    # 3) Tell libpq to use IPv4 + SSL
+    export PGHOST="$HOST"
+    export PGHOSTADDR="$ADDR"
+    export PGPORT="$PORT"
+    export PGDATABASE="$DB"
+    export PGUSER="$USER"
+    export PGPASSWORD="$PASS"
+    export PGSSLMODE="require"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: supabase-backup
-          path: supabase-backup_*.tar.gz
-          retention-days: 7
+    mkdir -p backups
+    TS=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
+    pg_dump --schema-only > "backups/schema_$TS.sql"
+    pg_dump --data-only  > "backups/data_$TS.sql"
+    tar -czf "supabase-backup_$TS.tar.gz" -C backups .
+    rm -rf backups
