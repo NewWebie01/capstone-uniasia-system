@@ -4,9 +4,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { CreditCard, Upload, ReceiptText, FileImage, Wallet, Info } from "lucide-react";
+import { Upload, ReceiptText, FileImage, Wallet, Info } from "lucide-react";
 
-/* ----------------------------- Date & Money ----------------------------- */
+/* ----------------------------- Config ----------------------------- */
+const CHEQUE_BUCKET = "payments-cheques";
+
+/* ----------------------------- Money ------------------------------ */
 const formatCurrency = (n: number) =>
   (Number(n) || 0).toLocaleString("en-PH", {
     style: "currency",
@@ -31,7 +34,7 @@ type ItemRow = {
 };
 
 type OrderRow = {
-  id: number;
+  id: string | number; // bigint or uuid
   total_amount: number | null;
   status: string | null;
   truck_delivery_id?: number | null;
@@ -42,7 +45,7 @@ type OrderRow = {
 };
 
 type CustomerTx = {
-  id: number;
+  id: string | number; // uuid or bigint
   name: string | null;
   code: string | null; // TXN
   contact_person?: string | null;
@@ -55,8 +58,8 @@ type CustomerTx = {
 
 type PaymentRow = {
   id: string;
-  customer_id: number;
-  order_id: number;
+  customer_id: string | number;
+  order_id: string | number;
   amount: number;
   method: string | null;
   cheque_number: string | null;
@@ -66,17 +69,19 @@ type PaymentRow = {
   created_at: string | null;
 };
 
+/* ------------------------------ Helpers ------------------------------ */
+const inList = (vals: (string | number)[]) =>
+  vals.map((v) => (typeof v === "string" ? `"${v}"` : String(v))).join(",");
+
 /* ------------------------------ Component ------------------------------ */
 export default function CustomerPaymentsPage() {
   const [loading, setLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState<string | null>(null);
 
-  // TXNs fetched with the SAME query as Orders page
   const [txns, setTxns] = useState<CustomerTx[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const paymentsSubKey = useRef<string>("");
 
-  // Selected TXN
   const [selectedTxnCode, setSelectedTxnCode] = useState<string>("");
 
   // Upload form state
@@ -141,8 +146,7 @@ export default function CustomerPaymentsPage() {
         const txList = (customers as CustomerTx[]) || [];
         setTxns(txList);
 
-        // Load payments across these customer rows (for balances)
-        const customerIds = txList.map((c) => c.id);
+        const customerIds = txList.map((c) => String(c.id));
         if (customerIds.length) {
           const { data: pays, error: payErr } = await supabase
             .from("payments")
@@ -152,6 +156,8 @@ export default function CustomerPaymentsPage() {
             .in("customer_id", customerIds)
             .order("created_at", { ascending: false });
           if (!payErr) setPayments((pays as PaymentRow[]) || []);
+        } else {
+          setPayments([]);
         }
       } catch (e) {
         console.error(e);
@@ -164,25 +170,24 @@ export default function CustomerPaymentsPage() {
 
   /* ----------------------------- Realtime payments ----------------------------- */
   useEffect(() => {
-    const key = `payments:${(txns || []).map((c) => c.id).join(",")}`;
-    if (!key || paymentsSubKey.current === key) return;
+    const ids = (txns || []).map((c) => String(c.id));
+    const key = `payments:${ids.join(",")}`;
+    if (!ids.length || paymentsSubKey.current === key) return;
     paymentsSubKey.current = key;
 
+    const filter = `customer_id=in.(${inList(ids)})`;
     const channel = supabase.channel("realtime-payments");
     channel.on(
       "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "payments",
-        filter: `customer_id=in.(${(txns || []).map((c) => c.id).join(",")})`,
-      },
+      { event: "*", schema: "public", table: "payments", filter },
       (payload) => {
         if (payload.eventType === "INSERT") {
           setPayments((prev) => [payload.new as PaymentRow, ...prev]);
         } else if (payload.eventType === "UPDATE") {
           setPayments((prev) =>
-            prev.map((p) => (p.id === (payload.new as any)?.id ? (payload.new as PaymentRow) : p))
+            prev.map((p) =>
+              p.id === (payload.new as any)?.id ? (payload.new as PaymentRow) : p
+            )
           );
         } else if (payload.eventType === "DELETE") {
           setPayments((prev) => prev.filter((p) => p.id !== (payload.old as any)?.id));
@@ -195,7 +200,7 @@ export default function CustomerPaymentsPage() {
     };
   }, [txns]);
 
-  /* --------------------------- Helpers (same calc as Orders page) --------------------------- */
+  /* --------------------------- Totals (same as Orders page) --------------------------- */
   function computeFromOrder(o?: OrderRow | null) {
     const items = o?.order_items ?? [];
     const subtotal = items.reduce((s, it) => {
@@ -221,7 +226,6 @@ export default function CustomerPaymentsPage() {
     return { subtotal, totalDiscount, salesTax, grandTotal, perTerm };
   }
 
-  // Build TXN options => completed orders only
   const txnOptions = useMemo(() => {
     const out: { code: string; order: OrderRow }[] = [];
     for (const c of txns) {
@@ -234,7 +238,6 @@ export default function CustomerPaymentsPage() {
     return out;
   }, [txns]);
 
-  // Selected pack
   const selectedPack = useMemo(() => {
     if (!selectedTxnCode) return null;
     const hit = txnOptions.find((t) => t.code === selectedTxnCode);
@@ -242,13 +245,12 @@ export default function CustomerPaymentsPage() {
 
     const totals = computeFromOrder(hit.order);
     const paid = payments
-      .filter((p) => p.order_id === hit.order.id)
+      .filter((p) => String(p.order_id) === String(hit.order.id))
       .reduce((s, p) => s + (Number(p.amount) || 0), 0);
     const balance = Math.max(totals.grandTotal - paid, 0);
     return { code: selectedTxnCode, order: hit.order, totals, paid, balance };
   }, [selectedTxnCode, txnOptions, payments]);
 
-  // Overall balance (credit customers)
   const isCredit = useMemo(() => {
     const m = txns[0];
     return ((m as any)?.payment_type || "").toLowerCase() === "credit";
@@ -259,28 +261,43 @@ export default function CustomerPaymentsPage() {
     return txnOptions.reduce((sum, t) => {
       const { grandTotal } = computeFromOrder(t.order);
       const paid = payments
-        .filter((p) => p.order_id === t.order.id)
+        .filter((p) => String(p.order_id) === String(t.order.id))
         .reduce((s, p) => s + (Number(p.amount) || 0), 0);
       return sum + Math.max(grandTotal - paid, 0);
     }, 0);
   }, [txnOptions, payments, isCredit]);
 
   /* ------------------------------ Upload logic ----------------------------- */
-  async function uploadChequeImage(file: File, customerId: number, orderId: number) {
-    const ext = file.name.split(".").pop() || "jpg";
-    const path = `${customerId}/${orderId}/${Date.now()}-${Math.random()
+  async function uploadChequeImage(
+    file: File,
+    customerId: string | number,
+    orderId: string | number
+  ) {
+    const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+    const safeCust = String(customerId);
+    const safeOrder = String(orderId);
+    const path = `${safeCust}/${safeOrder}/${Date.now()}-${Math.random()
       .toString(36)
       .slice(2)}.${ext}`;
+
     const { error } = await supabase.storage
-      .from("payments-cheques")
+      .from(CHEQUE_BUCKET)
       .upload(path, file, { cacheControl: "3600", upsert: false });
-    if (error) throw error;
-    const { data: pub } = supabase.storage.from("payments-cheques").getPublicUrl(path);
-    return pub?.publicUrl ?? null;
+
+    if (error) {
+      const msg = (error as any)?.message || "Upload failed";
+      throw new Error(`Storage upload error: ${msg}`);
+    }
+
+    const pub = supabase.storage.from(CHEQUE_BUCKET).getPublicUrl(path);
+    const publicUrl = pub?.data?.publicUrl ?? null;
+    if (!publicUrl) throw new Error("Could not get public URL for uploaded file.");
+    return publicUrl;
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
     const me = txns[0];
     if (!me?.id) {
       toast.error("Please sign in to continue.");
@@ -290,6 +307,7 @@ export default function CustomerPaymentsPage() {
       toast.error("Please select a transaction (TXN).");
       return;
     }
+
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       toast.error("Enter a valid amount.");
@@ -302,12 +320,15 @@ export default function CustomerPaymentsPage() {
 
     setSubmitting(true);
     try {
-      let image_url: string | null = null;
-      if (file) image_url = await uploadChequeImage(file, me.id, selectedPack.order.id);
+      const meId = String(me.id);
+      const orderId = String(selectedPack.order.id);
 
-      const { error } = await supabase.from("payments").insert({
-        customer_id: me.id,
-        order_id: selectedPack.order.id, // internal link; not shown in UI
+      let image_url: string | null = null;
+      if (file) image_url = await uploadChequeImage(file, meId, orderId);
+
+      const { error: insertErr } = await supabase.from("payments").insert({
+        customer_id: meId,
+        order_id: orderId,
         amount: amt,
         method: "Cheque",
         cheque_number: chequeNumber || null,
@@ -315,7 +336,8 @@ export default function CustomerPaymentsPage() {
         cheque_date: chequeDate || null,
         image_url,
       });
-      if (error) throw error;
+
+      if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
 
       toast.success("✅ Cheque submitted. We’ll verify it shortly.");
       setAmount("");
@@ -323,9 +345,9 @@ export default function CustomerPaymentsPage() {
       setBankName("");
       setChequeDate("");
       setFile(null);
-    } catch (err) {
-      console.error(err);
-      toast.error("Failed to submit cheque.");
+    } catch (err: any) {
+      console.error("Submit failed:", err?.message || err);
+      toast.error(err?.message || "Failed to submit cheque.");
     } finally {
       setSubmitting(false);
     }
@@ -377,7 +399,7 @@ export default function CustomerPaymentsPage() {
                   {txnOptions.map(({ code, order }, idx) => {
                     const { grandTotal } = computeFromOrder(order);
                     const paid = payments
-                      .filter((p) => p.order_id === order.id)
+                      .filter((p) => String(p.order_id) === String(order.id))
                       .reduce((s, p) => s + (Number(p.amount) || 0), 0);
                     const bal = Math.max(grandTotal - paid, 0);
 
@@ -402,7 +424,6 @@ export default function CustomerPaymentsPage() {
               </table>
             </div>
 
-            {/* Cash notice */}
             {!isCredit && (
               <div className="mt-4 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-900 px-4 py-3 text-sm">
                 <Info className="h-4 w-4 mt-0.5" />
@@ -536,7 +557,7 @@ export default function CustomerPaymentsPage() {
           </form>
         </div>
 
-        {/* Items & Totals for selected TXN (same totals math) */}
+        {/* Items & Totals for selected TXN */}
         {selectedPack && (
           <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
             <h2 className="text-lg font-semibold mb-3">
@@ -552,14 +573,10 @@ export default function CustomerPaymentsPage() {
                   >
                     <th className="py-2.5 px-3 text-center font-bold">QTY</th>
                     <th className="py-2.5 px-3 text-center font-bold">UNIT</th>
-                    <th className="py-2.5 px-3 text-left font-bold">
-                      ITEM DESCRIPTION
-                    </th>
+                    <th className="py-2.5 px-3 text-left font-bold">ITEM DESCRIPTION</th>
                     <th className="py-2.5 px-3 text-center font-bold">REMARKS</th>
                     <th className="py-2.5 px-3 text-center font-bold">UNIT PRICE</th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      DISCOUNT/ADD (%)
-                    </th>
+                    <th className="py-2.5 px-3 text-center font-bold">DISCOUNT/ADD (%)</th>
                     <th className="py-2.5 px-3 text-center font-bold">AMOUNT</th>
                   </tr>
                 </thead>
@@ -580,29 +597,20 @@ export default function CustomerPaymentsPage() {
                             .includes("in stock");
 
                     return (
-                      <tr
-                        key={idx}
-                        className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
-                      >
+                      <tr key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>
                         <td className="py-2.5 px-3 text-center font-mono">{qty}</td>
                         <td className="py-2.5 px-3 text-center font-mono">{unit}</td>
                         <td className="py-2.5 px-3">
                           <span className="font-semibold">{desc}</span>
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          {inStockFlag
-                            ? "✓"
-                            : it.inventory?.status
-                            ? it.inventory.status
-                            : "✗"}
+                          {inStockFlag ? "✓" : it.inventory?.status ? it.inventory.status : "✗"}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
                           {formatCurrency(unitPrice)}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
-                          {typeof it.discount_percent === "number"
-                            ? `${it.discount_percent}%`
-                            : ""}
+                          {typeof it.discount_percent === "number" ? `${it.discount_percent}%` : ""}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono font-bold whitespace-nowrap">
                           {formatCurrency(amount)}
@@ -621,16 +629,13 @@ export default function CustomerPaymentsPage() {
               </table>
             </div>
 
-            {/* Totals box — SAME calc as Orders page */}
             <div className="flex flex-row gap-4 mt-5">
               <div className="w-2/3 text-xs pr-4" />
               <div className="flex flex-col items-end text-xs mt-1 w-1/3">
                 <table className="text-right w-full">
                   <tbody>
                     <tr>
-                      <td className="font-semibold py-0.5">
-                        Subtotal (Before Discount):
-                      </td>
+                      <td className="font-semibold py-0.5">Subtotal (Before Discount):</td>
                       <td className="pl-2 font-mono">
                         {formatCurrency(selectedPack.totals.subtotal)}
                       </td>
@@ -663,9 +668,7 @@ export default function CustomerPaymentsPage() {
                     )}
                     <tr>
                       <td className="font-semibold py-0.5">Paid:</td>
-                      <td className="pl-2 font-mono">
-                        {formatCurrency(selectedPack.paid)}
-                      </td>
+                      <td className="pl-2 font-mono">{formatCurrency(selectedPack.paid)}</td>
                     </tr>
                     <tr>
                       <td className="font-semibold py-0.5">Remaining Balance:</td>
@@ -680,7 +683,6 @@ export default function CustomerPaymentsPage() {
           </div>
         )}
 
-        {/* Cash note when not credit */}
         {!isCredit && (
           <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
             <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-900 px-4 py-3 text-sm">
