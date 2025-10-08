@@ -46,7 +46,8 @@ const Menus: {
   { title: "Returns", icon: RotateCcw, href: "/returns" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
-  { title: "Account Request", icon: UserPlus, href: "/account-request" }, // ADDED
+  { title: "Account Request", icon: UserPlus, href: "/account-request" },
+  { title: "Backup & Restore", icon: RotateCcw, href: "/backups" },
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
