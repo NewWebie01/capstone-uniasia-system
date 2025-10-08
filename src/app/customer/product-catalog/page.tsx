@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
+import { useRouter } from "next/navigation";
 import supabase from "@/config/supabaseClient";
 
 /* ----------------------------- Limits ----------------------------- */
@@ -266,6 +267,8 @@ const loadPhoneForEmail = async (email: string): Promise<string> => {
 
 /* -------------------------------- Component ------------------------------- */
 export default function CustomerInventoryPage() {
+  const router = useRouter();
+
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -282,6 +285,12 @@ export default function CustomerInventoryPage() {
     customer: CustomerInfo;
     items: CartItem[];
   } | null>(null);
+
+  // NEW: post-submit choice modal state
+  const [showAfterSubmitModal, setShowAfterSubmitModal] = useState(false);
+  const [lastOrderId, setLastOrderId] = useState<string | null>(null);
+  const [lastTxnCode, setLastTxnCode] = useState<string | null>(null);
+  const [lastOrderTotal, setLastOrderTotal] = useState<number>(0);
 
   const [txn, setTxn] = useState("");
   const [trackingResult, setTrackingResult] = useState<any | null>(null);
@@ -966,7 +975,7 @@ export default function CustomerInventoryPage() {
         .single();
       if (custErr) throw custErr;
 
-      const customerId = cust.id;
+      const customerId = cust.id as string;
       const totalAmount = cartSum(items);
 
       const { data: ord, error: ordErr } = await supabase
@@ -983,7 +992,7 @@ export default function CustomerInventoryPage() {
         .single();
       if (ordErr) throw ordErr;
 
-      const orderId = ord.id;
+      const orderId = ord.id as string;
       const rows = items.map((ci) => ({
         order_id: orderId,
         inventory_id: ci.item.id,
@@ -995,7 +1004,15 @@ export default function CustomerInventoryPage() {
         .insert(rows);
       if (itemsErr) throw itemsErr;
 
+      // ✅ Success UI
       toast.success("Your order has been submitted successfully!");
+
+      // Keep data for Payments routing
+      const codeForPayments =
+        (customerPayload.code as string) || (cust.code as string) || "";
+      setLastOrderId(orderId);
+      setLastTxnCode(codeForPayments || null);
+      setLastOrderTotal(totalAmount);
 
       // Reset UI but KEEP identity defaults (incl. phone)
       setShowFinalPopup(false);
@@ -1026,6 +1043,9 @@ export default function CustomerInventoryPage() {
 
       const emailUsed = customer.email || authDefaults.email;
       if (emailUsed) await setTypeFromHistory(emailUsed);
+
+      // 🔔 Show the next-step modal
+      setShowAfterSubmitModal(true);
     } catch (e: any) {
       console.error("Order submission error:", e.message);
       toast.error("Something went wrong. Please try again.");
@@ -1110,6 +1130,14 @@ export default function CustomerInventoryPage() {
       }
     })();
   }, [showCartPopup]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---------------------- Navigation helpers ---------------------- */
+  const goToPayments = () => {
+    const qp = new URLSearchParams();
+    if (lastOrderId) qp.set("orderId", lastOrderId);
+    if (lastTxnCode) qp.set("code", lastTxnCode);
+    router.push(`/customer/payments${qp.toString() ? `?${qp.toString()}` : ""}`);
+  };
 
   /* --------------------------------- UI --------------------------------- */
   return (
@@ -1901,9 +1929,11 @@ export default function CustomerInventoryPage() {
             <div className="shrink-0 flex justify-end gap-2 mt-4">
               <button
                 onClick={() => !placingOrder && setShowFinalPopup(false)}
-                disabled={placingOrder}
+                disabled={placingOrder || !isConfirmOrderEnabled}
                 className={`px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition ${
-                  placingOrder ? "opacity-60 cursor-not-allowed" : ""
+                  placingOrder || !isConfirmOrderEnabled
+                    ? "opacity-60 cursor-not-allowed"
+                    : ""
                 }`}
               >
                 Cancel
@@ -1925,6 +1955,69 @@ export default function CustomerInventoryPage() {
                 ) : (
                   "Confirm Order"
                 )}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* ✅ After-Submit Choice Modal */}
+      {showAfterSubmitModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 260, damping: 22 }}
+            className="bg-white w-full max-w-md p-6 rounded-2xl shadow-2xl ring-1 ring-black/5"
+          >
+            <div className="flex items-start justify-between">
+              <h3 className="text-xl font-semibold">Order Submitted</h3>
+              <button
+                className="text-gray-500 hover:text-black"
+                onClick={() => setShowAfterSubmitModal(false)}
+                aria-label="Close"
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-3 text-sm text-gray-700 space-y-2">
+              <p>Your order was placed successfully.</p>
+<div className="rounded-lg bg-gray-50 p-3 ring-1 ring-black/5">
+  <div className="flex justify-between">
+    <span className="text-gray-500">Transaction Code:</span>
+    <span className="font-medium">{lastTxnCode || "—"}</span>
+  </div>
+  {/* Removed Order ID row */}
+  {/* <div className="flex justify-between">
+    <span className="text-gray-500">Order ID:</span>
+    <span className="font-mono text-xs">{lastOrderId || "—"}</span>
+  </div> */}
+  <div className="flex justify-between">
+    <span className="text-gray-500">Estimated Total:</span>
+    <span className="font-semibold">{formatPeso(lastOrderTotal)}</span>
+  </div>
+</div>
+
+              <p className="mt-2">
+                Would you like to proceed to the <strong>Payments</strong> page
+                now, or stay here to place another order?
+              </p>
+            </div>
+
+            <div className="mt-5 flex gap-2 justify-end">
+              <button
+                onClick={() => setShowAfterSubmitModal(false)}
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
+              >
+                Stay & Order More
+              </button>
+              <button
+                onClick={goToPayments}
+                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition"
+              >
+                Proceed to Payments
               </button>
             </div>
           </motion.div>
