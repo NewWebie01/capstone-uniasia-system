@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { FileImage, ReceiptText, Search, Info, X } from "lucide-react";
+import { FileImage, Search, Info } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -111,7 +111,7 @@ export default function PaymentHistoryPage() {
               "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, created_at, status, received_at, received_by"
             )
             .in("customer_id", ids)
-            .eq("status", "received")
+            .in("status", ["received", "rejected"]) // <-- include both
             .order("created_at", { ascending: false });
           if (pErr) throw pErr;
           setPayments((pays as PaymentRow[]) || []);
@@ -138,6 +138,8 @@ export default function PaymentHistoryPage() {
       .map((v) => (typeof v === "string" ? `"${v}"` : String(v)))
       .join(",")})`;
 
+    const included = new Set(["received", "rejected"]);
+
     const channel = supabase.channel("realtime-payments-history");
     channel.on(
       "postgres_changes",
@@ -146,28 +148,34 @@ export default function PaymentHistoryPage() {
         const newRow = payload.new as PaymentRow | undefined;
         const oldRow = payload.old as PaymentRow | undefined;
 
+        const newStatus = (newRow?.status || "").toLowerCase();
+        const oldStatus = (oldRow?.status || "").toLowerCase();
+
         if (payload.eventType === "INSERT") {
-          if ((newRow?.status || "").toLowerCase() === "received") {
+          if (included.has(newStatus)) {
             setPayments((prev) => [newRow!, ...prev]);
           }
         } else if (payload.eventType === "UPDATE") {
-          const newStatus = (newRow?.status || "").toLowerCase();
-          const oldStatus = (oldRow?.status || "").toLowerCase();
+          const newIn = included.has(newStatus);
+          const oldIn = included.has(oldStatus);
 
-          if (oldStatus !== "received" && newStatus === "received") {
+          if (!oldIn && newIn) {
+            // entered included set
             setPayments((prev) => {
               const exists = prev.some((p) => p.id === newRow!.id);
               return exists
                 ? prev.map((p) => (p.id === newRow!.id ? newRow! : p))
                 : [newRow!, ...prev];
             });
-          } else if (oldStatus === "received" && newStatus !== "received") {
+          } else if (oldIn && !newIn) {
+            // left included set
             setPayments((prev) => prev.filter((p) => p.id !== oldRow!.id));
-          } else if (newStatus === "received") {
+          } else if (newIn && oldIn) {
+            // stayed within included set (e.g., received -> rejected or edits)
             setPayments((prev) => prev.map((p) => (p.id === newRow!.id ? newRow! : p)));
           }
         } else if (payload.eventType === "DELETE") {
-          if ((oldRow?.status || "").toLowerCase() === "received") {
+          if (included.has(oldStatus)) {
             setPayments((prev) => prev.filter((p) => p.id !== oldRow!.id));
           }
         }
@@ -208,8 +216,12 @@ export default function PaymentHistoryPage() {
     });
   }, [payments, q, method, codeByCustomerId]);
 
-  const totalPaid = useMemo(
-    () => filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0),
+  // Sum only the received ones for the footer
+  const totalReceived = useMemo(
+    () =>
+      filtered
+        .filter((r) => (r.status || "").toLowerCase() === "received")
+        .reduce((s, r) => s + (Number(r.amount) || 0), 0),
     [filtered]
   );
 
@@ -228,13 +240,12 @@ export default function PaymentHistoryPage() {
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
         <div className="flex items-center gap-3">
-          
           <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
             Payment History
           </h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Payments appear here after an admin <b>marks your cheque as Received</b>.
+          Cheques appear here after an admin marks them as <b>Received</b> or <b>Rejected</b>.
         </p>
 
         {/* Filters */}
@@ -273,12 +284,28 @@ export default function PaymentHistoryPage() {
                   <th className={cellNowrap}>Bank</th>
                   <th className={cellNowrap}>Cheque Date</th>
                   <th className={cellNowrap}>Image</th>
+                  <th className={cellNowrap}>Status</th>
                 </tr>
               </thead>
 
               <tbody className="align-middle">
                 {filtered.map((p, idx) => {
                   const code = codeByCustomerId.get(String(p.customer_id)) || "—";
+                  const s = (p.status || "").toLowerCase();
+                  const statusBadge = (
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        s === "received"
+                          ? "bg-green-100 text-green-800"
+                          : s === "rejected"
+                          ? "bg-red-100 text-red-800"
+                          : "bg-yellow-100 text-yellow-900"
+                      }`}
+                    >
+                      {s === "received" ? "Received" : s === "rejected" ? "Rejected" : "Pending"}
+                    </span>
+                  );
+
                   return (
                     <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
                       <td className="py-2.5 px-3 whitespace-nowrap">
@@ -313,14 +340,15 @@ export default function PaymentHistoryPage() {
                           "—"
                         )}
                       </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">{statusBadge}</td>
                     </tr>
                   );
                 })}
 
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="py-10 text-center text-neutral-400">
-                      {loading ? "Loading…" : "No received payments yet."}
+                    <td colSpan={9} className="py-10 text-center text-neutral-400">
+                      {loading ? "Loading…" : "No reviewed cheques yet."}
                     </td>
                   </tr>
                 )}
@@ -329,12 +357,13 @@ export default function PaymentHistoryPage() {
               {filtered.length > 0 && (
                 <tfoot>
                   <tr className="bg-neutral-50 border-t">
-                    <td className="py-2.5 px-3 font-semibold">Total</td>
+                    <td className="py-2.5 px-3 font-semibold">Total Received</td>
                     <td />
                     <td className="py-2.5 px-3 font-bold font-mono">
-                      {formatCurrency(totalPaid)}
+                      {formatCurrency(totalReceived)}
                     </td>
-                    <td colSpan={5} />
+                    {/* Method, Cheque #, Bank, Cheque Date, Image, Status */}
+                    <td colSpan={6} />
                   </tr>
                 </tfoot>
               )}
@@ -346,8 +375,7 @@ export default function PaymentHistoryPage() {
         <div className="mt-4 flex items-start gap-2 text-sm text-gray-600">
           <Info className="h-4 w-4 mt-0.5" />
           <span>
-            Only <b>Received</b> payments are shown. When an admin approves a cheque,
-            it will appear here automatically.
+            This page shows cheques after admin review — both <b>Received</b> and <b>Rejected</b>.
           </span>
         </div>
       </div>

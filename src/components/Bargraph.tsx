@@ -1,7 +1,7 @@
 // components/Bargraph.tsx
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   BarChart,
   Bar,
@@ -10,7 +10,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Cell, // <<---- Don't forget this!
+  Cell,
 } from "recharts";
 import { TrendingUp } from "lucide-react";
 import supabase from "@/config/supabaseClient";
@@ -23,6 +23,9 @@ import {
   CardContent,
   CardFooter,
 } from "@/components/ui/card";
+
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+
 
 type ChartPoint = {
   label: string;
@@ -41,9 +44,14 @@ type Period = (typeof periodOptions)[number]["key"];
 
 // Helper: interpolate color from green to yellow
 function lerpColor(a: string, b: string, t: number) {
-  const ah = parseInt(a.slice(1), 16), bh = parseInt(b.slice(1), 16);
-  const ar = (ah >> 16) & 0xff, ag = (ah >> 8) & 0xff, ab = ah & 0xff;
-  const br = (bh >> 16) & 0xff, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
+  const ah = parseInt(a.slice(1), 16),
+    bh = parseInt(b.slice(1), 16);
+  const ar = (ah >> 16) & 0xff,
+    ag = (ah >> 8) & 0xff,
+    ab = ah & 0xff;
+  const br = (bh >> 16) & 0xff,
+    bg = (bh >> 8) & 0xff,
+    bb = bh & 0xff;
   const rr = Math.round(ar + (br - ar) * t);
   const rg = Math.round(ag + (bg - ag) * t);
   const rb = Math.round(ab + (bb - ab) * t);
@@ -54,142 +62,167 @@ const Bargraph: React.FC = () => {
   const [period, setPeriod] = useState<Period>("Monthly");
   const [data, setData] = useState<ChartPoint[]>([]);
 
-  useEffect(() => {
-    async function load() {
-      const now = new Date();
-      type Bucket = { key: string; label: string };
-      const buckets: Record<string, number> = {};
-      const timeline: Bucket[] = [];
+  const load = useCallback(async () => {
+    const now = new Date();
+    type Bucket = { key: string; label: string };
+    const buckets: Record<string, number> = {};
+    const timeline: Bucket[] = [];
 
-      // Setup timeline buckets
-      if (period === "Daily") {
-        for (let i = 6; i >= 0; i--) {
-          const dt = new Date(now);
-          dt.setDate(now.getDate() - i);
-          const key = dt.toISOString().slice(0, 10);
-          const label = dt.toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-          });
-          buckets[key] = 0;
-          timeline.push({ key, label });
-        }
-      } else if (period === "Weekly") {
-        const getMonday = (d: Date) => {
-          const day = d.getDay();
-          const diff = (day + 6) % 7;
-          const m = new Date(d);
-          m.setDate(d.getDate() - diff);
-          m.setHours(0, 0, 0, 0);
-          return m;
-        };
-        for (let i = 5; i >= 0; i--) {
-          const anchor = new Date(now);
-          anchor.setDate(now.getDate() - i * 7);
-          const monday = getMonday(anchor);
-          const key = monday.toISOString().slice(0, 10);
-          const weekNum = Math.ceil(
-            ((monday.getTime() - new Date(monday.getFullYear(), 0, 1).getTime()) /
-              86400000 +
-              1) /
-              7
-          );
-          buckets[key] = 0;
-          timeline.push({ key, label: `W${weekNum}` });
-        }
-      } else if (period === "Monthly") {
-        for (let i = 5; i >= 0; i--) {
-          const dt = new Date(now.getFullYear(), now.getMonth() - i, 1);
-          const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
-          const label = dt.toLocaleString("en-US", { month: "short" });
-          buckets[key] = 0;
-          timeline.push({ key, label });
-        }
-      } else if (period === "YTD") {
-        const startOfYear = new Date(now.getFullYear(), 0, 1);
-        let dt = new Date(startOfYear);
-        while (dt <= now) {
-          const key = dt.toISOString().slice(0, 10);
-          const label = dt.toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-          });
-          buckets[key] = 0;
-          timeline.push({ key, label });
-          dt.setDate(dt.getDate() + 1);
-        }
-      } else {
-        // Annually
-        for (let i = 5; i >= 0; i--) {
-          const year = now.getFullYear() - i;
-          const key = `${year}`;
-          const label = `${year}`;
-          buckets[key] = 0;
-          timeline.push({ key, label });
-        }
+    // Setup timeline buckets
+    if (period === "Daily") {
+      for (let i = 6; i >= 0; i--) {
+        const dt = new Date(now);
+        dt.setDate(now.getDate() - i);
+        const key = dt.toISOString().slice(0, 10);
+        const label = dt.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        });
+        buckets[key] = 0;
+        timeline.push({ key, label });
       }
-
-      const startKey = timeline[0]?.key;
-      if (!startKey) {
-        setData([]);
-        return;
+    } else if (period === "Weekly") {
+      const getMonday = (d: Date) => {
+        const day = d.getDay();
+        const diff = (day + 6) % 7;
+        const m = new Date(d);
+        m.setDate(d.getDate() - diff);
+        m.setHours(0, 0, 0, 0);
+        return m;
+      };
+      for (let i = 5; i >= 0; i--) {
+        const anchor = new Date(now);
+        anchor.setDate(now.getDate() - i * 7);
+        const monday = getMonday(anchor);
+        const key = monday.toISOString().slice(0, 10);
+        const weekNum = Math.ceil(
+          ((monday.getTime() - new Date(monday.getFullYear(), 0, 1).getTime()) / 86400000 + 1) / 7
+        );
+        buckets[key] = 0;
+        timeline.push({ key, label: `W${weekNum}` });
       }
-
-      const startDate =
-        period === "Daily"
-          ? startKey
-          : period === "Weekly"
-          ? startKey
-          : period === "Monthly"
-          ? `${startKey}-01`
-          : period === "YTD"
-          ? startKey
-          : `${startKey}-01-01`;
-
-      // --- Get SALES (earnings) ---
-      const { data: sales, error } = await supabase
-        .from("sales")
-        .select("date, earnings")
-        .gte("date", startDate);
-
-      if (error) {
-        console.error("Error loading sales:", error);
-        return;
+    } else if (period === "Monthly") {
+      for (let i = 5; i >= 0; i--) {
+        const dt = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+        const label = dt.toLocaleString("en-US", { month: "short" });
+        buckets[key] = 0;
+        timeline.push({ key, label });
       }
-
-      // --- Sum up earnings per period ---
-      (sales ?? []).forEach((row: any) => {
-        const dt = new Date(row.date);
-        let key = "";
-        if (period === "Daily" || period === "YTD") {
-          key = dt.toISOString().slice(0, 10);
-        } else if (period === "Weekly") {
-          const day = dt.getDay();
-          const monday = new Date(dt);
-          monday.setDate(dt.getDate() - ((day + 6) % 7));
-          monday.setHours(0, 0, 0, 0);
-          key = monday.toISOString().slice(0, 10);
-        } else if (period === "Monthly") {
-          key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
-        } else {
-          key = `${dt.getFullYear()}`;
-        }
-        if (buckets[key] !== undefined) buckets[key] += row.earnings || 0;
-      });
-
-      setData(
-        timeline.map(({ key, label }) => ({
-          label,
-          total: buckets[key],
-        }))
-      );
+    } else if (period === "YTD") {
+      const startOfYear = new Date(now.getFullYear(), 0, 1);
+      let dt = new Date(startOfYear);
+      while (dt <= now) {
+        const key = dt.toISOString().slice(0, 10);
+        const label = dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        buckets[key] = 0;
+        timeline.push({ key, label });
+        dt.setDate(dt.getDate() + 1);
+      }
+    } else {
+      // Annually
+      for (let i = 5; i >= 0; i--) {
+        const year = now.getFullYear() - i;
+        const key = `${year}`;
+        const label = `${year}`;
+        buckets[key] = 0;
+        timeline.push({ key, label });
+      }
     }
 
-    load();
+    const startKey = timeline[0]?.key;
+    if (!startKey) {
+      setData([]);
+      return;
+    }
+
+    const startDate =
+      period === "Daily"
+        ? startKey
+        : period === "Weekly"
+        ? startKey
+        : period === "Monthly"
+        ? `${startKey}-01`
+        : period === "YTD"
+        ? startKey
+        : `${startKey}-01-01`;
+
+    // ===== Pull RECEIVED payments only =====
+    const { data: pays, error } = await supabase
+      .from("payments")
+      .select("received_at, amount, status")
+      .eq("status", "received")
+      .not("received_at", "is", null)
+      .gte("received_at", startDate);
+
+    if (error) {
+      console.error("Error loading payments:", error);
+      setData(timeline.map(({ key, label }) => ({ label, total: 0 })));
+      return;
+    }
+
+    // Sum into buckets by period using received_at
+    (pays ?? []).forEach((row: any) => {
+      const dt = new Date(row.received_at);
+      let key = "";
+      if (period === "Daily" || period === "YTD") {
+        key = dt.toISOString().slice(0, 10);
+      } else if (period === "Weekly") {
+        const day = dt.getDay();
+        const monday = new Date(dt);
+        monday.setDate(dt.getDate() - ((day + 6) % 7));
+        monday.setHours(0, 0, 0, 0);
+        key = monday.toISOString().slice(0, 10);
+      } else if (period === "Monthly") {
+        key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+      } else {
+        key = `${dt.getFullYear()}`;
+      }
+      if (buckets[key] !== undefined) buckets[key] += Number(row.amount) || 0;
+    });
+
+    setData(timeline.map(({ key, label }) => ({ label, total: buckets[key] })));
   }, [period]);
 
+  // Initial + on period change
+  useEffect(() => {
+    load();
+  }, [period, load]);
+
+  // Realtime refresh whenever a payment becomes/was/ceases to be "received"
+useEffect(() => {
+  const ch = supabase.channel("bargraph-payments-rt");
+
+  ch.on(
+    "postgres_changes",
+    { event: "*", schema: "public", table: "payments" },
+    (payload: RealtimePostgresChangesPayload<any>) => {
+      const statusOf = (row: any): string =>
+        typeof row?.status === "string" ? row.status.toLowerCase() : "";
+
+      const newStatus = statusOf(payload.new);
+      const oldStatus = statusOf(payload.old);
+
+      if (
+        payload.eventType === "INSERT" ||
+        payload.eventType === "DELETE" ||
+        newStatus === "received" ||
+        oldStatus === "received"
+      ) {
+        load();
+      }
+    }
+  );
+
+  ch.subscribe();
+  return () => {
+    supabase.removeChannel(ch);
+  };
+}, [load]);
+
+
   // ---- Color logic for bars ----
-  const values = data.map(d => d.total);
+  const values = data.map((d) => d.total);
   const min = values.length ? Math.min(...values) : 0;
   const max = values.length ? Math.max(...values) : 1;
   const getBarColor = (value: number) => {
@@ -210,7 +243,7 @@ const Bargraph: React.FC = () => {
       <CardHeader>
         <div className="flex justify-between items-center w-full">
           <div>
-            <CardTitle>Profit Overview</CardTitle>
+            <CardTitle>Payments Received</CardTitle>
             <CardDescription>
               {periodOptions.find((o) => o.key === period)!.label}
             </CardDescription>
