@@ -358,7 +358,6 @@ export default function CustomerPaymentsPage() {
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
         <div className="flex items-center gap-3">
-          <ReceiptText className="h-7 w-7 text-amber-600" />
           <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payments</h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
