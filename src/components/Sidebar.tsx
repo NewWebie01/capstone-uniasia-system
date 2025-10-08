@@ -7,6 +7,7 @@ import ChartFill from "@/assets/Chart_fill.png";
 import Logistics from "@/assets/logistics.png";
 import Sales from "@/assets/Sales.png";
 import LogoutIcon from "@/assets/power-button.png";
+import { History, ReceiptText } from "lucide-react"; // ← add ReceiptText
 
 import { FaHistory } from "react-icons/fa";
 import {
@@ -43,6 +44,10 @@ const Menus: {
   { title: "Delivered", src: Logistics, href: "/logistics/delivered" },
   { title: "Sales", src: Sales, href: "/sales" },
   { title: "Invoice", icon: FileText, href: "/invoice" },
+
+  // ← NEW: Admin Payments page
+  { title: "Payments", icon: ReceiptText, href: "/payments" },
+
   { title: "Returns", icon: RotateCcw, href: "/returns" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
@@ -55,18 +60,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   const supabase = createClientComponentClient();
 
   const handleLogout = async () => {
-    // Get user info (role is stored in user_metadata, just like in login)
     const {
       data: { user },
     } = await supabase.auth.getUser();
     const userEmail = user?.email || "unknown";
-    const userRole = user?.user_metadata?.role || "unknown"; // <-- GET THE ROLE
+    const userRole = user?.user_metadata?.role || "unknown";
 
-    // Log the logout action, with the role!
     await supabase.from("activity_logs").insert([
       {
         user_email: userEmail,
-        user_role: userRole, // <-- SAVE ROLE!
+        user_role: userRole,
         action: "Logout",
         details: {},
         created_at: new Date().toISOString(),
@@ -134,7 +137,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
       <div className="flex-1 overflow-y-auto px-5">
         <ul className="flex flex-col gap-y-4">
           {Menus.map((menu, idx) => {
-            const isActive = pathname === menu.href;
+            // if you want nested active (e.g., /admin/payments/123), switch to startsWith
+            const isActive =
+              pathname === menu.href || pathname?.startsWith(menu.href + "/");
 
             const IconOrImage = menu.src ? (
               <Image src={menu.src} alt={menu.title} width={20} height={20} />
@@ -144,12 +149,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
                   [
                     "Activity Log",
                     "Account Creation",
-                    "Account Request", // highlight in yellow
+                    "Account Request",
                     "Purchase",
                     "Inventory",
                     "Invoice",
                     "Transaction History",
                     "Returns",
+                    "Payments", // ← highlight new item
                   ].includes(menu.title)
                     ? "text-[#ffba20]"
                     : "text-black"

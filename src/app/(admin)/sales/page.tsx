@@ -1,9 +1,8 @@
 "use client";
 import { Suspense } from "react";
-
 import { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { RealtimeChannel } from "@supabase/supabase-js";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 import PageLoader from "@/components/PageLoader";
 import { toast } from "sonner";
@@ -22,7 +21,6 @@ type InventoryItem = {
   amount: number;
   profit?: number;
 };
-
 type FastMovingProduct = {
   id: number;
   sku: string;
@@ -35,7 +33,6 @@ type FastMovingProduct = {
   est_days_of_cover: number | null;
   pr_units_velocity: number;
 };
-
 type OrderWithDetails = {
   id: string;
   total_amount: number;
@@ -73,23 +70,17 @@ type OrderWithDetails = {
     };
   }[];
 };
-
-type PickingOrder = {
-  orderId: string;
-  status: "accepted" | "rejected";
-};
-
+type PickingOrder = { orderId: string; status: "accepted" | "rejected" };
 
 function SalesPageContent() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showModal, setShowModal] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
-    null
-  );
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
 
   const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
@@ -103,9 +94,8 @@ function SalesPageContent() {
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
-  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(
-    null
-  );
+  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [salesman, setSalesman] = useState("");
   const [forwarder, setForwarder] = useState("");
   const resetSalesForm = () => {
@@ -119,41 +109,31 @@ function SalesPageContent() {
     setEditedDiscounts([]);
     setFieldErrors({ poNumber: false, repName: false });
   };
+  // Validation state
+  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({ poNumber: false, repName: false });
 
-  // Highlight/Validation State!
-  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
-    poNumber: false,
-    repName: false,
-  });
-
-  // --- Activity Logs Modal State --- (kept as original)
+  // Activity Logs Modal State
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const [logOrderId, setLogOrderId] = useState<string | null>(null);
-
   type Processor = { name: string; email: string; role: string | null };
   const [processor, setProcessor] = useState<Processor | null>(null);
 
   useEffect(() => {
     (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-
       const { data: userRow } = await supabase
         .from("users")
         .select("display_name, role")
         .eq("email", user.email ?? "")
         .maybeSingle();
-
       const friendly =
         userRow?.display_name ||
         user.user_metadata?.display_name ||
         user.user_metadata?.full_name ||
         (user.email ? user.email.split("@")[0] : "User");
-
       setProcessor({
         name: friendly,
         email: user.email ?? "unknown",
@@ -163,13 +143,12 @@ function SalesPageContent() {
   }, []);
 
   useEffect(() => {
-  // Register event: listen for "scroll-to-order"
-  const unsubscribe = onEvent("scroll-to-order", (orderId: string) => {
-    scrollToOrder(orderId); // this function already exists in your code
-  });
-  return () => unsubscribe();
-}, []);
-
+    // Register event: listen for "scroll-to-order"
+    const unsubscribe = onEvent("scroll-to-order", (orderId: string) => {
+      scrollToOrder(orderId);
+    });
+    return () => unsubscribe();
+  }, []);
 
   async function fetchActivityLogs(orderId: string) {
     setLogsLoading(true);
@@ -185,94 +164,68 @@ function SalesPageContent() {
     setLogsLoading(false);
   }
 
-  const [fastMovingProducts, setFastMovingProducts] = useState<
-    FastMovingProduct[]
-  >([]);
+  const [fastMovingProducts, setFastMovingProducts] = useState<FastMovingProduct[]>([]);
   const [showFastMovingModal, setShowFastMovingModal] = useState(false);
-  const [slowMovingProducts, setSlowMovingProducts] = useState<
-    FastMovingProduct[]
-  >([]);
+  const [slowMovingProducts, setSlowMovingProducts] = useState<FastMovingProduct[]>([]);
   const [showSlowMovingModal, setShowSlowMovingModal] = useState(false);
   const ordersPerPage = 10;
 
-const computedOrderTotal = useMemo(() => {
-  if (!selectedOrder) return 0;
-  return selectedOrder.order_items.reduce((sum, item, idx) => {
-    // Skip out-of-stock
-    if (item.inventory.quantity === 0) return sum;
-    const qty = editedQuantities[idx] ?? item.quantity;
-    const percent = editedDiscounts[idx] ?? 0;
-    const price = item.price;
-    // Apply discount to each
-    const discounted = qty * price * (1 - percent / 100);
-    return sum + discounted;
-  }, 0);
-}, [selectedOrder, editedQuantities, editedDiscounts]);
-
+  const computedOrderTotal = useMemo(() => {
+    if (!selectedOrder) return 0;
+    return selectedOrder.order_items.reduce((sum, item, idx) => {
+      if (item.inventory.quantity === 0) return sum;
+      const qty = editedQuantities[idx] ?? item.quantity;
+      const percent = editedDiscounts[idx] ?? 0;
+      const price = item.price;
+      const discounted = qty * price * (1 - percent / 100);
+      return sum + discounted;
+    }, 0);
+  }, [selectedOrder, editedQuantities, editedDiscounts]);
   const salesTaxValue = isSalesTaxOn ? computedOrderTotal * 0.12 : 0;
-
   const getGrandTotalWithInterest = () => {
     if (!selectedOrder) return 0;
     const baseTotal = computedOrderTotal + salesTaxValue;
-    if (
-      selectedOrder.customers.payment_type === "Credit" &&
-      numberOfTerms > 0
-    ) {
+    if (selectedOrder.customers.payment_type === "Credit" && numberOfTerms > 0) {
       return baseTotal * (1 + interestPercent / 100);
     }
     return baseTotal;
   };
-
   const getPerTermAmount = () => {
-    if (
-      selectedOrder &&
-      selectedOrder.customers.payment_type === "Credit" &&
-      numberOfTerms > 0
-    ) {
+    if (selectedOrder && selectedOrder.customers.payment_type === "Credit" && numberOfTerms > 0) {
       return getGrandTotalWithInterest() / numberOfTerms;
     }
     return getGrandTotalWithInterest();
   };
-
-  // Calculate original subtotal (before any discounts/markups)
-const subtotalBeforeDiscount = selectedOrder
-  ? selectedOrder.order_items.reduce(
-      (sum, item, idx) =>
-        item.inventory.quantity === 0
-          ? sum
-          : sum + (editedQuantities[idx] ?? item.quantity) * item.price,
-      0
-    )
-  : 0;
-
-function scrollToOrder(orderId: string) {
-  const el = orderRefs.current[orderId];
-  if (el) {
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    // Optionally add a highlight for visibility:
-    el.classList.add("ring-2", "ring-blue-500");
-    setTimeout(() => el.classList.remove("ring-2", "ring-blue-500"), 1200);
+  const subtotalBeforeDiscount = selectedOrder
+    ? selectedOrder.order_items.reduce(
+        (sum, item, idx) =>
+          item.inventory.quantity === 0
+            ? sum
+            : sum + (editedQuantities[idx] ?? item.quantity) * item.price,
+        0
+      )
+    : 0;
+  function scrollToOrder(orderId: string) {
+    const el = orderRefs.current[orderId];
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("ring-2", "ring-blue-500");
+      setTimeout(() => el.classList.remove("ring-2", "ring-blue-500"), 1200);
+    }
   }
-}
-
-
-// Total discount/add
-const totalDiscount = selectedOrder
-  ? selectedOrder.order_items.reduce((sum, item, idx) => {
-      if (item.inventory.quantity === 0) return sum;
-      const qty = editedQuantities[idx] ?? item.quantity;
-      const percent = editedDiscounts[idx] ?? 0;
-      return sum + qty * item.price * (percent / 100);
-    }, 0)
-  : 0;
-
-function getPHISOString() {
-  const now = new Date();
-  // Add 8 hours to UTC
-  const ph = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  return ph.toISOString().replace("T", " ").slice(0, 19); // "YYYY-MM-DD HH:mm:ss"
-}
-
+  const totalDiscount = selectedOrder
+    ? selectedOrder.order_items.reduce((sum, item, idx) => {
+        if (item.inventory.quantity === 0) return sum;
+        const qty = editedQuantities[idx] ?? item.quantity;
+        const percent = editedDiscounts[idx] ?? 0;
+        return sum + qty * item.price * (percent / 100);
+      }, 0)
+    : 0;
+  function getPHISOString() {
+    const now = new Date();
+    const ph = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+    return ph.toISOString().replace("T", " ").slice(0, 19);
+  }
   const totalSales = useMemo(
     () =>
       orders
@@ -291,13 +244,10 @@ function getPHISOString() {
   const totalOrders = orders.length;
 
   // Fetch all inventory items
- const fetchItems = async () => {
-  const { data, error } = await supabase
-    .from("inventory")
-    .select("*, profit");
-  if (!error) setItems(data || []);
-};
-
+  const fetchItems = async () => {
+    const { data, error } = await supabase.from("inventory").select("*, profit");
+    if (!error) setItems(data || []);
+  };
   // Fetch orders with related customer & items
   const fetchOrders = async () => {
     const { data, error } = await supabase
@@ -347,16 +297,13 @@ function getPHISOString() {
         customers: Array.isArray(o.customer) ? o.customer[0] : o.customer,
         order_items: o.order_items.map((item: any) => ({
           ...item,
-          inventory: Array.isArray(item.inventory)
-            ? item.inventory[0]
-            : item.inventory,
+          inventory: Array.isArray(item.inventory) ? item.inventory[0] : item.inventory,
         })),
       }));
       setOrders(formatted);
     }
   };
-
-  // Fetch Fast & Slow Moving Products from VIEW
+  // Fast/Slow Moving
   const fetchFastMovingProducts = async () => {
     const { data, error } = await supabase
       .from("v_fast_moving_products")
@@ -364,7 +311,6 @@ function getPHISOString() {
       .order("units_90d", { ascending: false });
     if (!error && data) setFastMovingProducts(data.slice(0, 20));
   };
-
   const fetchSlowMovingProducts = async () => {
     const { data, error } = await supabase
       .from("v_fast_moving_products")
@@ -372,13 +318,11 @@ function getPHISOString() {
       .order("units_90d", { ascending: true });
     if (!error && data) setSlowMovingProducts(data.slice(0, 20));
   };
-
   useEffect(() => {
     fetchItems();
     fetchOrders();
     fetchFastMovingProducts();
     fetchSlowMovingProducts();
-
     const inventoryChannel: RealtimeChannel = supabase
       .channel("inventory-channel")
       .on(
@@ -391,7 +335,6 @@ function getPHISOString() {
         }
       )
       .subscribe();
-
     const ordersChannel: RealtimeChannel = supabase
       .channel("orders-channel")
       .on(
@@ -402,53 +345,39 @@ function getPHISOString() {
         }
       )
       .subscribe();
-
     return () => {
       supabase.removeChannel(inventoryChannel);
       supabase.removeChannel(ordersChannel);
     };
   }, []);
-
   useEffect(() => {
     if (!showModal && !showSalesOrderModal) {
       resetSalesForm();
     }
   }, [showModal, showSalesOrderModal]);
-
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
   const handleAcceptOrder = async (order: OrderWithDetails) => {
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: "accepted" })
-      .eq("id", order.id);
-
+    const { error } = await supabase.from("orders").update({ status: "accepted" }).eq("id", order.id);
     if (error) {
       toast.error("Failed to accept order: " + error.message);
       return;
     }
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
+    const { data: { user } } = await supabase.auth.getUser();
     await supabase
       .from("orders")
       .update({
         accepted_by_auth_id: user?.id ?? null,
         accepted_by_email: user?.email ?? null,
-        accepted_by_name:
-          processor?.name ?? (user?.email ? user.email.split("@")[0] : null),
+        accepted_by_name: processor?.name ?? (user?.email ? user.email.split("@")[0] : null),
         accepted_by_role: processor?.role ?? user?.user_metadata?.role ?? null,
         accepted_at: getPHISOString(),
       })
       .eq("id", order.id);
-
     try {
       const userEmail = user?.email || "unknown";
       const userRole = user?.user_metadata?.role || "unknown";
-
       await supabase.from("activity_logs").insert([
         {
           user_email: userEmail,
@@ -472,18 +401,16 @@ function getPHISOString() {
     } catch (err) {
       console.error("Failed to log activity for order acceptance:", err);
     }
-
-  setSelectedOrder(order);
-setEditedQuantities(order.order_items.map(item => item.quantity));
-setEditedDiscounts(order.order_items.map(() => 0));
-setShowModal(true);
-setNumberOfTerms(1);
-setInterestPercent(0);
-setPickingStatus((prev) => [
-  ...prev,
-  { orderId: order.id, status: "accepted" },
-]);
-
+    setSelectedOrder(order);
+    setEditedQuantities(order.order_items.map(item => item.quantity));
+    setEditedDiscounts(order.order_items.map(() => 0));
+    setShowModal(true);
+    setNumberOfTerms(1);
+    setInterestPercent(0);
+    setPickingStatus((prev) => [
+      ...prev,
+      { orderId: order.id, status: "accepted" },
+    ]);
   };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
@@ -495,11 +422,8 @@ setPickingStatus((prev) => [
       .from("orders")
       .update({ status: "rejected" })
       .eq("id", order.id);
-
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
       const userRole = user?.user_metadata?.role || "unknown";
       await supabase.from("activity_logs").insert([
@@ -525,227 +449,221 @@ setPickingStatus((prev) => [
     } catch (err) {
       console.error("Failed to log activity for order rejection:", err);
     }
-
     fetchOrders();
   };
 
   // --- 🎯 THE VALIDATED "COMPLETE" HANDLER ---
- const handleOrderComplete = async () => {
-  if (!selectedOrder || isCompletingOrder) return;
-
-  // Reset errors before checking
-  setFieldErrors({ poNumber: false, repName: false });
-
-  let errors: any = {};
-  if (!poNumber || !poNumber.trim()) errors.poNumber = true;
-  if (!repName || !repName.trim()) errors.repName = true;
-  // add more checks if needed
-
-  if (Object.keys(errors).length > 0) {
-    setFieldErrors(errors);
-    toast.error("Please fill all required fields!");
-    return;
-  }
-
-  setIsCompletingOrder(true);
-  try {
-    // 1. UPDATE FULFILLED QUANTITY for each item
-    for (let i = 0; i < selectedOrder.order_items.length; i++) {
-      const oi = selectedOrder.order_items[i];
-      await supabase
-        .from("order_items")
-        .update({ fulfilled_quantity: editedQuantities[i] })
-        .eq("order_id", selectedOrder.id)
-        .eq("inventory_id", oi.inventory.id);
+  const handleOrderComplete = async () => {
+    if (!selectedOrder || isCompletingOrder) return;
+    setFieldErrors({ poNumber: false, repName: false });
+    let errors: any = {};
+    if (!poNumber || !poNumber.trim()) errors.poNumber = true;
+    if (!repName || !repName.trim()) errors.repName = true;
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      toast.error("Please fill all required fields!");
+      return;
     }
-
-    // 2. Update Inventory, Sales, etc (your existing logic)
-    for (let i = 0; i < selectedOrder.order_items.length; i++) {
-      const oi = selectedOrder.order_items[i];
-      if (oi.inventory.quantity === 0) continue;
-      const invId = oi.inventory.id;
-      const remaining = oi.inventory.quantity - editedQuantities[i];
-
-      if (remaining < 0) {
-        toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
-        setShowFinalConfirm(false);
-        throw new Error("Insufficient stock");
-      }
-
-      // Update inventory
-      await supabase
-        .from("inventory")
-        .update({ quantity: remaining })
-        .eq("id", invId);
-
-      // Update discount_percent in order_items
-      await supabase
-        .from("order_items")
-        .update({
-          discount_percent: editedDiscounts[i] || 0,
-        })
-        .eq("order_id", selectedOrder.id)
-        .eq("inventory_id", invId);
-
-      // Calculate earnings (profit per item)
-      const qty = editedQuantities[i];
-      const unitPrice = oi.price;
-      const discountPercent = editedDiscounts[i] || 0;
-      const costPrice = oi.inventory.cost_price || 0; // fallback if cost_price is null
-      const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
-
-      // Insert to sales table
-      await supabase.from("sales").insert([{
-        inventory_id: invId,
-        quantity_sold: qty,
-        amount: qty * unitPrice * (1 - discountPercent / 100),
-        earnings,
-        date: getPHISOString(),
-      }]);
-    }
-
-    // ...The rest of your existing order completion logic...
-    const isCredit = selectedOrder.customers.payment_type === "Credit";
-    const updateFields = {
-      status: "completed",
-      date_completed: getPHISOString(),
-      sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
-      po_number: poNumber,
-      salesman: repName,
-      terms: isCredit
-        ? `Net ${numberOfTerms} Monthly`
-        : selectedOrder.customers.payment_type,
-      payment_terms: isCredit ? numberOfTerms : null,
-      interest_percent: isCredit ? interestPercent : null,
-      grand_total_with_interest: isCredit ? getGrandTotalWithInterest() : null,
-      per_term_amount: isCredit ? getPerTermAmount() : null,
-      forwarder,
-      processed_by_email: processor?.email ?? "unknown",
-      processed_by_name: processor?.name ?? "unknown",
-      processed_by_role: processor?.role ?? "unknown",
-      processed_at: getPHISOString(),
-    } as const;
-
-    const { error: ordersErr } = await supabase
-      .from("orders")
-      .update(updateFields)
-      .eq("id", selectedOrder.id);
-    if (ordersErr) throw ordersErr;
-
+    setIsCompletingOrder(true);
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const userEmail = user?.email || "unknown";
-      const userRole = user?.user_metadata?.role || "unknown";
+      // 1. UPDATE FULFILLED QUANTITY for each item
+      for (let i = 0; i < selectedOrder.order_items.length; i++) {
+        const oi = selectedOrder.order_items[i];
+        await supabase
+          .from("order_items")
+          .update({ fulfilled_quantity: editedQuantities[i] })
+          .eq("order_id", selectedOrder.id)
+          .eq("inventory_id", oi.inventory.id);
+      }
+      // 2. Update Inventory, Sales, etc (your existing logic)
+      for (let i = 0; i < selectedOrder.order_items.length; i++) {
+        const oi = selectedOrder.order_items[i];
+        if (oi.inventory.quantity === 0) continue;
+        const invId = oi.inventory.id;
+        const remaining = oi.inventory.quantity - editedQuantities[i];
+        if (remaining < 0) {
+          toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
+          setShowFinalConfirm(false);
+          throw new Error("Insufficient stock");
+        }
+        // Update inventory
+        await supabase
+          .from("inventory")
+          .update({ quantity: remaining })
+          .eq("id", invId);
+        // Update discount_percent in order_items
+        await supabase
+          .from("order_items")
+          .update({
+            discount_percent: editedDiscounts[i] || 0,
+          })
+          .eq("order_id", selectedOrder.id)
+          .eq("inventory_id", invId);
+        // Calculate earnings (profit per item)
+        const qty = editedQuantities[i];
+        const unitPrice = oi.price;
+        const discountPercent = editedDiscounts[i] || 0;
+        const costPrice = oi.inventory.cost_price || 0;
+        const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
+        // Insert to sales table
+        await supabase.from("sales").insert([{
+          inventory_id: invId,
+          quantity_sold: qty,
+          amount: qty * unitPrice * (1 - discountPercent / 100),
+          earnings,
+          date: getPHISOString(),
+        }]);
+      }
+      // ...Rest of your order completion logic...
+      const isCredit = selectedOrder.customers.payment_type === "Credit";
+      const updateFields = {
+        status: "completed",
+        date_completed: getPHISOString(),
+        sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
+        po_number: poNumber,
+        salesman: repName,
+        terms: isCredit
+          ? `Net ${numberOfTerms} Monthly`
+          : selectedOrder.customers.payment_type,
+        payment_terms: isCredit ? numberOfTerms : null,
+        interest_percent: isCredit ? interestPercent : null,
+        grand_total_with_interest: isCredit ? getGrandTotalWithInterest() : null,
+        per_term_amount: isCredit ? getPerTermAmount() : null,
+        forwarder,
+        processed_by_email: processor?.email ?? "unknown",
+        processed_by_name: processor?.name ?? "unknown",
+        processed_by_role: processor?.role ?? "unknown",
+        processed_at: getPHISOString(),
+      } as const;
+      const { error: ordersErr } = await supabase
+        .from("orders")
+        .update(updateFields)
+        .eq("id", selectedOrder.id);
+      if (ordersErr) throw ordersErr;
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        const userEmail = user?.email || "unknown";
+        const userRole = user?.user_metadata?.role || "unknown";
+        await supabase.from("activity_logs").insert([{
+          user_email: userEmail,
+          user_role: userRole,
+          action: "Complete Sales Order",
+          details: {
+            order_id: selectedOrder.id,
+            customer_name: selectedOrder.customers.name,
+            customer_email: selectedOrder.customers.email,
+            items: selectedOrder.order_items.map((oi, idx) => ({
+              product_name: oi.inventory.product_name,
+              ordered_qty: oi.quantity,
+              fulfilled_qty: editedQuantities[idx],
+              unit_price: oi.price,
+              discount_percent: editedDiscounts[idx] || 0,
+            })),
+            total_amount: getGrandTotalWithInterest(),
+            payment_type: selectedOrder.customers.payment_type,
+          },
+          created_at: getPHISOString(),
+        }]);
+      } catch (err) {
+        console.error("Failed to log activity for sales order completion:", err);
+      }
+      setShowSalesOrderModal(false);
+      setShowModal(false);
+      setShowFinalConfirm(false);
+      resetSalesForm();
+      setSelectedOrder(null);
+      setPickingStatus((prev) => prev.filter((p) => p.orderId !== selectedOrder.id));
+      await Promise.all([fetchOrders(), fetchItems()]);
+      toast.success("Order successfully completed!");
+      // Compose the HTML body for the receipt email
+const receiptHtml = `
+  <h2>Thank you for your order with UniAsia!</h2>
+  <p><b>Order No:</b> ${selectedOrder.customers.code}</p>
+  <p><b>Name:</b> ${selectedOrder.customers.name}</p>
+  <p><b>Date:</b> ${new Date().toLocaleString("en-PH")}</p>
+  <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;margin-top:12px;">
+    <thead>
+      <tr>
+        <th>Product</th>
+        <th>Qty</th>
+        <th>Unit Price</th>
+        <th>Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${selectedOrder.order_items.map(
+        (item, idx) => `
+        <tr>
+          <td>${item.inventory.product_name}</td>
+          <td style="text-align:center">${editedQuantities[idx]}</td>
+          <td style="text-align:right">₱${item.price.toLocaleString()}</td>
+          <td style="text-align:right">₱${(editedQuantities[idx] * item.price).toLocaleString()}</td>
+        </tr>
+        `
+      ).join("")}
+    </tbody>
+  </table>
+  <p style="margin-top:18px;font-size:1.1em"><b>Total Paid: ₱${getGrandTotalWithInterest().toLocaleString(undefined, {minimumFractionDigits:2})}</b></p>
+  <p>If you have any questions, please contact UniAsia Support.<br>Thank you!</p>
+`;
 
-      await supabase.from("activity_logs").insert([{
-        user_email: userEmail,
-        user_role: userRole,
-        action: "Complete Sales Order",
-        details: {
-          order_id: selectedOrder.id,
-          customer_name: selectedOrder.customers.name,
-          customer_email: selectedOrder.customers.email,
-          items: selectedOrder.order_items.map((oi, idx) => ({
-            product_name: oi.inventory.product_name,
-            ordered_qty: oi.quantity,
-            fulfilled_qty: editedQuantities[idx], // <-- now logs fulfilled
-            unit_price: oi.price,
-            discount_percent: editedDiscounts[idx] || 0,
-          })),
-          total_amount: getGrandTotalWithInterest(),
-          payment_type: selectedOrder.customers.payment_type,
-        },
-        created_at: getPHISOString(),
-      }]);
-    } catch (err) {
-      console.error(
-        "Failed to log activity for sales order completion:",
-        err
+// Send the email via your API
+try {
+  const emailRes = await fetch("/api/send-receipt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orderId: selectedOrder.id }),
+  });
+  const result = await emailRes.json();
+  if (result.success) {
+    toast.success("Receipt emailed to customer!");
+  } else {
+    toast.error("Failed to send receipt email.");
+  }
+} catch (err) {
+  toast.error("Failed to send receipt email.");
+}
+
+      setIsCompletingOrder(false);
+    } catch (err: any) {
+      if (err?.message && err.message.includes('unique constraint "unique_po_number"')) {
+        toast.error("PO Number is already used, try another.");
+        setIsCompletingOrder(false);
+        setShowFinalConfirm(false);
+        setShowSalesOrderModal(true);
+        return;
+      }
+      toast.error(
+        `Failed to complete order: ${err?.message ?? "Unexpected error"}`
       );
+      setIsCompletingOrder(false);
+      setShowFinalConfirm(false);
+      setShowSalesOrderModal(true);
     }
+  };
 
+  // -- UI Actions --
+  const handleOrderConfirm = async () => {
+    if (!selectedOrder) return;
+    setShowFinalConfirm(true);
+  };
+  const handleBackModal = () => {
     setShowSalesOrderModal(false);
+    setShowModal(true);
+  };
+  const handleCancelModal = () => {
     setShowModal(false);
+    setShowSalesOrderModal(false);
     setShowFinalConfirm(false);
     resetSalesForm();
     setSelectedOrder(null);
     setPickingStatus((prev) =>
-      prev.filter((p) => p.orderId !== selectedOrder.id)
+      selectedOrder ? prev.filter((p) => p.orderId !== selectedOrder.id) : prev
     );
-
-    await Promise.all([fetchOrders(), fetchItems()]);
-    toast.success("Order successfully completed!");
-    setIsCompletingOrder(false);
-  } catch (err: any) {
-    if (
-      err?.message &&
-      err.message.includes('unique constraint "unique_po_number"')
-    ) {
-      toast.error("PO Number is already used, try another.");
-      setIsCompletingOrder(false);
-      setShowFinalConfirm(false);
-      setShowSalesOrderModal(true);
-      return;
-    }
-    toast.error(
-      `Failed to complete order: ${err?.message ?? "Unexpected error"}`
-    );
-    setIsCompletingOrder(false);
-    setShowFinalConfirm(false);
-    setShowSalesOrderModal(true);
-  }
-};
-
-      const handleOrderConfirm = async () => {
-        if (!selectedOrder) return;
-        setShowFinalConfirm(true);
-      };
-
-      const handleBackModal = () => {
-        setShowSalesOrderModal(false);
-        setShowModal(true);
-      };
-
-      const handleCancelModal = () => {
-        setShowModal(false);
-        setShowSalesOrderModal(false);
-        setShowFinalConfirm(false);
-        resetSalesForm();
-        setSelectedOrder(null);
-        setPickingStatus((prev) =>
-          selectedOrder ? prev.filter((p) => p.orderId !== selectedOrder.id) : prev
-        );
-      };
-
-      const handleResetDiscount = (idx: number) => {
-        setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
-      };
-
-      const timersRef = useRef<{ [key: number]: NodeJS.Timeout }>({});
-
-      const handleIncrement = (idx: number) => {
-        setEditedDiscounts((prev) =>
-          prev.map((d, i) => (i === idx ? Math.min(50, (Number(d) || 0) + 1) : d))  // 50% max
-        );
-      };
-      const handleDecrement = (idx: number) => {
-        setEditedDiscounts((prev) =>
-          prev.map((d, i) => (i === idx ? Math.max(0, (Number(d) || 0) - 1) : d))
-        );
-      };
-    const handleDiscountInput = (idx: number, value: string) => {
-      let percent = parseFloat(value.replace(/[^0-9\-]/g, ""));
-      if (isNaN(percent)) percent = 0;
-      if (percent > 50) percent = 50;
-      if (percent < 0) percent = 0;
-      setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? percent : d)));
-    };
-
-
-    const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
-
+  };
+  const handleResetDiscount = (idx: number) => {
+    setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
+  };
   // --- RENDER ---
   return (
     <div className="p-6">
@@ -1606,43 +1524,55 @@ setPickingStatus((prev) => [
 </td>
 
 
-      {/* Discount/Add (%) */}
-<td className="py-2 px-3 text-right">
-  <div className="flex flex-col items-center gap-1">
-    <div className="flex items-center justify-end gap-1">
-      <input
-  type="number"
-  value={percent}
-  onChange={(e) => {
-    let p = parseFloat(e.target.value.replace(/[^0-9]/g, ""));
-    if (isNaN(p)) p = 0;
-    if (p > 50) p = 50;    // MAX 50%
-    if (p < 0) p = 0;
-    setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
-  }}
-  className="w-14 text-center border rounded px-1 py-0.5 mx-1 font-bold"
-  min={0}
-  max={50}
-  step={1}
-  style={{
-    fontWeight: 600,
-    color: "#222",
-  }}
-/>
-      <span className="ml-1">%</span>
-    </div>
+{/* Discount/Add (%) */}
+<td className="py-2 px-3 text-right align-middle">
+  <div className="flex items-center justify-end gap-1">
+    <input
+      type="number"
+      value={percent}
+      disabled={item.inventory.quantity === 0}
+      onChange={(e) => {
+        let p = parseFloat(e.target.value.replace(/[^0-9]/g, ""));
+        if (isNaN(p)) p = 0;
+        if (p > 50) p = 50;
+        if (p < 0) p = 0;
+        setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
+      }}
+      className={`w-14 text-center border rounded px-1 py-0.5 font-bold ${
+        item.inventory.quantity === 0
+          ? "bg-gray-200 text-gray-400 cursor-not-allowed opacity-70"
+          : ""
+      }`}
+      min={0}
+      max={50}
+      step={1}
+      style={{ fontWeight: 600, color: "#222" }}
+      tabIndex={item.inventory.quantity === 0 ? -1 : 0}
+    />
+    <span className="ml-1">%</span>
     <button
-      className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 mt-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
+      className={`text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 active:bg-blue-200 transition ${
+        item.inventory.quantity === 0 ? "opacity-50 cursor-not-allowed" : ""
+      }`}
       style={{ fontSize: "11px" }}
       onClick={() =>
         setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)))
       }
       type="button"
+      disabled={item.inventory.quantity === 0}
+      tabIndex={item.inventory.quantity === 0 ? -1 : 0}
     >
       Reset
     </button>
   </div>
+  {/* Optionally show a note if disabled */}
+  {item.inventory.quantity === 0 && (
+    <div className="text-xs text-red-500 mt-1">
+      Out of stock – cannot apply discount
+    </div>
+  )}
 </td>
+
 
 
 
@@ -1903,52 +1833,59 @@ setPickingStatus((prev) => [
 
 
 
-                <tbody>
-                  {selectedOrder.order_items.map((item, idx) => {
-                   const qty = editedQuantities[idx] ?? item.quantity;
-const price = item.price;
-const percent = editedDiscounts[idx] || 0;
-const amount = qty * price * (1 - percent / 100);
+          <tbody>
+            {selectedOrder.order_items.map((item, idx) => {
+              const qty = editedQuantities[idx] ?? item.quantity;
+              const price = item.price;
+              const percent = editedDiscounts[idx] || 0;
+              const amount = qty * price * (1 - percent / 100);
 
-const stock = item.inventory.quantity;
-const insufficient = qty > stock || stock === 0; // ← our rule
+              const stock = item.inventory.quantity;
+              const insufficient = qty > stock || stock === 0;
 
-                    return (
-<tr key={idx} className="border-t text-[14px]">
-  <td className="py-1 px-2">{qty}</td>
-  <td className="py-1 px-2">{item.inventory.unit}</td>
-  <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
-  <td className="py-1 px-2">
-    {stock === 0 ? (
-      <span className="text-red-600 font-semibold">Out of Stock</span>
-    ) : qty > stock ? (
-      <span className="text-orange-600 font-semibold">
-        Insufficient (Requested {qty}, In stock {stock})
-      </span>
-    ) : (
-      <span className="text-green-600">Available</span>
-    )}
-  </td>
-  <td className="py-1 px-2 text-right">
-  ₱{price.toLocaleString()}
+              return (
+                <tr key={idx} className="border-t text-[14px]">
+                  <td className="py-1 px-2">{qty}</td>
+                  <td className="py-1 px-2">{item.inventory.unit}</td>
+                  <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
+                  <td className="py-1 px-2">
+                    {stock === 0 ? (
+                      <span className="text-red-600 font-semibold">Out of Stock</span>
+                    ) : qty > stock ? (
+                      <span className="text-orange-600 font-semibold">
+                        Insufficient (Requested {qty}, In stock {stock})
+                      </span>
+                    ) : (
+                      <span className="text-green-600">Available</span>
+                    )}
+                  </td>
+                  <td className="py-1 px-2 text-right">
+                    ₱{price.toLocaleString()}
+                  </td>
+                  <td className="py-1 px-2 text-right">
+                    {item.inventory.cost_price !== undefined && item.inventory.cost_price !== null
+                      ? `₱${item.inventory.cost_price.toLocaleString()}`
+                      : "—"}
+                  </td>
+                  {/* --- DISCOUNT COLUMN (blank if 0 or empty) --- */}
+                 <td className="py-1 px-2 text-right font-semibold">
+  {item.quantity === 0
+    ? ""
+    : typeof editedDiscounts[idx] === "number" && editedDiscounts[idx] !== 0
+      ? `${editedDiscounts[idx]}%`
+      : ""}
 </td>
-<td className="py-1 px-2 text-right">
-  {item.inventory.cost_price !== undefined && item.inventory.cost_price !== null
-    ? `₱${item.inventory.cost_price.toLocaleString()}`
-    : "—"}
-</td>
-  <td className="py-1 px-2 text-right font-semibold">
-    ₱
-    {amount.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-    })}
-  </td>
-</tr>
 
 
-                    );
-                  })}
-                </tbody>
+                  {/* --- AMOUNT COLUMN (always show computed value) --- */}
+                  <td className="py-1 px-2 text-right font-semibold">
+                    ₱{amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+
               </table>
             </div>
             {/* Totals and Terms */}

@@ -177,8 +177,22 @@ function generateTransactionCode(): string {
   return `TXN-${yyyymmdd}-${random}`;
 }
 function isValidPhone(phone: string) {
-  return /^\d{11}$/.test(phone);
+  return /^\d{11}$/.test(phone); // 09xxxxxxxxx
 }
+
+// NEW: accept +63 or 63 and convert to 09xxxxxxxxx
+function normalizePhone(input: string | null | undefined): string {
+  const digits = String(input || "").replace(/\D/g, ""); // keep numbers only
+  if (digits.startsWith("63") && digits.length === 12) {
+    // +63xxxxxxxxxx or 63xxxxxxxxxx  ->  0xxxxxxxxxx
+    return "0" + digits.slice(2);
+  }
+  if (digits.length === 11 && digits.startsWith("0")) {
+    return digits;
+  }
+  return ""; // unknown format
+}
+
 function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
   const nameFromMeta =
     meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
@@ -188,6 +202,7 @@ function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
     return fallbackEmail.split("@")[0];
   return "";
 }
+
 function formatPeso(n: number | undefined | null) {
   const v = Number(n ?? 0);
   return new Intl.NumberFormat("en-PH", {
@@ -204,6 +219,50 @@ function lineTotal(ci: CartItem) {
 function cartSum(list: CartItem[]) {
   return list.reduce((s, ci) => s + lineTotal(ci), 0);
 }
+
+/* ------------------------ Identity + Phone helpers ------------------------ */
+const getAuthIdentity = async () => {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const email = user?.email ?? "";
+  const name = getDisplayNameFromMetadata(user?.user_metadata, email);
+  const phone = normalizePhone((user?.user_metadata as any)?.phone || "");
+  return { email, name, phone };
+};
+
+/** Try multiple sources to get a phone for this email (case-insensitive). */
+const loadPhoneForEmail = async (email: string): Promise<string> => {
+  const clean = (email || "").trim();
+  if (!clean) return "";
+
+  // 1) Latest account_requests row
+  const { data: ar } = await supabase
+    .from("account_requests")
+    .select("contact_number")
+    .ilike("email", clean)
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const fromAR = normalizePhone(ar?.contact_number);
+  if (fromAR) return fromAR;
+
+  // 2) Latest customers row
+  const { data: cust } = await supabase
+    .from("customers")
+    .select("phone")
+    .ilike("email", clean)
+    .order("date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const fromCustomers = normalizePhone(cust?.phone);
+  if (fromCustomers) return fromCustomers;
+
+  return "";
+};
 
 /* -------------------------------- Component ------------------------------- */
 export default function CustomerInventoryPage() {
@@ -229,13 +288,15 @@ export default function CustomerInventoryPage() {
   const [trackError, setTrackError] = useState<string | null>(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
 
-  // identity defaults from auth (if any)
+  // identity defaults from auth (persist name, email, AND phone)
   const [authDefaults, setAuthDefaults] = useState<{
     name: string;
     email: string;
+    phone: string;
   }>({
     name: "",
     email: "",
+    phone: "",
   });
 
   // order history counter (for display)
@@ -519,7 +580,7 @@ export default function CustomerInventoryPage() {
     setCustomerInfo((prev) => ({
       ...prev,
       customer_type: type,
-      // NEW: For Existing customers, automatically set to Credit only.
+      // Existing customers => Credit; New => Cash
       payment_type: type === "Existing Customer" ? "Credit" : "Cash",
     }));
   }, []);
@@ -527,32 +588,21 @@ export default function CustomerInventoryPage() {
   // Pre-fill name/email/phone if logged in and compute type once
   useEffect(() => {
     (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        const displayName = getDisplayNameFromMetadata(
-          user.user_metadata,
-          user.email || undefined
-        );
-        const email = user.email || "";
+      const { email, name, phone: phoneFromAuth } = await getAuthIdentity();
+      if (email) {
+        const phoneFromSources = phoneFromAuth || (await loadPhoneForEmail(email));
 
-        // Fetch from account_requests to get contact_number
-        const { data: customerData } = await supabase
-          .from("account_requests")
-          .select("contact_number")
-          .eq("email", email)
-          .maybeSingle();
-
-        const contactNumber = customerData?.contact_number || "";
-
-        setAuthDefaults({ name: displayName || "", email });
+        setAuthDefaults({
+          name: name || "",
+          email,
+          phone: phoneFromSources || "",
+        });
 
         setCustomerInfo((prev) => ({
           ...prev,
-          name: prev.name || displayName || "",
+          name: prev.name || name || "",
           email: prev.email || email,
-          phone: prev.phone || contactNumber, // auto-fill phone
+          phone: prev.phone || phoneFromSources || "",
         }));
 
         await setTypeFromHistory(email);
@@ -653,7 +703,6 @@ export default function CustomerInventoryPage() {
     if (customerInfo.customer_type === "New Customer") {
       setCustomerInfo((prev) => ({ ...prev, payment_type: "Cash" }));
     } else if (customerInfo.customer_type === "Existing Customer") {
-      // NEW: Existing customer => always Credit (Balance removed)
       setCustomerInfo((prev) => ({ ...prev, payment_type: "Credit" }));
     }
   }, [customerInfo.customer_type]);
@@ -735,14 +784,49 @@ export default function CustomerInventoryPage() {
     if (!customerInfo.code) {
       setCustomerInfo((prev) => ({ ...prev, code: generateTransactionCode() }));
     }
+
+    // Always determine an email we can use right now
+    const { email: authEmail, name: authName } = await getAuthIdentity();
+    const emailToUse =
+      (customerInfo.email && customerInfo.email.trim()) ||
+      (authDefaults.email && authDefaults.email.trim()) ||
+      authEmail;
+
+    // Try every place to get a phone, normalize it
+    let ensuredPhone =
+      normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
+
+    if (!ensuredPhone && emailToUse) {
+      ensuredPhone = await loadPhoneForEmail(emailToUse);
+    }
+
+    // Persist identity & phone into both defaults and the form
+    setAuthDefaults((prev) => ({
+      ...prev,
+      name: prev.name || authName,
+      email: prev.email || authEmail,
+      phone: ensuredPhone || prev.phone,
+    }));
+
     setCustomerInfo((prev) => ({
       ...prev,
-      name: prev.name || authDefaults.name,
-      email: prev.email || authDefaults.email,
+      name: prev.name || authDefaults.name || authName,
+      email: prev.email || authDefaults.email || authEmail,
+      phone: ensuredPhone || prev.phone,
     }));
-    const emailToCheck =
-      (customerInfo.email && customerInfo.email.trim()) || authDefaults.email;
-    if (emailToCheck) await setTypeFromHistory(emailToCheck);
+
+    const checkEmail =
+      (customerInfo.email && customerInfo.email.trim()) ||
+      authDefaults.email ||
+      authEmail;
+    if (checkEmail) await setTypeFromHistory(checkEmail);
+
+    if (!ensuredPhone) {
+      toast.error(
+        "We couldn't auto-fill your phone number. Please update your profile."
+      );
+    }
+
     setShowCartPopup(true);
   };
 
@@ -756,7 +840,14 @@ export default function CustomerInventoryPage() {
     if (!customerInfo.email || !customerInfo.email.includes("@")) {
       missing.push("Email");
     }
-    // Phone validation removed (it's auto-filled & locked)
+    // REQUIRED: Contact Person
+    if (!customerInfo.contact_person || !customerInfo.contact_person.trim()) {
+      missing.push("Contact Person");
+    }
+    // Phone stays read-only but DB requires it — if empty, block submit.
+    if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) {
+      missing.push("Phone");
+    }
     if (!houseStreet || !houseStreet.trim()) {
       missing.push("House & Street");
     }
@@ -781,6 +872,8 @@ export default function CustomerInventoryPage() {
   }, [
     customerInfo.name,
     customerInfo.email,
+    customerInfo.contact_person,
+    customerInfo.phone,
     houseStreet,
     regionCode,
     provinceCode,
@@ -853,9 +946,11 @@ export default function CustomerInventoryPage() {
     const now = new Date();
     const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
 
+    const normalizedPhone = normalizePhone(finalOrderDetails.customer.phone);
     const customerPayload: Partial<CustomerInfo> = {
-      ...customer,
-      landmark: customer.landmark || "",
+      ...finalOrderDetails.customer,
+      phone: normalizedPhone || finalOrderDetails.customer.phone, // keep normalized
+      landmark: finalOrderDetails.customer.landmark || "",
       date: phTime,
       status: "pending",
       transaction: items
@@ -902,7 +997,7 @@ export default function CustomerInventoryPage() {
 
       toast.success("Your order has been submitted successfully!");
 
-      // Reset UI but keep identity
+      // Reset UI but KEEP identity defaults (incl. phone)
       setShowFinalPopup(false);
       setFinalOrderDetails(null);
       setCart([]);
@@ -910,7 +1005,7 @@ export default function CustomerInventoryPage() {
       setCustomerInfo({
         name: authDefaults.name,
         email: authDefaults.email,
-        phone: "",
+        phone: authDefaults.phone, // <-- keep
         address: "",
         contact_person: "",
         code: "",
@@ -999,6 +1094,22 @@ export default function CustomerInventoryPage() {
     setShowImageModal(false);
     setImageModalItem(null);
   };
+
+  /* ---------------------- Safety backfill while modal open --------------- */
+  useEffect(() => {
+    (async () => {
+      if (showCartPopup && !customerInfo.phone) {
+        const emailToUse = customerInfo.email || authDefaults.email;
+        if (emailToUse) {
+          const p = await loadPhoneForEmail(emailToUse);
+          if (p) {
+            setAuthDefaults((prev) => ({ ...prev, phone: p }));
+            setCustomerInfo((prev) => ({ ...prev, phone: p }));
+          }
+        }
+      }
+    })();
+  }, [showCartPopup]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* --------------------------------- UI --------------------------------- */
   return (
@@ -1374,7 +1485,7 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* First Confirm Order Modal (name/email/phone are READ-ONLY) */}
+      {/* First Confirm Order Modal (name/email are READ-ONLY) */}
       {showCartPopup && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -1403,19 +1514,25 @@ export default function CustomerInventoryPage() {
                   value={customerInfo.email}
                   readOnly
                 />
-                {/* Phone is auto-filled & read-only */}
+                {/* Phone (auto-filled & read-only). Highlight if missing */}
                 <input
                   type="tel"
                   placeholder="Phone (11 digits)"
-                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+                  className={`border px-3 py-2 rounded bg-gray-100 cursor-not-allowed ${
+                    !customerInfo.phone ? "border-red-400" : ""
+                  }`}
                   value={customerInfo.phone}
                   readOnly
                 />
 
-                {/* Contact Person (editable, optional) */}
+                {/* Contact Person (editable, REQUIRED) */}
                 <input
-                  placeholder="Contact Person"
-                  className="border px-3 py-2 rounded"
+                  placeholder="Contact Person (required)"
+                  className={`border px-3 py-2 rounded ${
+                    !customerInfo.contact_person?.trim()
+                      ? "border-red-400 focus:ring-red-500"
+                      : ""
+                  }`}
                   value={customerInfo.contact_person}
                   onChange={(e) =>
                     setCustomerInfo({
@@ -1614,8 +1731,8 @@ export default function CustomerInventoryPage() {
                 {/* Estimated total + note */}
                 <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
                   <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount during
-                    order processing.
+                    * Final price may change if an admin applies a discount
+                    during order processing.
                   </div>
                   <div className="text-sm">
                     <span className="mr-2 text-gray-600">Estimated Total:</span>
@@ -1707,7 +1824,9 @@ export default function CustomerInventoryPage() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-500">City/Municipality</div>
+                  <div className="text-xs text-gray-500">
+                    City/Municipality
+                  </div>
                   <div className="font-medium">{selectedCity?.name ?? "-"}</div>
                 </div>
                 <div>
@@ -1757,8 +1876,8 @@ export default function CustomerInventoryPage() {
                 {/* Estimated total + note */}
                 <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
                   <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount during
-                    order processing.
+                    * Final price may change if an admin applies a discount
+                    during order processing.
                   </div>
                   <div className="text-sm">
                     <span className="mr-2 text-gray-600">Estimated Total:</span>
