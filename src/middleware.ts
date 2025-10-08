@@ -23,9 +23,9 @@ export async function middleware(req: NextRequest) {
   ];
 
   // CASHIER modules (admin or cashier)
-  const cashierModules = [
-    "/sales", "/invoice", "/payments", "/returns", "/transaction-history"
-  ];
+ const cashierModules = [
+  "/sales", "/invoice", "/payments", "/returns", "/transaction-history", "/inventory" 
+];
 
   // WAREHOUSE modules
   const warehouseModules = ["/inventory"];
@@ -41,12 +41,13 @@ export async function middleware(req: NextRequest) {
   }
 
   // --- CASHIER OR ADMIN ---
-  if (cashierModules.some((p) => pathname.startsWith(p))) {
-    const role = session?.user?.user_metadata?.role;
-    if (!session || !(role === "admin" || role === "cashier")) {
-      return NextResponse.redirect(new URL("/login", req.url));
-    }
+if (cashierModules.some((p) => pathname.startsWith(p))) {
+  const role = session?.user?.user_metadata?.role;
+  if (!session || !(role === "admin" || role === "cashier")) {
+    return NextResponse.redirect(new URL("/login", req.url));
   }
+}
+
 
   // --- WAREHOUSE ONLY ---
   if (warehouseModules.some((p) => pathname.startsWith(p))) {
@@ -88,6 +89,7 @@ export const config = {
     "/payments/:path*",
     "/returns/:path*",
     "/transaction-history/:path*",
+    "/inventory/:path*",
     // Warehouse ONLY
     "/inventory/:path*",
     // Trucker ONLY
