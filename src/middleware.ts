@@ -7,7 +7,7 @@ export async function middleware(req: NextRequest) {
   const { data: { session } } = await supabase.auth.getSession();
   const pathname = req.nextUrl.pathname;
 
-  // ---- Allow unauthenticated access to public pages (login, signup, etc) ----
+  // Public pages (unauthenticated access allowed)
   const PUBLIC_PATHS = ["/login", "/reset", "/account_creation", "/otp-verification"];
   if (
     PUBLIC_PATHS.some((p) => pathname.startsWith(p)) ||
@@ -17,19 +17,54 @@ export async function middleware(req: NextRequest) {
     return res;
   }
 
-  // ---- ADMIN routes: must have admin role ----
-  const adminRoutes = [
-    "/dashboard", "/inventory", "/logistics", "/delivered",
-    "/sales", "/invoice", "/returns", "/transaction-history",
-    "/activity-log", "/account-request", "/settings"
+  // ADMIN-only modules
+  const adminOnly = [
+    "/dashboard", "/activity-log", "/account-request", "/backups", "/settings"
   ];
-  if (adminRoutes.some((p) => pathname.startsWith(p))) {
+
+  // CASHIER modules (admin or cashier)
+  const cashierModules = [
+    "/sales", "/invoice", "/payments", "/returns", "/transaction-history"
+  ];
+
+  // WAREHOUSE modules
+  const warehouseModules = ["/inventory"];
+
+  // TRUCKER modules
+  const truckerModules = ["/logistics", "/logistics/delivered"];
+
+  // --- ADMIN ONLY ---
+  if (adminOnly.some((p) => pathname.startsWith(p))) {
     if (!session || session.user.user_metadata?.role !== "admin") {
       return NextResponse.redirect(new URL("/login", req.url));
     }
   }
 
-  // ---- CUSTOMER routes: must have customer role ----
+  // --- CASHIER OR ADMIN ---
+  if (cashierModules.some((p) => pathname.startsWith(p))) {
+    const role = session?.user?.user_metadata?.role;
+    if (!session || !(role === "admin" || role === "cashier")) {
+      return NextResponse.redirect(new URL("/login", req.url));
+    }
+  }
+
+  // --- WAREHOUSE ONLY ---
+  if (warehouseModules.some((p) => pathname.startsWith(p))) {
+    const role = session?.user?.user_metadata?.role;
+    if (!session || role !== "warehouse") {
+      return NextResponse.redirect(new URL("/login", req.url));
+    }
+  }
+
+  // --- TRUCKER ONLY ---
+  if (truckerModules.some((p) => pathname.startsWith(p))) {
+    const role = session?.user?.user_metadata?.role;
+    if (!session || role !== "trucker") {
+      return NextResponse.redirect(new URL("/login", req.url));
+    }
+  }
+
+  // --- CUSTOMER ---
   if (pathname.startsWith("/customer")) {
     if (!session || session.user.user_metadata?.role !== "customer") {
       return NextResponse.redirect(new URL("/login", req.url));
@@ -38,21 +73,27 @@ export async function middleware(req: NextRequest) {
 
   return res;
 }
+
 export const config = {
   matcher: [
-    // Admin side
+    // Admin-only
     "/dashboard/:path*",
-    "/inventory/:path*",
-    "/logistics/:path*",
-    "/delivered/:path*",
-    "/sales/:path*",
-    "/invoice/:path*",
-    "/returns/:path*",
-    "/transaction-history/:path*",
     "/activity-log/:path*",
     "/account-request/:path*",
+    "/backups/:path*",
     "/settings/:path*",
-    // Customer side
-    "/customer/:path*"
+    // Cashier (or admin)
+    "/sales/:path*",
+    "/invoice/:path*",
+    "/payments/:path*",
+    "/returns/:path*",
+    "/transaction-history/:path*",
+    // Warehouse ONLY
+    "/inventory/:path*",
+    // Trucker ONLY
+    "/logistics/:path*",
+    "/logistics/delivered/:path*",
+    // Customer
+    "/customer/:path*",
   ],
 };
