@@ -11,6 +11,17 @@ import {
   RefreshCw,
 } from "lucide-react";
 
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose, // if this import doesn't exist in your dialog.tsx, delete it and see note below
+} from "@/components/ui/dialog";
+
 type Artifact = {
   id: number;
   name: string;
@@ -71,6 +82,24 @@ export default function BackupsPage() {
     }
   };
 
+  const restoreToStaging = async (artifactId: number) => {
+    try {
+      const res = await fetch("/api/restore/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artifactId, target: "staging" }),
+      });
+      const j = await res.json();
+      if (!res.ok || !j.ok)
+        throw new Error(j.error || `Restore dispatch failed (${res.status})`);
+      toast.success(
+        "Restore dispatched. Check GitHub → Actions → Supabase DB Restore."
+      );
+    } catch (e: any) {
+      toast.error(e.message || "Failed to dispatch restore");
+    }
+  };
+
   const restoreHelper = (fileHint: string) => {
     const text = [
       "# Unpack the ZIP you downloaded; inside is a .tar.gz or .tar",
@@ -91,6 +120,69 @@ export default function BackupsPage() {
     navigator.clipboard.writeText(text);
     toast.success("Restore steps copied to clipboard");
   };
+
+  /** Confirmation modal button using your dialog primitives */
+  function RestoreToStagingButton({
+    artifactId,
+    onConfirm,
+  }: {
+    artifactId: number;
+    onConfirm: (id: number) => Promise<void>;
+  }) {
+    const [open, setOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
+
+    const confirm = async () => {
+      try {
+        setBusy(true);
+        await onConfirm(artifactId);
+        setOpen(false);
+      } catch (e: any) {
+        toast.error(e.message || "Failed to dispatch restore");
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    return (
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <button
+            className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-indigo-500/20 hover:bg-indigo-500/30"
+            title="Restore this backup to staging"
+          >
+            <RotateCcw className="w-4 h-4" /> Restore to staging
+          </button>
+        </DialogTrigger>
+
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Restore to staging?</DialogTitle>
+            <DialogDescription>
+              This will <b>overwrite</b> the current data in your <b>staging</b>{" "}
+              database with this backup. Continue?
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter className="gap-2">
+            {/* If DialogClose isn't exported in your dialog.tsx, replace with: onClick={() => setOpen(false)} */}
+            <DialogClose asChild>
+              <button className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20">
+                Cancel
+              </button>
+            </DialogClose>
+            <button
+              onClick={confirm}
+              disabled={busy}
+              className="px-3 py-1.5 rounded-lg bg-indigo-500/90 text-black hover:bg-indigo-500 disabled:opacity-60"
+            >
+              {busy ? "Restoring..." : "Yes, restore"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   const rows = useMemo(
     () =>
@@ -117,7 +209,8 @@ export default function BackupsPage() {
             >
               <Download className="w-4 h-4" /> Download
             </a>
-            {/* The artifact is a ZIP; it will contain your .tar.gz file (e.g., supabase-backup_YYYY.tar.gz) */}
+
+            {/* Copy manual restore steps */}
             <button
               className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-white/10 hover:bg-white/20"
               onClick={() =>
@@ -127,6 +220,12 @@ export default function BackupsPage() {
             >
               <RotateCcw className="w-4 h-4" /> Restore Helper
             </button>
+
+            {/* NEW: confirmation modal for Restore to staging */}
+            <RestoreToStagingButton
+              artifactId={a.id}
+              onConfirm={restoreToStaging}
+            />
           </td>
         </tr>
       )),
