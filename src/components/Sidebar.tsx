@@ -57,7 +57,7 @@ const ROLE_MENUS: Record<string, string[]> = {
   ],
   cashier: [
      "Sales", "Invoice", "Payments",
-    "Returns", "Transaction History", "Inventory"
+    "Returns", "Transaction History", 
   ],
   warehouse: [
     "Inventory"

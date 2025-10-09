@@ -17,7 +17,7 @@ export async function middleware(req: NextRequest) {
     return res;
   }
 
-  // Admin only
+  // Admin only modules (except logistics/delivered)
   const adminOnly = [
     "/dashboard", "/activity-log", "/account-request", "/backups", "/settings"
   ];
@@ -27,34 +27,39 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // Cashier, Admin, Warehouse can access /inventory
-if (pathname.startsWith("/inventory")) {
-  const user = session?.user as any;
-  const role =
-    user?.user_metadata?.role ||
-    user?.raw_user_meta_data?.role;
-  if (!session || !["admin", "cashier", "warehouse"].includes(role)) {
-    return NextResponse.redirect(new URL("/login", req.url));
-  }
-}
-
-
-  // Cashier/Admin (no warehouse)
-  const cashierModules = [
-    "/sales", "/invoice", "/payments", "/returns", "/transaction-history"
-  ];
-  if (cashierModules.some((p) => pathname.startsWith(p))) {
-    const role = session?.user?.user_metadata?.role;
-    if (!session || !(role === "admin" || role === "cashier")) {
+  // Logistics + Delivered: allow admin OR trucker
+  if (
+    pathname.startsWith("/logistics") ||
+    pathname.startsWith("/logistics/delivered")
+  ) {
+    const role =
+      session?.user?.user_metadata?.role ||
+      (session?.user as any)?.raw_user_meta_data?.role;
+    if (!session || !["admin", "trucker"].includes(role)) {
       return NextResponse.redirect(new URL("/login", req.url));
     }
   }
 
-  // Trucker only
-  const truckerModules = ["/logistics", "/logistics/delivered"];
-  if (truckerModules.some((p) => pathname.startsWith(p))) {
-    const role = session?.user?.user_metadata?.role;
-    if (!session || role !== "trucker") {
+  // /inventory: admin, cashier, warehouse
+  if (pathname.startsWith("/inventory")) {
+    const user = session?.user as any;
+    const role =
+      user?.user_metadata?.role ||
+      user?.raw_user_meta_data?.role;
+    if (!session || !["admin", "cashier", "warehouse"].includes(role)) {
+      return NextResponse.redirect(new URL("/login", req.url));
+    }
+  }
+
+  // Cashier/Admin (but not warehouse or others)
+  const cashierModules = [
+    "/sales", "/invoice", "/payments", "/returns", "/transaction-history"
+  ];
+  if (cashierModules.some((p) => pathname.startsWith(p))) {
+    const role =
+      session?.user?.user_metadata?.role ||
+      (session?.user as any)?.raw_user_meta_data?.role;
+    if (!session || !(role === "admin" || role === "cashier")) {
       return NextResponse.redirect(new URL("/login", req.url));
     }
   }

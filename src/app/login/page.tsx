@@ -324,22 +324,29 @@ export default function LoginPage() {
               </motion.button>
             </form>
             <p className="text-sm text-gray-600">
-              Don’t have an account?{" "}
-              <button
-                type="button"
-                onClick={() => router.push("/account_creation")}
-                className="text-[#181918] font-medium hover:text-[#ffba20] transition-colors"
-              >
-                Sign Up
-              </button>
-            </p>
-            <button
-              type="button"
-              onClick={() => setShowPrivacy(true)}
-              className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mt-2"
-            >
-              Privacy Policy
-            </button>
+  Don’t have an account?{" "}
+  <button
+    type="button"
+    onClick={() => router.push("/account_creation")}
+    className="text-[#181918] font-medium hover:text-[#ffba20] transition-colors"
+  >
+    Sign Up
+  </button>
+</p>
+<button
+  type="button"
+  onClick={() => router.push("/reset")}
+  className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mb-1"
+>
+  Forgot password?
+</button>
+<button
+  type="button"
+  onClick={() => setShowPrivacy(true)}
+  className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mt-2"
+>
+  Privacy Policy
+</button>
           </div>
           <Image
             src={splashImage}
