@@ -74,16 +74,25 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
   const router = useRouter();
   const supabase = createClientComponentClient();
 
-  const handleLogout = async () => {
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-    } catch (err) {
-      console.error("Logout failed:", err);
-    } finally {
-      router.replace("/login");
-    }
-  };
+const handleLogout = async () => {
+  try {
+    // Clear OTP/other storage if needed
+    localStorage.removeItem("otpVerified");
+    localStorage.removeItem("otpVerifiedEmail");
+    localStorage.removeItem("otpVerifiedExpiry");
+    localStorage.removeItem("otpCode");
+    localStorage.removeItem("otpExpiry");
+    localStorage.removeItem("otpEmail");
+    // Optionally: localStorage.clear();
+
+    await supabase.auth.signOut();
+  } catch (err) {
+    console.error("Logout failed:", err);
+  } finally {
+    window.location.href = "/login";
+  }
+};
+
 
   return (
     <motion.div

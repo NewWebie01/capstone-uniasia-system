@@ -1,4 +1,3 @@
-// components/Sidebar.tsx
 "use client";
 
 import arrowcontrol from "@/assets/control.png";
@@ -8,11 +7,9 @@ import Logistics from "@/assets/logistics.png";
 import Sales from "@/assets/Sales.png";
 import LogoutIcon from "@/assets/power-button.png";
 import { History, ReceiptText } from "lucide-react";
-
 import { FaHistory } from "react-icons/fa";
 import {
   UserPlus,
-  ShoppingCart,
   Boxes,
   FileText,
   Receipt,
@@ -60,16 +57,13 @@ const ROLE_MENUS: Record<string, string[]> = {
   ],
   cashier: [
      "Sales", "Invoice", "Payments",
-    "Returns", "Transaction History"
+    "Returns", "Transaction History", "Inventory"
   ],
   warehouse: [
     "Inventory"
   ],
   trucker: [
     "Truck Delivery", "Delivered"
-  ],
-  customer: [
-    // If you have a sidebar for customer role, add here
   ],
   supervisor: [
     // Example: show some of admin + cashier, customize as needed
@@ -100,34 +94,44 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
         "";
       setRole(userRole);
     })();
-    // eslint-disable-next-line
-  }, []);
+  }, [supabase]);
 
+  // --- Robust logout (clears storage, session, forces reload)
   const handleLogout = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const userEmail = user?.email || "unknown";
-    const userRole =
-      user?.user_metadata?.role ||
-      (user && (user as any).raw_user_meta_data?.role) ||
-      "unknown";
+    try {
+      // Clear OTP/other custom storage if needed
+      localStorage.removeItem("otpVerified");
+      localStorage.removeItem("otpVerifiedEmail");
+      localStorage.removeItem("otpVerifiedExpiry");
+      localStorage.removeItem("otpCode");
+      localStorage.removeItem("otpExpiry");
+      localStorage.removeItem("otpEmail");
+      // Optionally: localStorage.clear();
 
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        user_role: userRole,
-        action: "Logout",
-        details: {},
-        created_at: new Date().toISOString(),
-      },
-    ]);
-
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error("Logout failed:", error.message);
-    } else {
-      window.location.href = "/login";
+      // Log out activity
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const userEmail = user?.email || "unknown";
+      const userRole =
+        user?.user_metadata?.role ||
+        (user && (user as any).raw_user_meta_data?.role) ||
+        "unknown";
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: userEmail,
+          user_role: userRole,
+          action: "Logout",
+          details: {},
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      await supabase.auth.signOut();
+    } catch (err) {
+      // Not blocking: still force reload
+      console.error("Logout failed:", err);
+    } finally {
+      window.location.href = "/login"; // ✅ Full reload
     }
   };
 

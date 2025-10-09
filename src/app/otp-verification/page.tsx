@@ -81,6 +81,9 @@ export default function OtpVerificationPage() {
       user?.user_metadata?.role ||
       (user && (user as any).raw_user_meta_data?.role) ||
       undefined;
+      console.log("OTP login user:", user);
+      console.log("Resolved role:", role);
+
 
     // Log login activity
     supabase
