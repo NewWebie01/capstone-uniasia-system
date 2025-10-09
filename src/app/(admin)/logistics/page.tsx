@@ -160,6 +160,10 @@ export default function TruckDeliveryPage() {
   const [provinceCode, setProvinceCode] = useState("");
   const [selectedRegionName, setSelectedRegionName] = useState<string>("");
   const [selectedProvinceName, setSelectedProvinceName] = useState<string>("");
+  //FOR SHIPPING CONST
+  const [editingShippingFees, setEditingShippingFees] = useState<
+    Record<string, string>
+  >({});
 
   useEffect(() => {
     const selected = regions.find((r) => r.code === regionCode);
@@ -957,7 +961,9 @@ export default function TruckDeliveryPage() {
     if (withoutSpaces.length <= 7) {
       setNewDelivery((prev) => ({ ...prev, plateNumber: value.toUpperCase() }));
     } else {
-      toast.error("Plate number must not exceed 7 characters");
+      toast.error("Plate number must not exceed 7 characters", {
+        id: "plate-limit",
+      });
     }
   };
 
@@ -1089,14 +1095,63 @@ export default function TruckDeliveryPage() {
                           </label>
                           <input
                             type="number"
+                            inputMode="decimal"
+                            step="0.01"
+                            min="0"
                             className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
-                            value={delivery.shipping_fee ?? ""} // You may need to support this field in your database
-                            onChange={(e) =>
-                              handleShippingFeeChange(
-                                delivery.id,
-                                parseFloat(e.target.value)
-                              )
+                            // Use the local buffer while editing; fall back to the DB value
+                            value={
+                              editingShippingFees[delivery.id] ??
+                              (delivery.shipping_fee != null
+                                ? String(delivery.shipping_fee)
+                                : "")
                             }
+                            onChange={(e) =>
+                              setEditingShippingFees((prev) => ({
+                                ...prev,
+                                [delivery.id]: e.target.value,
+                              }))
+                            }
+                            onBlur={(e) => {
+                              const raw = e.currentTarget.value.trim();
+                              // If empty, do nothing (or clear if that's your desired behavior)
+                              if (raw === "") return;
+
+                              const amount = Number(raw);
+                              if (!Number.isFinite(amount)) {
+                                // Optional: gently reset to previous value
+                                setEditingShippingFees((prev) => ({
+                                  ...prev,
+                                  [delivery.id]:
+                                    delivery.shipping_fee != null
+                                      ? String(delivery.shipping_fee)
+                                      : "",
+                                }));
+                                // If you toast here, use a fixed id to avoid stacking:
+                                // toast.error("Invalid amount", { id: `shipfee-${delivery.id}` });
+                                return;
+                              }
+
+                              // Skip if no change
+                              if (amount === (delivery.shipping_fee ?? 0))
+                                return;
+
+                              // Commit once on blur (your existing function can toast inside, with a fixed id)
+                              handleShippingFeeChange(delivery.id, amount);
+
+                              // Clear the local buffer after commit
+                              setEditingShippingFees((prev) => {
+                                const copy = { ...prev };
+                                delete copy[delivery.id];
+                                return copy;
+                              });
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                // Trigger the same commit path as blur
+                                (e.currentTarget as HTMLInputElement).blur();
+                              }
+                            }}
                             placeholder="Enter shipping fee"
                           />
                         </div>
