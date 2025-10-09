@@ -724,15 +724,30 @@ export default function InvoicePage() {
             PDFs.
           </p>
 
-          <div className="w-full max-w-3xl mt-4">
+          <form
+            autoComplete="off"
+            onSubmit={(e) => e.preventDefault()}
+            className="w-full max-w-3xl mt-4"
+          >
             <input
-              type="text"
+              type="search"
+              id="invoice_search"
+              name="invoice_search" // avoid keywords like "email", "user", "name"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              inputMode="search"
+              enterKeyHint="search"
               placeholder="Search by customer name…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full px-4 py-2 rounded-lg border border-neutral-200 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 bg-white transition"
+              // common PM vendor hints (harmless if unsupported)
+              data-1p-ignore
+              data-lpignore="true"
             />
-          </div>
+          </form>
         </div>
 
         <style jsx>{`
@@ -777,6 +792,7 @@ export default function InvoicePage() {
                     open={openId === order.id}
                     onOpenChange={(open) => {
                       if (!open) {
+                        if (showReauth) return;
                         setOpenId(null);
                         setItems(null);
                         setEditMode(false);
@@ -806,7 +822,18 @@ export default function InvoicePage() {
                         </DialogTrigger>
                       </td>
                     </tr>
-                    <DialogContent className="max-w-4xl max-h-[80vh] bg-white/95 rounded-xl shadow-2xl overflow-y-auto border border-neutral-100 p-0">
+                    <DialogContent
+                      className="max-w-4xl max-h-[80vh] bg-white/95 rounded-xl shadow-2xl overflow-y-auto border border-neutral-100 p-0"
+                      onInteractOutside={(e) => {
+                        if (showReauth) e.preventDefault();
+                      }}
+                      onPointerDownOutside={(e) => {
+                        if (showReauth) e.preventDefault();
+                      }}
+                      onEscapeKeyDown={(e) => {
+                        if (showReauth) e.preventDefault();
+                      }}
+                    >
                       {!items || !customerForOrder ? (
                         <div className="p-8 text-sm">Fetching items…</div>
                       ) : (
@@ -846,15 +873,16 @@ export default function InvoicePage() {
                               </select>
                               <button
                                 className="bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-                                onClick={() =>
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
                                   handlePrintClick({
                                     nodeId: `invoice-capture-${order.id}`,
                                     paper: paperSize,
                                     filenameBase: `UNIASIA_${txn}`,
                                     orderId: order.id,
                                     txn,
-                                  })
-                                }
+                                  });
+                                }}
                               >
                                 PRINT PDF
                               </button>
@@ -938,6 +966,76 @@ export default function InvoicePage() {
                           )}
                         </div>
                       )}
+                      {showReauth && (
+                        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+                            <h3 className="text-base font-semibold mb-2 text-center">
+                              Confirm Your Identity
+                            </h3>
+                            <p className="text-sm text-neutral-700 text-center mb-4">
+                              For security, please re-enter your password to
+                              print this invoice PDF.
+                            </p>
+
+                            <div className="space-y-3">
+                              <div>
+                                <label className="block text-xs text-neutral-600 mb-1">
+                                  Email
+                                </label>
+                                <input
+                                  type="email"
+                                  value={reauthEmail}
+                                  disabled
+                                  aria-disabled="true"
+                                  tabIndex={-1}
+                                  className="border rounded-lg px-3 py-2 w-full bg-gray-100 text-gray-500 cursor-not-allowed opacity-70"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs text-neutral-600 mb-1">
+                                  Password
+                                </label>
+                                <input
+                                  type="password"
+                                  className="border rounded-lg px-3 py-2 w-full"
+                                  value={reauthPassword}
+                                  onChange={(e) =>
+                                    setReauthPassword(e.target.value)
+                                  }
+                                  placeholder="Enter your password"
+                                  autoFocus
+                                />
+                              </div>
+                              {reauthError && (
+                                <div className="text-xs text-red-600">
+                                  {reauthError}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex gap-3 justify-center mt-5">
+                              <button
+                                className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
+                                onClick={confirmReauth}
+                                disabled={reauthing || !reauthPassword}
+                              >
+                                {reauthing ? "Verifying…" : "Verify & Continue"}
+                              </button>
+                              <button
+                                className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
+                                onClick={() => {
+                                  setShowReauth(false);
+                                  setReauthPassword("");
+                                  setReauthError("");
+                                  setPendingPrint(null);
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </DialogContent>
                   </Dialog>
                 );
@@ -953,72 +1051,6 @@ export default function InvoicePage() {
           </table>
         </motion.div>
         {/* Re-auth modal for PRINT PDF */}
-        {showReauth && (
-          <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-              <h3 className="text-base font-semibold mb-2 text-center">
-                Confirm Your Identity
-              </h3>
-              <p className="text-sm text-neutral-700 text-center mb-4">
-                For security, please re-enter your password to print this
-                invoice PDF.
-              </p>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs text-neutral-600 mb-1">
-                    Email
-                  </label>
-                  <input
-                    type="email"
-                    value={reauthEmail}
-                    disabled
-                    aria-disabled="true"
-                    tabIndex={-1}
-                    className="border rounded-lg px-3 py-2 w-full bg-gray-100 text-gray-500 cursor-not-allowed opacity-70"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-neutral-600 mb-1">
-                    Password
-                  </label>
-                  <input
-                    type="password"
-                    className="border rounded-lg px-3 py-2 w-full"
-                    value={reauthPassword}
-                    onChange={(e) => setReauthPassword(e.target.value)}
-                    placeholder="Enter your password"
-                    autoFocus
-                  />
-                </div>
-                {reauthError && (
-                  <div className="text-xs text-red-600">{reauthError}</div>
-                )}
-              </div>
-
-              <div className="flex gap-3 justify-center mt-5">
-                <button
-                  className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
-                  onClick={confirmReauth}
-                  disabled={reauthing || !reauthPassword}
-                >
-                  {reauthing ? "Verifying…" : "Verify & Continue"}
-                </button>
-                <button
-                  className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
-                  onClick={() => {
-                    setShowReauth(false);
-                    setReauthPassword("");
-                    setReauthError("");
-                    setPendingPrint(null);
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </motion.div>
   );
