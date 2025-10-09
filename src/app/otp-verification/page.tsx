@@ -8,7 +8,7 @@ import splashImage from "@/assets/tools-log-in-splash.jpg";
 import Image from "next/image";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import supabase from "@/config/supabaseClient";
 
 const dmSans = DM_Sans({
@@ -17,7 +17,7 @@ const dmSans = DM_Sans({
   variable: "--font-dm-sans",
 });
 
-export const dynamic = "force-dynamic"; // fix for Vercel/app dir
+export const dynamic = "force-dynamic";
 
 export default function OtpVerificationPage() {
   const router = useRouter();
@@ -26,13 +26,12 @@ export default function OtpVerificationPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // 🔥 ONLY localStorage (no useSearchParams)
   useEffect(() => {
     const email = localStorage.getItem("otpEmail") || "";
     setOtpEmail(email);
   }, []);
 
-  // Timer logic unchanged
+  // Timer logic
   const [expiryDisplay, setExpiryDisplay] = useState("");
   useEffect(() => {
     const expiry = parseInt(localStorage.getItem("otpExpiry") || "0", 10);
@@ -75,14 +74,23 @@ export default function OtpVerificationPage() {
     localStorage.removeItem("otpExpiry");
     localStorage.removeItem("otpEmail");
 
+    // --- Check user_metadata and raw_user_meta_data for role ---
     const { data } = await supabase.auth.getUser();
-    const role = (data?.user?.user_metadata?.role as string | undefined) ?? undefined;
+    const user = data?.user;
+    const role =
+      user?.user_metadata?.role ||
+      (user && (user as any).raw_user_meta_data?.role) ||
+      undefined;
+      console.log("OTP login user:", user);
+      console.log("Resolved role:", role);
 
+
+    // Log login activity
     supabase
       .from("activity_logs")
       .insert([
         {
-          user_email: data?.user?.email ?? null,
+          user_email: user?.email ?? null,
           user_role: role ?? null,
           action: "Login",
           details: {},
@@ -93,12 +101,35 @@ export default function OtpVerificationPage() {
         if (logError) console.error("Failed to insert activity log:", logError);
       });
 
-    if (role === "admin") router.replace("/dashboard");
-    else if (role === "customer") router.replace("/customer/product-catalog");
-    else {
+    // Route users based on their role
+    if (!role) {
       setErrorMessage("Access denied: No role found for this account.");
       await supabase.auth.signOut();
       setIsLoading(false);
+      return;
+    }
+
+    switch (role) {
+      case "admin":
+        router.replace("/dashboard");
+        break;
+      case "cashier":
+        router.replace("/sales");
+        break;
+      case "customer":
+        router.replace("/customer/product-catalog");
+        break;
+      case "warehouse":
+        router.replace("/inventory");
+        break;
+      case "trucker":
+        router.replace("/logistics");
+        break;
+      default:
+        setErrorMessage("Access denied: Role not recognized.");
+        await supabase.auth.signOut();
+        setIsLoading(false);
+        break;
     }
   };
 

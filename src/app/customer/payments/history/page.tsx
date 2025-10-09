@@ -3,7 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { Clock, FileImage, ReceiptText, Search, Info } from "lucide-react";
+import { FileImage, Search, Info } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 /* ----------------------------- Formatters ----------------------------- */
 const formatCurrency = (n: number) =>
@@ -41,7 +49,7 @@ type PaymentRow = {
   cheque_date: string | null;
   image_url: string | null;
   created_at: string | null;
-  status?: string | null;       // 'pending' | 'received' | 'rejected'
+  status?: string | null; // 'pending' | 'received' | 'rejected'
   received_at?: string | null;
   received_by?: string | null;
 };
@@ -55,8 +63,6 @@ type CustomerLite = {
 /* --------------------------------- Page ---------------------------------- */
 export default function PaymentHistoryPage() {
   const [loading, setLoading] = useState(true);
-  const [authEmail, setAuthEmail] = useState<string | null>(null);
-
   const [customers, setCustomers] = useState<CustomerLite[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const paymentsSubKey = useRef<string>("");
@@ -64,6 +70,13 @@ export default function PaymentHistoryPage() {
   // Filters
   const [q, setQ] = useState("");
   const [method, setMethod] = useState<"All" | "Cheque" | "Cash">("All");
+
+  // Image modal
+  const [imgOpen, setImgOpen] = useState(false);
+  const [imgSrc, setImgSrc] = useState<string | null>(null);
+  const [imgMeta, setImgMeta] = useState<{ cheque?: string | null; bank?: string | null } | null>(
+    null
+  );
 
   /* ------------------------------ Initial load ----------------------------- */
   useEffect(() => {
@@ -74,26 +87,22 @@ export default function PaymentHistoryPage() {
           data: { user },
         } = await supabase.auth.getUser();
         const email = user?.email ?? null;
-        setAuthEmail(email);
         if (!email) {
           setCustomers([]);
           setPayments([]);
           return;
         }
 
-        // Load my transaction rows (customers keyed by email)
         const { data: custs, error: cErr } = await supabase
           .from("customers")
           .select("id, code, email")
           .eq("email", email)
           .order("date", { ascending: false });
-
         if (cErr) throw cErr;
 
         const custList = (custs as CustomerLite[]) || [];
         setCustomers(custList);
 
-        // Fetch ONLY received payments for these customer ids
         const ids = custList.map((c) => String(c.id));
         if (ids.length) {
           const { data: pays, error: pErr } = await supabase
@@ -102,9 +111,8 @@ export default function PaymentHistoryPage() {
               "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, created_at, status, received_at, received_by"
             )
             .in("customer_id", ids)
-            .eq("status", "received") // ← only show after admin marks as received
+            .in("status", ["received", "rejected"]) // <-- include both
             .order("created_at", { ascending: false });
-
           if (pErr) throw pErr;
           setPayments((pays as PaymentRow[]) || []);
         } else {
@@ -130,6 +138,8 @@ export default function PaymentHistoryPage() {
       .map((v) => (typeof v === "string" ? `"${v}"` : String(v)))
       .join(",")})`;
 
+    const included = new Set(["received", "rejected"]);
+
     const channel = supabase.channel("realtime-payments-history");
     channel.on(
       "postgres_changes",
@@ -138,33 +148,34 @@ export default function PaymentHistoryPage() {
         const newRow = payload.new as PaymentRow | undefined;
         const oldRow = payload.old as PaymentRow | undefined;
 
+        const newStatus = (newRow?.status || "").toLowerCase();
+        const oldStatus = (oldRow?.status || "").toLowerCase();
+
         if (payload.eventType === "INSERT") {
-          // Only add if it's received
-          if ((newRow?.status || "").toLowerCase() === "received") {
+          if (included.has(newStatus)) {
             setPayments((prev) => [newRow!, ...prev]);
           }
         } else if (payload.eventType === "UPDATE") {
-          const newStatus = (newRow?.status || "").toLowerCase();
-          const oldStatus = (oldRow?.status || "").toLowerCase();
+          const newIn = included.has(newStatus);
+          const oldIn = included.has(oldStatus);
 
-          if (oldStatus !== "received" && newStatus === "received") {
-            // became received → add (or replace if existed)
+          if (!oldIn && newIn) {
+            // entered included set
             setPayments((prev) => {
               const exists = prev.some((p) => p.id === newRow!.id);
               return exists
                 ? prev.map((p) => (p.id === newRow!.id ? newRow! : p))
                 : [newRow!, ...prev];
             });
-          } else if (oldStatus === "received" && newStatus !== "received") {
-            // left received → remove
+          } else if (oldIn && !newIn) {
+            // left included set
             setPayments((prev) => prev.filter((p) => p.id !== oldRow!.id));
-          } else if (newStatus === "received") {
-            // stayed received → update
+          } else if (newIn && oldIn) {
+            // stayed within included set (e.g., received -> rejected or edits)
             setPayments((prev) => prev.map((p) => (p.id === newRow!.id ? newRow! : p)));
           }
         } else if (payload.eventType === "DELETE") {
-          // If a received row got deleted, remove it
-          if ((oldRow?.status || "").toLowerCase() === "received") {
+          if (included.has(oldStatus)) {
             setPayments((prev) => prev.filter((p) => p.id !== oldRow!.id));
           }
         }
@@ -186,9 +197,7 @@ export default function PaymentHistoryPage() {
   const filtered = useMemo(() => {
     const qx = q.trim().toLowerCase();
     return payments.filter((p) => {
-      // method filter
       if (method !== "All" && (p.method || "Cheque") !== method) return false;
-
       if (!qx) return true;
 
       const code = codeByCustomerId.get(String(p.customer_id)) || "";
@@ -207,23 +216,36 @@ export default function PaymentHistoryPage() {
     });
   }, [payments, q, method, codeByCustomerId]);
 
-  const totalPaid = useMemo(
-    () => filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0),
+  // Sum only the received ones for the footer
+  const totalReceived = useMemo(
+    () =>
+      filtered
+        .filter((r) => (r.status || "").toLowerCase() === "received")
+        .reduce((s, r) => s + (Number(r.amount) || 0), 0),
     [filtered]
   );
+
+  /* ------------------------------ Image modal helpers ------------------------------ */
+  function openImage(url: string, meta?: { cheque?: string | null; bank?: string | null }) {
+    setImgSrc(url);
+    setImgMeta(meta || null);
+    setImgOpen(true);
+  }
+
+  const cellNowrap =
+    "sticky top-0 z-10 py-3 px-3 text-left font-bold text-[13px] whitespace-nowrap";
 
   /* ---------------------------------- UI ---------------------------------- */
   return (
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
         <div className="flex items-center gap-3">
-          <ReceiptText className="h-7 w-7 text-amber-600" />
           <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
             Payment History
           </h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Payments appear here after an admin <b>marks your cheque as Received</b>.
+          Cheques appear here after an admin marks them as <b>Received</b> or <b>Rejected</b>.
         </p>
 
         {/* Filters */}
@@ -250,90 +272,145 @@ export default function PaymentHistoryPage() {
 
         {/* Table */}
         <div className="mt-4 rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
-          <table className="w-full text-sm align-middle">
-            <thead>
-              <tr
-                className="text-black uppercase tracking-wider text-[11px]"
-                style={{ background: "#ffba20" }}
-              >
-                <th className="py-2.5 px-3 text-left font-bold">Date</th>
-                <th className="py-2.5 px-3 text-left font-bold">TXN Code</th>
-                <th className="py-2.5 px-3 text-right font-bold">Amount</th>
-                <th className="py-2.5 px-3 text-left font-bold">Method</th>
-                <th className="py-2.5 px-3 text-left font-bold">Cheque #</th>
-                <th className="py-2.5 px-3 text-left font-bold">Bank</th>
-                <th className="py-2.5 px-3 text-left font-bold">Cheque Date</th>
-                <th className="py-2.5 px-3 text-left font-bold">Image</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((p, idx) => {
-                const code = codeByCustomerId.get(String(p.customer_id)) || "—";
-                return (
-                  <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      {formatPH(p.received_at || p.created_at)}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono">{code}</td>
-                    <td className="py-2.5 px-3 text-right font-mono">
-                      {formatCurrency(p.amount)}
-                    </td>
-                    <td className="py-2.5 px-3">{p.method ?? "—"}</td>
-                    <td className="py-2.5 px-3">{p.cheque_number ?? "—"}</td>
-                    <td className="py-2.5 px-3">{p.bank_name ?? "—"}</td>
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      {p.cheque_date ? formatPH(p.cheque_date, "date") : "—"}
-                    </td>
-                    <td className="py-2.5 px-3">
-                      {p.image_url ? (
-                        <a
-                          href={p.image_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded border hover:bg-gray-50"
-                        >
-                          <FileImage className="h-4 w-4" />
-                          <span>View</span>
-                        </a>
-                      ) : (
-                        "—"
-                      )}
+          <div className="w-full overflow-x-auto overscroll-x-contain">
+            <table className="min-w-full bg-white text-sm">
+              <thead className="bg-[#ffba20] text-black text-left">
+                <tr>
+                  <th className={cellNowrap}>Date</th>
+                  <th className={cellNowrap}>TXN Code</th>
+                  <th className={cellNowrap}>Amount</th>
+                  <th className={cellNowrap}>Method</th>
+                  <th className={cellNowrap}>Cheque #</th>
+                  <th className={cellNowrap}>Bank</th>
+                  <th className={cellNowrap}>Cheque Date</th>
+                  <th className={cellNowrap}>Image</th>
+                  <th className={cellNowrap}>Status</th>
+                </tr>
+              </thead>
+
+              <tbody className="align-middle">
+                {filtered.map((p, idx) => {
+                  const code = codeByCustomerId.get(String(p.customer_id)) || "—";
+                  const s = (p.status || "").toLowerCase();
+                  const statusBadge = (
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        s === "received"
+                          ? "bg-green-100 text-green-800"
+                          : s === "rejected"
+                          ? "bg-red-100 text-red-800"
+                          : "bg-yellow-100 text-yellow-900"
+                      }`}
+                    >
+                      {s === "received" ? "Received" : s === "rejected" ? "Rejected" : "Pending"}
+                    </span>
+                  );
+
+                  return (
+                    <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        {formatPH(p.received_at || p.created_at)}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono">{code}</td>
+                      <td className="py-2.5 px-3 font-mono tabular-nums whitespace-nowrap">
+                        {formatCurrency(p.amount)}
+                      </td>
+                      <td className="py-2.5 px-3">{p.method ?? "—"}</td>
+                      <td className="py-2.5 px-3">{p.cheque_number ?? "—"}</td>
+                      <td className="py-2.5 px-3">{p.bank_name ?? "—"}</td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        {p.cheque_date ? formatPH(p.cheque_date, "date") : "—"}
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        {p.image_url ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openImage(p.image_url!, {
+                                cheque: p.cheque_number,
+                                bank: p.bank_name,
+                              })
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded border hover:bg-gray-50"
+                          >
+                            <FileImage className="h-4 w-4" />
+                            <span>View</span>
+                          </button>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">{statusBadge}</td>
+                    </tr>
+                  );
+                })}
+
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="py-10 text-center text-neutral-400">
+                      {loading ? "Loading…" : "No reviewed cheques yet."}
                     </td>
                   </tr>
-                );
-              })}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="py-10 text-center text-neutral-400">
-                    {loading ? "Loading…" : "No received payments yet."}
-                  </td>
-                </tr>
+                )}
+              </tbody>
+
+              {filtered.length > 0 && (
+                <tfoot>
+                  <tr className="bg-neutral-50 border-t">
+                    <td className="py-2.5 px-3 font-semibold">Total Received</td>
+                    <td />
+                    <td className="py-2.5 px-3 font-bold font-mono">
+                      {formatCurrency(totalReceived)}
+                    </td>
+                    {/* Method, Cheque #, Bank, Cheque Date, Image, Status */}
+                    <td colSpan={6} />
+                  </tr>
+                </tfoot>
               )}
-            </tbody>
-            {filtered.length > 0 && (
-              <tfoot>
-                <tr className="bg-neutral-50 border-t">
-                  <td className="py-2.5 px-3 font-semibold">Total</td>
-                  <td />
-                  <td className="py-2.5 px-3 text-right font-bold font-mono">
-                    {formatCurrency(totalPaid)}
-                  </td>
-                  <td colSpan={5} />
-                </tr>
-              </tfoot>
-            )}
-          </table>
+            </table>
+          </div>
         </div>
 
         {/* Hint */}
         <div className="mt-4 flex items-start gap-2 text-sm text-gray-600">
           <Info className="h-4 w-4 mt-0.5" />
           <span>
-            Only <b>Received</b> payments are shown. When an admin approves a cheque,
-            it will appear here automatically.
+            This page shows cheques after admin review — both <b>Received</b> and <b>Rejected</b>.
           </span>
         </div>
       </div>
+
+      {/* Image Modal */}
+      <Dialog open={imgOpen} onOpenChange={setImgOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Cheque Image</DialogTitle>
+            <DialogDescription className="text-xs">
+              {imgMeta?.bank ? `Bank: ${imgMeta.bank}` : ""}{" "}
+              {imgMeta?.cheque ? `• Cheque #: ${imgMeta.cheque}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-lg overflow-hidden border">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={imgSrc || ""}
+              alt="Cheque"
+              className="w-full h-auto object-contain max-h-[70vh] bg-black/5"
+            />
+          </div>
+
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setImgOpen(false)}
+              className="px-4 py-2 rounded border hover:bg-gray-50"
+            >
+              Close
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

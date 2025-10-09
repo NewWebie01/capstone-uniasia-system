@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { Upload, ReceiptText, FileImage, Wallet, Info } from "lucide-react";
+import { Upload, FileImage, Wallet, Info } from "lucide-react";
 
 /* ----------------------------- Config ----------------------------- */
 const CHEQUE_BUCKET = "payments-cheques";
@@ -34,7 +34,7 @@ type ItemRow = {
 };
 
 type OrderRow = {
-  id: string | number; // bigint or uuid
+  id: string | number;
   total_amount: number | null;
   status: string | null;
   truck_delivery_id?: number | null;
@@ -45,9 +45,9 @@ type OrderRow = {
 };
 
 type CustomerTx = {
-  id: string | number; // uuid or bigint
+  id: string | number;
   name: string | null;
-  code: string | null; // TXN
+  code: string | null;
   contact_person?: string | null;
   email: string | null;
   phone: string | null;
@@ -92,7 +92,7 @@ export default function CustomerPaymentsPage() {
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  /* ------------------------------- Fetch (same as Orders) ------------------------------- */
+  /* ------------------------------- Fetch ------------------------------- */
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -200,7 +200,7 @@ export default function CustomerPaymentsPage() {
     };
   }, [txns]);
 
-  /* --------------------------- Totals (same as Orders page) --------------------------- */
+  /* --------------------------- Totals --------------------------- */
   function computeFromOrder(o?: OrderRow | null) {
     const items = o?.order_items ?? [];
     const subtotal = items.reduce((s, it) => {
@@ -267,6 +267,21 @@ export default function CustomerPaymentsPage() {
     }, 0);
   }, [txnOptions, payments, isCredit]);
 
+  /* --------------------------- Form validity --------------------------- */
+  const amountNum = Number(amount);
+  const amountValid = Number.isFinite(amountNum) && amountNum > 0;
+  const exceedsBalance =
+    !!selectedPack && amountValid && amountNum > selectedPack.balance;
+
+  const isFormValid =
+    !!selectedTxnCode &&
+    amountValid &&
+    !exceedsBalance &&
+    chequeNumber.trim().length > 0 &&
+    bankName.trim().length > 0 &&
+    chequeDate.trim().length > 0 &&
+    !!file;
+
   /* ------------------------------ Upload logic ----------------------------- */
   async function uploadChequeImage(
     file: File,
@@ -298,22 +313,19 @@ export default function CustomerPaymentsPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
+    // Guard: do nothing if form invalid (button should already be disabled)
+    if (!isFormValid || !selectedPack?.order?.id) {
+      toast.error("Please complete all fields.");
+      return;
+    }
+
     const me = txns[0];
     if (!me?.id) {
       toast.error("Please sign in to continue.");
       return;
     }
-    if (!selectedPack?.order?.id) {
-      toast.error("Please select a transaction (TXN).");
-      return;
-    }
 
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0) {
-      toast.error("Enter a valid amount.");
-      return;
-    }
-    if (selectedPack.balance > 0 && amt > selectedPack.balance) {
+    if (exceedsBalance) {
       toast.error("Amount exceeds remaining balance.");
       return;
     }
@@ -329,7 +341,7 @@ export default function CustomerPaymentsPage() {
       const { error: insertErr } = await supabase.from("payments").insert({
         customer_id: meId,
         order_id: orderId,
-        amount: amt,
+        amount: amountNum,
         method: "Cheque",
         cheque_number: chequeNumber || null,
         bank_name: bankName || null,
@@ -340,6 +352,7 @@ export default function CustomerPaymentsPage() {
       if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
 
       toast.success("✅ Cheque submitted. We’ll verify it shortly.");
+      setSelectedTxnCode("");
       setAmount("");
       setChequeNumber("");
       setBankName("");
@@ -358,7 +371,6 @@ export default function CustomerPaymentsPage() {
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
         <div className="flex items-center gap-3">
-          <ReceiptText className="h-7 w-7 text-amber-600" />
           <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payments</h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
@@ -444,7 +456,7 @@ export default function CustomerPaymentsPage() {
 
           <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Select Transaction (TXN)</label>
+              <label className="text-xs text-gray-600">Select Transaction (TXN) *</label>
               <select
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 value={selectedTxnCode}
@@ -467,7 +479,7 @@ export default function CustomerPaymentsPage() {
             </div>
 
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Amount</label>
+              <label className="text-xs text-gray-600">Amount *</label>
               <input
                 type="number"
                 step="0.01"
@@ -475,45 +487,55 @@ export default function CustomerPaymentsPage() {
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="0.00"
-                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                className={`mt-1 w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${
+                  exceedsBalance ? "border-red-400 focus:ring-red-400" : "border-gray-300 focus:ring-amber-400"
+                }`}
                 required
               />
+              {exceedsBalance && (
+                <div className="mt-1 text-xs text-red-600">
+                  Amount exceeds remaining balance.
+                </div>
+              )}
             </div>
 
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Cheque Number (optional)</label>
+              <label className="text-xs text-gray-600">Cheque Number *</label>
               <input
                 type="text"
                 value={chequeNumber}
                 onChange={(e) => setChequeNumber(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 placeholder="e.g., 00012345"
+                required
               />
             </div>
 
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Bank Name (optional)</label>
+              <label className="text-xs text-gray-600">Bank Name *</label>
               <input
                 type="text"
                 value={bankName}
                 onChange={(e) => setBankName(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 placeholder="e.g., BPI / BDO / Metrobank"
+                required
               />
             </div>
 
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Cheque Date (optional)</label>
+              <label className="text-xs text-gray-600">Cheque Date *</label>
               <input
                 type="date"
                 value={chequeDate}
                 onChange={(e) => setChequeDate(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                required
               />
             </div>
 
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Cheque Image (optional)</label>
+              <label className="text-xs text-gray-600">Cheque Image *</label>
               <div className="mt-1 flex items-center gap-3">
                 <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 cursor-pointer hover:bg-gray-50">
                   <FileImage className="h-4 w-4" />
@@ -523,6 +545,7 @@ export default function CustomerPaymentsPage() {
                     accept="image/*"
                     className="hidden"
                     onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                    required
                   />
                 </label>
                 <span className="text-xs text-gray-600">
@@ -548,8 +571,9 @@ export default function CustomerPaymentsPage() {
               </button>
               <button
                 type="submit"
-                disabled={submitting}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-60"
+                disabled={!isFormValid || submitting}
+                title={!isFormValid ? "Please complete all fields" : ""}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {submitting ? "Submitting…" : "Submit Cheque"}
               </button>
@@ -592,9 +616,7 @@ export default function CustomerPaymentsPage() {
                     const inStockFlag =
                       typeof it.inventory?.quantity === "number"
                         ? (it.inventory?.quantity ?? 0) > 0
-                        : (it.inventory?.status || "")
-                            .toLowerCase()
-                            .includes("in stock");
+                        : (it.inventory?.status || "").toLowerCase().includes("in stock");
 
                     return (
                       <tr key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>

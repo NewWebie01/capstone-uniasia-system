@@ -1,4 +1,3 @@
-// src/app/account-request/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -48,6 +47,15 @@ function formatPHDate(d?: string | number | Date | null) {
     timeZone: "Asia/Manila",
   }).format(new Date(d));
 }
+
+// --- ALL ROLES: Keep in sync with your business logic ---
+const ROLES = [
+  { value: "customer", label: "Customer" },
+  { value: "admin", label: "Admin" },
+  { value: "cashier", label: "Cashier / Sales Rep" },
+  { value: "warehouse", label: "Warehouse Keeper" },
+  { value: "trucker", label: "Trucker" },
+];
 
 export default function AccountRequestPage() {
   const [requests, setRequests] = useState<AccountRequest[]>([]);
@@ -151,7 +159,13 @@ export default function AccountRequestPage() {
           role,
         }),
       });
-      const data = await res.json();
+      if (!res.ok) {
+        const data = await res.text();
+        throw new Error(data || "Failed to create user");
+      }
+      // Try parsing JSON, but gracefully handle errors
+      let data: any = {};
+      try { data = await res.json(); } catch { }
       if (data?.error) throw new Error(data?.error);
 
       // 2. Update status to Approved
@@ -187,6 +201,8 @@ export default function AccountRequestPage() {
 
   // Reject handler (with activity log)
   const handleReject = async (req: AccountRequest) => {
+    if (isProcessing) return;
+    setIsProcessing(true);
     try {
       await supabase
         .from("account_requests")
@@ -205,6 +221,8 @@ export default function AccountRequestPage() {
       toast.success("Request rejected.");
     } catch {
       toast.error("Failed to reject.");
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -230,7 +248,7 @@ export default function AccountRequestPage() {
           />
         </div>
 
-        {/* Table - styled like Activity Log */}
+        {/* Table */}
         <div className="overflow-x-auto">
           <table className="min-w-full text-[13.5px] rounded-2xl overflow-hidden">
             <thead>
@@ -291,12 +309,18 @@ export default function AccountRequestPage() {
                           onChange={e =>
                             setSelectedRoles({ ...selectedRoles, [req.id]: e.target.value })
                           }
+                          disabled={isProcessing}
                         >
-                          <option value="customer">Customer</option>
-                          <option value="admin">Admin</option>
+                          {ROLES.map(role => (
+                            <option key={role.value} value={role.value}>
+                              {role.label}
+                            </option>
+                          ))}
                         </select>
                       ) : (
-                        <span className="capitalize">{req.role || "—"}</span>
+                        <span className="capitalize">
+                          {ROLES.find(r => r.value === req.role)?.label || req.role || "—"}
+                        </span>
                       )}
                     </td>
                     {/* Approve/Reject buttons */}
@@ -306,12 +330,14 @@ export default function AccountRequestPage() {
                           <button
                             className="bg-green-600 hover:bg-green-700 text-white text-xs px-4 py-1 rounded-full shadow"
                             onClick={() => handleApprove(req)}
+                            disabled={isProcessing}
                           >
                             Approve
                           </button>
                           <button
                             className="bg-red-500 hover:bg-red-600 text-white text-xs px-4 py-1 rounded-full shadow"
                             onClick={() => handleReject(req)}
+                            disabled={isProcessing}
                           >
                             Reject
                           </button>
@@ -345,7 +371,9 @@ export default function AccountRequestPage() {
               <h2 className="font-bold text-xl mb-3">Approve Account</h2>
               <p className="mb-2">
                 Approve account for <span className="font-semibold">{modalReq.name}</span> as{" "}
-                <span className="font-semibold">{selectedRoles[modalReq.id] || "customer"}</span>?
+                <span className="font-semibold">
+                  {ROLES.find(r => r.value === (selectedRoles[modalReq.id] || "customer"))?.label}
+                </span>?
               </p>
               <div className="flex gap-2 mt-6">
                 <button

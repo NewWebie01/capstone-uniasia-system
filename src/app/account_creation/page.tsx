@@ -50,7 +50,6 @@ export default function AccountCreationPage() {
   // Privacy modal
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
-  const [policyChecked, setPolicyChecked] = useState(false);
   const [policyAccepted, setPolicyAccepted] = useState(false);
 
   // Success modal
@@ -61,7 +60,6 @@ export default function AccountCreationPage() {
     if (e) e.preventDefault();
     setShowPrivacy(true);
     setHasScrolledToBottom(false);
-    setPolicyChecked(false);
   }
 
   // Only enable checkbox after scrolling to bottom
@@ -100,7 +98,6 @@ export default function AccountCreationPage() {
       confirmPassword: "",
     });
     setErrors({});
-    setPolicyChecked(false);
     setPolicyAccepted(false);
     setHasScrolledToBottom(false);
   };
@@ -143,7 +140,7 @@ export default function AccountCreationPage() {
           name: formData.name,
           email: formData.email,
           contact_number: contactNumber,
-          role: "customer",
+          role: "customer", // Always customer for public signup!
           password: formData.password,
           status: "Pending",
           date_created: getPHISOString(),
@@ -299,10 +296,10 @@ export default function AccountCreationPage() {
                     <span
                       className={`text-xs font-medium px-2 py-0.5 rounded
                         ${passwordStrength === "Very Strong" ? "bg-green-100 text-green-800 border border-green-300" : ""}
-                        ${passwordStrength === "Strong" ? "bg-emerald-100 text-emerald-800 border border-emerald-300" : ""}
-                        ${passwordStrength === "Moderate" ? "bg-yellow-100 text-yellow-800 border border-yellow-300" : ""}
+                        ${passwordStrength === "Strong" ? "bg-emerald-100 text-emerald-800 border-emerald-300" : ""}
+                        ${passwordStrength === "Moderate" ? "bg-yellow-100 text-yellow-800 border-yellow-300" : ""}
                         ${passwordStrength === "Weak" ? "bg-red-100 text-red-800 border border-red-300" : ""}
-                        ${passwordStrength === "Too Personal" ? "bg-pink-100 text-pink-800 border border-pink-300" : ""}
+                        ${passwordStrength === "Too Personal" ? "bg-pink-100 text-pink-800 border-pink-300" : ""}
                         ${passwordStrength === "Invalid" ? "bg-gray-100 text-gray-700 border border-gray-300" : ""}
                       `}
                     >
@@ -414,7 +411,7 @@ export default function AccountCreationPage() {
                   onScroll={handleScroll}
                   tabIndex={0}
                 >
-                  <p>
+<p>
                     <strong>Last updated:</strong> September 2025
                   </p>
                   <p>
@@ -483,7 +480,7 @@ export default function AccountCreationPage() {
                     <b>Email:</b> <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">support@uniasia.com</a>
                   </p>
                 </div>
-                <button
+ <button
                   type="button"
                   className={`mt-4 w-full bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] transition disabled:opacity-60`}
                   disabled={!hasScrolledToBottom}

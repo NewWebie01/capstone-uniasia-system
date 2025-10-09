@@ -121,7 +121,7 @@ export function generateReceiptHtml(order: any) {
         <div class="header">
           <div class="header-title">UNIASIA</div>
           <div class="header-desc">SITIO II MANGGAHAN BAHAY PARE, MEYCAUAYAN CITY BULACAN</div>
-          <div class="receipt-label">DELIVERY RECEIPT</div>
+          <div class="receipt-label">ORDER ITEMS</div>
         </div>
         <div class="info-section">
           <div class="info-left">

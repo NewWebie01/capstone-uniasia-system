@@ -1,4 +1,3 @@
-// components/Sidebar.tsx
 "use client";
 
 import arrowcontrol from "@/assets/control.png";
@@ -7,12 +6,10 @@ import ChartFill from "@/assets/Chart_fill.png";
 import Logistics from "@/assets/logistics.png";
 import Sales from "@/assets/Sales.png";
 import LogoutIcon from "@/assets/power-button.png";
-import { History, ReceiptText } from "lucide-react"; // ← add ReceiptText
-
+import { History, ReceiptText } from "lucide-react";
 import { FaHistory } from "react-icons/fa";
 import {
   UserPlus,
-  ShoppingCart,
   Boxes,
   FileText,
   Receipt,
@@ -23,31 +20,27 @@ import Image, { StaticImageData } from "next/image";
 import NavLink from "@/components/NavLink";
 
 import { usePathname } from "next/navigation";
-import { Dispatch, SetStateAction } from "react";
+import { Dispatch, SetStateAction, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
-interface SidebarProps {
-  open: boolean;
-  setOpen: Dispatch<SetStateAction<boolean>>;
-}
-
-const Menus: {
+// --- Menu Item Type
+type MenuItem = {
   title: string;
   href: string;
   src?: StaticImageData;
   icon?: React.ComponentType<{ className?: string }>;
-}[] = [
+};
+
+// --- Master Menu List
+const Menus: MenuItem[] = [
   { title: "Dashboard", src: ChartFill, href: "/dashboard" },
   { title: "Inventory", icon: Boxes, href: "/inventory" },
   { title: "Truck Delivery", src: Logistics, href: "/logistics" },
   { title: "Delivered", src: Logistics, href: "/logistics/delivered" },
   { title: "Sales", src: Sales, href: "/sales" },
   { title: "Invoice", icon: FileText, href: "/invoice" },
-
-  // ← NEW: Admin Payments page
   { title: "Payments", icon: ReceiptText, href: "/payments" },
-
   { title: "Returns", icon: RotateCcw, href: "/returns" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
@@ -55,34 +48,97 @@ const Menus: {
   { title: "Backup & Restore", icon: RotateCcw, href: "/backups" },
 ];
 
+// --- Which roles can see which menu titles
+const ROLE_MENUS: Record<string, string[]> = {
+  admin: [
+    "Dashboard", "Inventory", "Truck Delivery", "Delivered",
+    "Sales", "Invoice", "Payments", "Returns", "Transaction History",
+    "Activity Log", "Account Request", "Backup & Restore"
+  ],
+  cashier: [
+     "Sales", "Invoice", "Payments",
+    "Returns", "Transaction History", 
+  ],
+  warehouse: [
+    "Inventory"
+  ],
+  trucker: [
+    "Truck Delivery", "Delivered"
+  ],
+  supervisor: [
+    // Example: show some of admin + cashier, customize as needed
+    "Dashboard", "Inventory", "Truck Delivery", "Delivered",
+    "Sales", "Invoice", "Payments", "Returns", "Transaction History"
+  ],
+};
+
+interface SidebarProps {
+  open: boolean;
+  setOpen: Dispatch<SetStateAction<boolean>>;
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   const pathname = usePathname();
   const supabase = createClientComponentClient();
+  const [role, setRole] = useState<string>("");
 
+  useEffect(() => {
+    // Fetch user role from Supabase
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      const user = data?.user;
+      const userRole =
+        user?.user_metadata?.role ||
+        // fallback for older accounts
+        (user && (user as any).raw_user_meta_data?.role) ||
+        "";
+      setRole(userRole);
+    })();
+  }, [supabase]);
+
+  // --- Robust logout (clears storage, session, forces reload)
   const handleLogout = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const userEmail = user?.email || "unknown";
-    const userRole = user?.user_metadata?.role || "unknown";
+    try {
+      // Clear OTP/other custom storage if needed
+      localStorage.removeItem("otpVerified");
+      localStorage.removeItem("otpVerifiedEmail");
+      localStorage.removeItem("otpVerifiedExpiry");
+      localStorage.removeItem("otpCode");
+      localStorage.removeItem("otpExpiry");
+      localStorage.removeItem("otpEmail");
+      // Optionally: localStorage.clear();
 
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        user_role: userRole,
-        action: "Logout",
-        details: {},
-        created_at: new Date().toISOString(),
-      },
-    ]);
-
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error("Logout failed:", error.message);
-    } else {
-      window.location.href = "/login";
+      // Log out activity
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const userEmail = user?.email || "unknown";
+      const userRole =
+        user?.user_metadata?.role ||
+        (user && (user as any).raw_user_meta_data?.role) ||
+        "unknown";
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: userEmail,
+          user_role: userRole,
+          action: "Logout",
+          details: {},
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      await supabase.auth.signOut();
+    } catch (err) {
+      // Not blocking: still force reload
+      console.error("Logout failed:", err);
+    } finally {
+      window.location.href = "/login"; // ✅ Full reload
     }
   };
+
+  // --- Filter menus based on current role
+  const filteredMenus: MenuItem[] = Menus.filter(menu =>
+    ROLE_MENUS[role]?.includes(menu.title)
+  );
 
   return (
     <motion.div
@@ -136,8 +192,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
       {/* Menu Items */}
       <div className="flex-1 overflow-y-auto px-5">
         <ul className="flex flex-col gap-y-4">
-          {Menus.map((menu, idx) => {
-            // if you want nested active (e.g., /admin/payments/123), switch to startsWith
+          {filteredMenus.map((menu, idx) => {
             const isActive =
               pathname === menu.href || pathname?.startsWith(menu.href + "/");
 
@@ -155,7 +210,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
                     "Invoice",
                     "Transaction History",
                     "Returns",
-                    "Payments", // ← highlight new item
+                    "Payments",
                   ].includes(menu.title)
                     ? "text-[#ffba20]"
                     : "text-black"
