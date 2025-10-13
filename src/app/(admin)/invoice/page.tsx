@@ -732,7 +732,7 @@ export default function InvoicePage() {
             <input
               type="search"
               id="invoice_search"
-              name="invoice_search" // avoid keywords like "email", "user", "name"
+              name="invoice_search"
               autoComplete="off"
               autoCapitalize="off"
               autoCorrect="off"
@@ -743,7 +743,6 @@ export default function InvoicePage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full px-4 py-2 rounded-lg border border-neutral-200 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 bg-white transition"
-              // common PM vendor hints (harmless if unsupported)
               data-1p-ignore
               data-lpignore="true"
             />
