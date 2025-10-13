@@ -22,7 +22,6 @@ type Activity = {
 
 function formatPHDate(dateString: string): string {
   const d = new Date(dateString);
-  d.setHours(d.getHours() + 8);
   return d.toLocaleDateString("en-PH", {
     year: "numeric",
     month: "short",
@@ -32,7 +31,6 @@ function formatPHDate(dateString: string): string {
 }
 function formatPHTime(dateString: string): string {
   const d = new Date(dateString);
-  d.setHours(d.getHours() + 8);
   return d.toLocaleTimeString("en-PH", {
     hour: "2-digit",
     minute: "2-digit",
@@ -40,6 +38,7 @@ function formatPHTime(dateString: string): string {
     timeZone: "Asia/Manila",
   });
 }
+
 
 function accountTypeBadge(role: string | null) {
   let text = "";

@@ -37,6 +37,37 @@ const formatPH = (
       }).format(new Date(d))
     : "—";
 
+/* -------------------- Activity Logger -------------------- */
+async function logActivity(action: string, details: any = {}) {
+  try {
+    // Get user email and role from users table
+    const { data } = await supabase.auth.getUser();
+    const email = data?.user?.email || "";
+
+    let userRole = "admin";
+    if (email) {
+      const { data: userRow } = await supabase
+        .from("users")
+        .select("role")
+        .eq("email", email)
+        .maybeSingle();
+      if (userRow?.role) userRole = userRow.role;
+    }
+
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: email,
+        user_role: userRole,
+        action,
+        details,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  } catch (e) {
+    console.error("logActivity failed:", e);
+  }
+}
+
 /* ---------------------------------- Types --------------------------------- */
 type PaymentRow = {
   id: string;
@@ -61,7 +92,6 @@ type CustomerLite = {
   email: string | null;
 };
 
-/* --------------------------------- Page ---------------------------------- */
 export default function AdminPaymentsPage() {
   const [loading, setLoading] = useState(true);
   const [meEmail, setMeEmail] = useState<string | null>(null);
@@ -202,6 +232,12 @@ export default function AdminPaymentsPage() {
     setImgSrc(url);
     setImgMeta(meta || null);
     setImgOpen(true);
+    // ---- Activity log for "View" ----
+    logActivity("View Payment Cheque", {
+      payment_id: meta?.cheque || "",
+      bank_name: meta?.bank || "",
+      image_url: url,
+    });
   }
 
   async function handleConfirm() {
@@ -235,6 +271,14 @@ export default function AdminPaymentsPage() {
               : p
           )
         );
+        // ---- Activity log for "Receive" ----
+        await logActivity("Mark Payment as Received", {
+          payment_id: targetRow.id,
+          customer_id: targetRow.customer_id,
+          amount: targetRow.amount,
+          cheque_number: targetRow.cheque_number,
+          bank_name: targetRow.bank_name,
+        });
         toast.success("Marked as received. Customer balance will update.");
       } else {
         const { error } = await supabase
@@ -254,6 +298,14 @@ export default function AdminPaymentsPage() {
               : p
           )
         );
+        // ---- Activity log for "Reject" ----
+        await logActivity("Reject Payment Cheque", {
+          payment_id: targetRow.id,
+          customer_id: targetRow.customer_id,
+          amount: targetRow.amount,
+          cheque_number: targetRow.cheque_number,
+          bank_name: targetRow.bank_name,
+        });
         toast.success("Cheque marked as rejected.");
       }
 

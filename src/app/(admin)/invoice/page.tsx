@@ -870,8 +870,8 @@ export default function InvoicePage() {
                                   Long / Legal (8.5×13in)
                                 </option>
                               </select>
-                              <button
-                                className="bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+                             <button
+                                className="bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-40"
                                 onClick={(ev) => {
                                   ev.stopPropagation();
                                   handlePrintClick({
@@ -882,6 +882,8 @@ export default function InvoicePage() {
                                     txn,
                                   });
                                 }}
+                                disabled={editMode} 
+                                title={editMode ? "Save changes before printing PDF." : "Print as PDF"}
                               >
                                 PRINT PDF
                               </button>

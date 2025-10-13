@@ -10,7 +10,6 @@ import {
   PlayCircle,
   RefreshCw,
 } from "lucide-react";
-
 import {
   Dialog,
   DialogTrigger,
@@ -19,8 +18,28 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
-  DialogClose, // if this import doesn't exist in your dialog.tsx, delete it and see note below
+  DialogClose, // Remove if not exported by your Dialog
 } from "@/components/ui/dialog";
+import supabase from "@/config/supabaseClient";
+
+/* ========== ACTIVITY LOGGING ========= */
+async function logActivity(action: string, details: any = {}) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    const userEmail = data?.user?.email || "";
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        user_role: "admin",
+        action,
+        details,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  } catch (e) {
+    // Fails silently
+  }
+}
 
 type Artifact = {
   id: number;
@@ -55,6 +74,7 @@ export default function BackupsPage() {
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || "Failed to load");
       setArtifacts(j.items || []);
+      await logActivity("Refresh Backup List", {});
     } catch (e: any) {
       toast.error(e.message || "Failed to load backups");
     }
@@ -75,6 +95,7 @@ export default function BackupsPage() {
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || "Trigger failed");
       toast.success("Backup requested. Refresh in ~1–2 minutes.");
+      await logActivity("Trigger Backup", {});
     } catch (e: any) {
       toast.error(e.message || "Unable to trigger backup");
     } finally {
@@ -95,12 +116,13 @@ export default function BackupsPage() {
       toast.success(
         "Restore dispatched. Check GitHub → Actions → Supabase DB Restore."
       );
+      await logActivity("Restore To Staging (Confirm)", { artifactId });
     } catch (e: any) {
       toast.error(e.message || "Failed to dispatch restore");
     }
   };
 
-  const restoreHelper = (fileHint: string) => {
+  const restoreHelper = (fileHint: string, artifact: Artifact) => {
     const text = [
       "# Unpack the ZIP you downloaded; inside is a .tar.gz or .tar",
       "unzip backup_<id>.zip",
@@ -119,14 +141,20 @@ export default function BackupsPage() {
     ].join("\n");
     navigator.clipboard.writeText(text);
     toast.success("Restore steps copied to clipboard");
+    logActivity("Restore Helper Copy", {
+      artifactId: artifact.id,
+      artifactName: artifact.name,
+      fileHint,
+    });
   };
 
-  /** Confirmation modal button using your dialog primitives */
   function RestoreToStagingButton({
     artifactId,
+    artifactName,
     onConfirm,
   }: {
     artifactId: number;
+    artifactName: string;
     onConfirm: (id: number) => Promise<void>;
   }) {
     const [open, setOpen] = useState(false);
@@ -145,7 +173,20 @@ export default function BackupsPage() {
     };
 
     return (
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => {
+        setOpen(v);
+        if (v) {
+          logActivity("Open Restore To Staging Modal", {
+            artifactId,
+            artifactName,
+          });
+        } else {
+          logActivity("Cancel Restore To Staging Modal", {
+            artifactId,
+            artifactName,
+          });
+        }
+      }}>
         <DialogTrigger asChild>
           <button
             className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-indigo-500/20 hover:bg-indigo-500/30"
@@ -165,7 +206,6 @@ export default function BackupsPage() {
           </DialogHeader>
 
           <DialogFooter className="gap-2">
-            {/* If DialogClose isn't exported in your dialog.tsx, replace with: onClick={() => setOpen(false)} */}
             <DialogClose asChild>
               <button className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20">
                 Cancel
@@ -206,24 +246,27 @@ export default function BackupsPage() {
             <a
               className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-white/10 hover:bg-white/20"
               href={`/api/backup/download?id=${a.id}`}
+              onClick={() =>
+                logActivity("Download Backup", {
+                  artifactId: a.id,
+                  artifactName: a.name,
+                })
+              }
             >
               <Download className="w-4 h-4" /> Download
             </a>
-
-            {/* Copy manual restore steps */}
             <button
               className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-white/10 hover:bg-white/20"
               onClick={() =>
-                restoreHelper("supabase-backup_YYYY-mm-ddTHH-MM-SSZ.tar.gz")
+                restoreHelper("supabase-backup_YYYY-mm-ddTHH-MM-SSZ.tar.gz", a)
               }
               title="Copy restore commands"
             >
               <RotateCcw className="w-4 h-4" /> Restore Helper
             </button>
-
-            {/* NEW: confirmation modal for Restore to staging */}
             <RestoreToStagingButton
               artifactId={a.id}
+              artifactName={a.name}
               onConfirm={restoreToStaging}
             />
           </td>
@@ -253,7 +296,6 @@ export default function BackupsPage() {
           <PlayCircle className="w-5 h-5" />
           {loading ? "Requesting..." : "Trigger Backup"}
         </button>
-
         <button
           onClick={fetchArtifacts}
           className="inline-flex items-center gap-2 rounded-xl px-3 py-2 bg-white/10 hover:bg-white/20"

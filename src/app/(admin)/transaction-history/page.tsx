@@ -17,10 +17,7 @@ type Transaction = {
   total_amount: number | null;
 };
 
-// REAUTH FOR EXPORT (sensitive data)
-
-/* ------------------------ PH Time Utilities ----------------------- */
-// Philippines is UTC+8 year-round (no DST).
+/* ---------------------- PH Time Utilities ----------------------- */
 const PH_OFFSET_HOURS = 8;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const addHours = (d: Date, h: number) =>
@@ -35,11 +32,10 @@ function endOfPHDay(dUTC: Date): Date {
   return new Date(startOfPHDay(dUTC).getTime() + MS_PER_DAY - 1);
 }
 function startOfPHWeek(dUTC: Date): Date {
-  // Week starts Monday
   const start = startOfPHDay(dUTC);
   const local = addHours(start, PH_OFFSET_HOURS);
-  const day = local.getUTCDay(); // 0..6 (Sun..Sat)
-  const mondayDelta = (day + 6) % 7; // days since Monday
+  const day = local.getUTCDay();
+  const mondayDelta = (day + 6) % 7;
   const localMonday = new Date(local.getTime() - mondayDelta * MS_PER_DAY);
   return addHours(localMonday, -PH_OFFSET_HOURS);
 }
@@ -72,17 +68,15 @@ function endOfPHYear(dUTC: Date): Date {
 }
 function startOfPHDateString(yyyy_mm_dd: string): Date {
   const [y, m, d] = yyyy_mm_dd.split("-").map((n) => parseInt(n, 10));
-  const localMidnightUTC = new Date(Date.UTC(y, m - 1, d)); // local midnight represented in UTC
+  const localMidnightUTC = new Date(Date.UTC(y, m - 1, d));
   return addHours(localMidnightUTC, -PH_OFFSET_HOURS);
 }
 function endOfPHDateString(yyyy_mm_dd: string): Date {
   return new Date(startOfPHDateString(yyyy_mm_dd).getTime() + MS_PER_DAY - 1);
 }
 function fmtPHDateISO(d: Date) {
-  // For labels / filenames
   return addHours(d, PH_OFFSET_HOURS).toISOString().slice(0, 10);
 }
-// Format a Date as PH-local "YYYY-MM-DD HH:MM:SS" (no timezone)
 function toPHSqlNoTZ(d: Date) {
   const ph = new Date(d.getTime() + PH_OFFSET_HOURS * 3600 * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -95,9 +89,88 @@ function toPHSqlNoTZ(d: Date) {
   return `${Y}-${M}-${D} ${h}:${m}:${s}`;
 }
 
+/* ------------------ helpers ------------------ */
+function formatDate(value: string) {
+  const d = new Date(value);
+  return d.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+  });
+}
+function formatDateTimePH(value: string) {
+  const d = new Date(value);
+  d.setHours(d.getHours() + PH_OFFSET_HOURS);
+  return d.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Manila",
+  });
+}
+function currency(value: number | null | undefined) {
+  const n = value ?? 0;
+  if (Number.isNaN(n)) return "—";
+  return n.toLocaleString("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    maximumFractionDigits: 2,
+  });
+}
+function StatusBadge({ status }: { status: OrderStatus }) {
+  const s = String(status).toLowerCase();
+  const styles =
+    s === "completed"
+      ? "bg-green-100 text-green-700 border-green-200"
+      : s === "rejected"
+      ? "bg-red-100 text-red-700 border-red-200"
+      : "bg-yellow-100 text-yellow-700 border-yellow-200";
+
+  const label =
+    s === "completed" ? "Completed" : s === "rejected" ? "Rejected" : "Pending";
+
+  return (
+    <span
+      className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-medium ${styles}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+/* ---------------------- Activity Logger ---------------------- */
+const supabase = createPagesBrowserClient();
+
+async function logActivity(action: string, details: any = {}) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    const userEmail = data?.user?.email || "";
+    let userRole = "admin";
+    if (userEmail) {
+      const { data: u } = await supabase
+        .from("users")
+        .select("role")
+        .eq("email", userEmail)
+        .single();
+      if (u?.role) userRole = u.role;
+    }
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        user_role: userRole,
+        action,
+        details,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  } catch {}
+}
+
 /* --------------------------- Page --------------------------- */
 export default function TransactionHistoryPage() {
-  const supabase = createPagesBrowserClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,14 +196,17 @@ export default function TransactionHistoryPage() {
   const [reauthPassword, setReauthPassword] = useState("");
   const [reauthing, setReauthing] = useState(false);
   const [reauthError, setReauthError] = useState("");
-
-  // remember a successful reauth for a short window
   const [lastReauthAt, setLastReauthAt] = useState<number | null>(null);
-  const REAUTH_TTL_MS = 0.5 * 60 * 1000; // adjust this to recalibrate
+  const REAUTH_TTL_MS = 0.5 * 60 * 1000;
   const needsReauth = () =>
     !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
 
-  // Load initial list (no date filters here; the modal fetches its own filtered rows)
+  // Activity: On page load
+  useEffect(() => {
+    logActivity("Visited Transaction History Page");
+  }, []);
+
+  // Load initial list
   useEffect(() => {
     async function load() {
       setLoading(true);
@@ -151,19 +227,16 @@ export default function TransactionHistoryPage() {
         .order("date_created", { ascending: false });
 
       if (error) {
-        console.error("Error loading orders:", error);
         setTransactions([]);
         setLoading(false);
         return;
       }
 
       const rows: Transaction[] = (data ?? []).map((o: any) => {
-        // TXN code: TXN-YYYYMMDD-xxxxx
         const date = new Date(o.date_created);
         const dateCode = date.toISOString().split("T")[0].replace(/-/g, "");
         const shortId = String(o.id).split("-")[0].toUpperCase();
         const txnCode = `TXN-${dateCode}-${shortId}`;
-
         return {
           id: String(o.id),
           date: o.date_created,
@@ -177,9 +250,8 @@ export default function TransactionHistoryPage() {
       setTransactions(rows);
       setLoading(false);
     }
-
     load();
-  }, [supabase]);
+  }, []);
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -244,24 +316,45 @@ export default function TransactionHistoryPage() {
       const e = endOfPHYear(now);
       return { start: s, end: e, label: describeRangeLabel("this_year", s, e) };
     }
-    // custom
     if (!customStart || !customEnd) return { label: "CUSTOM_INVALID" };
     const s = startOfPHDateString(customStart);
     const e = endOfPHDateString(customEnd);
     return { start: s, end: e, label: describeRangeLabel("custom", s, e) };
   }
 
+  // --- Logging on search ---
+  function handleSearchInput(e: React.ChangeEvent<HTMLInputElement>) {
+    setSearchQuery(e.target.value);
+    if (e.target.value.trim()) {
+      logActivity("Searched Transaction History", { query: e.target.value });
+    }
+  }
+
+  // --- Logging on opening Export modal ---
+  function openExportModal() {
+    setShowExport(true);
+    logActivity("Opened Export Transaction History Modal");
+  }
+
+  // --- Logging on cancel Export modal ---
+  function cancelExportModal() {
+    setShowExport(false);
+    setExportChoice("today");
+    setCustomStart("");
+    setCustomEnd("");
+    setExportError("");
+    logActivity("Canceled Transaction History Export Modal");
+  }
+
   // Gate: ask for password unless recently verified
   async function handleExportNow() {
     setExportError("");
-
     if (needsReauth()) {
       const { data } = await supabase.auth.getUser();
       setReauthEmail(data?.user?.email || "");
       setShowReauth(true);
-      return; // stop here; continue after password verification
+      return;
     }
-
     await doExportNow();
   }
 
@@ -292,7 +385,6 @@ export default function TransactionHistoryPage() {
     try {
       const { start, end, label } = resolveRange();
 
-      // Build query for export
       let q = supabase
         .from("orders")
         .select(
@@ -312,30 +404,20 @@ export default function TransactionHistoryPage() {
           setExporting(false);
           return;
         }
-
-        // Exclusive upper bound (end + 1ms) to include the whole PH day
         const endExclusive = new Date(end.getTime() + 1);
-
-        // date_created is usually TIMESTAMP (no TZ) — compare using PH-local strings
         const startPH = toPHSqlNoTZ(start);
         const endPH = toPHSqlNoTZ(endExclusive);
         q = q.gte("date_created", startPH).lt("date_created", endPH);
-
-        // If your column is TIMESTAMPTZ instead, use:
-        // q = q.gte("date_created", start.toISOString())
-        //      .lt("date_created", endExclusive.toISOString());
       }
 
       const { data, error } = await q;
       if (error) throw error;
 
-      // Map to rows
       const rows = (data ?? []).map((o: any) => {
         const date = new Date(o.date_created);
         const dateCode = date.toISOString().split("T")[0].replace(/-/g, "");
         const shortId = String(o.id).split("-")[0].toUpperCase();
         const txnCode = `TXN-${dateCode}-${shortId}`;
-
         return [
           txnCode,
           o?.customers?.name ?? "—",
@@ -345,7 +427,6 @@ export default function TransactionHistoryPage() {
         ];
       });
 
-      // Workbook
       const headers = [
         "Transaction Code",
         "Customer",
@@ -361,33 +442,22 @@ export default function TransactionHistoryPage() {
       const safeLabel = label.replace(/[^\w\-]+/g, "_");
       XLSX.writeFile(wb, `Transaction_History_${safeLabel}_${todayStamp}.xlsx`);
 
-      // Log export (best-effort)
-      try {
-        const { data: u } = await supabase.auth.getUser();
-        await supabase.from("activity_logs").insert([
-          {
-            user_email: u?.user?.email ?? "unknown",
-            user_role: "admin",
-            action:
-              exportChoice === "all"
-                ? "Exported Transaction History (ALL)"
-                : `Exported Transaction History (${label})`,
-            details: {
-              rows: rows.length,
-              filter: exportChoice,
-              ...(exportChoice !== "all"
-                ? {
-                    start_utc: start?.toISOString(),
-                    end_utc: end?.toISOString(),
-                  }
-                : {}),
-            },
-            created_at: new Date().toISOString(),
-          },
-        ]);
-      } catch {
-        // ignore logging failures
-      }
+      // ---- Log export activity ----
+      await logActivity(
+        exportChoice === "all"
+          ? "Exported Transaction History (ALL)"
+          : `Exported Transaction History (${label})`,
+        {
+          rows: rows.length,
+          filter: exportChoice,
+          ...(exportChoice !== "all"
+            ? {
+                start_utc: start?.toISOString(),
+                end_utc: end?.toISOString(),
+              }
+            : {}),
+        }
+      );
 
       setShowExport(false);
     } catch (err: any) {
@@ -415,13 +485,13 @@ export default function TransactionHistoryPage() {
         aria-label="Search by date, code, customer, status, or amount"
         placeholder="Search by date, code, customer, status, or amount…"
         value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
+        onChange={handleSearchInput}
         className="border px-4 py-2 mb-4 w-full md:w-1/2 rounded-full"
       />
 
       <button
         className="h-10 px-4 rounded-xl border bg-black text-white hover:opacity-90 text-sm shrink-0"
-        onClick={() => setShowExport(true)}
+        onClick={openExportModal}
       >
         Export
       </button>
@@ -555,13 +625,7 @@ export default function TransactionHistoryPage() {
               </button>
               <button
                 className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
-                onClick={() => {
-                  setShowExport(false);
-                  setExportChoice("today");
-                  setCustomStart("");
-                  setCustomEnd("");
-                  setExportError("");
-                }}
+                onClick={cancelExportModal}
               >
                 Cancel
               </button>
@@ -636,57 +700,5 @@ export default function TransactionHistoryPage() {
         </div>
       )}
     </div>
-  );
-}
-
-/* ------------------ helpers ------------------ */
-function formatDate(value: string) {
-  const d = new Date(value);
-  return d.toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-  });
-}
-function formatDateTimePH(value: string) {
-  const d = new Date(value);
-  d.setHours(d.getHours() + PH_OFFSET_HOURS);
-  return d.toLocaleString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-    timeZone: "Asia/Manila",
-  });
-}
-function currency(value: number | null | undefined) {
-  const n = value ?? 0;
-  if (Number.isNaN(n)) return "—";
-  return n.toLocaleString("en-PH", {
-    style: "currency",
-    currency: "PHP",
-    maximumFractionDigits: 2,
-  });
-}
-function StatusBadge({ status }: { status: OrderStatus }) {
-  const s = String(status).toLowerCase();
-  const styles =
-    s === "completed"
-      ? "bg-green-100 text-green-700 border-green-200"
-      : s === "rejected"
-      ? "bg-red-100 text-red-700 border-red-200"
-      : "bg-yellow-100 text-yellow-700 border-yellow-200";
-
-  const label =
-    s === "completed" ? "Completed" : s === "rejected" ? "Rejected" : "Pending";
-
-  return (
-    <span
-      className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-medium ${styles}`}
-    >
-      {label}
-    </span>
   );
 }

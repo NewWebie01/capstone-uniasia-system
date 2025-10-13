@@ -1465,26 +1465,14 @@ const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
     >
       {/* Quantity */}
       <td className="py-2 px-3">
-        <input
-  type="number"
-  min={1}
-  // enforce both stock limit and 50k max
-  max={Math.min(item.inventory.quantity, 50000)}
-  value={qty}
-  onChange={(e) => {
-    let val = Number(e.target.value);
-
-    // clamp between 1 and 50,000 (and also not more than stock)
-    if (isNaN(val) || val < 1) val = 1;
-    if (val > 50000) val = 50000;
-    if (val > item.inventory.quantity) val = item.inventory.quantity;
-
-    setEditedQuantities((prev) =>
-      prev.map((q, i) => (i === idx ? val : q))
-    );
-  }}
-  className="border rounded px-2 py-1 w-24 text-center bg-gray-100 font-medium"
-/>
+      <input
+        type="number"
+        min={1}
+        max={Math.min(item.inventory.quantity, 50000)}
+        value={qty}
+        disabled
+        className="border rounded px-2 py-1 w-24 text-center bg-gray-100 font-medium opacity-70 cursor-not-allowed"
+      />
 
       </td>
 

@@ -13,7 +13,7 @@ async function logActivity(action: string, details: any = {}) {
     await supabase.from("activity_logs").insert([
       {
         user_email: userEmail,
-        user_role: "admin", // or your actual role if you track it
+        user_role: "admin",
         action,
         details,
         created_at: new Date().toISOString(),
@@ -41,20 +41,17 @@ type ReturnRow = {
   note: string | null;
   created_at: string;
   order_id: string;
-
   customer: {
-    code?: string | null; // TXN code
+    code?: string | null;
     name: string | null;
     email: string | null;
     phone: string | null;
     address: string | null;
   } | null;
-
   order: {
-    id: string; // kept in shape, not rendered
+    id: string;
     status: string | null;
   } | null;
-
   return_items: Array<{
     order_item_id: number;
     quantity: number;
@@ -78,7 +75,6 @@ const normalizeAdminReturns = (rows: any[]): ReturnRow[] =>
     note: toStrOrNull(r.note),
     created_at: r.created_at ?? new Date().toISOString(),
     order_id: String(r.order_id),
-
     customer: r.customer
       ? {
           code: toStrOrNull(r.customer.code),
@@ -88,14 +84,12 @@ const normalizeAdminReturns = (rows: any[]): ReturnRow[] =>
           address: toStrOrNull(r.customer.address),
         }
       : null,
-
     order: r.order
       ? {
           id: String(r.order.id),
           status: toStrOrNull(r.order.status),
         }
       : null,
-
     return_items: (r.return_items ?? []).map((ri: any) => ({
       order_item_id: toNum(ri.order_item_id),
       quantity: toNum(ri.quantity, 0),
@@ -205,6 +199,9 @@ function StatusSelect({
                 onClick={() => {
                   onChange(opt.value);
                   setOpen(false);
+                  logActivity("Filter Returns Status", {
+                    filter: opt.value,
+                  });
                 }}
                 className={`px-3 py-2 cursor-pointer transition ${
                   active
@@ -259,7 +256,7 @@ export default function AdminReturnsPage() {
   const [page, setPage] = useState(1);
   const perPage = 10;
 
-  // realtime channel guard (FIXED stray token)
+  // realtime channel guard
   const subscribedRef = useRef(false);
 
   const fetchReturns = async () => {
@@ -295,8 +292,6 @@ export default function AdminReturnsPage() {
 
   useEffect(() => {
     fetchReturns();
-
-    // Supabase Realtime — refresh on changes
     if (!subscribedRef.current) {
       subscribedRef.current = true;
       const ch = supabase
@@ -322,7 +317,6 @@ export default function AdminReturnsPage() {
     }
   }, []);
 
-  // reset to page 1 when filters change
   useEffect(() => {
     setPage(1);
   }, [q, statusFilter, quick]);
@@ -362,8 +356,6 @@ export default function AdminReturnsPage() {
 
   const isReceived = (status?: string | null) =>
     (status || "").toLowerCase() === "received";
-
-  // NEW: disable reject when approved (and keep disabled when received)
   const isApproved = (status?: string | null) =>
     (status || "").toLowerCase() === "approved";
 
@@ -376,21 +368,28 @@ export default function AdminReturnsPage() {
   ) => {
     const curr = (current || "").toLowerCase();
     const nxt = (next || "").toLowerCase();
-    if (curr === nxt) return; // no-op
+    if (curr === nxt) return;
     setConfirmTarget({ id, code, current, next });
     setConfirmOpen(true);
+
+    // Log button click for status change attempt
+    logActivity("Open Status Change Modal", {
+      return_id: id,
+      code,
+      from: current,
+      to: next,
+    });
   };
 
   const updateStatus = async (
     id: string,
     status: "approved" | "rejected" | "received"
   ) => {
-    const prev = rows; // keep to rollback
+    const prev = rows;
     const prevRow = rows.find((r) => r.id === id);
     const prevStatus = prevRow?.status ?? "";
 
     setUpdating(true);
-    // optimistic update
     setRows((r) => r.map((x) => (x.id === id ? { ...x, status } : x)));
     setSelected((s) => (s && s.id === id ? { ...s, status } : s));
 
@@ -411,8 +410,7 @@ export default function AdminReturnsPage() {
       toast.error(error.message);
     } else {
       toast.success(`Status changed to ${status}`);
-
-      // ✅ Log to activity_logs
+      // ✅ Log status update (already implemented)
       const code = prevRow?.code || id;
       await logActivity("Updated Return Status", {
         return_id: id,
@@ -424,6 +422,44 @@ export default function AdminReturnsPage() {
     }
   };
 
+  // Log quick tab clicks
+  const handleQuickTab = (s: QuickStatus) => {
+    setQuick(s);
+    logActivity("Quick Tab Filter", { quick_tab: s });
+  };
+
+  // Log search/filter input changes (optional, for completeness)
+  const handleSearchChange = (val: string) => {
+    setQ(val);
+    logActivity("Search Returns", { query: val });
+  };
+
+  // Log pagination
+  const handlePageChange = (n: number) => {
+    setPage(n);
+    logActivity("Change Returns Page", { page: n });
+  };
+
+  // Log View details
+  const handleView = (rtn: ReturnRow) => {
+    setSelected(rtn);
+    logActivity("View Return Details", {
+      return_id: rtn.id,
+      code: rtn.code,
+      status: rtn.status,
+    });
+  };
+
+  // Log modal Close
+  const handleCloseModal = (rtn: ReturnRow) => {
+    setSelected(null);
+    logActivity("Close Return Details Modal", {
+      return_id: rtn.id,
+      code: rtn.code,
+      status: rtn.status,
+    });
+  };
+
   return (
     <div className="px-4 pb-6 pt-1">
       <div className="flex items-start justify-between flex-wrap gap-2">
@@ -433,7 +469,6 @@ export default function AdminReturnsPage() {
             Track and manage product return requests from customers.
           </p>
         </div>
-        {/* Refresh button removed per request */}
       </div>
 
       {/* Quick tabs */}
@@ -445,7 +480,7 @@ export default function AdminReturnsPage() {
             return (
               <button
                 key={s}
-                onClick={() => setQuick(s)}
+                onClick={() => handleQuickTab(s)}
                 className={`px-3 py-1.5 rounded-full text-xs border transition ${
                   active
                     ? "bg-[#ffba20] border-[#ffba20] text-black"
@@ -468,18 +503,14 @@ export default function AdminReturnsPage() {
                 className="border rounded-xl px-3 py-2 w-full bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#ffba20] transition"
                 placeholder="Search by return code / name / email / phone / TXN"
                 value={q}
-                onChange={(e) => setQ(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
               />
             </div>
-
-            {/* Custom Select */}
             <StatusSelect value={statusFilter} onChange={setStatusFilter} />
           </div>
-
           <div className="text-sm text-gray-600">
             Showing <span className="font-medium">{filtered.length}</span>{" "}
-            record
-            {filtered.length === 1 ? "" : "s"}
+            record{filtered.length === 1 ? "" : "s"}
           </div>
         </div>
       </div>
@@ -522,12 +553,12 @@ export default function AdminReturnsPage() {
                 pageRows.map((rtn) => {
                   const itemsCount = rtn.return_items.length;
                   const lockedReceived = isReceived(rtn.status);
-                  const lockedReject = lockedReceived || isApproved(rtn.status); // NEW
+                  const lockedReject = lockedReceived || isApproved(rtn.status);
                   return (
                     <tr key={rtn.id} className="border-t hover:bg-gray-50">
                       <td className="py-2 px-3">
                         <button
-                          onClick={() => setSelected(rtn)}
+                          onClick={() => handleView(rtn)}
                           className="text-blue-600 hover:underline font-medium"
                           title="View details"
                         >
@@ -620,7 +651,7 @@ export default function AdminReturnsPage() {
                             Received
                           </button>
                           <button
-                            onClick={() => setSelected(rtn)}
+                            onClick={() => handleView(rtn)}
                             className="px-2.5 py-1.5 rounded-xl border text-xs hover:bg-gray-50"
                           >
                             View
@@ -643,7 +674,7 @@ export default function AdminReturnsPage() {
           <div className="flex items-center gap-1">
             <button
               className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-50"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              onClick={() => handlePageChange(Math.max(1, page - 1))}
               disabled={page === 1}
             >
               Prev
@@ -654,7 +685,7 @@ export default function AdminReturnsPage() {
               return (
                 <button
                   key={n}
-                  onClick={() => setPage(n)}
+                  onClick={() => handlePageChange(n)}
                   className={`px-2 py-1 rounded border text-xs ${
                     active
                       ? "bg-[#ffba20] border-[#ffba20] text-black"
@@ -667,7 +698,7 @@ export default function AdminReturnsPage() {
             })}
             <button
               className="px-2 py-1 rounded border hover:bg-gray-50 disabled:opacity-50"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              onClick={() => handlePageChange(Math.min(totalPages, page + 1))}
               disabled={page === totalPages}
             >
               Next
@@ -680,7 +711,7 @@ export default function AdminReturnsPage() {
       {selected && (
         <div
           className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={() => setSelected(null)}
+          onClick={() => handleCloseModal(selected)}
         >
           <div
             className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl ring-1 ring-black/5 p-0 overflow-hidden"
@@ -789,7 +820,7 @@ export default function AdminReturnsPage() {
               {/* Actions */}
               <div className="mt-6 flex flex-wrap gap-2 justify-end">
                 <button
-                  onClick={() => setSelected(null)}
+                  onClick={() => handleCloseModal(selected)}
                   className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
                 >
                   Close
@@ -828,7 +859,7 @@ export default function AdminReturnsPage() {
                   }`}
                   disabled={
                     isReceived(selected.status) || isApproved(selected.status)
-                  } // NEW
+                  }
                   title={
                     isApproved(selected.status)
                       ? "Already approved"
@@ -914,16 +945,25 @@ export default function AdminReturnsPage() {
 
               <div className="flex justify-end gap-2 mt-6">
                 <button
-                  onClick={() => setConfirmOpen(false)}
+                  onClick={() => {
+                    setConfirmOpen(false);
+                    logActivity("Cancel Status Change Modal", {
+                      ...confirmTarget,
+                    });
+                  }}
                   className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
                   disabled={updating}
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={() =>
-                    updateStatus(confirmTarget.id, confirmTarget.next)
-                  }
+                  onClick={async () => {
+                    await updateStatus(confirmTarget.id, confirmTarget.next);
+                    logActivity("Confirm Status Change", {
+                      ...confirmTarget,
+                      confirmed_at: new Date().toISOString(),
+                    });
+                  }}
                   className="px-4 py-2 rounded-xl bg-black text-white hover:opacity-90 disabled:opacity-50"
                   disabled={updating}
                 >
