@@ -359,60 +359,46 @@ function SalesPageContent() {
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
-  const handleAcceptOrder = async (order: OrderWithDetails) => {
-    const { error } = await supabase.from("orders").update({ status: "accepted" }).eq("id", order.id);
-    if (error) {
-      toast.error("Failed to accept order: " + error.message);
-      return;
-    }
-    const { data: { user } } = await supabase.auth.getUser();
-    await supabase
-      .from("orders")
-      .update({
-        accepted_by_auth_id: user?.id ?? null,
-        accepted_by_email: user?.email ?? null,
-        accepted_by_name: processor?.name ?? (user?.email ? user.email.split("@")[0] : null),
-        accepted_by_role: processor?.role ?? user?.user_metadata?.role ?? null,
-        accepted_at: getPHISOString(),
-      })
-      .eq("id", order.id);
-    try {
-      const userEmail = user?.email || "unknown";
-      const userRole = user?.user_metadata?.role || "unknown";
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          user_role: userRole,
-          action: "Accept Sales Order",
-          details: {
-            order_id: order.id,
-            customer_name: order.customers.name,
-            customer_email: order.customers.email,
-            items: order.order_items.map((oi) => ({
-              product_name: oi.inventory.product_name,
-              ordered_qty: oi.quantity,
-              unit_price: oi.price,
-            })),
-            total_amount: order.total_amount,
-            payment_type: order.customers.payment_type,
-          },
-          created_at: getPHISOString(),
+const handleAcceptOrder = async (order: OrderWithDetails) => {
+  const { data: { user } } = await supabase.auth.getUser();
+  try {
+    const userEmail = user?.email || "unknown";
+    const userRole = user?.user_metadata?.role || "unknown";
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        user_role: userRole,
+        action: "Accept Sales Order",
+        details: {
+          order_id: order.id,
+          customer_name: order.customers.name,
+          customer_email: order.customers.email,
+          items: order.order_items.map((oi) => ({
+            product_name: oi.inventory.product_name,
+            ordered_qty: oi.quantity,
+            unit_price: oi.price,
+          })),
+          total_amount: order.total_amount,
+          payment_type: order.customers.payment_type,
         },
-      ]);
-    } catch (err) {
-      console.error("Failed to log activity for order acceptance:", err);
-    }
-    setSelectedOrder(order);
-    setEditedQuantities(order.order_items.map(item => item.quantity));
-    setEditedDiscounts(order.order_items.map(() => 0));
-    setShowModal(true);
-    setNumberOfTerms(1);
-    setInterestPercent(0);
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "accepted" },
+        created_at: getPHISOString(),
+      },
     ]);
-  };
+  } catch (err) {
+    console.error("Failed to log activity for order acceptance:", err);
+  }
+  setSelectedOrder(order);
+  setEditedQuantities(order.order_items.map(item => item.quantity));
+  setEditedDiscounts(order.order_items.map(() => 0));
+  setShowModal(true);
+  setNumberOfTerms(1);
+  setInterestPercent(0);
+  setPickingStatus((prev) => [
+    ...prev,
+    { orderId: order.id, status: "accepted" },
+  ]);
+};
+
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
     setPickingStatus((prev) => [
@@ -1627,8 +1613,18 @@ const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
       ? "opacity-60 cursor-not-allowed bg-gray-400 hover:bg-gray-400"
       : "hover:bg-green-700")
   }
-  onClick={() => {
+  onClick={async () => {
     if (!hasAnyInsufficient) {
+      // Update orders.status to 'accepted'
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: "accepted" })
+        .eq("id", selectedOrder.id);
+      if (error) {
+        toast.error("Failed to accept order: " + error.message);
+        return;
+      }
+      // Optionally: Insert your activity log for "Accept Sales Order" here if you want.
       setShowModal(false);
       setShowSalesOrderModal(true);
     }
@@ -1637,6 +1633,7 @@ const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
 >
   Proceed Order
 </button>
+
 
 
   <button
