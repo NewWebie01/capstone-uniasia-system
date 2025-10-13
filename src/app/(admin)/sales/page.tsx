@@ -168,6 +168,7 @@ function SalesPageContent() {
   const [showFastMovingModal, setShowFastMovingModal] = useState(false);
   const [slowMovingProducts, setSlowMovingProducts] = useState<FastMovingProduct[]>([]);
   const [showSlowMovingModal, setShowSlowMovingModal] = useState(false);
+  
   const ordersPerPage = 10;
 
   const computedOrderTotal = useMemo(() => {
@@ -1246,6 +1247,7 @@ try {
     {showModal &&
   selectedOrder &&
   (() => {
+    
     const hasZeroStock = selectedOrder.order_items.some(
       (item) => item.inventory.quantity === 0
     );
@@ -1254,6 +1256,11 @@ try {
       const requested = editedQuantities[i] ?? item.quantity;
       return requested > item.inventory.quantity;
     });
+const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
+  const qty = editedQuantities[idx] ?? item.quantity;
+  const stock = item.inventory.quantity;
+  return qty > stock || stock === 0;
+});
 
 
           return (
@@ -1328,16 +1335,18 @@ try {
   <div>
     <label className="font-semibold mr-2">Terms:</label>
     <input
-      type="number"
-      min={1}
-      max={48}
-      value={numberOfTerms}
-      onChange={(e) => {
-        let val = Math.max(1, Math.min(48, Number(e.target.value)));
-        setNumberOfTerms(val);
-      }}
-      className="border rounded px-2 py-1 w-20 text-center"
-    />
+  type="number"
+  min={1}
+  max={48}
+  value={numberOfTerms}
+  onFocus={e => e.target.select()}
+  onChange={(e) => {
+    let val = Math.max(1, Math.min(48, Number(e.target.value)));
+    setNumberOfTerms(val);
+  }}
+  className="border rounded px-2 py-1 w-20 text-center"
+/>
+
     <div className="text-xs text-gray-500 ml-1">
       Number of months to pay (max 48 months / 4 years)
     </div>
@@ -1349,13 +1358,17 @@ try {
   {selectedOrder.customers.payment_type === "Credit" && (
     <div>
       <label className="font-semibold mr-2">Interest %:</label>
-      <input
-        type="number"
-        min={0}
-        value={interestPercent}
-        onChange={(e) => setInterestPercent(Math.max(0, Number(e.target.value)))}
-        className="border rounded px-2 py-1 w-20 text-center"
-      />
+     <input
+  type="number"
+  min={0}
+  max={30}
+  step={1}
+  value={interestPercent}
+  onFocus={e => e.target.select()}
+  onChange={(e) => setInterestPercent(Math.max(0, Math.min(30, Number(e.target.value))))}
+  className="border rounded px-2 py-1 w-20 text-center"
+/>
+
       <div className="text-xs text-gray-500 ml-1">
         Interest applied to subtotal + tax
       </div>
@@ -1607,15 +1620,25 @@ try {
 
 {/* Action Buttons */}
 <div className="flex justify-center gap-8 mt-6">
-  <button
-    className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
-    onClick={() => {
+<button
+  className={
+    "bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow transition " +
+    (hasAnyInsufficient
+      ? "opacity-60 cursor-not-allowed bg-gray-400 hover:bg-gray-400"
+      : "hover:bg-green-700")
+  }
+  onClick={() => {
+    if (!hasAnyInsufficient) {
       setShowModal(false);
       setShowSalesOrderModal(true);
-    }}
-  >
-    Proceed Order
-  </button>
+    }
+  }}
+  disabled={hasAnyInsufficient}
+>
+  Proceed Order
+</button>
+
+
   <button
     className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
     onClick={() => {
