@@ -34,6 +34,15 @@ async function fetchJSON<T>(url: string): Promise<T> {
 type PSGCRegion = { code: string; name: string };
 type PSGCProvince = { code: string; name: string };
 
+// CALENDAR HELPER
+const todayLocal = (() => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+})();
+
 /* =========================
    TYPES
 ========================= */
@@ -1080,6 +1089,7 @@ export default function TruckDeliveryPage() {
                           <input
                             type="date"
                             value={delivery.eta_date || ""}
+                            min={todayLocal}
                             onChange={(e) =>
                               updateEtaDate(delivery.id, e.target.value)
                             }
@@ -1098,28 +1108,51 @@ export default function TruckDeliveryPage() {
                             inputMode="decimal"
                             step="0.01"
                             min="0"
+                            max={999999.99} // 6 digits max before decimals
                             className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
-                            // Use the local buffer while editing; fall back to the DB value
                             value={
                               editingShippingFees[delivery.id] ??
                               (delivery.shipping_fee != null
                                 ? String(delivery.shipping_fee)
                                 : "")
                             }
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              let v = e.target.value;
+
+                              // allow empty while editing
+                              if (v === "") {
+                                setEditingShippingFees((prev) => ({
+                                  ...prev,
+                                  [delivery.id]: "",
+                                }));
+                                return;
+                              }
+
+                              // keep only digits and one dot
+                              v = v.replace(/[^\d.]/g, "");
+                              const parts = v.split(".");
+                              const intPart = (parts[0] || "").slice(0, 6); // <- limit to 6 digits
+                              let next = intPart;
+
+                              if (parts.length > 1) {
+                                const decPart = (parts[1] || "").slice(0, 2); // <- up to 2 decimals
+                                next = decPart.length
+                                  ? `${intPart}.${decPart}`
+                                  : `${intPart}.`;
+                              }
+
                               setEditingShippingFees((prev) => ({
                                 ...prev,
-                                [delivery.id]: e.target.value,
-                              }))
-                            }
+                                [delivery.id]: next,
+                              }));
+                            }}
                             onBlur={(e) => {
                               const raw = e.currentTarget.value.trim();
-                              // If empty, do nothing (or clear if that's your desired behavior)
                               if (raw === "") return;
 
-                              const amount = Number(raw);
+                              let amount = Number(raw);
                               if (!Number.isFinite(amount)) {
-                                // Optional: gently reset to previous value
+                                // reset to previous DB value
                                 setEditingShippingFees((prev) => ({
                                   ...prev,
                                   [delivery.id]:
@@ -1127,19 +1160,34 @@ export default function TruckDeliveryPage() {
                                       ? String(delivery.shipping_fee)
                                       : "",
                                 }));
-                                // If you toast here, use a fixed id to avoid stacking:
                                 // toast.error("Invalid amount", { id: `shipfee-${delivery.id}` });
                                 return;
                               }
 
-                              // Skip if no change
-                              if (amount === (delivery.shipping_fee ?? 0))
-                                return;
+                              // clamp to range 0 … 999999.99 and round to 2 decimals
+                              amount = Math.max(
+                                0,
+                                Math.min(
+                                  999999.99,
+                                  Math.round(amount * 100) / 100
+                                )
+                              );
 
-                              // Commit once on blur (your existing function can toast inside, with a fixed id)
+                              // Skip if unchanged
+                              if (amount === (delivery.shipping_fee ?? 0)) {
+                                // clear local buffer
+                                setEditingShippingFees((prev) => {
+                                  const copy = { ...prev };
+                                  delete copy[delivery.id];
+                                  return copy;
+                                });
+                                return;
+                              }
+
+                              // Commit once on blur
                               handleShippingFeeChange(delivery.id, amount);
 
-                              // Clear the local buffer after commit
+                              // Clear local buffer after commit
                               setEditingShippingFees((prev) => {
                                 const copy = { ...prev };
                                 delete copy[delivery.id];
@@ -1147,10 +1195,8 @@ export default function TruckDeliveryPage() {
                               });
                             }}
                             onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                // Trigger the same commit path as blur
+                              if (e.key === "Enter")
                                 (e.currentTarget as HTMLInputElement).blur();
-                              }
                             }}
                             placeholder="Enter shipping fee"
                           />
@@ -1442,12 +1488,6 @@ export default function TruckDeliveryPage() {
                         {selectedOrderForInvoice.terms ?? "—"}
                       </p>
                       <p>
-                        <strong>COLLECTION: </strong>
-                      </p>
-                      <p>
-                        <strong>CREDIT LIMIT: </strong>
-                      </p>
-                      <p>
                         <strong>SALESMAN: </strong>
                         {selectedOrderForInvoice.salesman ?? "—"}
                       </p>
@@ -1490,7 +1530,7 @@ export default function TruckDeliveryPage() {
                                         {new Date().toLocaleDateString()}
                                       </td>
                                       <td className="border px-2 py-1">
-                                        {product} — {it.quantity} @ ₱{it.price}
+                                        {product} — {it.quantity}
                                       </td>
                                       <td className="border px-2 py-1">
                                         {selectedOrderForInvoice.status ||

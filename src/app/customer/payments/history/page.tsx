@@ -1,3 +1,4 @@
+// src/app/customer/payments-history/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -160,7 +161,6 @@ export default function PaymentHistoryPage() {
           const oldIn = included.has(oldStatus);
 
           if (!oldIn && newIn) {
-            // entered included set
             setPayments((prev) => {
               const exists = prev.some((p) => p.id === newRow!.id);
               return exists
@@ -168,10 +168,8 @@ export default function PaymentHistoryPage() {
                 : [newRow!, ...prev];
             });
           } else if (oldIn && !newIn) {
-            // left included set
             setPayments((prev) => prev.filter((p) => p.id !== oldRow!.id));
           } else if (newIn && oldIn) {
-            // stayed within included set (e.g., received -> rejected or edits)
             setPayments((prev) => prev.map((p) => (p.id === newRow!.id ? newRow! : p)));
           }
         } else if (payload.eventType === "DELETE") {
@@ -216,15 +214,6 @@ export default function PaymentHistoryPage() {
     });
   }, [payments, q, method, codeByCustomerId]);
 
-  // Sum only the received ones for the footer
-  const totalReceived = useMemo(
-    () =>
-      filtered
-        .filter((r) => (r.status || "").toLowerCase() === "received")
-        .reduce((s, r) => s + (Number(r.amount) || 0), 0),
-    [filtered]
-  );
-
   /* ------------------------------ Image modal helpers ------------------------------ */
   function openImage(url: string, meta?: { cheque?: string | null; bank?: string | null }) {
     setImgSrc(url);
@@ -237,7 +226,7 @@ export default function PaymentHistoryPage() {
 
   /* ---------------------------------- UI ---------------------------------- */
   return (
-    <div className="min-h-[calc(100vh-80px)]">
+    <div className="min-h[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
         <div className="flex items-center gap-3">
           <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
@@ -353,20 +342,6 @@ export default function PaymentHistoryPage() {
                   </tr>
                 )}
               </tbody>
-
-              {filtered.length > 0 && (
-                <tfoot>
-                  <tr className="bg-neutral-50 border-t">
-                    <td className="py-2.5 px-3 font-semibold">Total Received</td>
-                    <td />
-                    <td className="py-2.5 px-3 font-bold font-mono">
-                      {formatCurrency(totalReceived)}
-                    </td>
-                    {/* Method, Cheque #, Bank, Cheque Date, Image, Status */}
-                    <td colSpan={6} />
-                  </tr>
-                </tfoot>
-              )}
             </table>
           </div>
         </div>
