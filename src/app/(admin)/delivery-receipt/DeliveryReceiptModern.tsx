@@ -77,16 +77,7 @@ export default function DeliveryReceiptModern({
 
   // Default remarks logic
   const getDefaultRemarks = (item: InvoiceItem) =>
-    item.remarks
-      ? item.remarks
-      : typeof item.qty === "number" &&
-        typeof item.orderedQty === "number" &&
-        item.qty === item.orderedQty
-      ? "Check"
-      : typeof item.orderedQty === "number"
-      ? `Original order is ${item.orderedQty}`
-      : "";
-
+  item.remarks ? item.remarks : "";
   // Handle edit mode toggle
   function startEdit() {
     const remap: Record<string, string> = {};
@@ -279,28 +270,30 @@ export default function DeliveryReceiptModern({
                 >
                   <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.qty}</td>
                   <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.unit}</td>
-                  <td className="px-2.5 py-1.5 text-left align-middle">
-                    <span className="font-semibold">{item.description}</span>
-                  </td>
-                  {/* REMARKS: Editable if in editMode, plain text otherwise */}
                   <td className="px-2.5 py-1.5 text-center align-middle">
-                    {editMode ? (
-                      <input
-                        type="text"
-                        value={editedRemarks[item.id] ?? displayRemark}
-                        onChange={e =>
-                          setEditedRemarks(r => ({
-                            ...r,
-                            [item.id]: e.target.value,
-                          }))
-                        }
-                        className="border px-1 py-0.5 rounded text-xs w-32"
-                        disabled={savingAll}
-                      />
-                    ) : (
-                      item.remarks ?? displayRemark
-                    )}
-                  </td>
+  <span className="font-semibold">{item.description}</span>
+</td>
+
+                  {/* REMARKS: Editable if in editMode, plain text otherwise */}
+                 <td className="px-2.5 py-1.5 text-center align-middle">
+  {editMode ? (
+    <input
+      type="text"
+      value={editedRemarks[item.id] ?? ""}
+      onChange={e =>
+        setEditedRemarks(r => ({
+          ...r,
+          [item.id]: e.target.value,
+        }))
+      }
+      className="border px-1 py-0.5 rounded text-xs w-32"
+      disabled={savingAll}
+    />
+  ) : (
+    item.remarks || ""
+  )}
+</td>
+
                   <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">{formatCurrency(item.unitPrice)}</td>
                   <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
                     {item.discount && item.discount !== 0 ? `${item.discount}%` : ""}
