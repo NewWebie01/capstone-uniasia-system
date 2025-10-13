@@ -62,11 +62,11 @@ const Menus: MenuItem[] = [
     href: "/customer/returns/status",
     icon: BadgeCheck,
   },
-  {
-    title: "Returned Items",
-    href: "/customer/returns/items",
-    icon: PackageCheck,
-  },
+  // {
+  //   title: "Returned Items",
+  //   href: "/customer/returns/items",
+  //   icon: PackageCheck,
+  // },
 ];
 
 export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
@@ -155,7 +155,7 @@ const handleLogout = async () => {
               "Product catalog",
               "My orders",
               "Payments",
-              "Payment History", // ← NEW highlight
+              "Payment History",
               "Returns / Issues",
               "Return Status",
               "Returned Items",

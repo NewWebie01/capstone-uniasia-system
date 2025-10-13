@@ -59,19 +59,26 @@ type CustomerTx = {
 type PaymentRow = {
   id: string;
   customer_id: string | number;
-  order_id: string | number;
+  order_id: string | number | null;
   amount: number;
   method: string | null;
   cheque_number: string | null;
   bank_name: string | null;
   cheque_date: string | null;
   image_url: string | null;
+  status: string | null; // 'pending' | 'received' | 'rejected'
   created_at: string | null;
 };
 
 /* ------------------------------ Helpers ------------------------------ */
 const inList = (vals: (string | number)[]) =>
   vals.map((v) => (typeof v === "string" ? `"${v}"` : String(v))).join(",");
+
+const isReceived = (p: PaymentRow) =>
+  (p?.status || "").toLowerCase() === "received";
+
+const isPending = (p: PaymentRow) =>
+  (p?.status || "").toLowerCase() === "pending";
 
 /* ------------------------------ Component ------------------------------ */
 export default function CustomerPaymentsPage() {
@@ -151,7 +158,7 @@ export default function CustomerPaymentsPage() {
           const { data: pays, error: payErr } = await supabase
             .from("payments")
             .select(
-              "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, created_at"
+              "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, status, created_at"
             )
             .in("customer_id", customerIds)
             .order("created_at", { ascending: false });
@@ -226,30 +233,87 @@ export default function CustomerPaymentsPage() {
     return { subtotal, totalDiscount, salesTax, grandTotal, perTerm };
   }
 
+  /* Txn options (attach customerId so we can match pending-by-customer fallback) */
   const txnOptions = useMemo(() => {
-    const out: { code: string; order: OrderRow }[] = [];
+    const out: { code: string; order: OrderRow; customerId: string }[] = [];
     for (const c of txns) {
       const code = c.code ?? "";
       const completed = (c.orders ?? []).find(
         (o) => (o.status || "").toLowerCase() === "completed"
       );
-      if (code && completed) out.push({ code, order: completed });
+      if (code && completed) out.push({ code, order: completed, customerId: String(c.id) });
     }
     return out;
   }, [txns]);
+
+  /* ---------- Build lookups ---------- */
+  const paymentsByOrder = useMemo(() => {
+    const m = new Map<string, PaymentRow[]>();
+    for (const p of payments) {
+      const k = String(p.order_id ?? "");
+      const arr = m.get(k) || [];
+      arr.push(p);
+      m.set(k, arr);
+    }
+    return m;
+  }, [payments]);
+
+  const pendingByCustomer = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const p of payments) {
+      if (isPending(p)) m.set(String(p.customer_id), true);
+    }
+    return m;
+  }, [payments]);
+
+  const receivedTotalByOrder = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const [k, arr] of paymentsByOrder.entries()) {
+      const total = arr.filter(isReceived).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      m.set(k, total);
+    }
+    return m;
+  }, [paymentsByOrder]);
+
+  /* ---------- Only show: NO pending (per order or per customer) AND balance > 0 (received-only) ---------- */
+  const unpaidTxnOptions = useMemo(() => {
+    return txnOptions.filter(({ order, customerId }) => {
+      const orderId = String(order.id);
+
+      // pending for this specific order?
+      const forOrder = paymentsByOrder.get(orderId) || [];
+      const hasPendingForOrder = forOrder.some(isPending);
+
+      // fallback: any pending for the same customer (covers null/missing order_id)
+      const hasPendingForCustomer = !!pendingByCustomer.get(customerId);
+
+      if (hasPendingForOrder || hasPendingForCustomer) return false;
+
+      const { grandTotal } = computeFromOrder(order);
+      const paid = receivedTotalByOrder.get(orderId) || 0;
+      const balance = Math.max(grandTotal - paid, 0);
+      return balance > 0;
+    });
+  }, [txnOptions, paymentsByOrder, pendingByCustomer, receivedTotalByOrder]);
+
+  /* ---------- Keep selection valid ---------- */
+  useEffect(() => {
+    if (selectedTxnCode && !unpaidTxnOptions.some((t) => t.code === selectedTxnCode)) {
+      setSelectedTxnCode("");
+    }
+  }, [selectedTxnCode, unpaidTxnOptions]);
 
   const selectedPack = useMemo(() => {
     if (!selectedTxnCode) return null;
     const hit = txnOptions.find((t) => t.code === selectedTxnCode);
     if (!hit) return null;
 
+    const orderId = String(hit.order.id);
     const totals = computeFromOrder(hit.order);
-    const paid = payments
-      .filter((p) => String(p.order_id) === String(hit.order.id))
-      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const paid = receivedTotalByOrder.get(orderId) || 0;
     const balance = Math.max(totals.grandTotal - paid, 0);
     return { code: selectedTxnCode, order: hit.order, totals, paid, balance };
-  }, [selectedTxnCode, txnOptions, payments]);
+  }, [selectedTxnCode, txnOptions, receivedTotalByOrder]);
 
   const isCredit = useMemo(() => {
     const m = txns[0];
@@ -259,13 +323,12 @@ export default function CustomerPaymentsPage() {
   const totalBalance = useMemo(() => {
     if (!isCredit) return 0;
     return txnOptions.reduce((sum, t) => {
+      const orderId = String(t.order.id);
       const { grandTotal } = computeFromOrder(t.order);
-      const paid = payments
-        .filter((p) => String(p.order_id) === String(t.order.id))
-        .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      const paid = receivedTotalByOrder.get(orderId) || 0;
       return sum + Math.max(grandTotal - paid, 0);
     }, 0);
-  }, [txnOptions, payments, isCredit]);
+  }, [txnOptions, receivedTotalByOrder, isCredit]);
 
   /* --------------------------- Form validity --------------------------- */
   const amountNum = Number(amount);
@@ -313,7 +376,6 @@ export default function CustomerPaymentsPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    // Guard: do nothing if form invalid (button should already be disabled)
     if (!isFormValid || !selectedPack?.order?.id) {
       toast.error("Please complete all fields.");
       return;
@@ -347,11 +409,12 @@ export default function CustomerPaymentsPage() {
         bank_name: bankName || null,
         cheque_date: chequeDate || null,
         image_url,
+        status: "pending", // admin will set to 'received' or 'rejected'
       });
 
       if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
 
-      toast.success("✅ Cheque submitted. We’ll verify it shortly.");
+      toast.success("✅ Cheque submitted. Awaiting admin verification.");
       setSelectedTxnCode("");
       setAmount("");
       setChequeNumber("");
@@ -371,10 +434,13 @@ export default function CustomerPaymentsPage() {
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
         <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payments</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
+            Payments
+          </h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Upload a cheque for your <b>Transaction Code (TXN)</b>. For <b>Credit</b> customers, balances update automatically.
+          Upload a cheque for your <b>Transaction Code (TXN)</b>. For{" "}
+          <b>Credit</b> customers, balances update automatically after admin verification.
         </p>
 
         {/* Balances (Credit only) */}
@@ -402,32 +468,46 @@ export default function CustomerPaymentsPage() {
                   >
                     <th className="py-2.5 px-3 text-left font-bold">TXN Code</th>
                     <th className="py-2.5 px-3 text-left font-bold">Status</th>
-                    <th className="py-2.5 px-3 text-right font-bold">Grand Total</th>
+                    <th className="py-2.5 px-3 text-right font-bold">
+                      Grand Total
+                    </th>
                     <th className="py-2.5 px-3 text-right font-bold">Paid</th>
-                    <th className="py-2.5 px-3 text-right font-bold">Balance</th>
+                    <th className="py-2.5 px-3 text-right font-bold">
+                      Balance
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {txnOptions.map(({ code, order }, idx) => {
                     const { grandTotal } = computeFromOrder(order);
-                    const paid = payments
-                      .filter((p) => String(p.order_id) === String(order.id))
-                      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+                    const paid = receivedTotalByOrder.get(String(order.id)) || 0;
                     const bal = Math.max(grandTotal - paid, 0);
 
                     return (
-                      <tr key={`${code}-${idx}`} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
+                      <tr
+                        key={`${code}-${idx}`}
+                        className={idx % 2 ? "bg-neutral-50" : "bg-white"}
+                      >
                         <td className="py-2.5 px-3 font-mono">{code}</td>
                         <td className="py-2.5 px-3">{order.status ?? "—"}</td>
-                        <td className="py-2.5 px-3 text-right font-mono">{formatCurrency(grandTotal)}</td>
-                        <td className="py-2.5 px-3 text-right font-mono">{formatCurrency(paid)}</td>
-                        <td className="py-2.5 px-3 text-right font-mono font-semibold">{formatCurrency(bal)}</td>
+                        <td className="py-2.5 px-3 text-right font-mono">
+                          {formatCurrency(grandTotal)}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono">
+                          {formatCurrency(paid)}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-semibold">
+                          {formatCurrency(bal)}
+                        </td>
                       </tr>
                     );
                   })}
                   {txnOptions.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-neutral-400">
+                      <td
+                        colSpan={5}
+                        className="py-8 text-center text-neutral-400"
+                      >
                         No completed credit transactions yet.
                       </td>
                     </tr>
@@ -435,15 +515,6 @@ export default function CustomerPaymentsPage() {
                 </tbody>
               </table>
             </div>
-
-            {!isCredit && (
-              <div className="mt-4 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-900 px-4 py-3 text-sm">
-                <Info className="h-4 w-4 mt-0.5" />
-                <div>
-                  Your payment type is <b>Cash</b>. Balances are shown only for <b>Credit</b> customers. You can still upload cheque proof here if needed.
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -454,9 +525,14 @@ export default function CustomerPaymentsPage() {
             <h2 className="text-lg font-semibold">Upload Cheque Payment</h2>
           </div>
 
-          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <form
+            onSubmit={handleSubmit}
+            className="grid grid-cols-1 md:grid-cols-2 gap-4"
+          >
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Select Transaction (TXN) *</label>
+              <label className="text-xs text-gray-600">
+                Select Transaction (TXN) *
+              </label>
               <select
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 value={selectedTxnCode}
@@ -464,7 +540,8 @@ export default function CustomerPaymentsPage() {
                 required
               >
                 <option value="">— Choose a TXN —</option>
-                {txnOptions.map(({ code }, i) => (
+                {/* Hide while pending & hide when fully paid (based on received only) */}
+                {unpaidTxnOptions.map(({ code }, i) => (
                   <option key={`${code}-${i}`} value={code}>
                     {code}
                   </option>
@@ -473,7 +550,9 @@ export default function CustomerPaymentsPage() {
               {!!selectedPack && (
                 <div className="mt-1 text-xs text-gray-600">
                   Remaining balance:{" "}
-                  <b className="text-green-700">{formatCurrency(selectedPack.balance)}</b>
+                  <b className="text-green-700">
+                    {formatCurrency(selectedPack.balance)}
+                  </b>
                 </div>
               )}
             </div>
@@ -488,7 +567,9 @@ export default function CustomerPaymentsPage() {
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="0.00"
                 className={`mt-1 w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${
-                  exceedsBalance ? "border-red-400 focus:ring-red-400" : "border-gray-300 focus:ring-amber-400"
+                  exceedsBalance
+                    ? "border-red-400 focus:ring-red-400"
+                    : "border-gray-300 focus:ring-amber-400"
                 }`}
                 required
               />
@@ -597,10 +678,14 @@ export default function CustomerPaymentsPage() {
                   >
                     <th className="py-2.5 px-3 text-center font-bold">QTY</th>
                     <th className="py-2.5 px-3 text-center font-bold">UNIT</th>
-                    <th className="py-2.5 px-3 text-left font-bold">ITEM DESCRIPTION</th>
+                    <th className="py-2.5 px-3 text-left font-bold">
+                      ITEM DESCRIPTION
+                    </th>
                     <th className="py-2.5 px-3 text-center font-bold">REMARKS</th>
                     <th className="py-2.5 px-3 text-center font-bold">UNIT PRICE</th>
-                    <th className="py-2.5 px-3 text-center font-bold">DISCOUNT/ADD (%)</th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      DISCOUNT/ADD (%)
+                    </th>
                     <th className="py-2.5 px-3 text-center font-bold">AMOUNT</th>
                   </tr>
                 </thead>
@@ -616,23 +701,38 @@ export default function CustomerPaymentsPage() {
                     const inStockFlag =
                       typeof it.inventory?.quantity === "number"
                         ? (it.inventory?.quantity ?? 0) > 0
-                        : (it.inventory?.status || "").toLowerCase().includes("in stock");
+                        : (it.inventory?.status || "")
+                            .toLowerCase()
+                            .includes("in stock");
 
                     return (
-                      <tr key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>
-                        <td className="py-2.5 px-3 text-center font-mono">{qty}</td>
-                        <td className="py-2.5 px-3 text-center font-mono">{unit}</td>
+                      <tr
+                        key={idx}
+                        className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
+                      >
+                        <td className="py-2.5 px-3 text-center font-mono">
+                          {qty}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono">
+                          {unit}
+                        </td>
                         <td className="py-2.5 px-3">
                           <span className="font-semibold">{desc}</span>
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          {inStockFlag ? "✓" : it.inventory?.status ? it.inventory.status : "✗"}
+                          {inStockFlag
+                            ? "✓"
+                            : it.inventory?.status
+                            ? it.inventory.status
+                            : "✗"}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
                           {formatCurrency(unitPrice)}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
-                          {typeof it.discount_percent === "number" ? `${it.discount_percent}%` : ""}
+                          {typeof it.discount_percent === "number"
+                            ? `${it.discount_percent}%`
+                            : ""}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono font-bold whitespace-nowrap">
                           {formatCurrency(amount)}
@@ -642,7 +742,10 @@ export default function CustomerPaymentsPage() {
                   })}
                   {(selectedPack.order.order_items ?? []).length === 0 && (
                     <tr>
-                      <td colSpan={7} className="text-center py-8 text-neutral-400">
+                      <td
+                        colSpan={7}
+                        className="text-center py-8 text-neutral-400"
+                      >
                         No items found.
                       </td>
                     </tr>
@@ -657,7 +760,9 @@ export default function CustomerPaymentsPage() {
                 <table className="text-right w-full">
                   <tbody>
                     <tr>
-                      <td className="font-semibold py-0.5">Subtotal (Before Discount):</td>
+                      <td className="font-semibold py-0.5">
+                        Subtotal (Before Discount):
+                      </td>
                       <td className="pl-2 font-mono">
                         {formatCurrency(selectedPack.totals.subtotal)}
                       </td>
@@ -690,27 +795,20 @@ export default function CustomerPaymentsPage() {
                     )}
                     <tr>
                       <td className="font-semibold py-0.5">Paid:</td>
-                      <td className="pl-2 font-mono">{formatCurrency(selectedPack.paid)}</td>
+                      <td className="pl-2 font-mono">
+                        {formatCurrency(selectedPack.paid)}
+                      </td>
                     </tr>
                     <tr>
-                      <td className="font-semibold py-0.5">Remaining Balance:</td>
+                      <td className="font-semibold py-0.5">
+                        Remaining Balance:
+                      </td>
                       <td className="pl-2 font-bold text-amber-700 font-mono">
                         {formatCurrency(selectedPack.balance)}
                       </td>
                     </tr>
                   </tbody>
                 </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {!isCredit && (
-          <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
-            <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-900 px-4 py-3 text-sm">
-              <Info className="h-4 w-4 mt-0.5" />
-              <div>
-                Your payment type is <b>Cash</b>. Balances are shown only for <b>Credit</b> customers. You can still upload cheque proof here if needed.
               </div>
             </div>
           </div>
