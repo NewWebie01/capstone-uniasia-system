@@ -1,14 +1,17 @@
-// /lib/generateReceiptPdfPuppeteer.ts
-import puppeteer from "puppeteer";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 import { generateReceiptHtml } from "./generateReceiptHtml";
 
 export async function generateReceiptPdfBuffer(opts: any) {
   const html = generateReceiptHtml(opts);
 
   const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: chromium.args,
+    executablePath: await chromium.executablePath(),
+    headless: true, // 'chromium.headless' does not exist; just use true!
+    // defaultViewport is not required
   });
+
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: "networkidle0" });
   const pdfBuffer = await page.pdf({
