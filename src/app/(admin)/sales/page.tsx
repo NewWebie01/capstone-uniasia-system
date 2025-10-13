@@ -1614,7 +1614,7 @@ const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
                {/* Optional warning banner if there are stock issues */}
 {(hasZeroStock || hasInsufficientStock) && (
   <div className="mt-4 mb-2 rounded-lg border border-orange-300 bg-orange-50 px-4 py-2 text-sm text-orange-700 text-center">
-    Some items are out of stock or exceed available quantity. You can still proceed and review on the next step.
+    Cannot Proceed please review the highlighted items above.
   </div>
 )}
 
