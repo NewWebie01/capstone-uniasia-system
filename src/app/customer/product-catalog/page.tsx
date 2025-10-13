@@ -109,6 +109,11 @@ type CustomerInfo = {
   customer_type?: "New Customer" | "Existing Customer";
 };
 
+/* ----------------------------- Stock helper ----------------------------- */
+const isOutOfStock = (i: InventoryItem) =>
+  (i.status || "").toLowerCase().includes("out") || (i.quantity ?? 0) <= 0;
+
+
 /* ------------------------------ Weight helpers ------------------------------ */
 /** Weight in kg for ONE inventory "unit" (e.g., 1 piece, 1 dozen, 1 box, or 1 kg). */
 function unitWeightKg(i: InventoryItem): number {
@@ -717,10 +722,15 @@ export default function CustomerInventoryPage() {
   }, [customerInfo.customer_type]);
 
   /* ------------------------------- Cart flow ------------------------------- */
-  const handleAddToCartClick = (item: InventoryItem) => {
-    setSelectedItem(item);
-    setOrderQuantity(1);
-  };
+const handleAddToCartClick = (item: InventoryItem) => {
+  if (isOutOfStock(item)) {
+    toast.error("This item is out of stock.");
+    return;
+  }
+  setSelectedItem(item);
+  setOrderQuantity(1);
+};
+
 
   const addToCart = () => {
     if (!selectedItem) return;
@@ -1223,15 +1233,22 @@ export default function CustomerInventoryPage() {
                     <td className="py-2 px-4 text-left">
                       {formatPeso(item.unit_price)}
                     </td>
-                    <td className="py-2 px-4 text-left">{item.status}</td>
-                    <td className="py-2 px-4">
-                      <button
-                        className="bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600"
-                        onClick={() => handleAddToCartClick(item)}
-                      >
-                        Add to Cart
-                      </button>
-                    </td>
+                    <td className={`py-2 px-4 text-left ${isOutOfStock(item) ? "text-red-600" : "text-green-700"}`}>
+  {item.status}
+</td>
+
+<td className="py-2 px-4">
+  <button
+    className={`bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600
+      ${isOutOfStock(item) ? "opacity-50 cursor-not-allowed hover:bg-[#ffba20]" : ""}`}
+    onClick={() => !isOutOfStock(item) && handleAddToCartClick(item)}
+    disabled={isOutOfStock(item)}
+    title={isOutOfStock(item) ? "Out of Stock" : "Add to Cart"}
+  >
+    Add to Cart
+  </button>
+</td>
+
                   </tr>
                 ))}
                 {pageItems.length === 0 && (

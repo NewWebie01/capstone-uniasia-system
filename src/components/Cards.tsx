@@ -1,6 +1,7 @@
+// components/Cards.tsx
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   FaDollarSign,
   FaExclamationTriangle,
@@ -11,15 +12,30 @@ import {
 import supabase from "@/config/supabaseClient";
 
 // Types
-type InventoryItem = { id: number; product_name: string; quantity: number; expiration_date?: string };
+type InventoryItem = {
+  id: number;
+  product_name: string;
+  quantity: number;
+  expiration_date?: string | null;
+};
 type Delivery = { id: number; destination: string };
-type Customer = { id: number; name: string };
+type Customer = { id: number; name: string; customer_type?: string | null };
 
 // Add "expNotify" to ModalType
 type ModalType = "outOfStock" | "deliveries" | "customers" | "expNotify" | null;
 
 const pluralize = (n: number, one: string, many: string) =>
   `${n} ${n === 1 ? one : many}`;
+
+// --- helper to match Bargraph's default "Monthly" window (last 6 months, including current) ---
+function getMonthlyStartISO(): string {
+  const now = new Date();
+  // earliest of the 6 months window (current month minus 5), day 1
+  const earliest = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+  const y = earliest.getFullYear();
+  const m = String(earliest.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}-01`;
+}
 
 const Cards: React.FC = () => {
   const [totalSales, setTotalSales] = useState<number | null>(null);
@@ -30,74 +46,130 @@ const Cards: React.FC = () => {
 
   const [modal, setModal] = useState<ModalType>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [salesRes, invRes, delivRes, custRes] = await Promise.all([
-          supabase.from("sales").select("amount"),
-          supabase
-            .from("inventory")
-            .select("id, product_name, quantity, expiration_date")
-            .order("product_name", { ascending: true }),
-          supabase
-            .from("truck_deliveries")
-            .select("id, destination")
-            .eq("status", "Ongoing")
-            .order("destination", { ascending: true }),
-          supabase
-            .from("customers")
-            .select("id, name, customer_type")
-            .eq("customer_type", "Existing Customer")
-            .order("name", { ascending: true }),
-        ]);
+  const monthlyStartISO = useMemo(() => getMonthlyStartISO(), []);
 
-        if (!salesRes.error && salesRes.data) {
-          const sum = salesRes.data.reduce(
-            (acc, r: any) => acc + Number(r.amount ?? 0),
-            0
-          );
-          setTotalSales(sum);
-        }
+  // --- Loaders ---
+  async function loadTotalSales() {
+    // Mirror Bargraph filters:
+    // payments where status = 'received' and received_at >= monthlyStartISO
+    const { data, error } = await supabase
+      .from("payments")
+      .select("amount, status, received_at")
+      .eq("status", "received")
+      .not("received_at", "is", null)
+      .gte("received_at", monthlyStartISO);
 
-        if (!invRes.error && invRes.data) {
-          // Out of stock
-          setOutOfStockItems(
-            (invRes.data as InventoryItem[]).filter((i) => i.quantity === 0)
-          );
+    if (error) {
+      console.error("TotalSales load error:", error);
+      setTotalSales(0);
+      return;
+    }
 
-          // ExpNotify: Items expiring in 7 days
-          const DAYS_AHEAD = 7;
-          const today = new Date();
-          const until = new Date(Date.now() + DAYS_AHEAD * 86400000);
-          setExpiringSoon(
-            (invRes.data as InventoryItem[]).filter((i) => {
-              if (!i.expiration_date) return false;
-              const exp = new Date(i.expiration_date);
-              // Use only the date portion for comparison
-              exp.setHours(0, 0, 0, 0);
-              today.setHours(0, 0, 0, 0);
-              until.setHours(0, 0, 0, 0);
-              return exp >= today && exp <= until;
-            })
-          );
-        }
+    const sum =
+      (data ?? []).reduce((acc, r: any) => acc + (Number(r.amount) || 0), 0) || 0;
+    setTotalSales(sum);
+  }
 
-        if (!delivRes.error && delivRes.data) setOngoingDeliveries(delivRes.data as Delivery[]);
-        if (!custRes.error && custRes.data) {
-          // dedupe by name
-          const seen = new Set<string>();
-          const unique = (custRes.data as Customer[]).filter((c) => {
-            if (seen.has(c.name)) return false;
-            seen.add(c.name);
-            return true;
-          });
-          setExistingCustomers(unique);
-        }
-      } catch (e) {
-        console.error("Cards fetch error:", e);
+  async function loadLists() {
+    try {
+      const [invRes, delivRes, custRes] = await Promise.all([
+        supabase
+          .from("inventory")
+          .select("id, product_name, quantity, expiration_date")
+          .order("product_name", { ascending: true }),
+        supabase
+          .from("truck_deliveries")
+          .select("id, destination")
+          .eq("status", "Ongoing")
+          .order("destination", { ascending: true }),
+        supabase
+          .from("customers")
+          .select("id, name, customer_type")
+          .eq("customer_type", "Existing Customer")
+          .order("name", { ascending: true }),
+      ]);
+
+      if (!invRes.error && invRes.data) {
+        // Out of stock
+        setOutOfStockItems(
+          (invRes.data as InventoryItem[]).filter((i) => (i.quantity || 0) === 0)
+        );
+
+        // ExpNotify: Items expiring in next 7 days (inclusive)
+        const DAYS_AHEAD = 7;
+        const today = new Date();
+        const until = new Date(Date.now() + DAYS_AHEAD * 86400000);
+
+        // Compare on date-only
+        const start = new Date(today);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(until);
+        end.setHours(0, 0, 0, 0);
+
+        setExpiringSoon(
+          (invRes.data as InventoryItem[]).filter((i) => {
+            if (!i.expiration_date) return false;
+            const exp = new Date(i.expiration_date);
+            exp.setHours(0, 0, 0, 0);
+            return exp >= start && exp <= end;
+          })
+        );
       }
-    })();
-  }, []);
+
+      if (!delivRes.error && delivRes.data)
+        setOngoingDeliveries(delivRes.data as Delivery[]);
+
+      if (!custRes.error && custRes.data) {
+        // dedupe by name
+        const seen = new Set<string>();
+        const unique = (custRes.data as Customer[]).filter((c) => {
+          if (seen.has(c.name)) return false;
+          seen.add(c.name);
+          return true;
+        });
+        setExistingCustomers(unique);
+      }
+    } catch (e) {
+      console.error("Cards list fetch error:", e);
+    }
+  }
+
+  // Initial load
+  useEffect(() => {
+    loadTotalSales();
+    loadLists();
+  }, [monthlyStartISO]);
+
+  // Realtime refresh for payments like Bargraph (any change that may affect 'received' totals)
+  useEffect(() => {
+    const ch = supabase.channel("cards-payments-rt");
+
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "payments" },
+      (payload: any) => {
+        const statusOf = (row: any): string =>
+          typeof row?.status === "string" ? row.status.toLowerCase() : "";
+
+        const newStatus = statusOf(payload.new);
+        const oldStatus = statusOf(payload.old);
+
+        if (
+          payload.eventType === "INSERT" ||
+          payload.eventType === "DELETE" ||
+          newStatus === "received" ||
+          oldStatus === "received"
+        ) {
+          loadTotalSales();
+        }
+      }
+    );
+
+    ch.subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [monthlyStartISO]);
 
   const currencyPH = (val: number | null) =>
     val === null
@@ -122,13 +194,16 @@ const Cards: React.FC = () => {
   return (
     <>
       <div className="grid grid-cols-5 gap-4 mb-6 w-full overflow-x-auto">
-        {/* Total Sales (non-clickable) */}
+        {/* Total Sales (now mirrors Bargraph source/filters: payments.received in last 6 months) */}
         <div className="bg-white p-5 rounded-xl shadow-sm flex items-start gap-4 overflow-hidden">
           <FaDollarSign className="text-3xl text-green-600 mt-1" />
           <div className="leading-tight">
             <div className="font-semibold text-base md:text-lg">Total Sales</div>
             <div className="text-sm md:text-base text-gray-600">
               {currencyPH(totalSales)}
+            </div>
+            <div className="text-[11px] md:text-xs text-gray-400">
+              Received payments • last 6 months
             </div>
           </div>
         </div>
@@ -146,9 +221,7 @@ const Cards: React.FC = () => {
               </div>
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-400">
-            Click to view details
-          </div>
+          <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
         </div>
 
         {/* Ongoing Deliveries (clickable -> modal) */}
@@ -164,9 +237,7 @@ const Cards: React.FC = () => {
               </div>
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-400">
-            Click to view details
-          </div>
+          <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
         </div>
 
         {/* Existing Customers (clickable -> modal) */}
@@ -182,9 +253,7 @@ const Cards: React.FC = () => {
               </div>
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-400">
-            Click to view details
-          </div>
+          <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
         </div>
 
         {/* ExpNotify (clickable -> modal) */}
@@ -198,14 +267,10 @@ const Cards: React.FC = () => {
                   ? pluralize(expiringSoon.length, "item", "items")
                   : "Loading…"}
               </div>
-              <div className="text-xs md:text-sm text-gray-400">
-                (7 days)
-              </div>
+              <div className="text-xs md:text-sm text-gray-400">(7 days)</div>
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-400">
-            Click to view details
-          </div>
+          <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
         </div>
       </div>
 
@@ -238,10 +303,10 @@ const Cards: React.FC = () => {
                   ? expiringSoon.map((i) =>
                       i.product_name +
                       (i.expiration_date
-                        ? ` (expires ${new Date(i.expiration_date).toLocaleDateString("en-PH", {
-                            month: "short",
-                            day: "numeric",
-                          })})`
+                        ? ` (expires ${new Date(i.expiration_date).toLocaleDateString(
+                            "en-PH",
+                            { month: "short", day: "numeric" }
+                          )})`
                         : "")
                     )
                   : []
