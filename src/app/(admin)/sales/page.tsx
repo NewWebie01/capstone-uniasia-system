@@ -527,6 +527,12 @@ const handleAcceptOrder = async (order: OrderWithDetails) => {
         .update(updateFields)
         .eq("id", selectedOrder.id);
       if (ordersErr) throw ordersErr;
+      // ✅ After marking the order as completed, mark this customer row as "Existing"
+await supabase
+  .from("customers")
+  .update({ customer_type: "Existing Customer" })
+  .eq("code", selectedOrder.customers.code);
+
       try {
         const { data: { user } } = await supabase.auth.getUser();
         const userEmail = user?.email || "unknown";

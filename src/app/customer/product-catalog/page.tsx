@@ -580,33 +580,36 @@ const [interestPercent, setInterestPercent] = useState<number>(0);
     return () => void supabase.removeChannel(invChannel);
   }, [fetchInventory]);
 
-  /* -------- Compute type from order history (by email, always) ---------- */
-  const setTypeFromHistory = useCallback(async (email: string) => {
-    const cleanEmail = (email || "").trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes("@")) return;
+/* -------- Compute type from order history (by email, completed only) ---------- */
+const setTypeFromHistory = useCallback(async (email: string) => {
+  const cleanEmail = (email || "").trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes("@")) return;
 
-    const { count, error } = await supabase
-      .from("orders")
-      .select("id, customers!inner(email)", { count: "exact", head: true })
-      .ilike("customers.email", cleanEmail);
+  // Only count orders that are COMPLETED (approved/fulfilled by admin)
+  const { count, error } = await supabase
+    .from("orders")
+    .select("id, status, customers!inner(email)", { count: "exact", head: true })
+    .ilike("customers.email", cleanEmail)
+    .in("status", ["completed"]); // <-- ✅ only completed
 
-    if (error) {
-      console.warn("Could not compute order history:", error.message);
-      return;
-    }
+  if (error) {
+    console.warn("Could not compute order history:", error.message);
+    return;
+  }
 
-    const c = count ?? 0;
-    setOrderHistoryCount(c);
-    const type: CustomerInfo["customer_type"] =
-      c > 0 ? "Existing Customer" : "New Customer";
+  const completedCount = count ?? 0;
+  setOrderHistoryCount(completedCount);
 
-    setCustomerInfo((prev) => ({
-      ...prev,
-      customer_type: type,
-      // Existing customers => Credit; New => Cash
-      payment_type: type === "Existing Customer" ? "Credit" : "Cash",
-    }));
-  }, []);
+  const type: CustomerInfo["customer_type"] =
+    completedCount > 0 ? "Existing Customer" : "New Customer";
+
+  setCustomerInfo((prev) => ({
+    ...prev,
+    customer_type: type,
+    payment_type: type === "Existing Customer" ? "Credit" : "Cash",
+  }));
+}, []);
+
 
   // Pre-fill name/email/phone if logged in and compute type once
   useEffect(() => {
