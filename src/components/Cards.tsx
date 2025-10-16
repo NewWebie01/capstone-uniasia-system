@@ -18,7 +18,7 @@ type InventoryItem = {
   quantity: number;
   expiration_date?: string | null;
 };
-type Delivery = { id: number; destination: string };
+type Delivery = { id: number; destination: string; status?: string | null };
 type Customer = { id: number; name: string; customer_type?: string | null };
 
 // Add "expNotify" to ModalType
@@ -30,7 +30,6 @@ const pluralize = (n: number, one: string, many: string) =>
 // --- helper to match Bargraph's default "Monthly" window (last 6 months, including current) ---
 function getMonthlyStartISO(): string {
   const now = new Date();
-  // earliest of the 6 months window (current month minus 5), day 1
   const earliest = new Date(now.getFullYear(), now.getMonth() - 5, 1);
   const y = earliest.getFullYear();
   const m = String(earliest.getMonth() + 1).padStart(2, "0");
@@ -50,8 +49,6 @@ const Cards: React.FC = () => {
 
   // --- Loaders ---
   async function loadTotalSales() {
-    // Mirror Bargraph filters:
-    // payments where status = 'received' and received_at >= monthlyStartISO
     const { data, error } = await supabase
       .from("payments")
       .select("amount, status, received_at")
@@ -77,10 +74,11 @@ const Cards: React.FC = () => {
           .from("inventory")
           .select("id, product_name, quantity, expiration_date")
           .order("product_name", { ascending: true }),
+        // 🔧 FIX: your logistics uses "To Ship" for ongoing — not "Ongoing"
         supabase
           .from("truck_deliveries")
-          .select("id, destination")
-          .eq("status", "Ongoing")
+          .select("id, destination, status")
+          .eq("status", "To Ship")
           .order("destination", { ascending: true }),
         supabase
           .from("customers")
@@ -90,7 +88,6 @@ const Cards: React.FC = () => {
       ]);
 
       if (!invRes.error && invRes.data) {
-        // Out of stock
         setOutOfStockItems(
           (invRes.data as InventoryItem[]).filter((i) => (i.quantity || 0) === 0)
         );
@@ -100,7 +97,6 @@ const Cards: React.FC = () => {
         const today = new Date();
         const until = new Date(Date.now() + DAYS_AHEAD * 86400000);
 
-        // Compare on date-only
         const start = new Date(today);
         start.setHours(0, 0, 0, 0);
         const end = new Date(until);
@@ -140,7 +136,7 @@ const Cards: React.FC = () => {
     loadLists();
   }, [monthlyStartISO]);
 
-  // Realtime refresh for payments like Bargraph (any change that may affect 'received' totals)
+  // Realtime refresh for payments totals (like Bargraph)
   useEffect(() => {
     const ch = supabase.channel("cards-payments-rt");
 
@@ -170,6 +166,33 @@ const Cards: React.FC = () => {
       supabase.removeChannel(ch);
     };
   }, [monthlyStartISO]);
+
+  // 🔄 Realtime refresh for "To Ship" deliveries shown on the card
+  useEffect(() => {
+    const ch = supabase.channel("cards-deliveries-rt");
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "truck_deliveries" },
+      (payload: any) => {
+        const statusNew = payload?.new?.status as string | undefined;
+        const statusOld = payload?.old?.status as string | undefined;
+
+        // If a row becomes or stops being "To Ship", refresh the list
+        if (
+          statusNew === "To Ship" ||
+          statusOld === "To Ship" ||
+          payload.eventType === "INSERT" ||
+          payload.eventType === "DELETE"
+        ) {
+          loadLists();
+        }
+      }
+    );
+    ch.subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, []);
 
   const currencyPH = (val: number | null) =>
     val === null
@@ -341,7 +364,6 @@ const Modal: React.FC<{
   onClose: () => void;
   children: React.ReactNode;
 }> = ({ title, onClose, children }) => {
-  // close on ESC
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onEsc);
