@@ -1,73 +1,69 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
+import { createClient } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
+
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// Use the service role key to access Supabase Auth Admin API
+const adminSupabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false } }
+);
 
 export async function GET(req: NextRequest) {
   try {
-    // 1. Find items expiring in the next 7 days
+    // 1. Find items expiring within 7 days
     const today = new Date();
-    const in7 = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const in7 = new Date();
+    in7.setDate(today.getDate() + 7);
+
     const { data: items, error } = await supabase
       .from("inventory")
-      .select("id, product_name, expiration_date, quantity")
+      .select("id, product_name, expiration_date")
       .gte("expiration_date", today.toISOString().slice(0, 10))
       .lte("expiration_date", in7.toISOString().slice(0, 10));
     if (error) throw error;
-
-    if (!items?.length) {
+    if (!items?.length)
       return NextResponse.json({ message: "No expiring items." });
-    }
 
-    // 2. Get all admin emails (adjust for your schema/roles)
-    const { data: admins, error: adminErr } = await supabase
-      .from("users")
-      .select("email, role")
-      .eq("role", "admin");
-    if (adminErr) throw adminErr;
+    // 2. Fetch all users via Admin API
+    const { data: users, error: userErr } =
+      await adminSupabase.auth.admin.listUsers();
+    if (userErr) throw userErr;
 
-    const emails = admins?.map((a: any) => a.email).filter(Boolean);
-    if (!emails?.length) throw new Error("No admin emails found.");
+    // 3. Filter for admins (user_metadata.role === "admin")
+    const adminEmails = users?.users
+      ?.filter((u: any) => u.user_metadata?.role === "admin")
+      .map((u: any) => u.email)
+      .filter(Boolean);
 
-    // 3. Send the email(s)
-    const subject = `Inventory Expiry Alert – ${items.length} Item(s)`;
-    const html = `
-      <div style="font-family:DM Sans,Arial,sans-serif;">
-        <h2 style="color:#f39c12;margin-bottom:4px;">Expiry Warning</h2>
-        <p>The following inventory item(s) will expire within 7 days:</p>
-        <ul>
-          ${items
-            .map(
-              (item: any) =>
-                `<li><b>${item.product_name}</b> – Qty: ${
-                  item.quantity
-                } – Expiry: <b>${item.expiration_date?.slice(0, 10)}</b></li>`
-            )
-            .join("")}
-        </ul>
-        <hr/>
-        <div style="color:#888;font-size:0.97rem">UniAsia Inventory Alert</div>
-      </div>
-    `;
+    if (!adminEmails?.length) throw new Error("No admin emails found!");
 
+    // 4. Send Resend email to all admins
     await resend.emails.send({
       from: "UniAsia <sales@uniasia.shop>",
-      to: emails,
-      subject,
-      html,
-      text: `Expiring soon: ${items
-        .map(
-          (i: any) =>
-            `${i.product_name} (expires ${i.expiration_date?.slice(0, 10)})`
-        )
-        .join(", ")}`,
+      to: adminEmails,
+      subject: "Expiring Inventory Alert – UniAsia",
+      html: `<h2>Expiring Inventory</h2>
+             <ul>${items
+               .map(
+                 (i: any) =>
+                   `<li><b>${i.product_name}</b> – expires ${i.expiration_date}</li>`
+               )
+               .join("")}</ul>
+             <p>Please take action on these items.</p>`,
+      text: `Expiring inventory:\n${items
+        .map((i: any) => `${i.product_name} – expires ${i.expiration_date}`)
+        .join("\n")}`,
     });
 
-    return NextResponse.json({ success: true, sentTo: emails });
+    return NextResponse.json({ success: true, notified: adminEmails });
   } catch (err: any) {
     console.error("[check-expiry] ERROR:", err);
     return NextResponse.json(
-      { error: err?.message || String(err) },
+      { error: String(err?.message || err) },
       { status: 500 }
     );
   }
