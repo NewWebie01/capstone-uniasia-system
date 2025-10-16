@@ -30,7 +30,7 @@ export default function ResetPasswordPage() {
 
     // Directly call Supabase resetPasswordForEmail
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: "http://localhost:3000/update-password", // Change this to your prod domain if needed!
+      redirectTo: "https://uniasia.shop/update-password", // Change this to your prod domain if needed!
     });
     if (error) {
       setError("Could not send reset email. Please check your email address.");
@@ -63,7 +63,8 @@ export default function ResetPasswordPage() {
         </h1>
         {sent ? (
           <div className="text-green-600 text-center">
-            If this email is registered, a reset link was sent!<br />
+            If this email is registered, a reset link was sent!
+            <br />
             Please check your inbox (and spam folder).
           </div>
         ) : (
