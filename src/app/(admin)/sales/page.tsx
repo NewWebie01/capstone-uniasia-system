@@ -594,10 +594,10 @@ function SalesPageContent() {
         .eq("id", selectedOrder.id);
       if (ordersErr) throw ordersErr;
       // ✅ After marking the order as completed, mark this customer row as "Existing"
-await supabase
-  .from("customers")
-  .update({ customer_type: "Existing Customer" })
-  .eq("code", selectedOrder.customers.code);
+      await supabase
+        .from("customers")
+        .update({ customer_type: "Existing Customer" })
+        .eq("code", selectedOrder.customers.code);
 
       try {
         const {
@@ -1422,15 +1422,9 @@ await supabase
                           min={1}
                           max={48}
                           value={numberOfTerms}
-                          onFocus={(e) => e.target.select()}
-                          onChange={(e) => {
-                            let val = Math.max(
-                              1,
-                              Math.min(48, Number(e.target.value))
-                            );
-                            setNumberOfTerms(val);
-                          }}
-                          className="border rounded px-2 py-1 w-20 text-center"
+                          disabled
+                          readOnly
+                          className="border rounded px-2 py-1 w-20 text-center bg-gray-100 cursor-not-allowed opacity-70"
                         />
 
                         <div className="text-xs text-gray-500 ml-1">
@@ -1451,13 +1445,9 @@ await supabase
                           max={30}
                           step={1}
                           value={interestPercent}
-                          onFocus={(e) => e.target.select()}
-                          onChange={(e) =>
-                            setInterestPercent(
-                              Math.max(0, Math.min(30, Number(e.target.value)))
-                            )
-                          }
-                          className="border rounded px-2 py-1 w-20 text-center"
+                          disabled
+                          readOnly
+                          className="border rounded px-2 py-1 w-20 text-center bg-gray-100 cursor-not-allowed opacity-70"
                         />
 
                         <div className="text-xs text-gray-500 ml-1">
