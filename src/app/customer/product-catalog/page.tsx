@@ -113,7 +113,6 @@ type CustomerInfo = {
 const isOutOfStock = (i: InventoryItem) =>
   (i.status || "").toLowerCase().includes("out") || (i.quantity ?? 0) <= 0;
 
-
 /* ------------------------------ Weight helpers ------------------------------ */
 /** Weight in kg for ONE inventory "unit" (e.g., 1 piece, 1 dozen, 1 box, or 1 kg). */
 function unitWeightKg(i: InventoryItem): number {
@@ -604,7 +603,8 @@ export default function CustomerInventoryPage() {
     (async () => {
       const { email, name, phone: phoneFromAuth } = await getAuthIdentity();
       if (email) {
-        const phoneFromSources = phoneFromAuth || (await loadPhoneForEmail(email));
+        const phoneFromSources =
+          phoneFromAuth || (await loadPhoneForEmail(email));
 
         setAuthDefaults({
           name: name || "",
@@ -722,15 +722,14 @@ export default function CustomerInventoryPage() {
   }, [customerInfo.customer_type]);
 
   /* ------------------------------- Cart flow ------------------------------- */
-const handleAddToCartClick = (item: InventoryItem) => {
-  if (isOutOfStock(item)) {
-    toast.error("This item is out of stock.");
-    return;
-  }
-  setSelectedItem(item);
-  setOrderQuantity(1);
-};
-
+  const handleAddToCartClick = (item: InventoryItem) => {
+    if (isOutOfStock(item)) {
+      toast.error("This item is out of stock.");
+      return;
+    }
+    setSelectedItem(item);
+    setOrderQuantity(1);
+  };
 
   const addToCart = () => {
     if (!selectedItem) return;
@@ -1013,6 +1012,30 @@ const handleAddToCartClick = (item: InventoryItem) => {
         .from("order_items")
         .insert(rows);
       if (itemsErr) throw itemsErr;
+      /*  NEW: add a notification for admin */
+      try {
+        // Summarize up to 3 items for the message
+        const preview = items
+          .slice(0, 3)
+          .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
+          .join(", ");
+        const more = items.length > 3 ? `, +${items.length - 3} more` : "";
+
+        await supabase.from("notifications").insert([
+          {
+            type: "order",
+            title: " New Order Submitted",
+            message: `${customer.name} • TXN ${
+              finalOrderDetails.customer.code || "—"
+            } • ${preview}${more} • Total: ${formatPeso(totalAmount)}`,
+            related_id: orderId, // so the bell can deep-link
+            user_email: customer.email || null, // optional
+          },
+        ]);
+      } catch (notifErr) {
+        // Don't block the order flow if this fails; just log it.
+        console.warn("Failed to create order notification:", notifErr);
+      }
 
       // ✅ Success UI
       toast.success("Your order has been submitted successfully!");
@@ -1146,7 +1169,9 @@ const handleAddToCartClick = (item: InventoryItem) => {
     const qp = new URLSearchParams();
     if (lastOrderId) qp.set("orderId", lastOrderId);
     if (lastTxnCode) qp.set("code", lastTxnCode);
-    router.push(`/customer/payments${qp.toString() ? `?${qp.toString()}` : ""}`);
+    router.push(
+      `/customer/payments${qp.toString() ? `?${qp.toString()}` : ""}`
+    );
   };
 
   /* --------------------------------- UI --------------------------------- */
@@ -1233,22 +1258,33 @@ const handleAddToCartClick = (item: InventoryItem) => {
                     <td className="py-2 px-4 text-left">
                       {formatPeso(item.unit_price)}
                     </td>
-                    <td className={`py-2 px-4 text-left ${isOutOfStock(item) ? "text-red-600" : "text-green-700"}`}>
-  {item.status}
-</td>
+                    <td
+                      className={`py-2 px-4 text-left ${
+                        isOutOfStock(item) ? "text-red-600" : "text-green-700"
+                      }`}
+                    >
+                      {item.status}
+                    </td>
 
-<td className="py-2 px-4">
-  <button
-    className={`bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600
-      ${isOutOfStock(item) ? "opacity-50 cursor-not-allowed hover:bg-[#ffba20]" : ""}`}
-    onClick={() => !isOutOfStock(item) && handleAddToCartClick(item)}
-    disabled={isOutOfStock(item)}
-    title={isOutOfStock(item) ? "Out of Stock" : "Add to Cart"}
-  >
-    Add to Cart
-  </button>
-</td>
-
+                    <td className="py-2 px-4">
+                      <button
+                        className={`bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600
+      ${
+        isOutOfStock(item)
+          ? "opacity-50 cursor-not-allowed hover:bg-[#ffba20]"
+          : ""
+      }`}
+                        onClick={() =>
+                          !isOutOfStock(item) && handleAddToCartClick(item)
+                        }
+                        disabled={isOutOfStock(item)}
+                        title={
+                          isOutOfStock(item) ? "Out of Stock" : "Add to Cart"
+                        }
+                      >
+                        Add to Cart
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {pageItems.length === 0 && (
@@ -1869,9 +1905,7 @@ const handleAddToCartClick = (item: InventoryItem) => {
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-500">
-                    City/Municipality
-                  </div>
+                  <div className="text-xs text-gray-500">City/Municipality</div>
                   <div className="font-medium">{selectedCity?.name ?? "-"}</div>
                 </div>
                 <div>
@@ -2001,21 +2035,23 @@ const handleAddToCartClick = (item: InventoryItem) => {
 
             <div className="mt-3 text-sm text-gray-700 space-y-2">
               <p>Your order was placed successfully.</p>
-<div className="rounded-lg bg-gray-50 p-3 ring-1 ring-black/5">
-  <div className="flex justify-between">
-    <span className="text-gray-500">Transaction Code:</span>
-    <span className="font-medium">{lastTxnCode || "—"}</span>
-  </div>
-  {/* Removed Order ID row */}
-  {/* <div className="flex justify-between">
+              <div className="rounded-lg bg-gray-50 p-3 ring-1 ring-black/5">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Transaction Code:</span>
+                  <span className="font-medium">{lastTxnCode || "—"}</span>
+                </div>
+                {/* Removed Order ID row */}
+                {/* <div className="flex justify-between">
     <span className="text-gray-500">Order ID:</span>
     <span className="font-mono text-xs">{lastOrderId || "—"}</span>
   </div> */}
-  <div className="flex justify-between">
-    <span className="text-gray-500">Estimated Total:</span>
-    <span className="font-semibold">{formatPeso(lastOrderTotal)}</span>
-  </div>
-</div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Estimated Total:</span>
+                  <span className="font-semibold">
+                    {formatPeso(lastOrderTotal)}
+                  </span>
+                </div>
+              </div>
 
               <p className="mt-2">
                 Would you like to proceed to the <strong>Payments</strong> page
