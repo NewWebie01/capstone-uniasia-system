@@ -105,7 +105,6 @@ export default function AdminPaymentsPage() {
   const [customers, setCustomers] = useState<CustomerLite[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const paymentsSubKey = useRef<string>("");
-  const [loadingAction, setLoadingAction] = useState(false);
 
   // filters
   const [q, setQ] = useState("");
@@ -256,7 +255,6 @@ export default function AdminPaymentsPage() {
 
   async function handleConfirm() {
     if (!targetRow || !confirmType) return;
-    setLoadingAction(true);
 
     // lock the row immediately => both buttons disable
     setLocked((prev) => new Set(prev).add(targetRow.id));
@@ -294,32 +292,8 @@ export default function AdminPaymentsPage() {
           cheque_number: targetRow.cheque_number,
           bank_name: targetRow.bank_name,
         });
-
-        // --- SEND EMAIL NOTIFICATION (Receive) ---
-        try {
-          const res = await fetch("/api/send-payment-confirmation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              paymentId: targetRow.id,
-              action: "receive",
-            }),
-          });
-          const data = await res.json();
-          if (res.ok) {
-            toast.success("Marked as received. Email sent to customer!");
-          } else {
-            toast.error(
-              "Payment marked as received, but email failed: " +
-                (data.error || "")
-            );
-          }
-        } catch (err) {
-          toast.error("Payment marked as received, but email send failed.");
-          console.error(err);
-        }
-        // --- END EMAIL NOTIF ---
-      } else if (confirmType === "reject") {
+        toast.success("Marked as received. Customer balance will update.");
+      } else {
         const { error } = await supabase
           .from("payments")
           .update({
@@ -350,27 +324,7 @@ export default function AdminPaymentsPage() {
           cheque_number: targetRow.cheque_number,
           bank_name: targetRow.bank_name,
         });
-
-        // --- SEND EMAIL NOTIFICATION (Reject) ---
-        try {
-          const res = await fetch("/api/send-payment-confirmation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ paymentId: targetRow.id, action: "reject" }),
-          });
-          const data = await res.json();
-          if (res.ok) {
-            toast.success("Cheque marked as rejected. Email sent to customer!");
-          } else {
-            toast.error(
-              "Cheque rejected, but email failed: " + (data.error || "")
-            );
-          }
-        } catch (err) {
-          toast.error("Cheque rejected, but email send failed.");
-          console.error(err);
-        }
-        // --- END EMAIL NOTIF ---
+        toast.success("Cheque marked as rejected.");
       }
 
       setConfirmOpen(false);
@@ -386,8 +340,6 @@ export default function AdminPaymentsPage() {
         next.delete(targetRow!.id);
         return next;
       });
-    } finally {
-      setLoadingAction(false);
     }
   }
 
@@ -618,49 +570,19 @@ export default function AdminPaymentsPage() {
               type="button"
               onClick={() => setConfirmOpen(false)}
               className="px-4 py-2 rounded border hover:bg-gray-50"
-              disabled={loadingAction}
             >
               Cancel
             </button>
-
             <button
               type="button"
               onClick={handleConfirm}
-              className={`px-4 py-2 rounded text-white flex items-center gap-2 ${
+              className={`px-4 py-2 rounded text-white ${
                 confirmType === "receive"
                   ? "bg-green-600 hover:bg-green-700"
                   : "bg-red-600 hover:bg-red-700"
               }`}
-              disabled={loadingAction}
             >
-              {loadingAction ? (
-                <span className="flex items-center gap-2">
-                  <svg
-                    className="animate-spin h-4 w-4 text-white"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                      fill="none"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                    />
-                  </svg>
-                  Processing...
-                </span>
-              ) : confirmType === "receive" ? (
-                "Confirm Receive"
-              ) : (
-                "Confirm Reject"
-              )}
+              {confirmType === "receive" ? "Confirm Receive" : "Confirm Reject"}
             </button>
           </DialogFooter>
         </DialogContent>

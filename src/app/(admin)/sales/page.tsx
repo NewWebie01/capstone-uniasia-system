@@ -6,7 +6,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
 import PageLoader from "@/components/PageLoader";
 import { toast } from "sonner";
-import { on as onEvent } from "@/utils/eventEmitter";
+import { on, off } from "@/utils/eventEmitter";
 
 type InventoryItem = {
   id: number;
@@ -77,7 +77,9 @@ function SalesPageContent() {
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showModal, setShowModal] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
+    null
+  );
 
   const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
@@ -85,6 +87,7 @@ function SalesPageContent() {
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
+  const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
   const [numberOfTerms, setNumberOfTerms] = useState(1);
   const [interestPercent, setInterestPercent] = useState(0);
   const [showSalesOrderModal, setShowSalesOrderModal] = useState(false);
@@ -94,7 +97,9 @@ function SalesPageContent() {
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
-  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null);
+  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(
+    null
+  );
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [salesman, setSalesman] = useState("");
   const [forwarder, setForwarder] = useState("");
@@ -110,7 +115,10 @@ function SalesPageContent() {
     setFieldErrors({ poNumber: false, repName: false });
   };
   // Validation state
-  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({ poNumber: false, repName: false });
+  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
+    poNumber: false,
+    repName: false,
+  });
 
   // Activity Logs Modal State
   const [showLogsModal, setShowLogsModal] = useState(false);
@@ -122,7 +130,9 @@ function SalesPageContent() {
 
   useEffect(() => {
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) return;
       const { data: userRow } = await supabase
         .from("users")
@@ -142,12 +152,24 @@ function SalesPageContent() {
     })();
   }, []);
 
+  // Pick up target order if we came from NotificationBell navigation
   useEffect(() => {
-    // Register event: listen for "scroll-to-order"
-    const unsubscribe = onEvent("scroll-to-order", (orderId: string) => {
-      scrollToOrder(orderId);
-    });
-    return () => unsubscribe();
+    try {
+      const id = sessionStorage.getItem("scroll-to-order-id");
+      if (id) {
+        sessionStorage.removeItem("scroll-to-order-id");
+        setPendingScrollId(id);
+      }
+    } catch {}
+  }, []);
+
+  // Listen for in-page jumps when NotificationBell tells us to
+  useEffect(() => {
+    const handler = (id: string) => {
+      setPendingScrollId(id); // queue even if orders not ready yet
+    };
+    on("scroll-to-order", handler);
+    return () => off("scroll-to-order", handler);
   }, []);
 
   async function fetchActivityLogs(orderId: string) {
@@ -164,11 +186,15 @@ function SalesPageContent() {
     setLogsLoading(false);
   }
 
-  const [fastMovingProducts, setFastMovingProducts] = useState<FastMovingProduct[]>([]);
+  const [fastMovingProducts, setFastMovingProducts] = useState<
+    FastMovingProduct[]
+  >([]);
   const [showFastMovingModal, setShowFastMovingModal] = useState(false);
-  const [slowMovingProducts, setSlowMovingProducts] = useState<FastMovingProduct[]>([]);
+  const [slowMovingProducts, setSlowMovingProducts] = useState<
+    FastMovingProduct[]
+  >([]);
   const [showSlowMovingModal, setShowSlowMovingModal] = useState(false);
-  
+
   const ordersPerPage = 10;
 
   const computedOrderTotal = useMemo(() => {
@@ -186,13 +212,20 @@ function SalesPageContent() {
   const getGrandTotalWithInterest = () => {
     if (!selectedOrder) return 0;
     const baseTotal = computedOrderTotal + salesTaxValue;
-    if (selectedOrder.customers.payment_type === "Credit" && numberOfTerms > 0) {
+    if (
+      selectedOrder.customers.payment_type === "Credit" &&
+      numberOfTerms > 0
+    ) {
       return baseTotal * (1 + interestPercent / 100);
     }
     return baseTotal;
   };
   const getPerTermAmount = () => {
-    if (selectedOrder && selectedOrder.customers.payment_type === "Credit" && numberOfTerms > 0) {
+    if (
+      selectedOrder &&
+      selectedOrder.customers.payment_type === "Credit" &&
+      numberOfTerms > 0
+    ) {
       return getGrandTotalWithInterest() / numberOfTerms;
     }
     return getGrandTotalWithInterest();
@@ -214,6 +247,27 @@ function SalesPageContent() {
       setTimeout(() => el.classList.remove("ring-2", "ring-blue-500"), 1200);
     }
   }
+  useEffect(() => {
+    if (!pendingScrollId) return;
+
+    const exists = orders.some((o) => o.id === pendingScrollId);
+    if (exists) {
+      // optional: bring the section into view first
+      document.getElementById("pending-orders-section")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+
+      // then scroll/highlight the specific card
+      // use rAF to ensure DOM is ready
+      requestAnimationFrame(() => {
+        scrollToOrder(pendingScrollId);
+      });
+
+      setPendingScrollId(null);
+    }
+  }, [orders, pendingScrollId]);
+
   const totalDiscount = selectedOrder
     ? selectedOrder.order_items.reduce((sum, item, idx) => {
         if (item.inventory.quantity === 0) return sum;
@@ -246,7 +300,9 @@ function SalesPageContent() {
 
   // Fetch all inventory items
   const fetchItems = async () => {
-    const { data, error } = await supabase.from("inventory").select("*, profit");
+    const { data, error } = await supabase
+      .from("inventory")
+      .select("*, profit");
     if (!error) setItems(data || []);
   };
   // Fetch orders with related customer & items
@@ -298,7 +354,9 @@ function SalesPageContent() {
         customers: Array.isArray(o.customer) ? o.customer[0] : o.customer,
         order_items: o.order_items.map((item: any) => ({
           ...item,
-          inventory: Array.isArray(item.inventory) ? item.inventory[0] : item.inventory,
+          inventory: Array.isArray(item.inventory)
+            ? item.inventory[0]
+            : item.inventory,
         })),
       }));
       setOrders(formatted);
@@ -359,46 +417,47 @@ function SalesPageContent() {
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
-const handleAcceptOrder = async (order: OrderWithDetails) => {
-  const { data: { user } } = await supabase.auth.getUser();
-  try {
-    const userEmail = user?.email || "unknown";
-    const userRole = user?.user_metadata?.role || "unknown";
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        user_role: userRole,
-        action: "Accept Sales Order",
-        details: {
-          order_id: order.id,
-          customer_name: order.customers.name,
-          customer_email: order.customers.email,
-          items: order.order_items.map((oi) => ({
-            product_name: oi.inventory.product_name,
-            ordered_qty: oi.quantity,
-            unit_price: oi.price,
-          })),
-          total_amount: order.total_amount,
-          payment_type: order.customers.payment_type,
+  const handleAcceptOrder = async (order: OrderWithDetails) => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    try {
+      const userEmail = user?.email || "unknown";
+      const userRole = user?.user_metadata?.role || "unknown";
+      await supabase.from("activity_logs").insert([
+        {
+          user_email: userEmail,
+          user_role: userRole,
+          action: "Accept Sales Order",
+          details: {
+            order_id: order.id,
+            customer_name: order.customers.name,
+            customer_email: order.customers.email,
+            items: order.order_items.map((oi) => ({
+              product_name: oi.inventory.product_name,
+              ordered_qty: oi.quantity,
+              unit_price: oi.price,
+            })),
+            total_amount: order.total_amount,
+            payment_type: order.customers.payment_type,
+          },
+          created_at: getPHISOString(),
         },
-        created_at: getPHISOString(),
-      },
+      ]);
+    } catch (err) {
+      console.error("Failed to log activity for order acceptance:", err);
+    }
+    setSelectedOrder(order);
+    setEditedQuantities(order.order_items.map((item) => item.quantity));
+    setEditedDiscounts(order.order_items.map(() => 0));
+    setShowModal(true);
+    setNumberOfTerms(1);
+    setInterestPercent(0);
+    setPickingStatus((prev) => [
+      ...prev,
+      { orderId: order.id, status: "accepted" },
     ]);
-  } catch (err) {
-    console.error("Failed to log activity for order acceptance:", err);
-  }
-  setSelectedOrder(order);
-  setEditedQuantities(order.order_items.map(item => item.quantity));
-  setEditedDiscounts(order.order_items.map(() => 0));
-  setShowModal(true);
-  setNumberOfTerms(1);
-  setInterestPercent(0);
-  setPickingStatus((prev) => [
-    ...prev,
-    { orderId: order.id, status: "accepted" },
-  ]);
-};
-
+  };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
     setPickingStatus((prev) => [
@@ -410,7 +469,9 @@ const handleAcceptOrder = async (order: OrderWithDetails) => {
       .update({ status: "rejected" })
       .eq("id", order.id);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
       const userRole = user?.user_metadata?.role || "unknown";
       await supabase.from("activity_logs").insert([
@@ -491,15 +552,18 @@ const handleAcceptOrder = async (order: OrderWithDetails) => {
         const unitPrice = oi.price;
         const discountPercent = editedDiscounts[i] || 0;
         const costPrice = oi.inventory.cost_price || 0;
-        const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
+        const earnings =
+          (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
         // Insert to sales table
-        await supabase.from("sales").insert([{
-          inventory_id: invId,
-          quantity_sold: qty,
-          amount: qty * unitPrice * (1 - discountPercent / 100),
-          earnings,
-          date: getPHISOString(),
-        }]);
+        await supabase.from("sales").insert([
+          {
+            inventory_id: invId,
+            quantity_sold: qty,
+            amount: qty * unitPrice * (1 - discountPercent / 100),
+            earnings,
+            date: getPHISOString(),
+          },
+        ]);
       }
       // ...Rest of your order completion logic...
       const isCredit = selectedOrder.customers.payment_type === "Credit";
@@ -514,7 +578,9 @@ const handleAcceptOrder = async (order: OrderWithDetails) => {
           : selectedOrder.customers.payment_type,
         payment_terms: isCredit ? numberOfTerms : null,
         interest_percent: isCredit ? interestPercent : null,
-        grand_total_with_interest: isCredit ? getGrandTotalWithInterest() : null,
+        grand_total_with_interest: isCredit
+          ? getGrandTotalWithInterest()
+          : null,
         per_term_amount: isCredit ? getPerTermAmount() : null,
         forwarder,
         processed_by_email: processor?.email ?? "unknown",
@@ -534,42 +600,51 @@ await supabase
   .eq("code", selectedOrder.customers.code);
 
       try {
-        const { data: { user } } = await supabase.auth.getUser();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
         const userEmail = user?.email || "unknown";
         const userRole = user?.user_metadata?.role || "unknown";
-        await supabase.from("activity_logs").insert([{
-          user_email: userEmail,
-          user_role: userRole,
-          action: "Complete Sales Order",
-          details: {
-            order_id: selectedOrder.id,
-            customer_name: selectedOrder.customers.name,
-            customer_email: selectedOrder.customers.email,
-            items: selectedOrder.order_items.map((oi, idx) => ({
-              product_name: oi.inventory.product_name,
-              ordered_qty: oi.quantity,
-              fulfilled_qty: editedQuantities[idx],
-              unit_price: oi.price,
-              discount_percent: editedDiscounts[idx] || 0,
-            })),
-            total_amount: getGrandTotalWithInterest(),
-            payment_type: selectedOrder.customers.payment_type,
+        await supabase.from("activity_logs").insert([
+          {
+            user_email: userEmail,
+            user_role: userRole,
+            action: "Complete Sales Order",
+            details: {
+              order_id: selectedOrder.id,
+              customer_name: selectedOrder.customers.name,
+              customer_email: selectedOrder.customers.email,
+              items: selectedOrder.order_items.map((oi, idx) => ({
+                product_name: oi.inventory.product_name,
+                ordered_qty: oi.quantity,
+                fulfilled_qty: editedQuantities[idx],
+                unit_price: oi.price,
+                discount_percent: editedDiscounts[idx] || 0,
+              })),
+              total_amount: getGrandTotalWithInterest(),
+              payment_type: selectedOrder.customers.payment_type,
+            },
+            created_at: getPHISOString(),
           },
-          created_at: getPHISOString(),
-        }]);
+        ]);
       } catch (err) {
-        console.error("Failed to log activity for sales order completion:", err);
+        console.error(
+          "Failed to log activity for sales order completion:",
+          err
+        );
       }
       setShowSalesOrderModal(false);
       setShowModal(false);
       setShowFinalConfirm(false);
       resetSalesForm();
       setSelectedOrder(null);
-      setPickingStatus((prev) => prev.filter((p) => p.orderId !== selectedOrder.id));
+      setPickingStatus((prev) =>
+        prev.filter((p) => p.orderId !== selectedOrder.id)
+      );
       await Promise.all([fetchOrders(), fetchItems()]);
       toast.success("Order successfully completed!");
       // Compose the HTML body for the receipt email
-const receiptHtml = `
+      const receiptHtml = `
   <h2>Thank you for your order with UniAsia!</h2>
   <p><b>Order No:</b> ${selectedOrder.customers.code}</p>
   <p><b>Name:</b> ${selectedOrder.customers.name}</p>
@@ -584,42 +659,52 @@ const receiptHtml = `
       </tr>
     </thead>
     <tbody>
-      ${selectedOrder.order_items.map(
-        (item, idx) => `
+      ${selectedOrder.order_items
+        .map(
+          (item, idx) => `
         <tr>
           <td>${item.inventory.product_name}</td>
           <td style="text-align:center">${editedQuantities[idx]}</td>
           <td style="text-align:right">₱${item.price.toLocaleString()}</td>
-          <td style="text-align:right">₱${(editedQuantities[idx] * item.price).toLocaleString()}</td>
+          <td style="text-align:right">₱${(
+            editedQuantities[idx] * item.price
+          ).toLocaleString()}</td>
         </tr>
         `
-      ).join("")}
+        )
+        .join("")}
     </tbody>
   </table>
-  <p style="margin-top:18px;font-size:1.1em"><b>Total Paid: ₱${getGrandTotalWithInterest().toLocaleString(undefined, {minimumFractionDigits:2})}</b></p>
+  <p style="margin-top:18px;font-size:1.1em"><b>Total Paid: ₱${getGrandTotalWithInterest().toLocaleString(
+    undefined,
+    { minimumFractionDigits: 2 }
+  )}</b></p>
   <p>If you have any questions, please contact UniAsia Support.<br>Thank you!</p>
 `;
 
-// Send the email via your API
-try {
-  const emailRes = await fetch("/api/send-receipt", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ orderId: selectedOrder.id }),
-  });
-  const result = await emailRes.json();
-  if (result.success) {
-    toast.success("Receipt emailed to customer!");
-  } else {
-    toast.error("Failed to send receipt email.");
-  }
-} catch (err) {
-  toast.error("Failed to send receipt email.");
-}
+      // Send the email via your API
+      try {
+        const emailRes = await fetch("/api/send-receipt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId: selectedOrder.id }),
+        });
+        const result = await emailRes.json();
+        if (result.success) {
+          toast.success("Receipt emailed to customer!");
+        } else {
+          toast.error("Failed to send receipt email.");
+        }
+      } catch (err) {
+        toast.error("Failed to send receipt email.");
+      }
 
       setIsCompletingOrder(false);
     } catch (err: any) {
-      if (err?.message && err.message.includes('unique constraint "unique_po_number"')) {
+      if (
+        err?.message &&
+        err.message.includes('unique constraint "unique_po_number"')
+      ) {
         toast.error("PO Number is already used, try another.");
         setIsCompletingOrder(false);
         setShowFinalConfirm(false);
@@ -993,62 +1078,59 @@ try {
 
       {/* Inventory Table */}
       <div className="overflow-x-auto rounded-lg shadow mb-6">
-  <table className="min-w-full bg-white text-sm">
-    <thead className="bg-[#ffba20] text-black text-left">
-      <tr>
-        <th className="py-2 px-4">SKU</th>
-        <th className="py-2 px-4">Product</th>
-        <th className="py-2 px-4">Category</th>
-        <th className="py-2 px-4">Subcategory</th>
-        <th className="py-2 px-4">Unit</th>
-        <th className="py-2 px-4 text-right">Quantity</th>
-        <th className="py-2 px-4 text-right">Unit Price</th>
-        <th className="py-2 px-4 text-right">Cost Price</th>
-        <th className="py-2 px-4 text-right">Total</th>
-        
-
-      </tr>
-    </thead>
-    <tbody>
-      {items
-        .filter((it) =>
-          it.product_name
-            .toLowerCase()
-            .includes(searchQuery.toLowerCase())
-        )
-        .map((it) => (
-          <tr
-            key={it.id}
-            className={
-              "border-b hover:bg-gray-100 " +
-              (it.quantity === 0
-                ? "bg-red-100 text-red-700 font-semibold"
-                : "")
-            }
-          >
-            <td className="py-2 px-4">{it.sku}</td>
-            <td className="py-2 px-4">{it.product_name}</td>
-            <td className="py-2 px-4">{it.category}</td>
-            <td className="py-2 px-4">{it.subcategory}</td>
-            <td className="py-2 px-4">{it.unit}</td>
-            <td className="py-2 px-4 text-right">{it.quantity}</td>
-            <td className="py-2 px-4 text-right">
-              ₱{it.unit_price?.toLocaleString()}
-            </td>
-            <td className="py-2 px-4 text-right">
-              {it.cost_price !== undefined && it.cost_price !== null
-                ? `₱${it.cost_price.toLocaleString()}`
-                : "—"}
-            </td>
-            <td className="py-2 px-4 text-right">
-              ₱{(it.unit_price * it.quantity).toLocaleString()}
-            </td>
-          </tr>
-        ))}
-    </tbody>
-  </table>
-</div>
-
+        <table className="min-w-full bg-white text-sm">
+          <thead className="bg-[#ffba20] text-black text-left">
+            <tr>
+              <th className="py-2 px-4">SKU</th>
+              <th className="py-2 px-4">Product</th>
+              <th className="py-2 px-4">Category</th>
+              <th className="py-2 px-4">Subcategory</th>
+              <th className="py-2 px-4">Unit</th>
+              <th className="py-2 px-4 text-right">Quantity</th>
+              <th className="py-2 px-4 text-right">Unit Price</th>
+              <th className="py-2 px-4 text-right">Cost Price</th>
+              <th className="py-2 px-4 text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items
+              .filter((it) =>
+                it.product_name
+                  .toLowerCase()
+                  .includes(searchQuery.toLowerCase())
+              )
+              .map((it) => (
+                <tr
+                  key={it.id}
+                  className={
+                    "border-b hover:bg-gray-100 " +
+                    (it.quantity === 0
+                      ? "bg-red-100 text-red-700 font-semibold"
+                      : "")
+                  }
+                >
+                  <td className="py-2 px-4">{it.sku}</td>
+                  <td className="py-2 px-4">{it.product_name}</td>
+                  <td className="py-2 px-4">{it.category}</td>
+                  <td className="py-2 px-4">{it.subcategory}</td>
+                  <td className="py-2 px-4">{it.unit}</td>
+                  <td className="py-2 px-4 text-right">{it.quantity}</td>
+                  <td className="py-2 px-4 text-right">
+                    ₱{it.unit_price?.toLocaleString()}
+                  </td>
+                  <td className="py-2 px-4 text-right">
+                    {it.cost_price !== undefined && it.cost_price !== null
+                      ? `₱${it.cost_price.toLocaleString()}`
+                      : "—"}
+                  </td>
+                  <td className="py-2 px-4 text-right">
+                    ₱{(it.unit_price * it.quantity).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
 
       {/* Orders List */}
       <div
@@ -1236,24 +1318,26 @@ try {
       {/* --- MODALS: Picking List, Sales Order, Final Confirmation --- */}
 
       {/* Picking List Modal */}
-    {showModal &&
-  selectedOrder &&
-  (() => {
-    
-    const hasZeroStock = selectedOrder.order_items.some(
-      (item) => item.inventory.quantity === 0
-    );
+      {showModal &&
+        selectedOrder &&
+        (() => {
+          const hasZeroStock = selectedOrder.order_items.some(
+            (item) => item.inventory.quantity === 0
+          );
 
-    const hasInsufficientStock = selectedOrder.order_items.some((item, i) => {
-      const requested = editedQuantities[i] ?? item.quantity;
-      return requested > item.inventory.quantity;
-    });
-const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
-  const qty = editedQuantities[idx] ?? item.quantity;
-  const stock = item.inventory.quantity;
-  return qty > stock || stock === 0;
-});
-
+          const hasInsufficientStock = selectedOrder.order_items.some(
+            (item, i) => {
+              const requested = editedQuantities[i] ?? item.quantity;
+              return requested > item.inventory.quantity;
+            }
+          );
+          const hasAnyInsufficient = selectedOrder.order_items.some(
+            (item, idx) => {
+              const qty = editedQuantities[idx] ?? item.quantity;
+              const stock = item.inventory.quantity;
+              return qty > stock || stock === 0;
+            }
+          );
 
           return (
             <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
@@ -1293,365 +1377,417 @@ const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
                     )}
                   </div>
                   <div className="bg-gray-50 border rounded-xl p-5 shadow-sm flex flex-col gap-3">
-  <h3 className="text-lg font-semibold text-gray-700 mb-2">
-    Payment & Totals
-  </h3>
+                    <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                      Payment & Totals
+                    </h3>
 
-  {/* TOTAL */}
-  <div>
-    <span className="font-semibold">Total: </span>
-    <span className="text-2xl font-bold text-green-700">
-      ₱{computedOrderTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-    </span>
-    <div className="text-xs text-gray-500 ml-1">Sum of items after discount</div>
-  </div>
+                    {/* TOTAL */}
+                    <div>
+                      <span className="font-semibold">Total: </span>
+                      <span className="text-2xl font-bold text-green-700">
+                        ₱
+                        {computedOrderTotal.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
+                      <div className="text-xs text-gray-500 ml-1">
+                        Sum of items after discount
+                      </div>
+                    </div>
 
-  {/* PAYMENT TYPE */}
-  <div>
-    <span className="font-semibold">Payment Type:</span>{" "}
-    <span
-      className={
-        selectedOrder.customers.payment_type === "Credit"
-          ? "font-bold text-blue-600"
-          : selectedOrder.customers.payment_type === "Cash"
-          ? "font-bold text-green-600"
-          : "font-bold text-orange-500"
-      }
-    >
-      {selectedOrder.customers.payment_type || "N/A"}
-    </span>
-    <div className="text-xs text-gray-500 ml-1">Customer chosen payment method</div>
-  </div>
+                    {/* PAYMENT TYPE */}
+                    <div>
+                      <span className="font-semibold">Payment Type:</span>{" "}
+                      <span
+                        className={
+                          selectedOrder.customers.payment_type === "Credit"
+                            ? "font-bold text-blue-600"
+                            : selectedOrder.customers.payment_type === "Cash"
+                            ? "font-bold text-green-600"
+                            : "font-bold text-orange-500"
+                        }
+                      >
+                        {selectedOrder.customers.payment_type || "N/A"}
+                      </span>
+                      <div className="text-xs text-gray-500 ml-1">
+                        Customer chosen payment method
+                      </div>
+                    </div>
 
-{selectedOrder.customers.payment_type === "Credit" && (
-  <div>
-    <label className="font-semibold mr-2">Terms:</label>
-    <input
-  type="number"
-  min={1}
-  max={48}
-  value={numberOfTerms}
-  onFocus={e => e.target.select()}
-  onChange={(e) => {
-    let val = Math.max(1, Math.min(48, Number(e.target.value)));
-    setNumberOfTerms(val);
-  }}
-  className="border rounded px-2 py-1 w-20 text-center"
-/>
+                    {selectedOrder.customers.payment_type === "Credit" && (
+                      <div>
+                        <label className="font-semibold mr-2">Terms:</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={48}
+                          value={numberOfTerms}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) => {
+                            let val = Math.max(
+                              1,
+                              Math.min(48, Number(e.target.value))
+                            );
+                            setNumberOfTerms(val);
+                          }}
+                          className="border rounded px-2 py-1 w-20 text-center"
+                        />
 
-    <div className="text-xs text-gray-500 ml-1">
-      Number of months to pay (max 48 months / 4 years)
-    </div>
-  </div>
-)}
+                        <div className="text-xs text-gray-500 ml-1">
+                          Number of months to pay (max 48 months / 4 years)
+                        </div>
+                      </div>
+                    )}
 
+                    {/* INTEREST % (only for Credit) */}
+                    {selectedOrder.customers.payment_type === "Credit" && (
+                      <div>
+                        <label className="font-semibold mr-2">
+                          Interest %:
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={30}
+                          step={1}
+                          value={interestPercent}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) =>
+                            setInterestPercent(
+                              Math.max(0, Math.min(30, Number(e.target.value)))
+                            )
+                          }
+                          className="border rounded px-2 py-1 w-20 text-center"
+                        />
 
-  {/* INTEREST % (only for Credit) */}
-  {selectedOrder.customers.payment_type === "Credit" && (
-    <div>
-      <label className="font-semibold mr-2">Interest %:</label>
-     <input
-  type="number"
-  min={0}
-  max={30}
-  step={1}
-  value={interestPercent}
-  onFocus={e => e.target.select()}
-  onChange={(e) => setInterestPercent(Math.max(0, Math.min(30, Number(e.target.value))))}
-  className="border rounded px-2 py-1 w-20 text-center"
-/>
+                        <div className="text-xs text-gray-500 ml-1">
+                          Interest applied to subtotal + tax
+                        </div>
+                      </div>
+                    )}
 
-      <div className="text-xs text-gray-500 ml-1">
-        Interest applied to subtotal + tax
-      </div>
-    </div>
-  )}
+                    {/* SALES TAX CHECKBOX */}
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={isSalesTaxOn}
+                        onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
+                        id="sales-tax-toggle"
+                        className="mr-2 accent-blue-600"
+                      />
+                      <label
+                        htmlFor="sales-tax-toggle"
+                        className="font-semibold"
+                      >
+                        Include Sales Tax (12%)
+                      </label>
+                      <div className="text-xs text-gray-500 ml-6">
+                        Check to add 12% VAT to total
+                      </div>
+                    </div>
 
-  {/* SALES TAX CHECKBOX */}
-  <div className="flex items-center">
-    <input
-      type="checkbox"
-      checked={isSalesTaxOn}
-      onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
-      id="sales-tax-toggle"
-      className="mr-2 accent-blue-600"
-    />
-    <label htmlFor="sales-tax-toggle" className="font-semibold">
-      Include Sales Tax (12%)
-    </label>
-    <div className="text-xs text-gray-500 ml-6">Check to add 12% VAT to total</div>
-  </div>
+                    {/* SALES TAX VALUE */}
+                    <div>
+                      <span className="font-semibold">Sales Tax (12%): </span>
+                      <span>
+                        ₱
+                        {salesTaxValue.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
+                      <div className="text-xs text-gray-500 ml-1">
+                        Tax amount added to subtotal
+                      </div>
+                    </div>
 
-  {/* SALES TAX VALUE */}
-  <div>
-    <span className="font-semibold">Sales Tax (12%): </span>
-    <span>₱{salesTaxValue.toLocaleString(undefined, {minimumFractionDigits:2})}</span>
-    <div className="text-xs text-gray-500 ml-1">Tax amount added to subtotal</div>
-  </div>
+                    {/* INTEREST AMOUNT */}
+                    {selectedOrder.customers.payment_type === "Credit" && (
+                      <div>
+                        <span className="font-semibold">
+                          Interest Amount ({interestPercent}%):
+                        </span>
+                        <span>
+                          ₱
+                          {(
+                            (computedOrderTotal + salesTaxValue) *
+                            (interestPercent / 100)
+                          ).toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                          })}
+                        </span>
+                        <div className="text-xs text-gray-500 ml-1">
+                          Additional cost due to credit terms
+                        </div>
+                      </div>
+                    )}
 
-  {/* INTEREST AMOUNT */}
-  {selectedOrder.customers.payment_type === "Credit" && (
-    <div>
-      <span className="font-semibold">
-        Interest Amount ({interestPercent}%):
-      </span>
-      <span>
-        ₱{((computedOrderTotal + salesTaxValue) * (interestPercent/100)).toLocaleString(undefined, {minimumFractionDigits:2})}
-      </span>
-      <div className="text-xs text-gray-500 ml-1">
-        Additional cost due to credit terms
-      </div>
-    </div>
-  )}
+                    {/* GRAND TOTAL */}
+                    <div className="border-t pt-3 text-sm">
+                      <span className="font-bold">
+                        Grand Total w/ Interest:
+                      </span>{" "}
+                      <span className="font-bold text-blue-700">
+                        ₱
+                        {getGrandTotalWithInterest().toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
+                      <div className="text-xs text-gray-500 ml-1">
+                        Final amount after tax & interest
+                      </div>
+                    </div>
 
-  {/* GRAND TOTAL */}
-  <div className="border-t pt-3 text-sm">
-    <span className="font-bold">Grand Total w/ Interest:</span>{" "}
-    <span className="font-bold text-blue-700">
-      ₱{getGrandTotalWithInterest().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-    </span>
-    <div className="text-xs text-gray-500 ml-1">
-      Final amount after tax & interest
-    </div>
-  </div>
-
-  {/* PER TERM */}
-  {selectedOrder.customers.payment_type === "Credit" && (
-    <div>
-      <span className="font-bold">Per Term ({numberOfTerms}x):</span>
-      <span className="font-bold text-blue-700 ml-2">
-        ₱{getPerTermAmount().toLocaleString(undefined, {minimumFractionDigits:2})}
-      </span>
-      <div className="text-xs text-gray-500 ml-1">
-        Amount due per installment/month
-      </div>
-    </div>
-  )}
-</div>
-
+                    {/* PER TERM */}
+                    {selectedOrder.customers.payment_type === "Credit" && (
+                      <div>
+                        <span className="font-bold">
+                          Per Term ({numberOfTerms}x):
+                        </span>
+                        <span className="font-bold text-blue-700 ml-2">
+                          ₱
+                          {getPerTermAmount().toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                          })}
+                        </span>
+                        <div className="text-xs text-gray-500 ml-1">
+                          Amount due per installment/month
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Picking List Table */}
                 <div className="overflow-x-auto rounded-xl border shadow-sm">
                   <table className="w-full text-sm">
-<thead className="bg-[#ffba20] text-black">
-  <tr>
-    <th className="py-2 px-3 text-left">Quantity</th>
-    <th className="py-2 px-3 text-left">Unit</th>
-    <th className="py-2 px-3 text-left">Description</th>
-    <th className="py-2 px-3 text-left">Notes</th>
-    <th className="py-2 px-3 text-right">Unit Price</th>
-    <th className="py-2 px-3 text-right">Cost Price</th>
-    <th className="py-2 px-3 text-right">Discount (%)</th>
-    <th className="py-2 px-3 text-right">Amount</th>
-  </tr>
-</thead>
-
-
+                    <thead className="bg-[#ffba20] text-black">
+                      <tr>
+                        <th className="py-2 px-3 text-left">Quantity</th>
+                        <th className="py-2 px-3 text-left">Unit</th>
+                        <th className="py-2 px-3 text-left">Description</th>
+                        <th className="py-2 px-3 text-left">Notes</th>
+                        <th className="py-2 px-3 text-right">Unit Price</th>
+                        <th className="py-2 px-3 text-right">Cost Price</th>
+                        <th className="py-2 px-3 text-right">Discount (%)</th>
+                        <th className="py-2 px-3 text-right">Amount</th>
+                      </tr>
+                    </thead>
 
                     <tbody>
-                     {selectedOrder.order_items.map((item, idx) => {
-  const qty = editedQuantities[idx] ?? item.quantity;
-  const price = item.price;
-  const percent = editedDiscounts[idx] || 0;
-  const amount = qty * price * (1 - percent / 100);
+                      {selectedOrder.order_items.map((item, idx) => {
+                        const qty = editedQuantities[idx] ?? item.quantity;
+                        const price = item.price;
+                        const percent = editedDiscounts[idx] || 0;
+                        const amount = qty * price * (1 - percent / 100);
 
-  const stock = item.inventory.quantity;
-  const insufficient = qty > stock || stock === 0; // highlight rule
+                        const stock = item.inventory.quantity;
+                        const insufficient = qty > stock || stock === 0; // highlight rule
 
- 
+                        return (
+                          <tr
+                            key={idx}
+                            className={
+                              "border-t hover:bg-gray-50 " +
+                              (insufficient
+                                ? "bg-red-100 text-red-700 font-semibold"
+                                : "")
+                            }
+                          >
+                            {/* Quantity */}
+                            <td className="py-2 px-3">
+                              <input
+                                type="number"
+                                min={1}
+                                max={Math.min(item.inventory.quantity, 50000)}
+                                value={qty}
+                                disabled
+                                className="border rounded px-2 py-1 w-24 text-center bg-gray-100 font-medium opacity-70 cursor-not-allowed"
+                              />
+                            </td>
 
-  return (
-    <tr
-      key={idx}
-      className={
-        "border-t hover:bg-gray-50 " +
-        (insufficient ? "bg-red-100 text-red-700 font-semibold" : "")
-      }
-    >
-      {/* Quantity */}
-      <td className="py-2 px-3">
-      <input
-        type="number"
-        min={1}
-        max={Math.min(item.inventory.quantity, 50000)}
-        value={qty}
-        disabled
-        className="border rounded px-2 py-1 w-24 text-center bg-gray-100 font-medium opacity-70 cursor-not-allowed"
-      />
+                            {/* Unit */}
+                            <td className="py-2 px-3">{item.inventory.unit}</td>
 
-      </td>
+                            {/* Description */}
+                            <td className="py-2 px-3">
+                              <div className="font-semibold">
+                                {item.inventory.product_name}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                SKU: {item.inventory.sku}
+                              </div>
+                            </td>
 
-      {/* Unit */}
-      <td className="py-2 px-3">{item.inventory.unit}</td>
+                            {/* Notes */}
+                            <td className="py-2 px-3">
+                              {stock === 0 ? (
+                                <span className="text-red-600 font-semibold">
+                                  Out of Stock
+                                </span>
+                              ) : qty > stock ? (
+                                <span className="text-orange-600 font-semibold">
+                                  Insufficient (Requested {qty}, In stock{" "}
+                                  {stock})
+                                </span>
+                              ) : (
+                                <span className="text-green-600">
+                                  Available
+                                </span>
+                              )}
+                            </td>
 
-      {/* Description */}
-<td className="py-2 px-3">
-  <div className="font-semibold">{item.inventory.product_name}</div>
-  <div className="text-xs text-gray-500">SKU: {item.inventory.sku}</div>
-</td>
+                            {/* Unit Price */}
+                            <td className="py-2 px-3 text-right">
+                              ₱{price.toLocaleString()}
+                            </td>
+                            {/* Cost Price */}
+                            <td className="py-2 px-3 text-right">
+                              {item.inventory.cost_price !== undefined &&
+                              item.inventory.cost_price !== null
+                                ? `₱${item.inventory.cost_price.toLocaleString()}`
+                                : "—"}
+                            </td>
 
-{/* Notes */}
-<td className="py-2 px-3">
-  {stock === 0 ? (
-    <span className="text-red-600 font-semibold">Out of Stock</span>
-  ) : qty > stock ? (
-    <span className="text-orange-600 font-semibold">
-      Insufficient (Requested {qty}, In stock {stock})
-    </span>
-  ) : (
-    <span className="text-green-600">Available</span>
-  )}
-</td>
+                            {/* Discount/Add (%) */}
+                            <td className="py-2 px-3 text-right align-middle">
+                              <div className="flex items-center justify-end gap-1">
+                                <input
+                                  type="number"
+                                  value={percent}
+                                  disabled={item.inventory.quantity === 0}
+                                  onChange={(e) => {
+                                    let p = parseFloat(
+                                      e.target.value.replace(/[^0-9]/g, "")
+                                    );
+                                    if (isNaN(p)) p = 0;
+                                    if (p > 50) p = 50;
+                                    if (p < 0) p = 0;
+                                    setEditedDiscounts((prev) =>
+                                      prev.map((d, i) => (i === idx ? p : d))
+                                    );
+                                  }}
+                                  className={`w-14 text-center border rounded px-1 py-0.5 font-bold ${
+                                    item.inventory.quantity === 0
+                                      ? "bg-gray-200 text-gray-400 cursor-not-allowed opacity-70"
+                                      : ""
+                                  }`}
+                                  min={0}
+                                  max={50}
+                                  step={1}
+                                  style={{ fontWeight: 600, color: "#222" }}
+                                  tabIndex={
+                                    item.inventory.quantity === 0 ? -1 : 0
+                                  }
+                                />
+                                <span className="ml-1">%</span>
+                                <button
+                                  className={`text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 active:bg-blue-200 transition ${
+                                    item.inventory.quantity === 0
+                                      ? "opacity-50 cursor-not-allowed"
+                                      : ""
+                                  }`}
+                                  style={{ fontSize: "11px" }}
+                                  onClick={() =>
+                                    setEditedDiscounts((prev) =>
+                                      prev.map((d, i) => (i === idx ? 0 : d))
+                                    )
+                                  }
+                                  type="button"
+                                  disabled={item.inventory.quantity === 0}
+                                  tabIndex={
+                                    item.inventory.quantity === 0 ? -1 : 0
+                                  }
+                                >
+                                  Reset
+                                </button>
+                              </div>
+                              {/* Optionally show a note if disabled */}
+                              {item.inventory.quantity === 0 && (
+                                <div className="text-xs text-red-500 mt-1">
+                                  Out of stock – cannot apply discount
+                                </div>
+                              )}
+                            </td>
 
-
-     {/* Unit Price */}
-<td className="py-2 px-3 text-right">
-  ₱{price.toLocaleString()}
-</td>
-{/* Cost Price */}
-<td className="py-2 px-3 text-right">
-  {item.inventory.cost_price !== undefined && item.inventory.cost_price !== null
-    ? `₱${item.inventory.cost_price.toLocaleString()}`
-    : "—"}
-</td>
-
-
-{/* Discount/Add (%) */}
-<td className="py-2 px-3 text-right align-middle">
-  <div className="flex items-center justify-end gap-1">
-    <input
-      type="number"
-      value={percent}
-      disabled={item.inventory.quantity === 0}
-      onChange={(e) => {
-        let p = parseFloat(e.target.value.replace(/[^0-9]/g, ""));
-        if (isNaN(p)) p = 0;
-        if (p > 50) p = 50;
-        if (p < 0) p = 0;
-        setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
-      }}
-      className={`w-14 text-center border rounded px-1 py-0.5 font-bold ${
-        item.inventory.quantity === 0
-          ? "bg-gray-200 text-gray-400 cursor-not-allowed opacity-70"
-          : ""
-      }`}
-      min={0}
-      max={50}
-      step={1}
-      style={{ fontWeight: 600, color: "#222" }}
-      tabIndex={item.inventory.quantity === 0 ? -1 : 0}
-    />
-    <span className="ml-1">%</span>
-    <button
-      className={`text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 active:bg-blue-200 transition ${
-        item.inventory.quantity === 0 ? "opacity-50 cursor-not-allowed" : ""
-      }`}
-      style={{ fontSize: "11px" }}
-      onClick={() =>
-        setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)))
-      }
-      type="button"
-      disabled={item.inventory.quantity === 0}
-      tabIndex={item.inventory.quantity === 0 ? -1 : 0}
-    >
-      Reset
-    </button>
-  </div>
-  {/* Optionally show a note if disabled */}
-  {item.inventory.quantity === 0 && (
-    <div className="text-xs text-red-500 mt-1">
-      Out of stock – cannot apply discount
-    </div>
-  )}
-</td>
-
-
-
-
-      {/* Amount */}
-  <td className="py-2 px-3 text-right font-semibold">
-  ₱
-  {(item.inventory.quantity === 0
-    ? 0
-    : amount
-  ).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-  })}
-</td>
-
-     
-    </tr>
-  );
-})}
-
+                            {/* Amount */}
+                            <td className="py-2 px-3 text-right font-semibold">
+                              ₱
+                              {(item.inventory.quantity === 0
+                                ? 0
+                                : amount
+                              ).toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                              })}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
 
                 {/* Action Buttons */}
 
-               {/* Optional warning banner if there are stock issues */}
-{(hasZeroStock || hasInsufficientStock) && (
-  <div className="mt-4 mb-2 rounded-lg border border-orange-300 bg-orange-50 px-4 py-2 text-sm text-orange-700 text-center">
-    Cannot Proceed please review the highlighted items above.
-  </div>
-)}
+                {/* Optional warning banner if there are stock issues */}
+                {(hasZeroStock || hasInsufficientStock) && (
+                  <div className="mt-4 mb-2 rounded-lg border border-orange-300 bg-orange-50 px-4 py-2 text-sm text-orange-700 text-center">
+                    Cannot Proceed please review the highlighted items above.
+                  </div>
+                )}
 
-{/* Action Buttons */}
-<div className="flex justify-center gap-8 mt-6">
-<button
-  className={
-    "bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow transition " +
-    (hasAnyInsufficient
-      ? "opacity-60 cursor-not-allowed bg-gray-400 hover:bg-gray-400"
-      : "hover:bg-green-700")
-  }
-  onClick={async () => {
-    if (!hasAnyInsufficient) {
-      // Update orders.status to 'accepted'
-      const { error } = await supabase
-        .from("orders")
-        .update({ status: "accepted" })
-        .eq("id", selectedOrder.id);
-      if (error) {
-        toast.error("Failed to accept order: " + error.message);
-        return;
-      }
-      // Optionally: Insert your activity log for "Accept Sales Order" here if you want.
-      setShowModal(false);
-      setShowSalesOrderModal(true);
-    }
-  }}
-  disabled={hasAnyInsufficient}
->
-  Proceed Order
-</button>
+                {/* Action Buttons */}
+                <div className="flex justify-center gap-8 mt-6">
+                  <button
+                    className={
+                      "bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow transition " +
+                      (hasAnyInsufficient
+                        ? "opacity-60 cursor-not-allowed bg-gray-400 hover:bg-gray-400"
+                        : "hover:bg-green-700")
+                    }
+                    onClick={async () => {
+                      if (!hasAnyInsufficient) {
+                        // Update orders.status to 'accepted'
+                        const { error } = await supabase
+                          .from("orders")
+                          .update({ status: "accepted" })
+                          .eq("id", selectedOrder.id);
+                        if (error) {
+                          toast.error(
+                            "Failed to accept order: " + error.message
+                          );
+                          return;
+                        }
+                        // Optionally: Insert your activity log for "Accept Sales Order" here if you want.
+                        setShowModal(false);
+                        setShowSalesOrderModal(true);
+                      }
+                    }}
+                    disabled={hasAnyInsufficient}
+                  >
+                    Proceed Order
+                  </button>
 
-
-
-  <button
-    className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-    onClick={() => {
-      // Reset states back to default
-      setShowModal(false);
-      setShowSalesOrderModal(false);
-      setShowFinalConfirm(false);
-      setSelectedOrder(null);
-      setEditedQuantities([]);
-      setEditedDiscounts([]);
-      setPickingStatus([]);
-      setPoNumber("");
-      setRepName("");
-      setNumberOfTerms(1);
-      setInterestPercent(0);
-      setIsSalesTaxOn(true);
-    }}
-  >
-    Cancel
-  </button>
-</div>
-
+                  <button
+                    className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
+                    onClick={() => {
+                      // Reset states back to default
+                      setShowModal(false);
+                      setShowSalesOrderModal(false);
+                      setShowFinalConfirm(false);
+                      setSelectedOrder(null);
+                      setEditedQuantities([]);
+                      setEditedDiscounts([]);
+                      setPickingStatus([]);
+                      setPoNumber("");
+                      setRepName("");
+                      setNumberOfTerms(1);
+                      setInterestPercent(0);
+                      setIsSalesTaxOn(true);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
           );
@@ -1686,42 +1822,48 @@ const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
                 </div>
 
                 {/* PO Number — digits only, max 6, with “No.” prefix */}
-<div className="flex items-baseline gap-2">
-  <span className="font-medium">PO Number:</span>
-  <span className="text-gray-700">No.</span>
-  <input
-    inputMode="numeric"
-    pattern="\d*"
-    maxLength={6}
-    value={poNumber}
-    onChange={(e) => {
-      // keep only digits, clamp to 6 chars
-      const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 6);
-      setPoNumber(digitsOnly);
-      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
-    }}
-    onPaste={(e) => {
-      // ensure pasted content follows the same rule
-      e.preventDefault();
-      const text = (e.clipboardData.getData("text") || "")
-        .replace(/\D/g, "")
-        .slice(0, 6);
-      setPoNumber(text);
-      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
-    }}
-    className={`border-b outline-none px-1 transition-all duration-150 tracking-widest tabular-nums ${
-      fieldErrors.poNumber
-        ? "border-red-500 bg-red-50 animate-shake"
-        : "border-gray-300"
-    }`}
-    style={{ minWidth: 110 }}
-    placeholder="000000"
-    aria-label="PO Number (numbers only, max 6)"
-  />
-</div>
-{fieldErrors.poNumber && (
-  <div className="text-xs text-red-600 mt-1">PO Number is required</div>
-)}
+                <div className="flex items-baseline gap-2">
+                  <span className="font-medium">PO Number:</span>
+                  <span className="text-gray-700">No.</span>
+                  <input
+                    inputMode="numeric"
+                    pattern="\d*"
+                    maxLength={6}
+                    value={poNumber}
+                    onChange={(e) => {
+                      // keep only digits, clamp to 6 chars
+                      const digitsOnly = e.target.value
+                        .replace(/\D/g, "")
+                        .slice(0, 6);
+                      setPoNumber(digitsOnly);
+                      if (fieldErrors.poNumber)
+                        setFieldErrors((f) => ({ ...f, poNumber: false }));
+                    }}
+                    onPaste={(e) => {
+                      // ensure pasted content follows the same rule
+                      e.preventDefault();
+                      const text = (e.clipboardData.getData("text") || "")
+                        .replace(/\D/g, "")
+                        .slice(0, 6);
+                      setPoNumber(text);
+                      if (fieldErrors.poNumber)
+                        setFieldErrors((f) => ({ ...f, poNumber: false }));
+                    }}
+                    className={`border-b outline-none px-1 transition-all duration-150 tracking-widest tabular-nums ${
+                      fieldErrors.poNumber
+                        ? "border-red-500 bg-red-50 animate-shake"
+                        : "border-gray-300"
+                    }`}
+                    style={{ minWidth: 110 }}
+                    placeholder="000000"
+                    aria-label="PO Number (numbers only, max 6)"
+                  />
+                </div>
+                {fieldErrors.poNumber && (
+                  <div className="text-xs text-red-600 mt-1">
+                    PO Number is required
+                  </div>
+                )}
 
                 <div>
                   <span className="font-medium">Processed By: </span>
@@ -1738,44 +1880,46 @@ const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
                     </span>
                   )}
                 </div>
-              {/* Sales Rep Name — letters + spaces only, max 30 chars */}
-<div>
-  <span className="font-medium">Sales Rep Name: </span>
-  <input
-    type="text"
-    maxLength={30}
-    value={repName}
-    onChange={(e) => {
-      // allow only letters and spaces, clamp to 30
-      const lettersOnly = e.target.value.replace(/[^A-Za-z\s]/g, "").slice(0, 30);
-      setRepName(lettersOnly);
-      if (fieldErrors.repName)
-        setFieldErrors((f) => ({ ...f, repName: false }));
-    }}
-    onPaste={(e) => {
-      e.preventDefault();
-      const text = (e.clipboardData.getData("text") || "")
-        .replace(/[^A-Za-z\s]/g, "")
-        .slice(0, 30);
-      setRepName(text);
-      if (fieldErrors.repName)
-        setFieldErrors((f) => ({ ...f, repName: false }));
-    }}
-    className={`border-b outline-none px-1 transition-all duration-150 ${
-      fieldErrors.repName
-        ? "border-red-500 bg-red-50 animate-shake"
-        : "border-gray-300"
-    }`}
-    style={{ minWidth: 120 }}
-    placeholder="Input Rep (letters only)"
-    aria-label="Sales Rep Name (letters only, max 30)"
-  />
-  {fieldErrors.repName && (
-    <div className="text-xs text-red-600 mt-1">
-      Sales Rep Name is required
-    </div>
-  )}
-</div>
+                {/* Sales Rep Name — letters + spaces only, max 30 chars */}
+                <div>
+                  <span className="font-medium">Sales Rep Name: </span>
+                  <input
+                    type="text"
+                    maxLength={30}
+                    value={repName}
+                    onChange={(e) => {
+                      // allow only letters and spaces, clamp to 30
+                      const lettersOnly = e.target.value
+                        .replace(/[^A-Za-z\s]/g, "")
+                        .slice(0, 30);
+                      setRepName(lettersOnly);
+                      if (fieldErrors.repName)
+                        setFieldErrors((f) => ({ ...f, repName: false }));
+                    }}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const text = (e.clipboardData.getData("text") || "")
+                        .replace(/[^A-Za-z\s]/g, "")
+                        .slice(0, 30);
+                      setRepName(text);
+                      if (fieldErrors.repName)
+                        setFieldErrors((f) => ({ ...f, repName: false }));
+                    }}
+                    className={`border-b outline-none px-1 transition-all duration-150 ${
+                      fieldErrors.repName
+                        ? "border-red-500 bg-red-50 animate-shake"
+                        : "border-gray-300"
+                    }`}
+                    style={{ minWidth: 120 }}
+                    placeholder="Input Rep (letters only)"
+                    aria-label="Sales Rep Name (letters only, max 30)"
+                  />
+                  {fieldErrors.repName && (
+                    <div className="text-xs text-red-600 mt-1">
+                      Sales Rep Name is required
+                    </div>
+                  )}
+                </div>
 
                 <div>
                   <span className="font-medium">Payment Terms: </span>
@@ -1832,164 +1976,212 @@ const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
             {/* Item Table */}
             <div className="rounded-xl border mt-3">
               <table className="w-full text-[15px]">
-<thead className="bg-[#ffba20] text-black">
-  <tr>
-    <th className="py-1 px-2 text-left">Quantity</th>
-    <th className="py-1 px-2 text-left">Unit</th>
-    <th className="py-1 px-2 text-left">Description</th>
-    <th className="py-1 px-2 text-left">Notes</th>
-    <th className="py-1 px-2 text-right">Unit Price</th>
-    <th className="py-1 px-2 text-right">Cost Price</th>
-    <th className="py-1 px-2 text-right">Discount</th>
-    <th className="py-1 px-2 text-right">Amount</th>
-  </tr>
-</thead>
+                <thead className="bg-[#ffba20] text-black">
+                  <tr>
+                    <th className="py-1 px-2 text-left">Quantity</th>
+                    <th className="py-1 px-2 text-left">Unit</th>
+                    <th className="py-1 px-2 text-left">Description</th>
+                    <th className="py-1 px-2 text-left">Notes</th>
+                    <th className="py-1 px-2 text-right">Unit Price</th>
+                    <th className="py-1 px-2 text-right">Cost Price</th>
+                    <th className="py-1 px-2 text-right">Discount</th>
+                    <th className="py-1 px-2 text-right">Amount</th>
+                  </tr>
+                </thead>
 
+                <tbody>
+                  {selectedOrder.order_items.map((item, idx) => {
+                    const qty = editedQuantities[idx] ?? item.quantity;
+                    const price = item.price;
+                    const percent = editedDiscounts[idx] || 0;
+                    const amount = qty * price * (1 - percent / 100);
 
+                    const stock = item.inventory.quantity;
+                    const insufficient = qty > stock || stock === 0;
 
-          <tbody>
-            {selectedOrder.order_items.map((item, idx) => {
-              const qty = editedQuantities[idx] ?? item.quantity;
-              const price = item.price;
-              const percent = editedDiscounts[idx] || 0;
-              const amount = qty * price * (1 - percent / 100);
+                    return (
+                      <tr key={idx} className="border-t text-[14px]">
+                        <td className="py-1 px-2">{qty}</td>
+                        <td className="py-1 px-2">{item.inventory.unit}</td>
+                        <td className="py-1 px-2 font-semibold">
+                          {item.inventory.product_name}
+                        </td>
+                        <td className="py-1 px-2">
+                          {stock === 0 ? (
+                            <span className="text-red-600 font-semibold">
+                              Out of Stock
+                            </span>
+                          ) : qty > stock ? (
+                            <span className="text-orange-600 font-semibold">
+                              Insufficient (Requested {qty}, In stock {stock})
+                            </span>
+                          ) : (
+                            <span className="text-green-600">Available</span>
+                          )}
+                        </td>
+                        <td className="py-1 px-2 text-right">
+                          ₱{price.toLocaleString()}
+                        </td>
+                        <td className="py-1 px-2 text-right">
+                          {item.inventory.cost_price !== undefined &&
+                          item.inventory.cost_price !== null
+                            ? `₱${item.inventory.cost_price.toLocaleString()}`
+                            : "—"}
+                        </td>
+                        {/* --- DISCOUNT COLUMN (blank if 0 or empty) --- */}
+                        <td className="py-1 px-2 text-right font-semibold">
+                          {item.quantity === 0
+                            ? ""
+                            : typeof editedDiscounts[idx] === "number" &&
+                              editedDiscounts[idx] !== 0
+                            ? `${editedDiscounts[idx]}%`
+                            : ""}
+                        </td>
 
-              const stock = item.inventory.quantity;
-              const insufficient = qty > stock || stock === 0;
-
-              return (
-                <tr key={idx} className="border-t text-[14px]">
-                  <td className="py-1 px-2">{qty}</td>
-                  <td className="py-1 px-2">{item.inventory.unit}</td>
-                  <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
-                  <td className="py-1 px-2">
-                    {stock === 0 ? (
-                      <span className="text-red-600 font-semibold">Out of Stock</span>
-                    ) : qty > stock ? (
-                      <span className="text-orange-600 font-semibold">
-                        Insufficient (Requested {qty}, In stock {stock})
-                      </span>
-                    ) : (
-                      <span className="text-green-600">Available</span>
-                    )}
-                  </td>
-                  <td className="py-1 px-2 text-right">
-                    ₱{price.toLocaleString()}
-                  </td>
-                  <td className="py-1 px-2 text-right">
-                    {item.inventory.cost_price !== undefined && item.inventory.cost_price !== null
-                      ? `₱${item.inventory.cost_price.toLocaleString()}`
-                      : "—"}
-                  </td>
-                  {/* --- DISCOUNT COLUMN (blank if 0 or empty) --- */}
-                 <td className="py-1 px-2 text-right font-semibold">
-  {item.quantity === 0
-    ? ""
-    : typeof editedDiscounts[idx] === "number" && editedDiscounts[idx] !== 0
-      ? `${editedDiscounts[idx]}%`
-      : ""}
-</td>
-
-
-                  {/* --- AMOUNT COLUMN (always show computed value) --- */}
-                  <td className="py-1 px-2 text-right font-semibold">
-                    ₱{amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-
+                        {/* --- AMOUNT COLUMN (always show computed value) --- */}
+                        <td className="py-1 px-2 text-right font-semibold">
+                          ₱
+                          {amount.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                          })}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
               </table>
             </div>
             {/* Totals and Terms */}
             <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
               <div className="space-y-2 min-w-[350px]">
+                {/* Subtotal */}
+                <div className="flex justify-between font-medium">
+                  <span>
+                    Subtotal:
+                    <div className="text-xs text-gray-500">
+                      Sum before tax & discount
+                    </div>
+                  </span>
+                  <span>
+                    ₱
+                    {subtotalBeforeDiscount.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
 
-  {/* Subtotal */}
-  <div className="flex justify-between font-medium">
-    <span>
-      Subtotal:
-      <div className="text-xs text-gray-500">Sum before tax & discount</div>
-    </span>
-    <span>
-      ₱{subtotalBeforeDiscount.toLocaleString(undefined, {minimumFractionDigits: 2})}
-    </span>
-  </div>
+                {/* Sales Tax */}
+                <div className="flex justify-between">
+                  <span>
+                    Sales Tax (12%):
+                    <div className="text-xs text-gray-500">
+                      Tax applied to subtotal
+                    </div>
+                  </span>
+                  <span>
+                    ₱
+                    {salesTaxValue.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
 
-  {/* Sales Tax */}
-  <div className="flex justify-between">
-    <span>
-      Sales Tax (12%):
-      <div className="text-xs text-gray-500">Tax applied to subtotal</div>
-    </span>
-    <span>
-      ₱{salesTaxValue.toLocaleString(undefined, {minimumFractionDigits: 2})}
-    </span>
-  </div>
+                {/* Total Discount */}
+                <div className="flex justify-between">
+                  <span>
+                    Discount/Add:
+                    <div className="text-xs text-gray-500">
+                      Sum of per-item discounts/adds
+                    </div>
+                  </span>
+                  <span
+                    className={
+                      totalDiscount !== 0 ? "text-orange-600 font-semibold" : ""
+                    }
+                  >
+                    {totalDiscount === 0
+                      ? "—"
+                      : `${totalDiscount > 0 ? "-" : "+"}₱${Math.abs(
+                          totalDiscount
+                        ).toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}`}
+                  </span>
+                </div>
 
-  {/* Total Discount */}
-  <div className="flex justify-between">
-    <span>
-      Discount/Add:
-      <div className="text-xs text-gray-500">Sum of per-item discounts/adds</div>
-    </span>
-    <span className={totalDiscount !== 0 ? "text-orange-600 font-semibold" : ""}>
-      {totalDiscount === 0
-        ? "—"
-        : `${totalDiscount > 0 ? "-" : "+"}₱${Math.abs(totalDiscount).toLocaleString(undefined, {minimumFractionDigits: 2})}`}
-    </span>
-  </div>
+                {/* Subtotal with Tax/Discount */}
+                <div className="flex justify-between">
+                  <span>
+                    Subtotal w/ Tax & Discount:
+                    <div className="text-xs text-gray-500">
+                      Subtotal after discount & tax
+                    </div>
+                  </span>
+                  <span>
+                    ₱
+                    {(
+                      subtotalBeforeDiscount +
+                      salesTaxValue -
+                      totalDiscount
+                    ).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
 
-  {/* Subtotal with Tax/Discount */}
-  <div className="flex justify-between">
-    <span>
-      Subtotal w/ Tax & Discount:
-      <div className="text-xs text-gray-500">Subtotal after discount & tax</div>
-    </span>
-    <span>
-      ₱{(subtotalBeforeDiscount + salesTaxValue - totalDiscount).toLocaleString(undefined, {minimumFractionDigits: 2})}
-    </span>
-  </div>
+                {/* Interest (for Credit) */}
+                {selectedOrder.customers.payment_type === "Credit" && (
+                  <div className="flex justify-between">
+                    <span>
+                      Interest Amount ({interestPercent}%):
+                      <div className="text-xs text-gray-500">
+                        For credit terms
+                      </div>
+                    </span>
+                    <span>
+                      ₱
+                      {(
+                        (subtotalBeforeDiscount +
+                          salesTaxValue -
+                          totalDiscount) *
+                        (interestPercent / 100)
+                      ).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
 
-  {/* Interest (for Credit) */}
-  {selectedOrder.customers.payment_type === "Credit" && (
-    <div className="flex justify-between">
-      <span>
-        Interest Amount ({interestPercent}%):
-        <div className="text-xs text-gray-500">For credit terms</div>
-      </span>
-      <span>
-        ₱{((subtotalBeforeDiscount + salesTaxValue - totalDiscount) * (interestPercent/100)).toLocaleString(undefined, {minimumFractionDigits:2})}
-      </span>
-    </div>
-  )}
+                {/* Grand Total */}
+                <div className="flex justify-between text-xl font-bold border-t pt-2">
+                  <span>
+                    TOTAL ORDER AMOUNT:
+                    <div className="text-xs text-gray-500">
+                      Final total (tax, discount &amp; interest)
+                    </div>
+                  </span>
+                  <span className="text-green-700">
+                    ₱
+                    {getGrandTotalWithInterest().toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
 
-  {/* Grand Total */}
-  <div className="flex justify-between text-xl font-bold border-t pt-2">
-    <span>
-      TOTAL ORDER AMOUNT:
-      <div className="text-xs text-gray-500">Final total (tax, discount &amp; interest)</div>
-    </span>
-    <span className="text-green-700">
-      ₱{getGrandTotalWithInterest().toLocaleString(undefined, {minimumFractionDigits: 2})}
-    </span>
-  </div>
-
-  {/* Per Term (for Credit) */}
-  {selectedOrder.customers.payment_type === "Credit" && (
-    <div className="flex justify-between">
-      <span>
-        Payment per Term:
-        <div className="text-xs text-gray-500">Amount per installment/month</div>
-      </span>
-      <span className="font-bold text-blue-700">
-        ₱{getPerTermAmount().toLocaleString(undefined, {minimumFractionDigits: 2})}
-      </span>
-    </div>
-  )}
-</div>
-
+                {/* Per Term (for Credit) */}
+                {selectedOrder.customers.payment_type === "Credit" && (
+                  <div className="flex justify-between">
+                    <span>
+                      Payment per Term:
+                      <div className="text-xs text-gray-500">
+                        Amount per installment/month
+                      </div>
+                    </span>
+                    <span className="font-bold text-blue-700">
+                      ₱
+                      {getPerTermAmount().toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
             {/* Action Buttons */}
             <div className="flex justify-center gap-8 mt-6">

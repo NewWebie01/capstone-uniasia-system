@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { Upload, FileImage, Wallet, Info } from "lucide-react";
+import { Upload, FileImage, Wallet } from "lucide-react";
 
 /* ----------------------------- Config ----------------------------- */
 const CHEQUE_BUCKET = "payments-cheques";
@@ -193,11 +193,15 @@ export default function CustomerPaymentsPage() {
         } else if (payload.eventType === "UPDATE") {
           setPayments((prev) =>
             prev.map((p) =>
-              p.id === (payload.new as any)?.id ? (payload.new as PaymentRow) : p
+              p.id === (payload.new as any)?.id
+                ? (payload.new as PaymentRow)
+                : p
             )
           );
         } else if (payload.eventType === "DELETE") {
-          setPayments((prev) => prev.filter((p) => p.id !== (payload.old as any)?.id));
+          setPayments((prev) =>
+            prev.filter((p) => p.id !== (payload.old as any)?.id)
+          );
         }
       }
     );
@@ -241,7 +245,8 @@ export default function CustomerPaymentsPage() {
       const completed = (c.orders ?? []).find(
         (o) => (o.status || "").toLowerCase() === "completed"
       );
-      if (code && completed) out.push({ code, order: completed, customerId: String(c.id) });
+      if (code && completed)
+        out.push({ code, order: completed, customerId: String(c.id) });
     }
     return out;
   }, [txns]);
@@ -269,7 +274,9 @@ export default function CustomerPaymentsPage() {
   const receivedTotalByOrder = useMemo(() => {
     const m = new Map<string, number>();
     for (const [k, arr] of paymentsByOrder.entries()) {
-      const total = arr.filter(isReceived).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      const total = arr
+        .filter(isReceived)
+        .reduce((s, p) => s + (Number(p.amount) || 0), 0);
       m.set(k, total);
     }
     return m;
@@ -298,7 +305,10 @@ export default function CustomerPaymentsPage() {
 
   /* ---------- Keep selection valid ---------- */
   useEffect(() => {
-    if (selectedTxnCode && !unpaidTxnOptions.some((t) => t.code === selectedTxnCode)) {
+    if (
+      selectedTxnCode &&
+      !unpaidTxnOptions.some((t) => t.code === selectedTxnCode)
+    ) {
       setSelectedTxnCode("");
     }
   }, [selectedTxnCode, unpaidTxnOptions]);
@@ -369,7 +379,8 @@ export default function CustomerPaymentsPage() {
 
     const pub = supabase.storage.from(CHEQUE_BUCKET).getPublicUrl(path);
     const publicUrl = pub?.data?.publicUrl ?? null;
-    if (!publicUrl) throw new Error("Could not get public URL for uploaded file.");
+    if (!publicUrl)
+      throw new Error("Could not get public URL for uploaded file.");
     return publicUrl;
   }
 
@@ -414,6 +425,30 @@ export default function CustomerPaymentsPage() {
 
       if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
 
+      /* ======== Notify Admins that a cheque was submitted ======== */
+      try {
+        const title = "💰 New Cheque Payment Submitted";
+        const message = `${me.name || "Customer"} • ${
+          selectedPack.code
+        } • ₱${amountNum.toLocaleString("en-PH", {
+          minimumFractionDigits: 2,
+        })}`;
+        await supabase.from("notifications").insert([
+          {
+            type: "payment",
+            title,
+            message,
+            related_id: orderId, // keep linking to the order
+            is_read: false,
+            user_email: me.email || null,
+          },
+        ]);
+      } catch (notifyErr) {
+        // Don't block user success if notification fails
+        console.error("Notification insert failed:", notifyErr);
+      }
+      /* =========================================================== */
+
       toast.success("✅ Cheque submitted. Awaiting admin verification.");
       setSelectedTxnCode("");
       setAmount("");
@@ -440,7 +475,8 @@ export default function CustomerPaymentsPage() {
         </div>
         <p className="text-sm text-gray-600 mt-1">
           Upload a cheque for your <b>Transaction Code (TXN)</b>. For{" "}
-          <b>Credit</b> customers, balances update automatically after admin verification.
+          <b>Credit</b> customers, balances update automatically after admin
+          verification.
         </p>
 
         {/* Balances (Credit only) */}
@@ -466,7 +502,9 @@ export default function CustomerPaymentsPage() {
                     className="text-black uppercase tracking-wider text-[11px]"
                     style={{ background: "#ffba20" }}
                   >
-                    <th className="py-2.5 px-3 text-left font-bold">TXN Code</th>
+                    <th className="py-2.5 px-3 text-left font-bold">
+                      TXN Code
+                    </th>
                     <th className="py-2.5 px-3 text-left font-bold">Status</th>
                     <th className="py-2.5 px-3 text-right font-bold">
                       Grand Total
@@ -480,7 +518,8 @@ export default function CustomerPaymentsPage() {
                 <tbody>
                   {txnOptions.map(({ code, order }, idx) => {
                     const { grandTotal } = computeFromOrder(order);
-                    const paid = receivedTotalByOrder.get(String(order.id)) || 0;
+                    const paid =
+                      receivedTotalByOrder.get(String(order.id)) || 0;
                     const bal = Math.max(grandTotal - paid, 0);
 
                     return (
@@ -666,7 +705,8 @@ export default function CustomerPaymentsPage() {
         {selectedPack && (
           <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
             <h2 className="text-lg font-semibold mb-3">
-              Items for TXN <span className="font-mono">{selectedPack.code}</span>
+              Items for TXN{" "}
+              <span className="font-mono">{selectedPack.code}</span>
             </h2>
 
             <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
@@ -681,12 +721,18 @@ export default function CustomerPaymentsPage() {
                     <th className="py-2.5 px-3 text-left font-bold">
                       ITEM DESCRIPTION
                     </th>
-                    <th className="py-2.5 px-3 text-center font-bold">REMARKS</th>
-                    <th className="py-2.5 px-3 text-center font-bold">UNIT PRICE</th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      REMARKS
+                    </th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      UNIT PRICE
+                    </th>
                     <th className="py-2.5 px-3 text-center font-bold">
                       DISCOUNT/ADD (%)
                     </th>
-                    <th className="py-2.5 px-3 text-center font-bold">AMOUNT</th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      AMOUNT
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
