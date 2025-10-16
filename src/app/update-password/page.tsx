@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import supabase from "@/config/supabaseClient";
 import { motion } from "framer-motion";
@@ -19,6 +19,15 @@ export default function UpdatePasswordPage() {
   const [newPassword, setNewPassword] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
   const [message, setMessage] = useState("");
+  const [validSession, setValidSession] = useState(false);
+
+  useEffect(() => {
+    // Make sure there is a valid session from the magic link
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) setValidSession(true);
+      else setValidSession(false);
+    });
+  }, []);
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,27 +64,33 @@ export default function UpdatePasswordPage() {
         <h2 className="text-2xl font-bold mb-6 text-center text-[#181918]">
           Set New Password
         </h2>
-        <form onSubmit={handleUpdate} className="flex flex-col gap-5 w-full">
-          <input
-            type="password"
-            placeholder="Enter new password"
-            className="rounded-md p-2 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 disabled:opacity-60"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            required
-            minLength={6}
-            disabled={isUpdating}
-            autoFocus
-          />
-          <motion.button
-            type="submit"
-            whileTap={{ scale: 0.97 }}
-            className="bg-[#ffba20] hover:bg-[#ffd84b] text-black font-semibold py-2 rounded transition-colors"
-            disabled={isUpdating}
-          >
-            {isUpdating ? "Updating..." : "Update Password"}
-          </motion.button>
-        </form>
+        {validSession ? (
+          <form onSubmit={handleUpdate} className="flex flex-col gap-5 w-full">
+            <input
+              type="password"
+              placeholder="Enter new password"
+              className="rounded-md p-2 border-2 outline-none focus:border-[#ffba20] focus:bg-slate-50 disabled:opacity-60"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+              minLength={6}
+              disabled={isUpdating}
+              autoFocus
+            />
+            <motion.button
+              type="submit"
+              whileTap={{ scale: 0.97 }}
+              className="bg-[#ffba20] hover:bg-[#ffd84b] text-black font-semibold py-2 rounded transition-colors"
+              disabled={isUpdating}
+            >
+              {isUpdating ? "Updating..." : "Update Password"}
+            </motion.button>
+          </form>
+        ) : (
+          <p className="text-red-500 text-center">
+            This link is invalid or expired. Please request a new reset link.
+          </p>
+        )}
         {message && (
           <p
             className={`mt-4 text-center text-sm ${

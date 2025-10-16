@@ -1,12 +1,34 @@
-import productImage from "@/assets/product-image-uniasia.png";
-import pyramidImage from "@/assets/box-parcel.png";
-import tubeImage from "@/assets/forklift.png";
+"use client";
+import { useState, useEffect } from "react";
+import toolboxImage from "@/assets/toolbox.jpg";
+import warehouseImage from "@/assets/warehouse.jpg";
+import wrenchImage from "@/assets/wrench.jpg";
+import screwsImage from "@/assets/screws.jpg";
+import powertoolsImage from "@/assets/powertools.jpg";
 import Image from "next/image";
 
+const images = [
+  toolboxImage,
+  warehouseImage,
+  wrenchImage,
+  screwsImage,
+  powertoolsImage,
+];
+
 export const AboutUs = () => {
+  const [current, setCurrent] = useState(0);
+
+  // Auto-slide every 4s
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrent((c) => (c + 1) % images.length);
+    }, 4000);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
     <section
-      id="about-us" // Added ID for smooth scrolling
+      id="about-us"
       className="bg-gradient-to-b from-[#FFFFFF] to-[#ffba20] py-24 overflow-x-clip"
     >
       <div className="container">
@@ -22,21 +44,36 @@ export const AboutUs = () => {
             demand and ensure customer satisfaction.
           </p>
         </div>
-        <div className="relative">
-          <Image src={productImage} alt="Product Image" className="mt-16" />
-          {/* <Image
-            src={pyramidImage}
-            alt="Pyramid Image"
-            height={262}
-            width={262}
-            className="hidden md:block absolute -right-36 -top-32"
-          />
-          <Image
-            src={tubeImage}
-            alt="Tube Image"
-            height={248}
-            className="hidden md:block absolute bottom-0 -left-36"
-          /> */}
+        <div className="relative mt-16 aspect-[4/3] max-w-3xl mx-auto rounded-2xl overflow-hidden shadow-xl">
+          {images.map((img, idx) => (
+            <Image
+              key={img.src}
+              src={img}
+              alt={`UniAsia Slideshow ${idx + 1}`}
+              fill
+              className={`
+                object-cover transition-opacity duration-1000
+                ${idx === current ? "opacity-100" : "opacity-0"}
+              `}
+              priority={idx === 0}
+              draggable={false}
+            />
+          ))}
+          {/* Dots */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 z-10">
+            {images.map((_, i) => (
+              <button
+                key={i}
+                className={`w-3 h-3 rounded-full ${
+                  current === i
+                    ? "bg-[#ffba20]"
+                    : "bg-white/60 border border-gray-300"
+                }`}
+                onClick={() => setCurrent(i)}
+                aria-label={`Go to slide ${i + 1}`}
+              />
+            ))}
+          </div>
         </div>
       </div>
     </section>

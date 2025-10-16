@@ -206,7 +206,7 @@ export default function TransactionHistoryPage() {
     logActivity("Visited Transaction History Page");
   }, []);
 
-  // Load initial list
+  // Load initial list (COMPLETED ONLY)
   useEffect(() => {
     async function load() {
       setLoading(true);
@@ -224,6 +224,7 @@ export default function TransactionHistoryPage() {
           )
         `
         )
+        .eq("status", "completed") // <<< Completed-only filter
         .order("date_created", { ascending: false });
 
       if (error) {
@@ -396,6 +397,7 @@ export default function TransactionHistoryPage() {
     customers(name)
   `
         )
+        .eq("status", "completed") // <<< Completed-only filter for export
         .order("date_created", { ascending: false });
 
       if (exportChoice !== "all") {
@@ -445,11 +447,12 @@ export default function TransactionHistoryPage() {
       // ---- Log export activity ----
       await logActivity(
         exportChoice === "all"
-          ? "Exported Transaction History (ALL)"
-          : `Exported Transaction History (${label})`,
+          ? "Exported Transaction History (Completed Only, ALL)"
+          : `Exported Transaction History (Completed Only, ${label})`,
         {
           rows: rows.length,
           filter: exportChoice,
+          completed_only: true,
           ...(exportChoice !== "all"
             ? {
                 start_utc: start?.toISOString(),
@@ -474,8 +477,8 @@ export default function TransactionHistoryPage() {
         <div>
           <h1 className="pt-1 text-3xl font-bold mb-1">Transaction History</h1>
           <p className="text-sm text-gray-500 mb-2">
-            View all orders with their status and totals, search, and export by
-            time frame.
+            View <span className="font-medium">completed</span> orders with
+            their totals, search, and export by time frame.
           </p>
         </div>
       </div>
@@ -496,7 +499,7 @@ export default function TransactionHistoryPage() {
         Export
       </button>
 
-      <div className="overflow-x-auto rounded-lg shadow bg-white">
+      <div className="overflow-x-auto rounded-lg shadow bg-white mt-3">
         <table className="min-w-full text-sm">
           <thead className="bg-[#ffba20] text-black text-left">
             <tr>
@@ -517,7 +520,7 @@ export default function TransactionHistoryPage() {
             ) : filtered.length === 0 ? (
               <tr>
                 <td className="px-4 py-6 text-center text-gray-500" colSpan={5}>
-                  No transactions found.
+                  No completed transactions found.
                 </td>
               </tr>
             ) : (
@@ -547,7 +550,10 @@ export default function TransactionHistoryPage() {
               Export Transaction History
             </h3>
             <p className="text-sm text-gray-700 text-center mb-4">
-              Choose a time frame (PH timezone).
+              Choose a time frame (PH timezone). <br />
+              <span className="text-xs text-gray-500">
+                *Only <strong>Completed</strong> orders are included.
+              </span>
             </p>
 
             <div className="space-y-3 mb-4">
