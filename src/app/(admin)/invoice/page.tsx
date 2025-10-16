@@ -105,7 +105,7 @@ function statusColor(status?: string | null) {
   return "bg-gray-100 text-gray-600 border-gray-300";
 }
 
-// ---------- PDF Export Helper (html2canvas + jsPDF) ----------
+/* -------------------- PDF Export Helper -------------------- */
 type PaperKey = "a4" | "letter" | "legal";
 const PAPER_SPECS: Record<
   PaperKey,
@@ -148,8 +148,18 @@ async function exportNodeToPDF(
   const imgData = canvas.toDataURL("image/png", 1.0);
 
   let remaining = imgH;
-  let y = spec.margin;
-  pdf.addImage(imgData, "PNG", spec.margin, y, imgW, imgH, undefined, "FAST");
+  let sY = Math.floor((pageH / imgH) * canvas.height);
+
+  pdf.addImage(
+    imgData,
+    "PNG",
+    spec.margin,
+    spec.margin,
+    imgW,
+    imgH,
+    undefined,
+    "FAST"
+  );
 
   if (imgH > pageH) {
     const pageCanvas = document.createElement("canvas");
@@ -157,7 +167,6 @@ async function exportNodeToPDF(
     pageCanvas.height = Math.floor((pageH / imgH) * canvas.height);
     const ctx = pageCanvas.getContext("2d")!;
     const sliceH = pageCanvas.height;
-    let sY = Math.floor((pageH / imgH) * canvas.height);
 
     while (remaining > pageH) {
       pdf.addPage([spec.width, spec.height]);
@@ -188,8 +197,36 @@ async function exportNodeToPDF(
       remaining -= pageH;
     }
   }
+
   const safeName = filenameBase.replace(/[^\w\-]+/g, "_");
   pdf.save(`${safeName}_${PAPER_SPECS[paper].filename}.pdf`);
+}
+
+/* -------- Shipping fee: orders.truck_delivery_id -> truck_deliveries.shipping_fee -------- */
+async function fetchShippingFeeForOrder(orderId: string): Promise<number> {
+  try {
+    const { data: ord } = await supabase
+      .from("orders")
+      .select("truck_delivery_id")
+      .eq("id", orderId)
+      .maybeSingle();
+
+    const deliveryId = ord?.truck_delivery_id;
+    if (!deliveryId) return 0;
+
+    const { data: del } = await supabase
+      .from("truck_deliveries")
+      .select("shipping_fee")
+      .eq("id", deliveryId)
+      .maybeSingle();
+
+    const fee = Number(del?.shipping_fee ?? 0);
+    console.log("[shipping] fee found", { orderId, deliveryId, fee });
+    return Number.isFinite(fee) ? fee : 0;
+  } catch (err) {
+    console.warn("[shipping] fetch error:", err);
+    return 0;
+  }
 }
 
 export default function InvoicePage() {
@@ -245,6 +282,10 @@ export default function InvoicePage() {
   const [perTermAmount, setPerTermAmount] = useState<number>(0);
   const [salesTaxSaved, setSalesTaxSaved] = useState<number>(0);
 
+  // shipping fee state (modal + detail)
+  const [shippingFee, setShippingFee] = useState<number>(0);
+  const [detailShippingFee, setDetailShippingFee] = useState<number>(0);
+
   // --- Password re-auth (for PRINT PDF) ---
   const [showReauth, setShowReauth] = useState(false);
   const [reauthEmail, setReauthEmail] = useState<string>("");
@@ -252,13 +293,11 @@ export default function InvoicePage() {
   const [reauthing, setReauthing] = useState(false);
   const [reauthError, setReauthError] = useState("");
 
-  // remember success for a short window
   const [lastReauthAt, setLastReauthAt] = useState<number | null>(null);
-  const REAUTH_TTL_MS = 5 * 60 * 1000; // <-- recalibrate here (e.g. 30*1000 for 30s)
+  const REAUTH_TTL_MS = 5 * 60 * 1000;
   const needsReauth = () =>
     !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
 
-  // what we plan to print after reauth
   const [pendingPrint, setPendingPrint] = useState<null | {
     nodeId: string;
     paper: PaperKey;
@@ -267,7 +306,6 @@ export default function InvoicePage() {
     txn: string;
   }>(null);
 
-  // trigger from button
   async function handlePrintClick(args: {
     nodeId: string;
     paper: PaperKey;
@@ -320,10 +358,8 @@ export default function InvoicePage() {
     const node = document.getElementById(args.nodeId);
     if (!node) return;
 
-    // generate PDF
     await exportNodeToPDF(node, args.paper, args.filenameBase);
 
-    // log activity
     await logActivity("Exported Invoice PDF", {
       order_id: args.orderId,
       txn: args.txn,
@@ -332,6 +368,7 @@ export default function InvoicePage() {
       sales_tax: salesTaxSaved,
       grand_total_with_interest: grandTotalWithInterest,
       per_term_amount: perTermAmount,
+      shipping_fee: openId === args.orderId ? shippingFee : detailShippingFee,
     });
   }
 
@@ -404,7 +441,6 @@ export default function InvoicePage() {
     setOpenId(order.id);
     setLoadingItems(true);
 
-    // ✅ log "Viewed Invoice"
     const txn = order.customer?.code || order.id;
     await logActivity("Viewed Invoice", {
       order_id: order.id,
@@ -470,6 +506,12 @@ export default function InvoicePage() {
     setPerTermAmount(Number(orderRow?.per_term_amount || 0));
     setSalesTaxSaved(Number(orderRow?.sales_tax || 0));
 
+    // --- shipping fee (modal) ---
+    {
+      const fee = await fetchShippingFeeForOrder(order.id);
+      setShippingFee(fee);
+    }
+
     if (!error && rows) {
       const mapped: InvoiceItem[] = (rows as unknown as OrderItemRow[]).map(
         (r) => ({
@@ -489,7 +531,6 @@ export default function InvoicePage() {
       );
       setItems(mapped);
 
-      // Initialize remarks for editing
       const remap: Record<string, string> = {};
       mapped.forEach((it) => (remap[it.id] = it.remarks ?? ""));
       setEditedRemarks(remap);
@@ -526,7 +567,6 @@ export default function InvoicePage() {
         supabase.from("order_items").update({ remarks: remark }).eq("id", id)
       )
     );
-    // Update parent state to force rerender
     setItems((prev) =>
       prev
         ? prev.map((it) =>
@@ -618,10 +658,10 @@ export default function InvoicePage() {
             ? mapped
             : [
                 {
-                  id: "empty",
+                  id: "fallback",
                   qty: 1,
                   unit: "pcs",
-                  description: "No items found.",
+                  description: "Invoice not found.",
                   unitPrice: 0,
                   discount: 0,
                 },
@@ -631,6 +671,12 @@ export default function InvoicePage() {
         setGrandTotalWithInterest(Number(row.grand_total_with_interest || 0));
         setPerTermAmount(Number(row.per_term_amount || 0));
         setSalesTaxSaved(Number(row.sales_tax || 0));
+
+        // --- shipping fee (detail) ---
+        {
+          const fee = await fetchShippingFeeForOrder(orderId);
+          setDetailShippingFee(fee);
+        }
       } else {
         if (error) console.error("Invoice detail fetch error:", error);
         setDetailCustomer({ name: "—", address: "" });
@@ -652,6 +698,7 @@ export default function InvoicePage() {
         setGrandTotalWithInterest(0);
         setPerTermAmount(0);
         setSalesTaxSaved(0);
+        setDetailShippingFee(0);
       }
       setLoadingDetail(false);
     })();
@@ -696,6 +743,7 @@ export default function InvoicePage() {
               salesTax: salesTaxSaved,
               grandTotalWithInterest,
               perTermAmount,
+              shippingFee: detailShippingFee, // ← from truck_deliveries
             }}
             txn={orderId}
             status={detailStatus}
@@ -750,7 +798,6 @@ export default function InvoicePage() {
         </div>
 
         <style jsx>{`
-          /* Force vertical middle in all table cells inside this invoice only */
           .invoice table th,
           .invoice table td {
             vertical-align: middle !important;
@@ -870,7 +917,7 @@ export default function InvoicePage() {
                                   Long / Legal (8.5×13in)
                                 </option>
                               </select>
-                             <button
+                              <button
                                 className="bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-40"
                                 onClick={(ev) => {
                                   ev.stopPropagation();
@@ -882,13 +929,17 @@ export default function InvoicePage() {
                                     txn,
                                   });
                                 }}
-                                disabled={editMode} 
-                                title={editMode ? "Save changes before printing PDF." : "Print as PDF"}
+                                disabled={editMode}
+                                title={
+                                  editMode
+                                    ? "Save changes before printing PDF."
+                                    : "Print as PDF"
+                                }
                               >
                                 PRINT PDF
                               </button>
 
-                              {/* EDIT/SAVE BUTTON (never appears in print/pdf) */}
+                              {/* EDIT/SAVE BUTTON */}
                               <span className="no-print">
                                 {!editMode ? (
                                   <button
@@ -935,6 +986,7 @@ export default function InvoicePage() {
                                 salesTax: salesTaxSaved,
                                 grandTotalWithInterest,
                                 perTermAmount,
+                                shippingFee, // ← from truck_deliveries
                               }}
                               txn={txn}
                               status={order.status}
@@ -1051,7 +1103,6 @@ export default function InvoicePage() {
             </tbody>
           </table>
         </motion.div>
-        {/* Re-auth modal for PRINT PDF */}
       </div>
     </motion.div>
   );
