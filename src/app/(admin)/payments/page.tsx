@@ -3,7 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { CheckCircle2, XCircle, FileImage, Search, Loader2 } from "lucide-react";
+import {
+  CheckCircle2,
+  XCircle,
+  FileImage,
+  Search,
+  Loader2,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -99,18 +105,21 @@ export default function AdminPaymentsPage() {
   const [customers, setCustomers] = useState<CustomerLite[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const paymentsSubKey = useRef<string>("");
+  const [loadingAction, setLoadingAction] = useState(false);
 
   // filters
   const [q, setQ] = useState("");
-  const [status, setStatus] =
-    useState<"all" | "pending" | "received" | "rejected">("pending");
+  const [status, setStatus] = useState<
+    "all" | "pending" | "received" | "rejected"
+  >("pending");
 
   // image modal
   const [imgOpen, setImgOpen] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [imgMeta, setImgMeta] = useState<{ cheque?: string | null; bank?: string | null } | null>(
-    null
-  );
+  const [imgMeta, setImgMeta] = useState<{
+    cheque?: string | null;
+    bank?: string | null;
+  } | null>(null);
 
   // confirmation modal
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -181,7 +190,9 @@ export default function AdminPaymentsPage() {
             )
           );
         } else if (payload.eventType === "DELETE") {
-          setPayments((prev) => prev.filter((p) => p.id !== (payload.old as any).id));
+          setPayments((prev) =>
+            prev.filter((p) => p.id !== (payload.old as any).id)
+          );
         }
       }
     );
@@ -228,7 +239,10 @@ export default function AdminPaymentsPage() {
     setConfirmOpen(true);
   }
 
-  function openImage(url: string, meta?: { cheque?: string | null; bank?: string | null }) {
+  function openImage(
+    url: string,
+    meta?: { cheque?: string | null; bank?: string | null }
+  ) {
     setImgSrc(url);
     setImgMeta(meta || null);
     setImgOpen(true);
@@ -242,6 +256,7 @@ export default function AdminPaymentsPage() {
 
   async function handleConfirm() {
     if (!targetRow || !confirmType) return;
+    setLoadingAction(true);
 
     // lock the row immediately => both buttons disable
     setLocked((prev) => new Set(prev).add(targetRow.id));
@@ -279,8 +294,32 @@ export default function AdminPaymentsPage() {
           cheque_number: targetRow.cheque_number,
           bank_name: targetRow.bank_name,
         });
-        toast.success("Marked as received. Customer balance will update.");
-      } else {
+
+        // --- SEND EMAIL NOTIFICATION (Receive) ---
+        try {
+          const res = await fetch("/api/send-payment-confirmation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              paymentId: targetRow.id,
+              action: "receive",
+            }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            toast.success("Marked as received. Email sent to customer!");
+          } else {
+            toast.error(
+              "Payment marked as received, but email failed: " +
+                (data.error || "")
+            );
+          }
+        } catch (err) {
+          toast.error("Payment marked as received, but email send failed.");
+          console.error(err);
+        }
+        // --- END EMAIL NOTIF ---
+      } else if (confirmType === "reject") {
         const { error } = await supabase
           .from("payments")
           .update({
@@ -294,7 +333,12 @@ export default function AdminPaymentsPage() {
         setPayments((prev) =>
           prev.map((p) =>
             p.id === targetRow.id
-              ? { ...p, status: "rejected", received_at: null, received_by: null }
+              ? {
+                  ...p,
+                  status: "rejected",
+                  received_at: null,
+                  received_by: null,
+                }
               : p
           )
         );
@@ -306,7 +350,27 @@ export default function AdminPaymentsPage() {
           cheque_number: targetRow.cheque_number,
           bank_name: targetRow.bank_name,
         });
-        toast.success("Cheque marked as rejected.");
+
+        // --- SEND EMAIL NOTIFICATION (Reject) ---
+        try {
+          const res = await fetch("/api/send-payment-confirmation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ paymentId: targetRow.id, action: "reject" }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            toast.success("Cheque marked as rejected. Email sent to customer!");
+          } else {
+            toast.error(
+              "Cheque rejected, but email failed: " + (data.error || "")
+            );
+          }
+        } catch (err) {
+          toast.error("Cheque rejected, but email send failed.");
+          console.error(err);
+        }
+        // --- END EMAIL NOTIF ---
       }
 
       setConfirmOpen(false);
@@ -322,6 +386,8 @@ export default function AdminPaymentsPage() {
         next.delete(targetRow!.id);
         return next;
       });
+    } finally {
+      setLoadingAction(false);
     }
   }
 
@@ -399,7 +465,11 @@ export default function AdminPaymentsPage() {
                           : "bg-yellow-100 text-yellow-900"
                       }`}
                     >
-                      {s === "received" ? "Received" : s === "rejected" ? "Rejected" : "Pending"}
+                      {s === "received"
+                        ? "Received"
+                        : s === "rejected"
+                        ? "Rejected"
+                        : "Pending"}
                     </span>
                   );
 
@@ -407,8 +477,13 @@ export default function AdminPaymentsPage() {
                   const disableAll = locked.has(p.id) || s !== "pending";
 
                   return (
-                    <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
-                      <td className="py-2.5 px-3 whitespace-nowrap">{formatPH(p.created_at)}</td>
+                    <tr
+                      key={p.id}
+                      className={idx % 2 ? "bg-neutral-50" : "bg-white"}
+                    >
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        {formatPH(p.created_at)}
+                      </td>
                       <td className="py-2.5 px-3">
                         <div className="font-mono truncate">{code}</div>
                         <div className="text-[11px] text-gray-600 truncate">
@@ -418,8 +493,12 @@ export default function AdminPaymentsPage() {
                       <td className="py-2.5 px-3 font-mono tabular-nums whitespace-nowrap">
                         {formatCurrency(p.amount)}
                       </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap truncate">{p.bank_name ?? "—"}</td>
-                      <td className="py-2.5 px-3 whitespace-nowrap truncate">{p.cheque_number ?? "—"}</td>
+                      <td className="py-2.5 px-3 whitespace-nowrap truncate">
+                        {p.bank_name ?? "—"}
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap truncate">
+                        {p.cheque_number ?? "—"}
+                      </td>
                       <td className="py-2.5 px-3 whitespace-nowrap">
                         {p.cheque_date ? formatPH(p.cheque_date, "date") : "—"}
                       </td>
@@ -449,7 +528,11 @@ export default function AdminPaymentsPage() {
                             onClick={() => openConfirm("receive", p)}
                             disabled={disableAll}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={disableAll ? "Action not available" : "Mark as Received"}
+                            title={
+                              disableAll
+                                ? "Action not available"
+                                : "Mark as Received"
+                            }
                           >
                             <CheckCircle2 className="h-4 w-4" />
                             <span>Receive</span>
@@ -458,7 +541,9 @@ export default function AdminPaymentsPage() {
                             onClick={() => openConfirm("reject", p)}
                             disabled={disableAll}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={disableAll ? "Action not available" : "Reject"}
+                            title={
+                              disableAll ? "Action not available" : "Reject"
+                            }
                           >
                             <XCircle className="h-4 w-4" />
                             <span>Reject</span>
@@ -471,7 +556,10 @@ export default function AdminPaymentsPage() {
 
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-10 text-center text-neutral-400">
+                    <td
+                      colSpan={9}
+                      className="py-10 text-center text-neutral-400"
+                    >
                       {loading ? (
                         <span className="inline-flex items-center gap-2">
                           <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -515,7 +603,9 @@ export default function AdminPaymentsPage() {
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Cheque #</span>
-              <span className="font-mono">{targetRow?.cheque_number || "—"}</span>
+              <span className="font-mono">
+                {targetRow?.cheque_number || "—"}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Bank</span>
@@ -528,19 +618,49 @@ export default function AdminPaymentsPage() {
               type="button"
               onClick={() => setConfirmOpen(false)}
               className="px-4 py-2 rounded border hover:bg-gray-50"
+              disabled={loadingAction}
             >
               Cancel
             </button>
+
             <button
               type="button"
               onClick={handleConfirm}
-              className={`px-4 py-2 rounded text-white ${
+              className={`px-4 py-2 rounded text-white flex items-center gap-2 ${
                 confirmType === "receive"
                   ? "bg-green-600 hover:bg-green-700"
                   : "bg-red-600 hover:bg-red-700"
               }`}
+              disabled={loadingAction}
             >
-              {confirmType === "receive" ? "Confirm Receive" : "Confirm Reject"}
+              {loadingAction ? (
+                <span className="flex items-center gap-2">
+                  <svg
+                    className="animate-spin h-4 w-4 text-white"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                      fill="none"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                    />
+                  </svg>
+                  Processing...
+                </span>
+              ) : confirmType === "receive" ? (
+                "Confirm Receive"
+              ) : (
+                "Confirm Reject"
+              )}
             </button>
           </DialogFooter>
         </DialogContent>
