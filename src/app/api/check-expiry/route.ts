@@ -1,92 +1,74 @@
 import { NextRequest, NextResponse } from "next/server";
-import supabase from "@/config/supabaseClient";
 import { Resend } from "resend";
-
+import supabase from "@/config/supabaseClient";
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function GET(req: NextRequest) {
-  const DAYS_AHEAD = 7;
-  const { data: items, error } = await supabase
-    .from("inventory")
-    .select("id, product_name, expiration_date")
-    .gte("expiration_date", new Date().toISOString().slice(0, 10))
-    .lte(
-      "expiration_date",
-      new Date(Date.now() + DAYS_AHEAD * 86400000).toISOString().slice(0, 10)
-    );
+  try {
+    // 1. Find items expiring in the next 7 days
+    const today = new Date();
+    const in7 = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const { data: items, error } = await supabase
+      .from("inventory")
+      .select("id, product_name, expiration_date, quantity")
+      .gte("expiration_date", today.toISOString().slice(0, 10))
+      .lte("expiration_date", in7.toISOString().slice(0, 10));
+    if (error) throw error;
 
-  if (error)
-    return NextResponse.json({ error: error.message }, { status: 500 });
-
-  const newlyNotifiedItems: typeof items = [];
-
-  for (const item of items) {
-    const { data: existing } = await supabase
-      .from("system_notifications")
-      .select("id")
-      .eq("item_id", item.id)
-      .eq("type", "expiration")
-      .eq("expires_at", item.expiration_date);
-
-    if (!existing || existing.length === 0) {
-      await supabase.from("system_notifications").insert([
-        {
-          type: "expiration",
-          title: `Item Expiring Soon: ${item.product_name}`,
-          message: `The item "${item.product_name}" is expiring on ${item.expiration_date}.`,
-          item_id: item.id,
-          item_name: item.product_name,
-          expires_at: item.expiration_date,
-        },
-      ]);
-      newlyNotifiedItems.push(item);
+    if (!items?.length) {
+      return NextResponse.json({ message: "No expiring items." });
     }
-  }
 
-  console.log("Fetched expiring items:", items.length);
-  console.log(
-    "New notifications to send:",
-    newlyNotifiedItems.length,
-    newlyNotifiedItems.map((i) => i.product_name)
-  );
+    // 2. Get all admin emails (adjust for your schema/roles)
+    const { data: admins, error: adminErr } = await supabase
+      .from("users")
+      .select("email, role")
+      .eq("role", "admin");
+    if (adminErr) throw adminErr;
 
-  if (newlyNotifiedItems.length > 0) {
-    const productList = newlyNotifiedItems
-      .map(
-        (item) =>
-          `<li><strong>${item.product_name}</strong> — expires on <b>${item.expiration_date}</b></li>`
-      )
-      .join("");
-    const htmlBody = `
-      <h2>Expiration Alert: Items Expiring in the Next 7 Days</h2>
-      <ul>${productList}</ul>
-      <br />
-      <small>This is an automated notification from the UniAsia Inventory System.</small>
+    const emails = admins?.map((a: any) => a.email).filter(Boolean);
+    if (!emails?.length) throw new Error("No admin emails found.");
+
+    // 3. Send the email(s)
+    const subject = `Inventory Expiry Alert – ${items.length} Item(s)`;
+    const html = `
+      <div style="font-family:DM Sans,Arial,sans-serif;">
+        <h2 style="color:#f39c12;margin-bottom:4px;">Expiry Warning</h2>
+        <p>The following inventory item(s) will expire within 7 days:</p>
+        <ul>
+          ${items
+            .map(
+              (item: any) =>
+                `<li><b>${item.product_name}</b> – Qty: ${
+                  item.quantity
+                } – Expiry: <b>${item.expiration_date?.slice(0, 10)}</b></li>`
+            )
+            .join("")}
+        </ul>
+        <hr/>
+        <div style="color:#888;font-size:0.97rem">UniAsia Inventory Alert</div>
+      </div>
     `;
 
-    const adminEmails = [
-      "harveyvoldan.hr@gmail.com",
-      "jeffbarraca.hr@gmail.com",
-      "jonasemil2bernabe@gmail.com",
-      "admin1@gmail.com",
-      "angelosrosario1011@gmail.com",
-    ];
-    console.log("Notifying admins:", adminEmails);
+    await resend.emails.send({
+      from: "UniAsia <sales@uniasia.shop>",
+      to: emails,
+      subject,
+      html,
+      text: `Expiring soon: ${items
+        .map(
+          (i: any) =>
+            `${i.product_name} (expires ${i.expiration_date?.slice(0, 10)})`
+        )
+        .join(", ")}`,
+    });
 
-    try {
-      await resend.emails.send({
-        from: "UNI-ASIA Inventory <no-reply@uniasia.com>",
-        to: adminEmails,
-        subject: "Expiring Inventory Alert (Next 7 Days)",
-        html: htmlBody,
-      });
-      console.log("Notification email sent successfully.");
-    } catch (e) {
-      console.error("Failed to send notification email:", e);
-    }
-  } else {
-    console.log("No new expiring items to notify admins about.");
+    return NextResponse.json({ success: true, sentTo: emails });
+  } catch (err: any) {
+    console.error("[check-expiry] ERROR:", err);
+    return NextResponse.json(
+      { error: err?.message || String(err) },
+      { status: 500 }
+    );
   }
-
-  return NextResponse.json({ success: true, count: items.length });
 }
