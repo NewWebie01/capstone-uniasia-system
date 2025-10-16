@@ -80,6 +80,42 @@ const isReceived = (p: PaymentRow) =>
 const isPending = (p: PaymentRow) =>
   (p?.status || "").toLowerCase() === "pending";
 
+/* -------- Shipping fee: orders.truck_delivery_id -> truck_deliveries.shipping_fee -------- */
+async function fetchShippingFeeForOrder(orderId: string | number): Promise<number> {
+  try {
+    const { data: ord, error: ordErr } = await supabase
+      .from("orders")
+      .select("truck_delivery_id")
+      .eq("id", orderId)
+      .maybeSingle();
+
+    if (ordErr) {
+      console.warn("[shipping] order fetch error:", ordErr.message);
+      return 0;
+    }
+
+    const deliveryId = ord?.truck_delivery_id;
+    if (!deliveryId) return 0;
+
+    const { data: del, error: delErr } = await supabase
+      .from("truck_deliveries")
+      .select("shipping_fee")
+      .eq("id", deliveryId)
+      .maybeSingle();
+
+    if (delErr) {
+      console.warn("[shipping] delivery fetch error:", delErr.message);
+      return 0;
+    }
+
+    const fee = Number(del?.shipping_fee ?? 0);
+    return Number.isFinite(fee) ? fee : 0;
+  } catch (err) {
+    console.warn("[shipping] fetch error:", err);
+    return 0;
+  }
+}
+
 /* ------------------------------ Component ------------------------------ */
 export default function CustomerPaymentsPage() {
   const [loading, setLoading] = useState(true);
@@ -98,6 +134,9 @@ export default function CustomerPaymentsPage() {
   const [chequeDate, setChequeDate] = useState<string>("");
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Shipping fee per order cache
+  const [shippingFees, setShippingFees] = useState<Record<string, number>>({});
 
   /* ------------------------------- Fetch ------------------------------- */
   useEffect(() => {
@@ -153,6 +192,7 @@ export default function CustomerPaymentsPage() {
         const txList = (customers as CustomerTx[]) || [];
         setTxns(txList);
 
+        // Load payments for these customers
         const customerIds = txList.map((c) => String(c.id));
         if (customerIds.length) {
           const { data: pays, error: payErr } = await supabase
@@ -166,6 +206,27 @@ export default function CustomerPaymentsPage() {
         } else {
           setPayments([]);
         }
+
+        // Prefetch shipping fees for ALL orders we will display (completed ones matter most)
+        const allOrders = txList.flatMap((c) => c.orders ?? []);
+        const allIds = Array.from(
+          new Set(
+            allOrders
+              .filter((o) => !!o?.id)
+              .map((o) => String(o.id))
+          )
+        );
+
+        // Fetch fees in parallel (bounded)
+        const feeEntries = await Promise.all(
+          allIds.map(async (oid) => {
+            const fee = await fetchShippingFeeForOrder(oid);
+            return [oid, fee] as [string, number];
+          })
+        );
+        const feeMap: Record<string, number> = {};
+        for (const [oid, fee] of feeEntries) feeMap[oid] = fee;
+        setShippingFees(feeMap);
       } catch (e) {
         console.error(e);
         toast.error("Failed to load data.");
@@ -212,7 +273,7 @@ export default function CustomerPaymentsPage() {
   }, [txns]);
 
   /* --------------------------- Totals --------------------------- */
-  function computeFromOrder(o?: OrderRow | null) {
+  function computeFromOrder(o?: OrderRow | null, extraShippingFee = 0) {
     const items = o?.order_items ?? [];
     const subtotal = items.reduce((s, it) => {
       const unitPrice = Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
@@ -228,13 +289,24 @@ export default function CustomerPaymentsPage() {
     }, 0);
 
     const salesTax = Number(o?.sales_tax ?? 0);
-    const grandTotal =
+    const grandTotalExclFee =
       typeof o?.grand_total_with_interest === "number"
         ? Number(o!.grand_total_with_interest)
         : Math.max(subtotal - totalDiscount, 0) + salesTax;
 
     const perTerm = Number(o?.per_term_amount ?? 0);
-    return { subtotal, totalDiscount, salesTax, grandTotal, perTerm };
+    const shippingFee = Number(extraShippingFee || 0);
+    const finalGrandTotal = grandTotalExclFee + shippingFee;
+
+    return {
+      subtotal,
+      totalDiscount,
+      salesTax,
+      grandTotalExclFee,
+      shippingFee,
+      finalGrandTotal,
+      perTerm,
+    };
   }
 
   /* Txn options (attach customerId so we can match pending-by-customer fallback) */
@@ -282,26 +354,29 @@ export default function CustomerPaymentsPage() {
     return m;
   }, [paymentsByOrder]);
 
-  /* ---------- Only show: NO pending (per order or per customer) AND balance > 0 (received-only) ---------- */
+  /* ---------- Only show: NO pending (per order or per customer) AND balance > 0 (received-only), WITH SHIPPING ---------- */
   const unpaidTxnOptions = useMemo(() => {
     return txnOptions.filter(({ order, customerId }) => {
       const orderId = String(order.id);
 
-      // pending for this specific order?
       const forOrder = paymentsByOrder.get(orderId) || [];
       const hasPendingForOrder = forOrder.some(isPending);
-
-      // fallback: any pending for the same customer (covers null/missing order_id)
       const hasPendingForCustomer = !!pendingByCustomer.get(customerId);
-
       if (hasPendingForOrder || hasPendingForCustomer) return false;
 
-      const { grandTotal } = computeFromOrder(order);
+      const fee = shippingFees[orderId] ?? 0;
+      const totals = computeFromOrder(order, fee);
       const paid = receivedTotalByOrder.get(orderId) || 0;
-      const balance = Math.max(grandTotal - paid, 0);
+      const balance = Math.max(totals.finalGrandTotal - paid, 0);
       return balance > 0;
     });
-  }, [txnOptions, paymentsByOrder, pendingByCustomer, receivedTotalByOrder]);
+  }, [
+    txnOptions,
+    paymentsByOrder,
+    pendingByCustomer,
+    receivedTotalByOrder,
+    shippingFees,
+  ]);
 
   /* ---------- Keep selection valid ---------- */
   useEffect(() => {
@@ -319,11 +394,18 @@ export default function CustomerPaymentsPage() {
     if (!hit) return null;
 
     const orderId = String(hit.order.id);
-    const totals = computeFromOrder(hit.order);
+    const fee = shippingFees[orderId] ?? 0;
+    const totals = computeFromOrder(hit.order, fee);
     const paid = receivedTotalByOrder.get(orderId) || 0;
-    const balance = Math.max(totals.grandTotal - paid, 0);
-    return { code: selectedTxnCode, order: hit.order, totals, paid, balance };
-  }, [selectedTxnCode, txnOptions, receivedTotalByOrder]);
+    const balance = Math.max(totals.finalGrandTotal - paid, 0);
+    return {
+      code: selectedTxnCode,
+      order: hit.order,
+      totals,
+      paid,
+      balance,
+    };
+  }, [selectedTxnCode, txnOptions, receivedTotalByOrder, shippingFees]);
 
   const isCredit = useMemo(() => {
     const m = txns[0];
@@ -334,11 +416,12 @@ export default function CustomerPaymentsPage() {
     if (!isCredit) return 0;
     return txnOptions.reduce((sum, t) => {
       const orderId = String(t.order.id);
-      const { grandTotal } = computeFromOrder(t.order);
+      const fee = shippingFees[orderId] ?? 0;
+      const totals = computeFromOrder(t.order, fee);
       const paid = receivedTotalByOrder.get(orderId) || 0;
-      return sum + Math.max(grandTotal - paid, 0);
+      return sum + Math.max(totals.finalGrandTotal - paid, 0);
     }, 0);
-  }, [txnOptions, receivedTotalByOrder, isCredit]);
+  }, [txnOptions, receivedTotalByOrder, isCredit, shippingFees]);
 
   /* --------------------------- Form validity --------------------------- */
   const amountNum = Number(amount);
@@ -507,7 +590,7 @@ export default function CustomerPaymentsPage() {
                     </th>
                     <th className="py-2.5 px-3 text-left font-bold">Status</th>
                     <th className="py-2.5 px-3 text-right font-bold">
-                      Grand Total
+                      Grand Total (+ Shipping)
                     </th>
                     <th className="py-2.5 px-3 text-right font-bold">Paid</th>
                     <th className="py-2.5 px-3 text-right font-bold">
@@ -517,10 +600,11 @@ export default function CustomerPaymentsPage() {
                 </thead>
                 <tbody>
                   {txnOptions.map(({ code, order }, idx) => {
-                    const { grandTotal } = computeFromOrder(order);
-                    const paid =
-                      receivedTotalByOrder.get(String(order.id)) || 0;
-                    const bal = Math.max(grandTotal - paid, 0);
+                    const orderId = String(order.id);
+                    const fee = shippingFees[orderId] ?? 0;
+                    const { finalGrandTotal } = computeFromOrder(order, fee);
+                    const paid = receivedTotalByOrder.get(orderId) || 0;
+                    const bal = Math.max(finalGrandTotal - paid, 0);
 
                     return (
                       <tr
@@ -530,7 +614,7 @@ export default function CustomerPaymentsPage() {
                         <td className="py-2.5 px-3 font-mono">{code}</td>
                         <td className="py-2.5 px-3">{order.status ?? "—"}</td>
                         <td className="py-2.5 px-3 text-right font-mono">
-                          {formatCurrency(grandTotal)}
+                          {formatCurrency(finalGrandTotal)}
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono">
                           {formatCurrency(paid)}
@@ -579,21 +663,25 @@ export default function CustomerPaymentsPage() {
                 required
               >
                 <option value="">— Choose a TXN —</option>
-                {/* Hide while pending & hide when fully paid (based on received only) */}
+                {/* Hide while pending & hide when fully paid (based on received only), WITH SHIPPING */}
                 {unpaidTxnOptions.map(({ code }, i) => (
                   <option key={`${code}-${i}`} value={code}>
                     {code}
                   </option>
                 ))}
               </select>
-              {!!selectedPack && (
-                <div className="mt-1 text-xs text-gray-600">
-                  Remaining balance:{" "}
-                  <b className="text-green-700">
-                    {formatCurrency(selectedPack.balance)}
-                  </b>
-                </div>
-              )}
+{!!selectedPack && (
+  <div className="mt-2 text-sm md:text-base text-gray-700">
+    <span className="font-semibold">
+      Remaining balance (incl. shipping):
+    </span>{" "}
+    <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
+      {formatCurrency(selectedPack.balance)}
+    </span>
+  </div>
+)}
+
+
             </div>
 
             <div className="col-span-1">
@@ -826,9 +914,17 @@ export default function CustomerPaymentsPage() {
                       </td>
                     </tr>
                     <tr>
-                      <td className="font-bold py-1.5">Grand Total:</td>
+                      <td className="font-semibold py-0.5">Shipping Fee:</td>
+                      <td className="pl-2 font-mono">
+                        {formatCurrency(selectedPack.totals.shippingFee)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="font-bold py-1.5">
+                        Grand Total (Incl. Shipping):
+                      </td>
                       <td className="pl-2 font-bold text-green-700 font-mono">
-                        {formatCurrency(selectedPack.totals.grandTotal)}
+                        {formatCurrency(selectedPack.totals.finalGrandTotal)}
                       </td>
                     </tr>
                     {selectedPack.totals.perTerm > 0 && (
