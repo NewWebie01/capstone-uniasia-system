@@ -5,6 +5,7 @@ import supabase from "@/config/supabaseClient";
 import { Loader2 } from "lucide-react";
 import { DM_Sans } from "next/font/google";
 import * as XLSX from "xlsx";
+import { parseDbDate, formatPHDate, formatPHTime } from "@/lib/datetimePH";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -20,26 +21,7 @@ type Activity = {
   created_at: string;
 };
 
-function formatPHDate(dateString: string): string {
-  const d = new Date(dateString);
-  return d.toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    timeZone: "Asia/Manila",
-  });
-}
-function formatPHTime(dateString: string): string {
-  const d = new Date(dateString);
-  return d.toLocaleTimeString("en-PH", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-    timeZone: "Asia/Manila",
-  });
-}
-
-
+/* ------------------------------- UI helpers -------------------------------- */
 function accountTypeBadge(role: string | null) {
   let text = "";
   let color = "";
@@ -47,10 +29,10 @@ function accountTypeBadge(role: string | null) {
   if (!role || role.toLowerCase() === "authenticated") {
     text = "Admin";
     color = "bg-[#e0f2fe] text-blue-800 border border-blue-200";
-  } else if (role.toLowerCase() === "admin") {
+  } else if (role?.toLowerCase() === "admin") {
     text = "Admin";
     color = "bg-[#e0f2fe] text-blue-800 border border-blue-200";
-  } else if (role.toLowerCase() === "customer") {
+  } else if (role?.toLowerCase() === "customer") {
     text = "Customer";
     color = "bg-[#f0fdf4] text-green-800 border border-green-200";
   } else {
@@ -110,25 +92,22 @@ type ActionTabKey = (typeof ACTION_TABS)[number]["key"];
 const PH_OFFSET_HOURS = 8;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-/** Convert a Date (UTC) to an equivalent Date representing PH local midnight of the same PH date. */
+/** Convert a UTC Date to the UTC instant representing PH local midnight of the same PH date. */
 function startOfPHDay(dUTC: Date): Date {
   const msLocal = dUTC.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
   const dayLocal = new Date(Math.floor(msLocal / MS_PER_DAY) * MS_PER_DAY);
-  // convert back to UTC
   return new Date(dayLocal.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
 }
 function endOfPHDay(dUTC: Date): Date {
   const start = startOfPHDay(dUTC);
   return new Date(start.getTime() + MS_PER_DAY - 1);
 }
-
 function startOfPHWeek(dUTC: Date): Date {
-  // Week starts Monday
   const startDay = startOfPHDay(dUTC);
   const msLocal = startDay.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
   const local = new Date(msLocal);
   const day = local.getUTCDay(); // 0=Sun ... 6=Sat
-  const mondayDelta = (day + 6) % 7; // days since Monday
+  const mondayDelta = (day + 6) % 7;
   const localMonday = new Date(local.getTime() - mondayDelta * MS_PER_DAY);
   return new Date(localMonday.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
 }
@@ -164,12 +143,11 @@ function endOfPHYear(dUTC: Date): Date {
   const firstNextLocal = new Date(Date.UTC(local.getUTCFullYear() + 1, 0, 1));
   return new Date(firstNextLocal.getTime() - PH_OFFSET_HOURS * 3600 * 1000 - 1);
 }
-/** Build PH-local day start from `YYYY-MM-DD` (local) and return UTC Date. */
+/** PH-local midnight (YYYY-MM-DD) to UTC */
 function startOfPHDateString(yyyy_mm_dd: string): Date {
-  // interpret as PH local midnight
   const [y, m, d] = yyyy_mm_dd.split("-").map((n) => parseInt(n, 10));
-  const localMidnightUTC = new Date(Date.UTC(y, m - 1, d));
-  return new Date(localMidnightUTC.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
+  const phMidnightUtc = new Date(Date.UTC(y, m - 1, d));
+  return new Date(phMidnightUtc.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
 }
 function endOfPHDateString(yyyy_mm_dd: string): Date {
   const start = startOfPHDateString(yyyy_mm_dd);
@@ -239,7 +217,7 @@ export default function ActivityLogPage() {
   const [reauthing, setReauthing] = useState(false);
   const [reauthError, setReauthError] = useState("");
   const [lastReauthAt, setLastReauthAt] = useState<number | null>(null);
-  const REAUTH_TTL_MS = 0.5 * 60 * 1000; // 5 minutes
+  const REAUTH_TTL_MS = 0.5 * 60 * 1000; // 30 seconds
   const needsReauth = () =>
     !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
 
@@ -284,6 +262,7 @@ export default function ActivityLogPage() {
       }
     });
 
+    // Precompute PH display strings (optional)
     arr = arr.map((a) => ({
       ...a,
       date: formatPHDate(a.created_at),
@@ -307,21 +286,21 @@ export default function ActivityLogPage() {
     if (sortConfig) {
       const { key, direction } = sortConfig;
       arr.sort((a: any, b: any) => {
-        let av: any;
-        let bv: any;
         if (key === "created_at") {
-          av = new Date(a.created_at).getTime();
-          bv = new Date(b.created_at).getTime();
+          const av = parseDbDate(a.created_at).getTime();
+          const bv = parseDbDate(b.created_at).getTime();
+          const base = av < bv ? -1 : av > bv ? 1 : 0;
+          return direction === "asc" ? base : -base;
         } else {
-          av = a[key];
-          bv = b[key];
+          let av: any = a[key];
+          let bv: any = b[key];
           if (typeof av === "string") av = av.toLowerCase();
           if (typeof bv === "string") bv = bv.toLowerCase();
           if (av == null) av = "";
           if (bv == null) bv = "";
+          const base = av < bv ? -1 : av > bv ? 1 : 0;
+          return direction === "asc" ? base : -base;
         }
-        const base = av < bv ? -1 : av > bv ? 1 : 0;
-        return direction === "asc" ? base : -base;
       });
     }
 
@@ -342,7 +321,7 @@ export default function ActivityLogPage() {
   const pageStart = (currentPage - 1) * itemsPerPage;
   const paged = filtered.slice(pageStart, pageStart + itemsPerPage);
 
-  /** Resolve the UTC start/end based on selected exportChoice. */
+  /** Resolve the UTC start/end based on selected exportChoice (PH-local windows). */
   function resolveRange(): { start?: Date; end?: Date; label: string } {
     const nowUTC = new Date();
     if (exportChoice === "all") return { label: "ALL" };
@@ -379,7 +358,6 @@ export default function ActivityLogPage() {
   // ---- PASSWORD GATE ----
   async function handleExportNow() {
     setExportError("");
-    // ask for password unless recently verified
     if (needsReauth()) {
       const { data } = await supabase.auth.getUser();
       setReauthEmail(data?.user?.email || "");
@@ -393,7 +371,6 @@ export default function ActivityLogPage() {
     setReauthError("");
     setReauthing(true);
     try {
-      // verify current session email + supplied password
       const { error } = await supabase.auth.signInWithPassword({
         email: reauthEmail,
         password: reauthPassword,
@@ -411,7 +388,7 @@ export default function ActivityLogPage() {
     }
   }
 
-  // ---- ACTUAL EXPORT (unchanged UI, fixed filter) ----
+  // ---- ACTUAL EXPORT (PH window → UTC, exclusive end) ----
   async function doExportNow() {
     setExporting(true);
     try {
@@ -427,7 +404,6 @@ export default function ActivityLogPage() {
           setExporting(false);
           return;
         }
-        // FIX: exclusive upper bound to avoid cutting off same-day rows
         const endExclusive = new Date(end.getTime() + 1);
         query = query
           .gte("created_at", start.toISOString())
@@ -437,7 +413,7 @@ export default function ActivityLogPage() {
       const { data: rows, error } = await query;
       if (error) throw error;
 
-      // Log the export action (best-effort)
+      // Log the export action (let DB set created_at with default now())
       try {
         const { data } = await supabase.auth.getUser();
         const userEmail = data?.user?.email || "unknown";
@@ -459,11 +435,11 @@ export default function ActivityLogPage() {
                   }
                 : {}),
             },
-            created_at: new Date().toISOString(),
+            // created_at omitted on purpose
           },
         ]);
       } catch {
-        // ignore insert failure
+        /* ignore logging errors */
       }
 
       // Build and download workbook
@@ -506,7 +482,7 @@ export default function ActivityLogPage() {
 
   return (
     <div className={`${dmSans.className} px-4 pb-6 pt-1`}>
-      {/* Header like Returns */}
+      {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-2">
         <div>
           <h1 className="pt-1 text-3xl font-bold mb-1">Activity Log</h1>
@@ -516,7 +492,7 @@ export default function ActivityLogPage() {
         </div>
       </div>
 
-      {/* Quick chips like Returns */}
+      {/* Quick chips */}
       <div className="bg-white border rounded-2xl p-3 shadow-sm mb-3">
         <div className="flex flex-wrap gap-2">
           {ACTION_TABS.map((t) => {
@@ -538,7 +514,7 @@ export default function ActivityLogPage() {
         </div>
       </div>
 
-      {/* Filters card like Returns */}
+      {/* Filters */}
       <div className="bg-white border rounded-2xl p-4 shadow-sm mb-4">
         <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
