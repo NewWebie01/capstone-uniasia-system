@@ -290,6 +290,15 @@ export default function CustomerInventoryPage() {
     items: CartItem[];
   } | null>(null);
 
+  // Payment terms (Credit only)
+const [termsMonths, setTermsMonths] = useState<number | null>(null);
+/** Interest for the whole term, as a percentage of principal.
+ * Defaults to ~2% per month (common in B2B), editable by the customer.
+ * Example: 3 months -> 6%
+ */
+const [interestPercent, setInterestPercent] = useState<number>(0);
+
+
   // NEW: post-submit choice modal state
   const [showAfterSubmitModal, setShowAfterSubmitModal] = useState(false);
   const [lastOrderId, setLastOrderId] = useState<string | null>(null);
@@ -721,6 +730,26 @@ export default function CustomerInventoryPage() {
     }
   }, [customerInfo.customer_type]);
 
+  // When payment type switches to Credit, set default term (1) and interest (~2% per month)
+useEffect(() => {
+  if (customerInfo.payment_type === "Credit") {
+    // If no term chosen yet, default to 1 month
+    setTermsMonths((prev) => (prev == null ? 1 : prev));
+  } else {
+    // If cash, clear terms and interest
+    setTermsMonths(null);
+    setInterestPercent(0);
+  }
+}, [customerInfo.payment_type]);
+
+// Keep a simple default: ~2% per month * months (editable)
+useEffect(() => {
+  if (customerInfo.payment_type === "Credit" && termsMonths != null) {
+    setInterestPercent(termsMonths * 2); // e.g., 3 months -> 6%
+  }
+}, [termsMonths, customerInfo.payment_type]);
+
+
   /* ------------------------------- Cart flow ------------------------------- */
   const handleAddToCartClick = (item: InventoryItem) => {
     if (isOutOfStock(item)) {
@@ -848,62 +877,80 @@ export default function CustomerInventoryPage() {
     setShowCartPopup(true);
   };
 
-  /* ------------------ VALIDATION: required fields for Submit Order ------------------ */
-  const missingFields = useMemo(() => {
-    const missing: string[] = [];
+/* ------------------ VALIDATION: required fields for Submit Order ------------------ */
+const missingFields = useMemo(() => {
+  const missing: string[] = [];
 
-    if (!customerInfo.name || !customerInfo.name.trim()) {
-      missing.push("Customer Name");
-    }
-    if (!customerInfo.email || !customerInfo.email.includes("@")) {
-      missing.push("Email");
-    }
-    // REQUIRED: Contact Person
-    if (!customerInfo.contact_person || !customerInfo.contact_person.trim()) {
-      missing.push("Contact Person");
-    }
-    // Phone stays read-only but DB requires it — if empty, block submit.
-    if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) {
-      missing.push("Phone");
-    }
-    if (!houseStreet || !houseStreet.trim()) {
-      missing.push("House & Street");
-    }
-    if (!regionCode) {
-      missing.push("Region");
-    }
-    // Province required only when not NCR
-    if (!isNCR && !provinceCode) {
-      missing.push("Province");
-    }
-    if (!cityCode) {
-      missing.push("City / Municipality");
-    }
-    if (!barangayCode) {
-      missing.push("Barangay");
-    }
-    if (!cart || cart.length === 0) {
-      missing.push("Cart (add at least one item)");
-    }
+  if (!customerInfo.name || !customerInfo.name.trim()) {
+    missing.push("Customer Name");
+  }
+  if (!customerInfo.email || !customerInfo.email.includes("@")) {
+    missing.push("Email");
+  }
+  // REQUIRED: Contact Person
+  if (!customerInfo.contact_person || !customerInfo.contact_person.trim()) {
+    missing.push("Contact Person");
+  }
+  // Phone stays read-only but DB requires it — if empty, block submit.
+  if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) {
+    missing.push("Phone");
+  }
+  if (!houseStreet || !houseStreet.trim()) {
+    missing.push("House & Street");
+  }
+  if (!regionCode) {
+    missing.push("Region");
+  }
+  // Province required only when not NCR
+  if (!isNCR && !provinceCode) {
+    missing.push("Province");
+  }
+  if (!cityCode) {
+    missing.push("City / Municipality");
+  }
+  if (!barangayCode) {
+    missing.push("Barangay");
+  }
+  if (!cart || cart.length === 0) {
+    missing.push("Cart (add at least one item)");
+  }
 
-    return missing;
-  }, [
-    customerInfo.name,
-    customerInfo.email,
-    customerInfo.contact_person,
-    customerInfo.phone,
-    houseStreet,
-    regionCode,
-    provinceCode,
-    cityCode,
-    barangayCode,
-    cart,
-    isNCR,
-  ]);
+  // --- Credit-only validation ---
+  if (customerInfo.payment_type === "Credit") {
+    if (!termsMonths) {
+      missing.push("Payment Terms (months)");
+    }
+    if (interestPercent < 0) {
+      missing.push("Interest % must be 0 or higher");
+    }
+  }
 
-  const isConfirmOrderEnabled = missingFields.length === 0;
+  return missing;
+}, [
+  customerInfo.name,
+  customerInfo.email,
+  customerInfo.contact_person,
+  customerInfo.phone,
+  customerInfo.payment_type, // ✅ add this
+  houseStreet,
+  regionCode,
+  provinceCode,
+  cityCode,
+  barangayCode,
+  cart,
+  isNCR,
+  // ensure recompute when terms or interest change
+  termsMonths,
+  interestPercent,
+]);
 
-  /* ------------------ end validation ------------------ */
+/* ------------------ end validation ------------------ */
+
+// Allow Submit when nothing is missing
+const isConfirmOrderEnabled = missingFields.length === 0;
+
+
+
 
   const handleOpenFinalModal = () => {
     // enforce validation client-side as well
@@ -987,18 +1034,24 @@ export default function CustomerInventoryPage() {
       const customerId = cust.id as string;
       const totalAmount = cartSum(items);
 
-      const { data: ord, error: ordErr } = await supabase
-        .from("orders")
-        .insert([
-          {
-            customer_id: customerId,
-            total_amount: totalAmount,
-            status: "pending",
-            date_created: phTime,
-          },
-        ])
-        .select()
-        .single();
+const orderPayload: any = {
+  customer_id: customerId,
+  total_amount: totalAmount,
+  status: "pending",
+  date_created: phTime,
+};
+
+if (customer.payment_type === "Credit") {
+  orderPayload.terms = `Net ${termsMonths ?? 1} Monthly`;
+  orderPayload.interest_percent = Math.max(0, interestPercent);
+}
+
+const { data: ord, error: ordErr } = await supabase
+  .from("orders")
+  .insert([orderPayload])
+  .select()
+  .single();
+
       if (ordErr) throw ordErr;
 
       const orderId = ord.id as string;
@@ -1566,297 +1619,349 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* First Confirm Order Modal (name/email are READ-ONLY) */}
-      {showCartPopup && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
-          >
-            <h2 className="text-2xl font-semibold tracking-tight shrink-0">
-              Confirm Order
-            </h2>
+{/* First Confirm Order Modal (name/email are READ-ONLY) */}
+{showCartPopup && (
+  <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <motion.div
+      initial={{ opacity: 0, y: 16, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: "spring", stiffness: 260, damping: 22 }}
+      className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
+    >
+      <h2 className="text-2xl font-semibold tracking-tight shrink-0">
+        Confirm Order
+      </h2>
 
-            <div className="flex-1 overflow-auto mt-4 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* READ-ONLY name & email */}
-                <input
-                  placeholder="Customer Name"
-                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-                  value={customerInfo.name}
-                  readOnly
-                />
-                <input
-                  type="email"
-                  placeholder="Email"
-                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-                  value={customerInfo.email}
-                  readOnly
-                />
-                {/* Phone (auto-filled & read-only). Highlight if missing */}
-                <input
-                  type="tel"
-                  placeholder="Phone (11 digits)"
-                  className={`border px-3 py-2 rounded bg-gray-100 cursor-not-allowed ${
-                    !customerInfo.phone ? "border-red-400" : ""
-                  }`}
-                  value={customerInfo.phone}
-                  readOnly
-                />
+      <div className="flex-1 overflow-auto mt-4 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* READ-ONLY name & email */}
+          <input
+            placeholder="Customer Name"
+            className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+            value={customerInfo.name}
+            readOnly
+          />
+          <input
+            type="email"
+            placeholder="Email"
+            className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+            value={customerInfo.email}
+            readOnly
+          />
+          {/* Phone (read-only) */}
+          <input
+            type="tel"
+            placeholder="Phone (11 digits)"
+            className={`border px-3 py-2 rounded bg-gray-100 cursor-not-allowed ${
+              !customerInfo.phone ? "border-red-400" : ""
+            }`}
+            value={customerInfo.phone}
+            readOnly
+          />
 
-                {/* Contact Person (editable, REQUIRED) */}
-                <input
-                  placeholder="Contact Person (required)"
-                  className={`border px-3 py-2 rounded ${
-                    !customerInfo.contact_person?.trim()
-                      ? "border-red-400 focus:ring-red-500"
-                      : ""
-                  }`}
-                  value={customerInfo.contact_person}
-                  onChange={(e) =>
-                    setCustomerInfo({
-                      ...customerInfo,
-                      contact_person: e.target.value,
-                    })
-                  }
-                />
+          {/* Contact Person (editable, REQUIRED) */}
+          <input
+            placeholder="Contact Person (required)"
+            className={`border px-3 py-2 rounded ${
+              !customerInfo.contact_person?.trim()
+                ? "border-red-400 focus:ring-red-500"
+                : ""
+            }`}
+            value={customerInfo.contact_person}
+            onChange={(e) =>
+              setCustomerInfo({
+                ...customerInfo,
+                contact_person: e.target.value,
+              })
+            }
+          />
 
-                {/* Address pickers */}
-                <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-sm mb-1">Region</label>
-                    <select
-                      className="border px-3 py-2 rounded w-full"
-                      value={regionCode}
-                      onChange={(e) => setRegionCode(e.target.value)}
-                    >
-                      <option value="">Select region</option>
-                      {regions.map((r) => (
-                        <option key={r.code} value={r.code}>
-                          {r.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1">Province</label>
-                    <select
-                      className="border px-3 py-2 rounded w-full"
-                      value={provinceCode}
-                      onChange={(e) => setProvinceCode(e.target.value)}
-                      disabled={!regionCode || isNCR}
-                    >
-                      <option value="">
-                        {!regionCode
-                          ? "Select region first"
-                          : isNCR
-                          ? "NCR has no provinces"
-                          : "Select province"}
-                      </option>
-                      {!isNCR &&
-                        provinces.map((p) => (
-                          <option key={p.code} value={p.code}>
-                            {p.name}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1">
-                      City / Municipality
-                    </label>
-                    <select
-                      className="border px-3 py-2 rounded w-full"
-                      value={cityCode}
-                      onChange={(e) => setCityCode(e.target.value)}
-                      disabled={isNCR ? !regionCode : !provinceCode}
-                    >
-                      <option value="">
-                        {isNCR
-                          ? regionCode
-                            ? "Select city/municipality"
-                            : "Select region first"
-                          : provinceCode
-                          ? "Select city/municipality"
-                          : "Select province first"}
-                      </option>
-                      {cities.map((c) => (
-                        <option key={c.code} value={c.code}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1">Barangay</label>
-                    <select
-                      className="border px-3 py-2 rounded w-full"
-                      value={barangayCode}
-                      onChange={(e) => setBarangayCode(e.target.value)}
-                      disabled={!cityCode}
-                    >
-                      <option value="">
-                        {cityCode ? "Select barangay" : "Select city first"}
-                      </option>
-                      {barangays.map((b) => (
-                        <option key={b.code} value={b.code}>
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <input
-                  placeholder="House Number & Street Name"
-                  className="border px-3 py-2 rounded col-span-2"
-                  value={houseStreet}
-                  onChange={(e) => setHouseStreet(e.target.value)}
-                />
-                <input
-                  placeholder="Landmark"
-                  className="border px-3 py-2 rounded col-span-2"
-                  value={customerInfo.landmark || ""}
-                  onChange={(e) =>
-                    setCustomerInfo({
-                      ...customerInfo,
-                      landmark: e.target.value,
-                    })
-                  }
-                />
-                <input
-                  className="border px-3 py-2 rounded col-span-2 bg-gray-50"
-                  value={customerInfo.address || ""}
-                  placeholder="Address will be set from House/St. + Barangay/City/Province/Region"
-                  readOnly
-                />
-
-                {/* Customer Type (derived) */}
-                <div className="col-span-2">
-                  <label className="block mb-1">Customer Type</label>
-                  <input
-                    className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
-                    value={customerInfo.customer_type || ""}
-                    readOnly
-                  />
-                  {orderHistoryCount !== null && (
-                    <div className="text-xs text-gray-500 mt-1">
-                      Past orders under this email: {orderHistoryCount}
-                    </div>
-                  )}
-                </div>
-
-                {/* Payment Type */}
-                <div className="col-span-2">
-                  <label className="block mb-1">Payment Type</label>
-                  <div className="flex gap-4">
-                    {(customerInfo.customer_type === "Existing Customer"
-                      ? ["Credit"]
-                      : ["Cash"]
-                    ).map((type) => (
-                      <label key={type} className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="payment_type"
-                          value={type}
-                          checked={customerInfo.payment_type === type}
-                          onChange={(e) =>
-                            setCustomerInfo({
-                              ...customerInfo,
-                              payment_type: e.target.value as "Cash" | "Credit",
-                            })
-                          }
-                        />
-                        {type}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Items table */}
-              <div className="border rounded-xl bg-gray-100 overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-200 sticky top-0 z-10">
-                    <tr>
-                      <th className="py-2 px-3 text-left">Product</th>
-                      <th className="py-2 px-3 text-left">Category</th>
-                      <th className="py-2 px-3 text-left">Subcategory</th>
-                      <th className="py-2 px-3 text-left">Unit Price</th>
-                      <th className="py-2 px-3 text-left">Qty</th>
-                      <th className="py-2 px-3 text-left">Status</th>
-                      <th className="py-2 px-3 text-left">Line Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cart.map((ci) => (
-                      <tr key={ci.item.id} className="border-b">
-                        <td className="py-2 px-3">{ci.item.product_name}</td>
-                        <td className="py-2 px-3">{ci.item.category}</td>
-                        <td className="py-2 px-3">{ci.item.subcategory}</td>
-                        <td className="py-2 px-3">
-                          {formatPeso(ci.item.unit_price)}
-                        </td>
-                        <td className="py-2 px-3">{ci.quantity}</td>
-                        <td className="py-2 px-3">{ci.item.status}</td>
-                        <td className="py-2 px-3 font-medium">
-                          {formatPeso(lineTotal(ci))}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                {/* Estimated total + note */}
-                <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
-                  <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount
-                    during order processing.
-                  </div>
-                  <div className="text-sm">
-                    <span className="mr-2 text-gray-600">Estimated Total:</span>
-                    <span className="font-semibold">
-                      {formatPeso(cartSum(cart))}
-                    </span>
-                  </div>
-                </div>
-              </div>
+          {/* Address pickers */}
+          <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-sm mb-1">Region</label>
+              <select
+                className="border px-3 py-2 rounded w-full"
+                value={regionCode}
+                onChange={(e) => setRegionCode(e.target.value)}
+              >
+                <option value="">Select region</option>
+                {regions.map((r) => (
+                  <option key={r.code} value={r.code}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
             </div>
+            <div>
+              <label className="block text-sm mb-1">Province</label>
+              <select
+                className="border px-3 py-2 rounded w-full"
+                value={provinceCode}
+                onChange={(e) => setProvinceCode(e.target.value)}
+                disabled={!regionCode || isNCR}
+              >
+                <option value="">
+                  {!regionCode
+                    ? "Select region first"
+                    : isNCR
+                    ? "NCR has no provinces"
+                    : "Select province"}
+                </option>
+                {!isNCR &&
+                  provinces.map((p) => (
+                    <option key={p.code} value={p.code}>
+                      {p.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm mb-1">City / Municipality</label>
+              <select
+                className="border px-3 py-2 rounded w-full"
+                value={cityCode}
+                onChange={(e) => setCityCode(e.target.value)}
+                disabled={isNCR ? !regionCode : !provinceCode}
+              >
+                <option value="">
+                  {isNCR
+                    ? regionCode
+                      ? "Select city/municipality"
+                      : "Select region first"
+                    : provinceCode
+                    ? "Select city/municipality"
+                    : "Select province first"}
+                </option>
+                {cities.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Barangay</label>
+              <select
+                className="border px-3 py-2 rounded w-full"
+                value={barangayCode}
+                onChange={(e) => setBarangayCode(e.target.value)}
+                disabled={!cityCode}
+              >
+                <option value="">
+                  {cityCode ? "Select barangay" : "Select city first"}
+                </option>
+                {barangays.map((b) => (
+                  <option key={b.code} value={b.code}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-            {/* Show missing fields (if any) */}
-            {missingFields.length > 0 && (
-              <div className="mt-3 text-sm text-red-600">
-                <strong>Required:</strong>{" "}
-                {missingFields.slice(0, 5).join(", ")}
-                {missingFields.length > 5 ? "..." : ""}
+          <input
+            placeholder="House Number & Street Name"
+            className="border px-3 py-2 rounded col-span-2"
+            value={houseStreet}
+            onChange={(e) => setHouseStreet(e.target.value)}
+          />
+          <input
+            placeholder="Landmark"
+            className="border px-3 py-2 rounded col-span-2"
+            value={customerInfo.landmark || ""}
+            onChange={(e) =>
+              setCustomerInfo({ ...customerInfo, landmark: e.target.value })
+            }
+          />
+          <input
+            className="border px-3 py-2 rounded col-span-2 bg-gray-50"
+            value={customerInfo.address || ""}
+            placeholder="Address will be set from House/St. + Barangay/City/Province/Region"
+            readOnly
+          />
+
+          {/* Customer Type (derived) */}
+          <div className="col-span-2">
+            <label className="block mb-1">Customer Type</label>
+            <input
+              className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
+              value={customerInfo.customer_type || ""}
+              readOnly
+            />
+            {orderHistoryCount !== null && (
+              <div className="text-xs text-gray-500 mt-1">
+                Past orders under this email: {orderHistoryCount}
               </div>
             )}
+          </div>
 
-            <div className="shrink-0 flex justify-end gap-2 mt-4">
-              <button
-                onClick={() => setShowCartPopup(false)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleOpenFinalModal}
-                className={`px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 active:translate-y-px transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2`}
-                disabled={!isConfirmOrderEnabled}
-                title={
-                  !isConfirmOrderEnabled
-                    ? "Please complete required fields before submitting"
-                    : "Submit order"
-                }
-              >
-                Submit Order
-              </button>
+          {/* Payment Type */}
+          <div className="col-span-2">
+            <label className="block mb-1">Payment Type</label>
+            <div className="flex gap-4">
+              {(customerInfo.customer_type === "Existing Customer"
+                ? ["Credit"]
+                : ["Cash"]
+              ).map((type) => (
+                <label key={type} className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="payment_type"
+                    value={type}
+                    checked={customerInfo.payment_type === type}
+                    onChange={(e) =>
+                      setCustomerInfo({
+                        ...customerInfo,
+                        payment_type: e.target.value as "Cash" | "Credit",
+                      })
+                    }
+                  />
+                  {type}
+                </label>
+              ))}
             </div>
-          </motion.div>
+          </div>
+
+          {/* Payment Terms (Credit only) */}
+          {customerInfo.payment_type === "Credit" && (
+            <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block mb-1">Payment Terms</label>
+                <select
+                  className={`border px-3 py-2 rounded w-full ${
+                    !termsMonths ? "border-red-400" : ""
+                  }`}
+                  value={termsMonths ?? ""}
+                  onChange={(e) =>
+                    setTermsMonths(Number(e.target.value) || null)
+                  }
+                >
+                  <option value="">Select term</option>
+                  <option value={1}>1 month (Net 1)</option>
+                  <option value={3}>3 months (Net 3)</option>
+                  <option value={6}>6 months (Net 6)</option>
+                  <option value={12}>12 months (Net 12)</option>
+                </select>
+                <div className="text-xs text-gray-500 mt-1">
+                  Only available for Existing Customers with Credit.
+                </div>
+              </div>
+
+<div>
+  <label className="block mb-1">Interest %</label>
+  <input
+    type="number"
+    className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
+    value={interestPercent}
+    readOnly
+    disabled
+    title="Locked at 2% per month × number of months"
+  />
+  <div className="text-xs text-gray-500 mt-1">
+    Computed as 2% × months (e.g., 3 months → 6%).
+  </div>
+</div>
+
+            </div>
+          )}
+        </div>
+
+        {/* Items table */}
+        <div className="border rounded-xl bg-gray-100 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-200 sticky top-0 z-10">
+              <tr>
+                <th className="py-2 px-3 text-left">Product</th>
+                <th className="py-2 px-3 text-left">Category</th>
+                <th className="py-2 px-3 text-left">Subcategory</th>
+                <th className="py-2 px-3 text-left">Unit Price</th>
+                <th className="py-2 px-3 text-left">Qty</th>
+                <th className="py-2 px-3 text-left">Status</th>
+                <th className="py-2 px-3 text-left">Line Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cart.map((ci) => (
+                <tr key={ci.item.id} className="border-b">
+                  <td className="py-2 px-3">{ci.item.product_name}</td>
+                  <td className="py-2 px-3">{ci.item.category}</td>
+                  <td className="py-2 px-3">{ci.item.subcategory}</td>
+                  <td className="py-2 px-3">
+                    {formatPeso(ci.item.unit_price)}
+                  </td>
+                  <td className="py-2 px-3">{ci.quantity}</td>
+                  <td className="py-2 px-3">{ci.item.status}</td>
+                  <td className="py-2 px-3 font-medium">
+                    {formatPeso(lineTotal(ci))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* Estimated total + note */}
+          <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
+            <div className="text-xs text-gray-500">
+              * Final price may change if an admin applies a discount during
+              order processing.
+            </div>
+            <div className="text-right text-sm">
+              <div>
+                <span className="mr-2 text-gray-600">Estimated Total:</span>
+                <span className="font-semibold">
+                  {formatPeso(cartSum(cart))}
+                </span>
+              </div>
+              {customerInfo.payment_type === "Credit" && (
+                <div className="mt-1">
+                  <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
+                  <span className="font-semibold">
+                    {formatPeso(
+                      cartSum(cart) *
+                        (1 + Math.max(0, interestPercent) / 100)
+                    )}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Show missing fields (if any) */}
+      {missingFields.length > 0 && (
+        <div className="mt-3 text-sm text-red-600">
+          <strong>Required:</strong>{" "}
+          {missingFields.slice(0, 5).join(", ")}
+          {missingFields.length > 5 ? "..." : ""}
         </div>
       )}
+
+      <div className="shrink-0 flex justify-end gap-2 mt-4">
+        <button
+          onClick={() => setShowCartPopup(false)}
+          className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleOpenFinalModal}
+          className="px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 active:translate-y-px transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+          disabled={!isConfirmOrderEnabled}
+          title={
+            !isConfirmOrderEnabled
+              ? "Please complete required fields before submitting"
+              : "Submit order"
+          }
+        >
+          Submit Order
+        </button>
+      </div>
+    </motion.div>
+  </div>
+)}
+
 
       {/* Final Confirmation Modal */}
       {showFinalPopup && finalOrderDetails && (
@@ -1890,6 +1995,24 @@ export default function CustomerInventoryPage() {
                   <div className="font-medium">{formatPH()}</div>
                 </div>
               </div>
+
+              {finalOrderDetails.customer.payment_type === "Credit" && (
+  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+    <div>
+      <div className="text-xs text-gray-500">Payment Type</div>
+      <div className="font-medium">Credit</div>
+    </div>
+    <div>
+      <div className="text-xs text-gray-500">Terms</div>
+      <div className="font-medium">{termsMonths ?? "-"} month(s)</div>
+    </div>
+    <div>
+      <div className="text-xs text-gray-500">Interest (Whole Term)</div>
+      <div className="font-medium">{interestPercent}%</div>
+    </div>
+  </div>
+)}
+
 
               <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                 <div>
@@ -1953,18 +2076,31 @@ export default function CustomerInventoryPage() {
                 </table>
 
                 {/* Estimated total + note */}
-                <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
-                  <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount
-                    during order processing.
-                  </div>
-                  <div className="text-sm">
-                    <span className="mr-2 text-gray-600">Estimated Total:</span>
-                    <span className="font-semibold">
-                      {formatPeso(cartSum(finalOrderDetails.items))}
-                    </span>
-                  </div>
-                </div>
+<div className="flex items-center justify-between px-3 py-2 bg-white border-t">
+  <div className="text-xs text-gray-500">
+    * Final price may change if an admin applies a discount during order processing.
+  </div>
+  <div className="text-right text-sm">
+    <div>
+      <span className="mr-2 text-gray-600">Estimated Total:</span>
+      <span className="font-semibold">
+        {formatPeso(cartSum(finalOrderDetails.items))}
+      </span>
+    </div>
+    {finalOrderDetails.customer.payment_type === "Credit" && (
+      <div className="mt-1">
+        <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
+        <span className="font-semibold">
+          {formatPeso(
+            cartSum(finalOrderDetails.items) *
+              (1 + Math.max(0, interestPercent) / 100)
+          )}
+        </span>
+      </div>
+    )}
+  </div>
+</div>
+
               </div>
             </div>
 

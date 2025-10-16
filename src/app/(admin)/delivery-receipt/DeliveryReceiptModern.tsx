@@ -29,7 +29,7 @@ export type CustomerInfo = {
 type DeliveryReceiptModernProps = {
   customer: CustomerInfo;
   initialItems: InvoiceItem[];
-  setItems?: React.Dispatch<React.SetStateAction<InvoiceItem[] | null>>; // for non-edit mode parent update
+  setItems?: React.Dispatch<React.SetStateAction<InvoiceItem[] | null>>;
   initialDate?: string | null;
   terms?: string | null;
   salesman?: string | null;
@@ -38,15 +38,18 @@ type DeliveryReceiptModernProps = {
     salesTax?: number;
     grandTotalWithInterest?: number;
     perTermAmount?: number;
+    shippingFee?: number; // <-- NEW: not taxed
   };
   txn?: string;
   status?: string | null;
 
-  // These are now optional, for parent-controlled edit state
+  // Optional parent-controlled edit state
   editMode?: boolean;
   savingAll?: boolean;
   editedRemarks?: Record<string, string>;
-  setEditedRemarks?: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  setEditedRemarks?: React.Dispatch<
+    React.SetStateAction<Record<string, string>>
+  >;
 };
 
 export default function DeliveryReceiptModern({
@@ -65,9 +68,11 @@ export default function DeliveryReceiptModern({
   editedRemarks: editedRemarksProp,
   setEditedRemarks: setEditedRemarksProp,
 }: DeliveryReceiptModernProps) {
-  // If parent controls state, use those; else, fallback to own local state
+  // Internal fallbacks when parent doesn't control
   const [editModeLocal, setEditModeLocal] = useState(false);
-  const [editedRemarksLocal, setEditedRemarksLocal] = useState<Record<string, string>>({});
+  const [editedRemarksLocal, setEditedRemarksLocal] = useState<
+    Record<string, string>
+  >({});
   const [savingAllLocal, setSavingAllLocal] = useState(false);
 
   const editMode = editModeProp ?? editModeLocal;
@@ -75,32 +80,32 @@ export default function DeliveryReceiptModern({
   const editedRemarks = editedRemarksProp ?? editedRemarksLocal;
   const setEditedRemarks = setEditedRemarksProp ?? setEditedRemarksLocal;
 
-  // Default remarks logic
   const getDefaultRemarks = (item: InvoiceItem) =>
-  item.remarks ? item.remarks : "";
-  // Handle edit mode toggle
+    item.remarks ? item.remarks : "";
+
   function startEdit() {
     const remap: Record<string, string> = {};
     (initialItems || []).forEach(
       (it) => (remap[it.id] = it.remarks ?? getDefaultRemarks(it))
     );
     setEditedRemarks(remap);
-    if (!editModeProp) setEditModeLocal(true); // only use if not controlled
+    if (!editModeProp) setEditModeLocal(true);
   }
 
-  // Save all edited remarks (parent may provide handler)
   async function saveAllRemarks() {
-    if (!setItems) return;
-    if (!editedRemarks) return;
-    if (!Object.keys(editedRemarks).length) return;
-    if (!editMode) return;
+    if (
+      !setItems ||
+      !editedRemarks ||
+      !Object.keys(editedRemarks).length ||
+      !editMode
+    )
+      return;
     setSavingAllLocal(true);
     await Promise.all(
       Object.entries(editedRemarks).map(([id, remark]) =>
         supabase.from("order_items").update({ remarks: remark }).eq("id", id)
       )
     );
-    // Update parent state to force rerender (if setItems provided)
     setItems((prev) =>
       prev
         ? prev.map((it) =>
@@ -110,12 +115,12 @@ export default function DeliveryReceiptModern({
           )
         : prev
     );
-    if (!editModeProp) setEditModeLocal(false); // only reset if not controlled
+    if (!editModeProp) setEditModeLocal(false);
     setSavingAllLocal(false);
     toast.success("Saved!");
   }
 
-  // Table calculations
+  // --- Calculations ---
   const rows = initialItems || [];
   const inStockRows = rows.filter((i) => i.inStock !== false);
 
@@ -125,22 +130,31 @@ export default function DeliveryReceiptModern({
     return s + (line * (i.discount || 0)) / 100;
   }, 0);
   const afterDiscount = subtotal - totalDiscount;
+
   const TAX_RATE = 0.12;
   const computedSalesTax = afterDiscount * TAX_RATE;
+  const shippingFee = Number(totals?.shippingFee ?? 0); // <-- not taxed
 
   const salesTaxOut =
     typeof totals?.salesTax === "number" ? totals!.salesTax : computedSalesTax;
+
   const isCredit = (terms || "").toLowerCase().includes("net");
 
+  // Base grand total (before shipping)
   const computedGrandTotal = afterDiscount + salesTaxOut;
   const grandTotalOut =
-    isCredit && typeof totals?.grandTotalWithInterest === "number" && totals.grandTotalWithInterest > 0
+    isCredit &&
+    typeof totals?.grandTotalWithInterest === "number" &&
+    totals.grandTotalWithInterest > 0
       ? totals.grandTotalWithInterest
       : computedGrandTotal;
+
+  // Final amount due = grand total (incl. VAT/interest) + shipping fee (not taxed)
+  const finalAmountDue = grandTotalOut + shippingFee;
+
   const perTermOut =
     typeof totals?.perTermAmount === "number" ? totals!.perTermAmount : 0;
 
-  // INTEREST calculation
   const interestAmount =
     isCredit && typeof totals?.grandTotalWithInterest === "number"
       ? totals.grandTotalWithInterest - (afterDiscount + salesTaxOut)
@@ -150,7 +164,7 @@ export default function DeliveryReceiptModern({
       ? (interestAmount / (afterDiscount + salesTaxOut)) * 100
       : 0;
 
-  // Currency formatting helper
+  // Currency format
   function formatCurrency(n: number) {
     return n.toLocaleString("en-PH", {
       style: "currency",
@@ -164,11 +178,11 @@ export default function DeliveryReceiptModern({
       {/* Hide all .no-print elements in PDF */}
       <style>{`
         @media print {
-          .no-print {
-            display: none !important;
-          }
+          .no-print { display: none !important; }
         }
       `}</style>
+
+      {/* Header */}
       <div className="relative mb-10">
         <div className="flex flex-col items-center justify-center text-center">
           <h2 className="text-4xl font-extrabold tracking-tight text-neutral-900 mb-1 -mt-3">
@@ -182,6 +196,7 @@ export default function DeliveryReceiptModern({
           </div>
         </div>
       </div>
+
       {/* Details */}
       <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs mb-4 border border-neutral-300 rounded-lg p-3">
         <div>
@@ -233,6 +248,7 @@ export default function DeliveryReceiptModern({
           )}
         </div>
       </div>
+
       {/* Items */}
       <div className="border border-neutral-300 rounded-lg overflow-x-auto mt-2 mb-2">
         <table className="min-w-full text-xs align-middle">
@@ -241,13 +257,27 @@ export default function DeliveryReceiptModern({
               className="text-black uppercase tracking-wider text-[11px]"
               style={{ background: "#ffba20" }}
             >
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">QTY</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">ITEM DESCRIPTION</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">REMARKS</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT PRICE</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">DISCOUNT/ADD (%)</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">AMOUNT</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                QTY
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                UNIT
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                ITEM DESCRIPTION
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                REMARKS
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                UNIT PRICE
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                DISCOUNT/ADD (%)
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                AMOUNT
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -268,38 +298,48 @@ export default function DeliveryReceiptModern({
                   key={item.id}
                   className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
                 >
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.qty}</td>
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.unit}</td>
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
+                    {item.qty}
+                  </td>
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
+                    {item.unit}
+                  </td>
                   <td className="px-2.5 py-1.5 text-center align-middle">
-  <span className="font-semibold">{item.description}</span>
-</td>
+                    <span className="font-semibold">{item.description}</span>
+                  </td>
 
-                  {/* REMARKS: Editable if in editMode, plain text otherwise */}
-                 <td className="px-2.5 py-1.5 text-center align-middle">
-  {editMode ? (
-    <input
-      type="text"
-      value={editedRemarks[item.id] ?? ""}
-      onChange={e =>
-        setEditedRemarks(r => ({
-          ...r,
-          [item.id]: e.target.value,
-        }))
-      }
-      className="border px-1 py-0.5 rounded text-xs w-32"
-      disabled={savingAll}
-    />
-  ) : (
-    item.remarks || ""
-  )}
-</td>
+                  {/* Remarks (editable in edit mode) */}
+                  <td className="px-2.5 py-1.5 text-center align-middle">
+                    {editMode ? (
+                      <input
+                        type="text"
+                        value={editedRemarks[item.id] ?? ""}
+                        onChange={(e) =>
+                          setEditedRemarks((r) => ({
+                            ...r,
+                            [item.id]: e.target.value,
+                          }))
+                        }
+                        className="border px-1 py-0.5 rounded text-xs w-32"
+                        disabled={savingAll}
+                      />
+                    ) : (
+                      displayRemark
+                    )}
+                  </td>
 
-                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">{formatCurrency(item.unitPrice)}</td>
                   <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
-                    {item.discount && item.discount !== 0 ? `${item.discount}%` : ""}
+                    {formatCurrency(item.unitPrice)}
+                  </td>
+                  <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
+                    {item.discount && item.discount !== 0
+                      ? `${item.discount}%`
+                      : ""}
                   </td>
                   <td className="px-2.5 py-1.5 text-center font-mono font-bold align-middle whitespace-nowrap">
-                    {item.inStock === false ? formatCurrency(0) : formatCurrency(lineAfter)}
+                    {item.inStock === false
+                      ? formatCurrency(0)
+                      : formatCurrency(lineAfter)}
                   </td>
                 </tr>
               );
@@ -307,16 +347,22 @@ export default function DeliveryReceiptModern({
           </tbody>
         </table>
       </div>
+
       {/* Notes + Summary */}
       <div className="flex flex-row gap-4 mt-5 print:gap-2">
         <div className="w-2/3 text-xs pr-4">
           <b>NOTE:</b>
           <ul className="list-decimal ml-6 space-y-0.5 mt-1">
-            <li>All goods are checked in good condition and complete after received and signed.</li>
+            <li>
+              All goods are checked in good condition and complete after
+              received and signed.
+            </li>
             <li>Cash advances to salesman not allowed.</li>
             <li>All checks payable to By–Grace Trading only.</li>
           </ul>
         </div>
+
+        {/* Summary panel */}
         <div className="flex flex-col items-end text-xs mt-1 w-1/3">
           <table className="text-right w-full">
             <tbody>
@@ -327,9 +373,7 @@ export default function DeliveryReceiptModern({
                 <td className="pl-2 font-mono">{formatCurrency(subtotal)}</td>
               </tr>
               <tr>
-                <td className="font-semibold py-0.5">
-                  Discount
-                </td>
+                <td className="font-semibold py-0.5">Discount</td>
                 <td className="pl-2 font-mono text-red-600 font-bold">
                   -{formatCurrency(totalDiscount)}
                 </td>
@@ -343,7 +387,9 @@ export default function DeliveryReceiptModern({
               <tr>
                 <td className="font-semibold py-0.5">
                   Interest
-                  {interestPercent > 0 ? ` (${interestPercent.toFixed(2)}%)` : ""}
+                  {interestPercent > 0
+                    ? ` (${interestPercent.toFixed(2)}%)`
+                    : ""}
                 </td>
                 <td className="pl-2 font-mono text-blue-600 font-bold">
                   {interestAmount > 0 ? formatCurrency(interestAmount) : "—"}
@@ -355,6 +401,15 @@ export default function DeliveryReceiptModern({
                   {formatCurrency(grandTotalOut)}
                 </td>
               </tr>
+
+              {/* NEW: Shipping fee row (NOT taxed) */}
+              <tr>
+                <td className="font-semibold py-0.5">Shipping Fee</td>
+                <td className="pl-2 font-mono">
+                  {formatCurrency(shippingFee)}
+                </td>
+              </tr>
+
               {perTermOut > 0 && (
                 <tr>
                   <td className="font-semibold py-0.5">Per Term:</td>
@@ -363,11 +418,22 @@ export default function DeliveryReceiptModern({
                   </td>
                 </tr>
               )}
+
+              {/* Final amount due = grand total (incl VAT/interest) + shipping fee */}
+              <tr>
+                <td className="font-extrabold py-1.5 text-base">
+                  Total Amount Due
+                </td>
+                <td className="pl-2 font-extrabold text-base text-green-800 font-mono">
+                  {formatCurrency(finalAmountDue)}
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
       </div>
-      {/* Edit/Save button (never visible in print/pdf, only if using internal state) */}
+
+      {/* Edit/Save buttons (hidden in print) */}
       {setItems && !editModeProp && (
         <div className="flex justify-end mt-5 no-print">
           {!editMode ? (
