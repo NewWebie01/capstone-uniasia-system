@@ -4,14 +4,22 @@ export function generateReceiptHtml(order: any) {
   const items = order.items || order.order_items || [];
   const customer = order.customer || order.customers || {};
   const totalAmount = items.reduce(
-    (sum: number, item: any) => sum + ((item.item?.unit_price ?? item.unit_price ?? item.price ?? 0) * (item.quantity ?? 1)),
+    (sum: number, item: any) =>
+      sum +
+      (item.item?.unit_price ?? item.unit_price ?? item.price ?? 0) *
+        (item.quantity ?? 1),
     0
   );
-  const date = order.date || order.date_created || new Date().toISOString().slice(0, 10);
+  const date =
+    order.date || order.date_created || new Date().toISOString().slice(0, 10);
 
   const formatPeso = (n: number) =>
-    (Number(n) || 0).toLocaleString("en-PH", { style: "currency", currency: "PHP", minimumFractionDigits: 2 });
-
+    (Number(n) || 0).toLocaleString("en-PH", {
+      style: "currency",
+      currency: "PHP",
+      minimumFractionDigits: 2,
+    });
+  ("");
   return `
   <html>
     <head>
@@ -125,14 +133,28 @@ export function generateReceiptHtml(order: any) {
         </div>
         <div class="info-section">
           <div class="info-left">
-            <div><span class="info-field">CUSTOMER:</span> ${customer.name || "-"}</div>
-            <div><span class="info-field">ADDRESS:</span> ${customer.address || "-"}</div>
-            <div><span class="info-field">EMAIL:</span> ${customer.email || "-"}</div>
+            <div><span class="info-field">CUSTOMER:</span> ${
+              customer.name || "-"
+            }</div>
+            <div><span class="info-field">ADDRESS:</span> ${
+              customer.address || "-"
+            }</div>
+            <div><span class="info-field">EMAIL:</span> ${
+              customer.email || "-"
+            }</div>
           </div>
           <div class="info-right">
-            <div><span class="info-field">DATE:</span> ${typeof date === "string" && date.length > 10 ? date.slice(0, 10) : date || "-"}</div>
-            <div><span class="info-field">TRANSACTION CODE:</span> ${order.transactionCode || order.transaction_code || order.id || "-"}</div>
-            <div><span class="info-field">PHONE:</span> ${customer.phone || "-"}</div>
+            <div><span class="info-field">DATE:</span> ${
+              typeof date === "string" && date.length > 10
+                ? date.slice(0, 10)
+                : date || "-"
+            }</div>
+            <div><span class="info-field">TRANSACTION CODE:</span> ${
+              order.transactionCode || order.transaction_code || order.id || "-"
+            }</div>
+            <div><span class="info-field">PHONE:</span> ${
+              customer.phone || "-"
+            }</div>
           </div>
         </div>
         <div class="table-section">
@@ -156,12 +178,26 @@ export function generateReceiptHtml(order: any) {
                   <tr>
                     <td>${ci.quantity ?? ci.item?.quantity ?? ci.qty ?? 1}</td>
                     <td>${ci.item?.unit || ci.unit || "-"}</td>
-                    <td><b>${ci.item?.product_name || ci.product_name || ci.description || "-"}</b></td>
+                    <td><b>${
+                      ci.item?.product_name ||
+                      ci.product_name ||
+                      ci.description ||
+                      "-"
+                    }</b></td>
                     <td>${ci.remarks || ""}</td>
-                    <td>${formatPeso(ci.item?.unit_price ?? ci.unit_price ?? ci.price ?? ci.unitPrice ?? 0)}</td>
                     <td>${formatPeso(
-                      (ci.item?.unit_price ?? ci.unit_price ?? ci.price ?? ci.unitPrice ?? 0) *
-                        (ci.quantity ?? ci.item?.quantity ?? ci.qty ?? 1)
+                      ci.item?.unit_price ??
+                        ci.unit_price ??
+                        ci.price ??
+                        ci.unitPrice ??
+                        0
+                    )}</td>
+                    <td>${formatPeso(
+                      (ci.item?.unit_price ??
+                        ci.unit_price ??
+                        ci.price ??
+                        ci.unitPrice ??
+                        0) * (ci.quantity ?? ci.item?.quantity ?? ci.qty ?? 1)
                     )}</td>
                   </tr>`
                       )
