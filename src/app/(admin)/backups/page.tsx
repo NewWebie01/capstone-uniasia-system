@@ -68,8 +68,11 @@ export default function BackupsPage() {
     "postgresql://***:***@aws-0-<region>.pooler.supabase.com:5432/postgres"
   );
 
+  const [listLoading, setListLoading] = useState(false);
+
   const fetchArtifacts = async () => {
     try {
+      setListLoading(true);
       const res = await fetch("/api/backup/list", { cache: "no-store" });
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || "Failed to load");
@@ -77,6 +80,8 @@ export default function BackupsPage() {
       await logActivity("Refresh Backup List", {});
     } catch (e: any) {
       toast.error(e.message || "Failed to load backups");
+    } finally {
+      setListLoading(false);
     }
   };
 
@@ -173,26 +178,29 @@ export default function BackupsPage() {
     };
 
     return (
-      <Dialog open={open} onOpenChange={(v) => {
-        setOpen(v);
-        if (v) {
-          logActivity("Open Restore To Staging Modal", {
-            artifactId,
-            artifactName,
-          });
-        } else {
-          logActivity("Cancel Restore To Staging Modal", {
-            artifactId,
-            artifactName,
-          });
-        }
-      }}>
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          setOpen(v);
+          if (v) {
+            logActivity("Open Restore To Staging Modal", {
+              artifactId,
+              artifactName,
+            });
+          } else {
+            logActivity("Cancel Restore To Staging Modal", {
+              artifactId,
+              artifactName,
+            });
+          }
+        }}
+      >
         <DialogTrigger asChild>
           <button
-            className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-indigo-500/20 hover:bg-indigo-500/30"
+            className="h-9 px-3 inline-flex items-center gap-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 whitespace-nowrap"
             title="Restore this backup to staging"
           >
-            <RotateCcw className="w-4 h-4" /> Restore to staging
+            <RotateCcw className="w-4 h-4" /> Restore
           </button>
         </DialogTrigger>
 
@@ -227,48 +235,63 @@ export default function BackupsPage() {
   const rows = useMemo(
     () =>
       artifacts.map((a) => (
-        <tr key={a.id} className="border-b border-white/10">
-          <td className="py-3">{a.name}</td>
-          <td className="py-3">{new Date(a.created_at).toLocaleString()}</td>
-          <td className="py-3">{formatBytes(a.size_in_bytes)}</td>
-          <td className="py-3">
+        <tr
+          key={a.id}
+          className="even:bg-white/60 odd:bg-white/40 hover:bg-white/70 border-b border-black/5"
+        >
+          <td className="py-4 px-4 font-medium text-gray-900">{a.name}</td>
+          <td className="py-4 px-4 text-gray-900">
+            {new Date(a.created_at).toLocaleString()}
+          </td>
+          <td className="py-4 px-4 text-gray-900">
+            {formatBytes(a.size_in_bytes)}
+          </td>
+          <td className="py-4 px-4">
             {a.expired ? (
-              <span className="px-2 py-1 text-xs rounded bg-red-500/20 text-red-300">
+              <span className="px-2 py-1 text-xs rounded bg-red-100 text-red-700">
                 Expired
               </span>
             ) : (
-              <span className="px-2 py-1 text-xs rounded bg-emerald-500/20 text-emerald-300">
+              <span className="px-2 py-1 text-xs rounded bg-emerald-100 text-emerald-700">
                 Available
               </span>
             )}
           </td>
-          <td className="py-3 flex gap-2">
-            <a
-              className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-white/10 hover:bg-white/20"
-              href={`/api/backup/download?id=${a.id}`}
-              onClick={() =>
-                logActivity("Download Backup", {
-                  artifactId: a.id,
-                  artifactName: a.name,
-                })
-              }
-            >
-              <Download className="w-4 h-4" /> Download
-            </a>
-            <button
-              className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-white/10 hover:bg-white/20"
-              onClick={() =>
-                restoreHelper("supabase-backup_YYYY-mm-ddTHH-MM-SSZ.tar.gz", a)
-              }
-              title="Copy restore commands"
-            >
-              <RotateCcw className="w-4 h-4" /> Restore Helper
-            </button>
-            <RestoreToStagingButton
-              artifactId={a.id}
-              artifactName={a.name}
-              onConfirm={restoreToStaging}
-            />
+          <td className="py-3 px-4 w-[440px] whitespace-nowrap">
+            <div className="inline-flex flex-nowrap items-center gap-2">
+              <a
+                className="h-9 px-3 inline-flex items-center gap-1 rounded-lg bg-blue-600 text-white hover:bg-blue-500"
+                href={`/api/backup/download?id=${a.id}`}
+                onClick={() =>
+                  logActivity("Download Backup", {
+                    artifactId: a.id,
+                    artifactName: a.name,
+                  })
+                }
+              >
+                <Download className="w-4 h-4" /> Download
+              </a>
+
+              <button
+                className="h-9 px-3 inline-flex items-center gap-1 rounded-lg bg-black/5 hover:bg-black/10 text-gray-900"
+                onClick={() =>
+                  restoreHelper(
+                    "supabase-backup_YYYY-mm-ddTHH-MM-SSZ.tar.gz",
+                    a
+                  )
+                }
+                title="Copy restore commands"
+              >
+                <RotateCcw className="w-4 h-4" /> Helper
+              </button>
+
+              {/* uses the updated styled trigger above */}
+              <RestoreToStagingButton
+                artifactId={a.id}
+                artifactName={a.name}
+                onConfirm={restoreToStaging}
+              />
+            </div>
           </td>
         </tr>
       )),
@@ -298,24 +321,42 @@ export default function BackupsPage() {
         </button>
         <button
           onClick={fetchArtifacts}
-          className="inline-flex items-center gap-2 rounded-xl px-3 py-2 bg-white/10 hover:bg-white/20"
+          disabled={listLoading}
+          className="inline-flex items-center gap-2 rounded-xl px-3 py-2 bg-white/10 hover:bg-white/20 disabled:opacity-60"
         >
-          <RefreshCw className="w-4 h-4" /> Refresh List
+          <RefreshCw
+            className={`w-4 h-4 ${listLoading ? "animate-spin" : ""}`}
+          />
+          {listLoading ? "Refreshing…" : "Refresh List"}
         </button>
       </div>
 
-      <div className="overflow-auto rounded-2xl border border-white/10">
+      <div className="rounded-2xl overflow-hidden border border-amber-500/40 bg-gradient-to-b from-amber-200/60 to-amber-100/30">
         <table className="w-full text-sm">
-          <thead className="bg-white/5">
+          <thead className="bg-amber-400 text-gray-900">
             <tr>
               <th className="text-left p-3">Name</th>
               <th className="text-left p-3">Created</th>
               <th className="text-left p-3">Size</th>
               <th className="text-left p-3">Status</th>
-              <th className="text-left p-3">Actions</th>
+              <th className="text-left p-3 w-[440px]">Action</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/5">{rows}</tbody>
+
+          <tbody className="divide-y divide-black/5">
+            {listLoading ? (
+              <tr>
+                <td colSpan={5} className="p-6">
+                  <div className="flex items-center gap-3 text-gray-900">
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-black/20 border-t-transparent" />
+                    Loading latest backups…
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              rows
+            )}
+          </tbody>
         </table>
       </div>
 
