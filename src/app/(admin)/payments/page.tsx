@@ -1,15 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import {
-  CheckCircle2,
-  XCircle,
-  FileImage,
-  Search,
-  Loader2,
-} from "lucide-react";
+import { CheckCircle2, XCircle, FileImage, Search, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -46,7 +40,6 @@ const formatPH = (
 /* -------------------- Activity Logger -------------------- */
 async function logActivity(action: string, details: any = {}) {
   try {
-    // Get user email and role from users table
     const { data } = await supabase.auth.getUser();
     const email = data?.user?.email || "";
 
@@ -104,30 +97,24 @@ export default function AdminPaymentsPage() {
 
   const [customers, setCustomers] = useState<CustomerLite[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
-  const paymentsSubKey = useRef<string>("");
 
   // filters
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState<
-    "all" | "pending" | "received" | "rejected"
-  >("pending");
+  const [status, setStatus] = useState<"all" | "pending" | "received" | "rejected">(
+    "pending"
+  );
 
   // image modal
   const [imgOpen, setImgOpen] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [imgMeta, setImgMeta] = useState<{
-    cheque?: string | null;
-    bank?: string | null;
-  } | null>(null);
+  const [imgMeta, setImgMeta] = useState<{ cheque?: string | null; bank?: string | null } | null>(null);
 
   // confirmation modal
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmType, setConfirmType] = useState<"receive" | "reject" | null>(
-    null
-  );
+  const [confirmType, setConfirmType] = useState<"receive" | "reject" | null>(null);
   const [targetRow, setTargetRow] = useState<PaymentRow | null>(null);
 
-  // row-level lock so BOTH buttons disable immediately after confirming
+  // row-level lock so BOTH buttons disable after confirming
   const [locked, setLocked] = useState<Set<string>>(new Set());
 
   /* ------------------------------ Load data ------------------------------ */
@@ -184,14 +171,10 @@ export default function AdminPaymentsPage() {
           setPayments((prev) => [payload.new as PaymentRow, ...prev]);
         } else if (payload.eventType === "UPDATE") {
           setPayments((prev) =>
-            prev.map((p) =>
-              p.id === (payload.new as any).id ? (payload.new as PaymentRow) : p
-            )
+            prev.map((p) => (p.id === (payload.new as any).id ? (payload.new as PaymentRow) : p))
           );
         } else if (payload.eventType === "DELETE") {
-          setPayments((prev) =>
-            prev.filter((p) => p.id !== (payload.old as any).id)
-          );
+          setPayments((prev) => prev.filter((p) => p.id !== (payload.old as any).id));
         }
       }
     );
@@ -231,7 +214,7 @@ export default function AdminPaymentsPage() {
     });
   }, [payments, status, q, customerById]);
 
-  /* ------------------------------ Actions ------------------------------- */
+  /* ------------------------------ Helpers ------------------------------- */
   function openConfirm(type: "receive" | "reject", row: PaymentRow) {
     setConfirmType(type);
     setTargetRow(row);
@@ -245,152 +228,154 @@ export default function AdminPaymentsPage() {
     setImgSrc(url);
     setImgMeta(meta || null);
     setImgOpen(true);
-    // ---- Activity log for "View" ----
     logActivity("View Payment Cheque", {
       payment_id: meta?.cheque || "",
       bank_name: meta?.bank || "",
       image_url: url,
     });
   }
-async function notifyCustomerByEmail(paymentId: string, action: "receive" | "reject") {
-  try {
+
+  async function notifyCustomerByEmail(paymentId: string, action: "receive" | "reject") {
     const res = await fetch("/api/send-payment-confirmation", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      cache: "no-store", // avoid cached POSTs
+      cache: "no-store",
       body: JSON.stringify({ paymentId, action }),
     });
-
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err?.error || "Failed to send email.");
     }
-
-    return true;
-  } catch (err: any) {
-    console.error("[notifyCustomerByEmail] error:", err);
-    throw err;
   }
-}
-async function handleConfirm() {
-  if (!targetRow || !confirmType) return;
 
-  // lock the row immediately => both buttons disable
-  setLocked((prev) => new Set(prev).add(targetRow.id));
+  /* ------------------------------ Actions ------------------------------- */
+  async function handleConfirm() {
+    if (!targetRow || !confirmType) return;
 
-  try {
-    if (confirmType === "receive") {
-      if (!meEmail) throw new Error("Missing admin email; please re-login.");
+    // lock the row immediately => both buttons disable
+    setLocked((prev) => new Set(prev).add(targetRow.id));
 
-      const { error } = await supabase
-        .from("payments")
-        .update({
-          status: "received",
-          received_at: new Date().toISOString(),
-          received_by: meEmail,
-        })
-        .eq("id", targetRow.id);
+    try {
+      if (confirmType === "receive") {
+        if (!meEmail) throw new Error("Missing admin email; please re-login.");
 
-      if (error) throw error;
+        // Guard against double-processing: only update if currently pending
+        const { data: updated, error } = await supabase
+          .from("payments")
+          .update({
+            status: "received",
+            received_at: new Date().toISOString(),
+            received_by: meEmail,
+          })
+          .eq("id", targetRow.id)
+          .eq("status", "pending")
+          .select("id")
+          .maybeSingle();
 
-      // optimistic local state update
-      setPayments((prev) =>
-        prev.map((p) =>
-          p.id === targetRow.id
-            ? {
-                ...p,
-                status: "received",
-                received_at: new Date().toISOString(),
-                received_by: meEmail,
-              }
-            : p
-        )
-      );
+        if (error) throw error;
+        if (!updated) {
+          toast.warning("This cheque was already processed by someone else.");
+          return;
+        }
 
-      // activity log (as you had)
-      await logActivity("Mark Payment as Received", {
-        payment_id: targetRow.id,
-        customer_id: targetRow.customer_id,
-        amount: targetRow.amount,
-        cheque_number: targetRow.cheque_number,
-        bank_name: targetRow.bank_name,
-      });
+        setPayments((prev) =>
+          prev.map((p) =>
+            p.id === targetRow.id
+              ? {
+                  ...p,
+                  status: "received",
+                  received_at: new Date().toISOString(),
+                  received_by: meEmail,
+                }
+              : p
+          )
+        );
 
-      // 🔔 send email (non-blocking for DB state)
-      try {
-        await notifyCustomerByEmail(targetRow.id, "receive");
-        toast.success("Marked as received. Email sent to customer.");
-      } catch (emailErr: any) {
-        console.error("[email receive] failed:", emailErr);
-        toast.message("Marked as received.", {
-          description:
-            typeof emailErr?.message === "string"
-              ? `Email not sent: ${emailErr.message}`
-              : "Email not sent.",
+        await logActivity("Mark Payment as Received", {
+          payment_id: targetRow.id,
+          customer_id: targetRow.customer_id,
+          amount: targetRow.amount,
+          cheque_number: targetRow.cheque_number,
+          bank_name: targetRow.bank_name,
         });
-      }
-    } else {
-      // reject flow
-      const { error } = await supabase
-        .from("payments")
-        .update({
-          status: "rejected",
-          received_at: null,
-          received_by: null,
-        })
-        .eq("id", targetRow.id);
 
-      if (error) throw error;
+        // Email (don't block success if email fails)
+        try {
+          await notifyCustomerByEmail(targetRow.id, "receive");
+          toast.success("Marked as received. Email sent to customer.");
+        } catch (emailErr: any) {
+          console.error("[email receive] failed:", emailErr);
+          toast.message("Marked as received.", {
+            description:
+              typeof emailErr?.message === "string"
+                ? `Email not sent: ${emailErr.message}`
+                : "Email not sent.",
+          });
+        }
+      } else {
+        const { data: updated, error } = await supabase
+          .from("payments")
+          .update({
+            status: "rejected",
+            received_at: null,
+            received_by: null,
+          })
+          .eq("id", targetRow.id)
+          .eq("status", "pending")
+          .select("id")
+          .maybeSingle();
 
-      setPayments((prev) =>
-        prev.map((p) =>
-          p.id === targetRow.id
-            ? { ...p, status: "rejected", received_at: null, received_by: null }
-            : p
-        )
-      );
+        if (error) throw error;
+        if (!updated) {
+          toast.warning("This cheque was already processed by someone else.");
+          return;
+        }
 
-      await logActivity("Reject Payment Cheque", {
-        payment_id: targetRow.id,
-        customer_id: targetRow.customer_id,
-        amount: targetRow.amount,
-        cheque_number: targetRow.cheque_number,
-        bank_name: targetRow.bank_name,
-      });
+        setPayments((prev) =>
+          prev.map((p) =>
+            p.id === targetRow.id
+              ? { ...p, status: "rejected", received_at: null, received_by: null }
+              : p
+          )
+        );
 
-      // 🔔 send email (non-blocking for DB state)
-      try {
-        await notifyCustomerByEmail(targetRow.id, "reject");
-        toast.success("Cheque rejected. Email sent to customer.");
-      } catch (emailErr: any) {
-        console.error("[email reject] failed:", emailErr);
-        toast.message("Cheque rejected.", {
-          description:
-            typeof emailErr?.message === "string"
-              ? `Email not sent: ${emailErr.message}`
-              : "Email not sent.",
+        await logActivity("Reject Payment Cheque", {
+          payment_id: targetRow.id,
+          customer_id: targetRow.customer_id,
+          amount: targetRow.amount,
+          cheque_number: targetRow.cheque_number,
+          bank_name: targetRow.bank_name,
         });
+
+        try {
+          await notifyCustomerByEmail(targetRow.id, "reject");
+          toast.success("Cheque rejected. Email sent to customer.");
+        } catch (emailErr: any) {
+          console.error("[email reject] failed:", emailErr);
+          toast.message("Cheque rejected.", {
+            description:
+              typeof emailErr?.message === "string"
+                ? `Email not sent: ${emailErr.message}`
+                : "Email not sent.",
+          });
+        }
       }
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.message || "Action failed.");
+      // rollback lock only if the DB action failed
+      setLocked((prev) => {
+        const next = new Set(prev);
+        if (targetRow) next.delete(targetRow.id);
+        return next;
+      });
+    } finally {
+      setConfirmOpen(false);
+      setTargetRow(null);
+      setConfirmType(null);
+      // keep the row locked on success (so actions remain disabled)
     }
-
-    // close modal & clear selection
-    setConfirmOpen(false);
-    setTargetRow(null);
-    setConfirmType(null);
-    // keep the row locked (so buttons remain disabled)
-  } catch (err: any) {
-    console.error(err);
-    toast.error(err?.message || "Action failed.");
-
-    // rollback lock if the DB action itself failed
-    setLocked((prev) => {
-      const next = new Set(prev);
-      next.delete(targetRow!.id);
-      return next;
-    });
   }
-}
-
 
   /* ---------------------------------- UI ---------------------------------- */
   const cellNowrap =
@@ -400,13 +385,11 @@ async function handleConfirm() {
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-7xl px-6 py-6">
         <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
-            Payments
-          </h1>
+          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payments</h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Review submitted cheques. Mark as <b>Received</b> to post the payment
-          and deduct it from the customer’s balance.
+          Review submitted cheques. Mark as <b>Received</b> to post the payment and deduct it from
+          the customer’s balance.
         </p>
 
         {/* Filters */}
@@ -432,7 +415,7 @@ async function handleConfirm() {
           </select>
         </div>
 
-        {/* Table (left-aligned, bigger headers, tighter spacing) */}
+        {/* Table */}
         <div className="mt-4 rounded-xl ring-1 ring-gray-200 bg-white overflow-hidden">
           <div className="w-full overflow-x-auto overscroll-x-contain">
             <table className="min-w-full bg-white text-sm">
@@ -466,25 +449,15 @@ async function handleConfirm() {
                           : "bg-yellow-100 text-yellow-900"
                       }`}
                     >
-                      {s === "received"
-                        ? "Received"
-                        : s === "rejected"
-                        ? "Rejected"
-                        : "Pending"}
+                      {s === "received" ? "Received" : s === "rejected" ? "Rejected" : "Pending"}
                     </span>
                   );
 
-                  // disable both buttons once row is locked OR status is no longer pending
                   const disableAll = locked.has(p.id) || s !== "pending";
 
                   return (
-                    <tr
-                      key={p.id}
-                      className={idx % 2 ? "bg-neutral-50" : "bg-white"}
-                    >
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        {formatPH(p.created_at)}
-                      </td>
+                    <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
+                      <td className="py-2.5 px-3 whitespace-nowrap">{formatPH(p.created_at)}</td>
                       <td className="py-2.5 px-3">
                         <div className="font-mono truncate">{code}</div>
                         <div className="text-[11px] text-gray-600 truncate">
@@ -494,9 +467,7 @@ async function handleConfirm() {
                       <td className="py-2.5 px-3 font-mono tabular-nums whitespace-nowrap">
                         {formatCurrency(p.amount)}
                       </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap truncate">
-                        {p.bank_name ?? "—"}
-                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap truncate">{p.bank_name ?? "—"}</td>
                       <td className="py-2.5 px-3 whitespace-nowrap truncate">
                         {p.cheque_number ?? "—"}
                       </td>
@@ -529,11 +500,7 @@ async function handleConfirm() {
                             onClick={() => openConfirm("receive", p)}
                             disabled={disableAll}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={
-                              disableAll
-                                ? "Action not available"
-                                : "Mark as Received"
-                            }
+                            title={disableAll ? "Action not available" : "Mark as Received"}
                           >
                             <CheckCircle2 className="h-4 w-4" />
                             <span>Receive</span>
@@ -542,9 +509,7 @@ async function handleConfirm() {
                             onClick={() => openConfirm("reject", p)}
                             disabled={disableAll}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={
-                              disableAll ? "Action not available" : "Reject"
-                            }
+                            title={disableAll ? "Action not available" : "Reject"}
                           >
                             <XCircle className="h-4 w-4" />
                             <span>Reject</span>
@@ -557,10 +522,7 @@ async function handleConfirm() {
 
                 {filtered.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={9}
-                      className="py-10 text-center text-neutral-400"
-                    >
+                    <td colSpan={9} className="py-10 text-center text-neutral-400">
                       {loading ? (
                         <span className="inline-flex items-center gap-2">
                           <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -604,9 +566,7 @@ async function handleConfirm() {
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Cheque #</span>
-              <span className="font-mono">
-                {targetRow?.cheque_number || "—"}
-              </span>
+              <span className="font-mono">{targetRow?.cheque_number || "—"}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Bank</span>

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
 import { createClient } from "@supabase/supabase-js";
 
-/** Force Node runtime so Resend + service-role client work */
+/** Ensure server runtime on Vercel */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -31,25 +31,11 @@ const peso = (n: number) =>
 /* ------------------------- Handler ------------------------- */
 export async function POST(req: NextRequest) {
   try {
-    if (req.method !== "POST") {
-      return NextResponse.json(
-        { error: "Method Not Allowed" },
-        { status: 405, headers: { Allow: "POST" } }
-      );
-    }
+    const { paymentId, action }: { paymentId?: string; action?: Action } =
+      await req.json().catch(() => ({} as any));
 
-    const body = await req.json().catch(() => ({}));
-    const paymentId: string | undefined = body?.paymentId;
-    const action: Action | undefined = body?.action;
-
-    if (!paymentId || !action) {
-      return NextResponse.json(
-        { error: "Missing paymentId or action" },
-        { status: 400 }
-      );
-    }
-    if (action !== "receive" && action !== "reject") {
-      return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+    if (!paymentId || !action || !["receive", "reject"].includes(action)) {
+      return NextResponse.json({ error: "Missing or invalid payload" }, { status: 400 });
     }
 
     // Fetch payment + customer using service role (bypass RLS)
@@ -79,15 +65,9 @@ export async function POST(req: NextRequest) {
 
     // Safety: only email if DB status matches the intended action
     const s = String(payment.status || "").toLowerCase();
-    if (action === "receive" && s !== "received") {
+    if ((action === "receive" && s !== "received") || (action === "reject" && s !== "rejected")) {
       return NextResponse.json(
-        { error: "Payment is not marked as received." },
-        { status: 409 }
-      );
-    }
-    if (action === "reject" && s !== "rejected") {
-      return NextResponse.json(
-        { error: "Payment is not marked as rejected." },
+        { error: `Payment is not marked as ${action}.` },
         { status: 409 }
       );
     }
@@ -100,17 +80,11 @@ export async function POST(req: NextRequest) {
     const customerName: string = customerRaw?.name || "Customer";
 
     if (!customerEmail) {
-      return NextResponse.json(
-        { error: "Customer email not found." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Customer email not found." }, { status: 400 });
     }
 
-    // Build email content
     const subject =
-      action === "receive"
-        ? "Your Payment Has Been Received"
-        : "Your Payment Has Been Rejected";
+      action === "receive" ? "Your Payment Has Been Received" : "Your Payment Has Been Rejected";
 
     const html =
       action === "receive"
@@ -138,15 +112,14 @@ export async function POST(req: NextRequest) {
         : `Hi ${customerName},\n\nYour cheque payment was rejected. Please contact UniAsia for details.`;
 
     // Send email via Resend
-const { data: sent, error: sendErr } = await resend.emails.send({
-  from: "UniAsia <sales@uniasia.shop>",
-  to: [customerEmail],
-  subject,
-  html,
-  text,
-  replyTo: ["sales@uniasia.shop"],
-});
-
+    const { data: sent, error: sendErr } = await resend.emails.send({
+      from: "UniAsia <sales@uniasia.shop>",
+      to: [customerEmail],
+      subject,
+      html,
+      text,
+      replyTo: ["sales@uniasia.shop"],
+    });
 
     if (sendErr) {
       console.error("[Resend] send error:", sendErr);
