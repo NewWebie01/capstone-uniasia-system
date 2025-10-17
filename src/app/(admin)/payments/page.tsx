@@ -252,96 +252,145 @@ export default function AdminPaymentsPage() {
       image_url: url,
     });
   }
+async function notifyCustomerByEmail(paymentId: string, action: "receive" | "reject") {
+  try {
+    const res = await fetch("/api/send-payment-confirmation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store", // avoid cached POSTs
+      body: JSON.stringify({ paymentId, action }),
+    });
 
-  async function handleConfirm() {
-    if (!targetRow || !confirmType) return;
-
-    // lock the row immediately => both buttons disable
-    setLocked((prev) => new Set(prev).add(targetRow.id));
-
-    try {
-      if (confirmType === "receive") {
-        if (!meEmail) throw new Error("Missing admin email; please re-login.");
-        const { error } = await supabase
-          .from("payments")
-          .update({
-            status: "received",
-            received_at: new Date().toISOString(),
-            received_by: meEmail,
-          })
-          .eq("id", targetRow.id);
-        if (error) throw error;
-
-        setPayments((prev) =>
-          prev.map((p) =>
-            p.id === targetRow.id
-              ? {
-                  ...p,
-                  status: "received",
-                  received_at: new Date().toISOString(),
-                  received_by: meEmail,
-                }
-              : p
-          )
-        );
-        // ---- Activity log for "Receive" ----
-        await logActivity("Mark Payment as Received", {
-          payment_id: targetRow.id,
-          customer_id: targetRow.customer_id,
-          amount: targetRow.amount,
-          cheque_number: targetRow.cheque_number,
-          bank_name: targetRow.bank_name,
-        });
-        toast.success("Marked as received. Customer balance will update.");
-      } else {
-        const { error } = await supabase
-          .from("payments")
-          .update({
-            status: "rejected",
-            received_at: null,
-            received_by: null,
-          })
-          .eq("id", targetRow.id);
-        if (error) throw error;
-
-        setPayments((prev) =>
-          prev.map((p) =>
-            p.id === targetRow.id
-              ? {
-                  ...p,
-                  status: "rejected",
-                  received_at: null,
-                  received_by: null,
-                }
-              : p
-          )
-        );
-        // ---- Activity log for "Reject" ----
-        await logActivity("Reject Payment Cheque", {
-          payment_id: targetRow.id,
-          customer_id: targetRow.customer_id,
-          amount: targetRow.amount,
-          cheque_number: targetRow.cheque_number,
-          bank_name: targetRow.bank_name,
-        });
-        toast.success("Cheque marked as rejected.");
-      }
-
-      setConfirmOpen(false);
-      setTargetRow(null);
-      setConfirmType(null);
-      // Keep it locked so actions stay disabled permanently for this row
-    } catch (err: any) {
-      console.error(err);
-      toast.error(err?.message || "Action failed.");
-      // rollback lock if the action failed
-      setLocked((prev) => {
-        const next = new Set(prev);
-        next.delete(targetRow!.id);
-        return next;
-      });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || "Failed to send email.");
     }
+
+    return true;
+  } catch (err: any) {
+    console.error("[notifyCustomerByEmail] error:", err);
+    throw err;
   }
+}
+async function handleConfirm() {
+  if (!targetRow || !confirmType) return;
+
+  // lock the row immediately => both buttons disable
+  setLocked((prev) => new Set(prev).add(targetRow.id));
+
+  try {
+    if (confirmType === "receive") {
+      if (!meEmail) throw new Error("Missing admin email; please re-login.");
+
+      const { error } = await supabase
+        .from("payments")
+        .update({
+          status: "received",
+          received_at: new Date().toISOString(),
+          received_by: meEmail,
+        })
+        .eq("id", targetRow.id);
+
+      if (error) throw error;
+
+      // optimistic local state update
+      setPayments((prev) =>
+        prev.map((p) =>
+          p.id === targetRow.id
+            ? {
+                ...p,
+                status: "received",
+                received_at: new Date().toISOString(),
+                received_by: meEmail,
+              }
+            : p
+        )
+      );
+
+      // activity log (as you had)
+      await logActivity("Mark Payment as Received", {
+        payment_id: targetRow.id,
+        customer_id: targetRow.customer_id,
+        amount: targetRow.amount,
+        cheque_number: targetRow.cheque_number,
+        bank_name: targetRow.bank_name,
+      });
+
+      // 🔔 send email (non-blocking for DB state)
+      try {
+        await notifyCustomerByEmail(targetRow.id, "receive");
+        toast.success("Marked as received. Email sent to customer.");
+      } catch (emailErr: any) {
+        console.error("[email receive] failed:", emailErr);
+        toast.message("Marked as received.", {
+          description:
+            typeof emailErr?.message === "string"
+              ? `Email not sent: ${emailErr.message}`
+              : "Email not sent.",
+        });
+      }
+    } else {
+      // reject flow
+      const { error } = await supabase
+        .from("payments")
+        .update({
+          status: "rejected",
+          received_at: null,
+          received_by: null,
+        })
+        .eq("id", targetRow.id);
+
+      if (error) throw error;
+
+      setPayments((prev) =>
+        prev.map((p) =>
+          p.id === targetRow.id
+            ? { ...p, status: "rejected", received_at: null, received_by: null }
+            : p
+        )
+      );
+
+      await logActivity("Reject Payment Cheque", {
+        payment_id: targetRow.id,
+        customer_id: targetRow.customer_id,
+        amount: targetRow.amount,
+        cheque_number: targetRow.cheque_number,
+        bank_name: targetRow.bank_name,
+      });
+
+      // 🔔 send email (non-blocking for DB state)
+      try {
+        await notifyCustomerByEmail(targetRow.id, "reject");
+        toast.success("Cheque rejected. Email sent to customer.");
+      } catch (emailErr: any) {
+        console.error("[email reject] failed:", emailErr);
+        toast.message("Cheque rejected.", {
+          description:
+            typeof emailErr?.message === "string"
+              ? `Email not sent: ${emailErr.message}`
+              : "Email not sent.",
+        });
+      }
+    }
+
+    // close modal & clear selection
+    setConfirmOpen(false);
+    setTargetRow(null);
+    setConfirmType(null);
+    // keep the row locked (so buttons remain disabled)
+  } catch (err: any) {
+    console.error(err);
+    toast.error(err?.message || "Action failed.");
+
+    // rollback lock if the DB action itself failed
+    setLocked((prev) => {
+      const next = new Set(prev);
+      next.delete(targetRow!.id);
+      return next;
+    });
+  }
+}
+
 
   /* ---------------------------------- UI ---------------------------------- */
   const cellNowrap =
