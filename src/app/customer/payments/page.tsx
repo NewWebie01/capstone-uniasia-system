@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { Upload, FileImage, Wallet } from "lucide-react";
+import { Upload, FileImage, Wallet, X, Calendar } from "lucide-react";
 
 /* ----------------------------- Config ----------------------------- */
 const CHEQUE_BUCKET = "payments-cheques";
@@ -22,15 +22,17 @@ type ItemRow = {
   quantity: number;
   price: number;
   discount_percent?: number | null;
-  inventory?: {
-    product_name?: string | null;
-    category?: string | null;
-    subcategory?: string | null;
-    status?: string | null;
-    unit?: string | null;
-    unit_price?: number | null;
-    quantity?: number | null;
-  } | null;
+  inventory?:
+    | {
+        product_name?: string | null;
+        category?: string | null;
+        subcategory?: string | null;
+        status?: string | null;
+        unit?: string | null;
+        unit_price?: number | null;
+        quantity?: number | null;
+      }
+    | null;
 };
 
 type OrderRow = {
@@ -53,6 +55,8 @@ type CustomerTx = {
   phone: string | null;
   address: string | null;
   date: string | null;
+  // (payment_type not guaranteed on customer page; we handle gracefully)
+  payment_type?: string | null;
   orders?: OrderRow[];
 };
 
@@ -70,6 +74,16 @@ type PaymentRow = {
   created_at: string | null;
 };
 
+type InstallmentRow = {
+  id?: string;
+  order_id: string;
+  term_no: number;
+  due_date: string; // YYYY-MM-DD
+  amount_due: number;
+  amount_paid?: number | null;
+  status?: string | null; // 'unpaid' | 'partial' | 'paid'
+};
+
 /* ------------------------------ Helpers ------------------------------ */
 const inList = (vals: (string | number)[]) =>
   vals.map((v) => (typeof v === "string" ? `"${v}"` : String(v))).join(",");
@@ -81,7 +95,9 @@ const isPending = (p: PaymentRow) =>
   (p?.status || "").toLowerCase() === "pending";
 
 /* -------- Shipping fee: orders.truck_delivery_id -> truck_deliveries.shipping_fee -------- */
-async function fetchShippingFeeForOrder(orderId: string | number): Promise<number> {
+async function fetchShippingFeeForOrder(
+  orderId: string | number
+): Promise<number> {
   try {
     const { data: ord, error: ordErr } = await supabase
       .from("orders")
@@ -138,6 +154,11 @@ export default function CustomerPaymentsPage() {
   // Shipping fee per order cache
   const [shippingFees, setShippingFees] = useState<Record<string, number>>({});
 
+  // Installments (for modal)
+  const [installments, setInstallments] = useState<InstallmentRow[]>([]);
+  const [loadingInstallments, setLoadingInstallments] = useState(false);
+  const [showBreakdown, setShowBreakdown] = useState(false);
+
   /* ------------------------------- Fetch ------------------------------- */
   useEffect(() => {
     (async () => {
@@ -158,7 +179,7 @@ export default function CustomerPaymentsPage() {
           .from("customers")
           .select(
             `
-            id, name, code, contact_person, email, phone, address, date,
+            id, name, code, contact_person, email, phone, address, date, payment_type,
             orders (
               id,
               total_amount,
@@ -207,17 +228,12 @@ export default function CustomerPaymentsPage() {
           setPayments([]);
         }
 
-        // Prefetch shipping fees for ALL orders we will display (completed ones matter most)
+        // Prefetch shipping fees
         const allOrders = txList.flatMap((c) => c.orders ?? []);
         const allIds = Array.from(
-          new Set(
-            allOrders
-              .filter((o) => !!o?.id)
-              .map((o) => String(o.id))
-          )
+          new Set(allOrders.filter((o) => !!o?.id).map((o) => String(o.id)))
         );
 
-        // Fetch fees in parallel (bounded)
         const feeEntries = await Promise.all(
           allIds.map(async (oid) => {
             const fee = await fetchShippingFeeForOrder(oid);
@@ -354,7 +370,7 @@ export default function CustomerPaymentsPage() {
     return m;
   }, [paymentsByOrder]);
 
-  /* ---------- Only show: NO pending (per order or per customer) AND balance > 0 (received-only), WITH SHIPPING ---------- */
+  /* ---------- Only show: NO pending & balance > 0 (received-only), WITH SHIPPING ---------- */
   const unpaidTxnOptions = useMemo(() => {
     return txnOptions.filter(({ order, customerId }) => {
       const orderId = String(order.id);
@@ -503,12 +519,12 @@ export default function CustomerPaymentsPage() {
         bank_name: bankName || null,
         cheque_date: chequeDate || null,
         image_url,
-        status: "pending", // admin will set to 'received' or 'rejected'
+        status: "pending",
       });
 
       if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
 
-      /* ======== Notify Admins that a cheque was submitted ======== */
+      // (Soft) notify admins
       try {
         const title = "💰 New Cheque Payment Submitted";
         const message = `${me.name || "Customer"} • ${
@@ -521,16 +537,14 @@ export default function CustomerPaymentsPage() {
             type: "payment",
             title,
             message,
-            related_id: orderId, // keep linking to the order
+            related_id: orderId,
             is_read: false,
             user_email: me.email || null,
           },
         ]);
       } catch (notifyErr) {
-        // Don't block user success if notification fails
         console.error("Notification insert failed:", notifyErr);
       }
-      /* =========================================================== */
 
       toast.success("✅ Cheque submitted. Awaiting admin verification.");
       setSelectedTxnCode("");
@@ -545,6 +559,35 @@ export default function CustomerPaymentsPage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  /* ---------------------- Installment breakdown modal ---------------------- */
+  async function openBreakdown() {
+    if (!selectedPack?.order?.id) return;
+    try {
+      setLoadingInstallments(true);
+      setShowBreakdown(true);
+      const { data, error } = await supabase
+        .from("order_installments")
+        .select(
+          "id, order_id, term_no, due_date, amount_due, amount_paid, status"
+        )
+        .eq("order_id", String(selectedPack.order.id))
+        .order("term_no", { ascending: true });
+
+      if (error) throw error;
+      setInstallments((data as InstallmentRow[]) || []);
+    } catch (e: any) {
+      console.error("Breakdown fetch failed:", e?.message || e);
+      toast.error("Couldn't load the breakdown for this TXN.");
+      setInstallments([]);
+    } finally {
+      setLoadingInstallments(false);
+    }
+  }
+
+  function closeBreakdown() {
+    setShowBreakdown(false);
   }
 
   /* ---------------------------------- UI ---------------------------------- */
@@ -562,85 +605,6 @@ export default function CustomerPaymentsPage() {
           verification.
         </p>
 
-        {/* Balances (Credit only) */}
-        {isCredit && (
-          <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Wallet className="h-5 w-5 text-green-700" />
-                <h2 className="text-lg font-semibold">Your Balances</h2>
-              </div>
-              <div className="text-sm">
-                <span className="text-gray-600 mr-2">Total Balance:</span>
-                <span className="font-bold text-green-700">
-                  {formatCurrency(totalBalance)}
-                </span>
-              </div>
-            </div>
-
-            <div className="mt-3 rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
-              <table className="w-full text-sm align-middle">
-                <thead>
-                  <tr
-                    className="text-black uppercase tracking-wider text-[11px]"
-                    style={{ background: "#ffba20" }}
-                  >
-                    <th className="py-2.5 px-3 text-left font-bold">
-                      TXN Code
-                    </th>
-                    <th className="py-2.5 px-3 text-left font-bold">Status</th>
-                    <th className="py-2.5 px-3 text-right font-bold">
-                      Grand Total (+ Shipping)
-                    </th>
-                    <th className="py-2.5 px-3 text-right font-bold">Paid</th>
-                    <th className="py-2.5 px-3 text-right font-bold">
-                      Balance
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {txnOptions.map(({ code, order }, idx) => {
-                    const orderId = String(order.id);
-                    const fee = shippingFees[orderId] ?? 0;
-                    const { finalGrandTotal } = computeFromOrder(order, fee);
-                    const paid = receivedTotalByOrder.get(orderId) || 0;
-                    const bal = Math.max(finalGrandTotal - paid, 0);
-
-                    return (
-                      <tr
-                        key={`${code}-${idx}`}
-                        className={idx % 2 ? "bg-neutral-50" : "bg-white"}
-                      >
-                        <td className="py-2.5 px-3 font-mono">{code}</td>
-                        <td className="py-2.5 px-3">{order.status ?? "—"}</td>
-                        <td className="py-2.5 px-3 text-right font-mono">
-                          {formatCurrency(finalGrandTotal)}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono">
-                          {formatCurrency(paid)}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-semibold">
-                          {formatCurrency(bal)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {txnOptions.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={5}
-                        className="py-8 text-center text-neutral-400"
-                      >
-                        No completed credit transactions yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
         {/* Upload Cheque — select by TXN code */}
         <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
           <div className="flex items-center gap-2 mb-3">
@@ -648,10 +612,7 @@ export default function CustomerPaymentsPage() {
             <h2 className="text-lg font-semibold">Upload Cheque Payment</h2>
           </div>
 
-          <form
-            onSubmit={handleSubmit}
-            className="grid grid-cols-1 md:grid-cols-2 gap-4"
-          >
+          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
                 Select Transaction (TXN) *
@@ -663,25 +624,36 @@ export default function CustomerPaymentsPage() {
                 required
               >
                 <option value="">— Choose a TXN —</option>
-                {/* Hide while pending & hide when fully paid (based on received only), WITH SHIPPING */}
                 {unpaidTxnOptions.map(({ code }, i) => (
                   <option key={`${code}-${i}`} value={code}>
                     {code}
                   </option>
                 ))}
               </select>
-{!!selectedPack && (
-  <div className="mt-2 text-sm md:text-base text-gray-700">
-    <span className="font-semibold">
-      Remaining balance (incl. shipping):
-    </span>{" "}
-    <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
-      {formatCurrency(selectedPack.balance)}
-    </span>
-  </div>
-)}
 
+              {!!selectedPack && (
+                <div className="mt-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                  <div className="text-sm md:text-base text-gray-700">
+                    <span className="font-semibold">
+                      Remaining balance (incl. shipping):
+                    </span>{" "}
+                    <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
+                      {formatCurrency(selectedPack.balance)}
+                    </span>
+                  </div>
 
+                  {/* NEW: View Breakdown button */}
+                  <button
+                    type="button"
+                    onClick={openBreakdown}
+                    className="inline-flex items-center gap-2 self-start md:self-auto rounded-lg border border-amber-400 px-3 py-2 text-amber-700 hover:bg-amber-50"
+                    title="See your monthly payment schedule for this TXN"
+                  >
+                    <Calendar className="h-4 w-4" />
+                    View Breakdown
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="col-span-1">
@@ -793,8 +765,7 @@ export default function CustomerPaymentsPage() {
         {selectedPack && (
           <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
             <h2 className="text-lg font-semibold mb-3">
-              Items for TXN{" "}
-              <span className="font-mono">{selectedPack.code}</span>
+              Items for TXN <span className="font-mono">{selectedPack.code}</span>
             </h2>
 
             <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
@@ -806,21 +777,11 @@ export default function CustomerPaymentsPage() {
                   >
                     <th className="py-2.5 px-3 text-center font-bold">QTY</th>
                     <th className="py-2.5 px-3 text-center font-bold">UNIT</th>
-                    <th className="py-2.5 px-3 text-left font-bold">
-                      ITEM DESCRIPTION
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      REMARKS
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      UNIT PRICE
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      DISCOUNT/ADD (%)
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      AMOUNT
-                    </th>
+                    <th className="py-2.5 px-3 text-left font-bold">ITEM DESCRIPTION</th>
+                    <th className="py-2.5 px-3 text-center font-bold">REMARKS</th>
+                    <th className="py-2.5 px-3 text-center font-bold">UNIT PRICE</th>
+                    <th className="py-2.5 px-3 text-center font-bold">DISCOUNT/ADD (%)</th>
+                    <th className="py-2.5 px-3 text-center font-bold">AMOUNT</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -844,29 +805,19 @@ export default function CustomerPaymentsPage() {
                         key={idx}
                         className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
                       >
-                        <td className="py-2.5 px-3 text-center font-mono">
-                          {qty}
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono">
-                          {unit}
-                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono">{qty}</td>
+                        <td className="py-2.5 px-3 text-center font-mono">{unit}</td>
                         <td className="py-2.5 px-3">
                           <span className="font-semibold">{desc}</span>
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          {inStockFlag
-                            ? "✓"
-                            : it.inventory?.status
-                            ? it.inventory.status
-                            : "✗"}
+                          {inStockFlag ? "✓" : it.inventory?.status ? it.inventory.status : "✗"}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
                           {formatCurrency(unitPrice)}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
-                          {typeof it.discount_percent === "number"
-                            ? `${it.discount_percent}%`
-                            : ""}
+                          {typeof it.discount_percent === "number" ? `${it.discount_percent}%` : ""}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono font-bold whitespace-nowrap">
                           {formatCurrency(amount)}
@@ -876,10 +827,7 @@ export default function CustomerPaymentsPage() {
                   })}
                   {(selectedPack.order.order_items ?? []).length === 0 && (
                     <tr>
-                      <td
-                        colSpan={7}
-                        className="text-center py-8 text-neutral-400"
-                      >
+                      <td colSpan={7} className="text-center py-8 text-neutral-400">
                         No items found.
                       </td>
                     </tr>
@@ -894,9 +842,7 @@ export default function CustomerPaymentsPage() {
                 <table className="text-right w-full">
                   <tbody>
                     <tr>
-                      <td className="font-semibold py-0.5">
-                        Subtotal (Before Discount):
-                      </td>
+                      <td className="font-semibold py-0.5">Subtotal (Before Discount):</td>
                       <td className="pl-2 font-mono">
                         {formatCurrency(selectedPack.totals.subtotal)}
                       </td>
@@ -920,9 +866,7 @@ export default function CustomerPaymentsPage() {
                       </td>
                     </tr>
                     <tr>
-                      <td className="font-bold py-1.5">
-                        Grand Total (Incl. Shipping):
-                      </td>
+                      <td className="font-bold py-1.5">Grand Total (Incl. Shipping):</td>
                       <td className="pl-2 font-bold text-green-700 font-mono">
                         {formatCurrency(selectedPack.totals.finalGrandTotal)}
                       </td>
@@ -937,14 +881,10 @@ export default function CustomerPaymentsPage() {
                     )}
                     <tr>
                       <td className="font-semibold py-0.5">Paid:</td>
-                      <td className="pl-2 font-mono">
-                        {formatCurrency(selectedPack.paid)}
-                      </td>
+                      <td className="pl-2 font-mono">{formatCurrency(selectedPack.paid)}</td>
                     </tr>
                     <tr>
-                      <td className="font-semibold py-0.5">
-                        Remaining Balance:
-                      </td>
+                      <td className="font-semibold py-0.5">Remaining Balance:</td>
                       <td className="pl-2 font-bold text-amber-700 font-mono">
                         {formatCurrency(selectedPack.balance)}
                       </td>
@@ -956,6 +896,112 @@ export default function CustomerPaymentsPage() {
           </div>
         )}
       </div>
+
+      {/* =================== Modal: Installment Breakdown =================== */}
+      {showBreakdown && (
+        <div className="fixed inset-0 z-50">
+          {/* backdrop */}
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={closeBreakdown}
+            aria-hidden="true"
+          />
+          {/* modal box */}
+          <div className="absolute inset-0 flex items-start md:items-center justify-center p-4 md:p-8">
+            <div className="w-full max-w-3xl rounded-2xl bg-white shadow-xl ring-1 ring-black/10 overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b">
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-5 w-5 text-amber-600" />
+                  <h3 className="text-lg font-semibold">
+                    Installment Breakdown {selectedPack?.code ? `• ${selectedPack.code}` : ""}
+                  </h3>
+                </div>
+                <button
+                  onClick={closeBreakdown}
+                  className="rounded-md p-1 hover:bg-neutral-100"
+                  aria-label="Close"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="px-5 py-4">
+                {loadingInstallments ? (
+                  <div className="py-10 text-center text-sm text-gray-500">
+                    Loading schedule…
+                  </div>
+                ) : installments.length === 0 ? (
+                  <div className="py-8 text-center text-gray-600">
+                    No installment schedule found for this TXN.
+                  </div>
+                ) : (
+                  <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
+                    <table className="w-full text-sm align-middle">
+                      <thead>
+                        <tr
+                          className="text-black uppercase tracking-wider text-[11px]"
+                          style={{ background: "#ffba20" }}
+                        >
+                          <th className="py-2.5 px-3 text-left font-bold">Term</th>
+                          <th className="py-2.5 px-3 text-left font-bold">Due Date</th>
+                          <th className="py-2.5 px-3 text-right font-bold">Amount Due</th>
+                          <th className="py-2.5 px-3 text-right font-bold">Amount Paid</th>
+                          <th className="py-2.5 px-3 text-left font-bold">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {installments.map((row) => {
+                          const paid = Number(row.amount_paid || 0);
+                          const due = Number(row.amount_due || 0);
+                          const isPaid = paid >= due;
+                          return (
+                            <tr key={`${row.term_no}-${row.due_date}`} className="border-b">
+                              <td className="py-2.5 px-3">{row.term_no}</td>
+                              <td className="py-2.5 px-3">
+                                {new Date(row.due_date + "T00:00:00").toLocaleDateString(
+                                  "en-PH",
+                                  { year: "numeric", month: "short", day: "2-digit" }
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono">
+                                {formatCurrency(due)}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono">
+                                {formatCurrency(paid)}
+                              </td>
+                              <td className="py-2.5 px-3">
+                                {isPaid ? (
+                                  <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">
+                                    Paid
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">
+                                    Pending
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div className="px-5 py-4 border-t flex justify-end">
+                <button
+                  onClick={closeBreakdown}
+                  className="px-4 py-2 rounded-md border hover:bg-neutral-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ==================================================================== */}
     </div>
   );
 }

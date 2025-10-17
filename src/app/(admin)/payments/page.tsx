@@ -256,110 +256,86 @@ export default function AdminPaymentsPage() {
     setLocked((prev) => new Set(prev).add(targetRow.id));
 
     try {
-      if (confirmType === "receive") {
-        if (!meEmail) throw new Error("Missing admin email; please re-login.");
+if (confirmType === "receive") {
+  if (!meEmail) throw new Error("Missing admin email; please re-login.");
 
-        // Guard against double-processing: only update if currently pending
-        const { data: updated, error } = await supabase
-          .from("payments")
-          .update({
+  const orderId = String(targetRow.order_id || "");
+  const amt = Number(targetRow.amount || 0);
+  if (!orderId) throw new Error("Payment is missing order_id.");
+  if (!(amt > 0)) throw new Error("Amount must be greater than 0.");
+
+  // 1) Apply the money to the order's installments (server-side)
+  const { error: rpcErr } = await supabase.rpc("apply_payment_to_installments", {
+    p_order_id: orderId,
+    p_amount: amt,
+  });
+  if (rpcErr) {
+    // Unlock row since we didn't update anything yet
+    setLocked((prev) => {
+      const next = new Set(prev);
+      next.delete(targetRow.id);
+      return next;
+    });
+    throw new Error(`Could not apply to installments: ${rpcErr.message}`);
+  }
+
+  // 2) Mark this payment as received (guard against double processing)
+  const { data: updated, error } = await supabase
+    .from("payments")
+    .update({
+      status: "received",
+      received_at: new Date().toISOString(),
+      received_by: meEmail,
+    })
+    .eq("id", targetRow.id)
+    .eq("status", "pending")
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!updated) {
+    toast.warning("This cheque was already processed by someone else.");
+    return;
+  }
+
+  // update local state
+  setPayments((prev) =>
+    prev.map((p) =>
+      p.id === targetRow.id
+        ? {
+            ...p,
             status: "received",
             received_at: new Date().toISOString(),
             received_by: meEmail,
-          })
-          .eq("id", targetRow.id)
-          .eq("status", "pending")
-          .select("id")
-          .maybeSingle();
+          }
+        : p
+    )
+  );
 
-        if (error) throw error;
-        if (!updated) {
-          toast.warning("This cheque was already processed by someone else.");
-          return;
-        }
+  await logActivity("Mark Payment as Received", {
+    payment_id: targetRow.id,
+    customer_id: targetRow.customer_id,
+    amount: targetRow.amount,
+    cheque_number: targetRow.cheque_number,
+    bank_name: targetRow.bank_name,
+    order_id: orderId,
+  });
 
-        setPayments((prev) =>
-          prev.map((p) =>
-            p.id === targetRow.id
-              ? {
-                  ...p,
-                  status: "received",
-                  received_at: new Date().toISOString(),
-                  received_by: meEmail,
-                }
-              : p
-          )
-        );
+  // Try to send the email, but don't block success
+  try {
+    await notifyCustomerByEmail(targetRow.id, "receive");
+    toast.success("Payment received and applied. Email sent to customer.");
+  } catch (emailErr: any) {
+    console.error("[email receive] failed:", emailErr);
+    toast.message("Payment received and applied.", {
+      description:
+        typeof emailErr?.message === "string"
+          ? `Email not sent: ${emailErr.message}`
+          : "Email not sent.",
+    });
+  }
+}
 
-        await logActivity("Mark Payment as Received", {
-          payment_id: targetRow.id,
-          customer_id: targetRow.customer_id,
-          amount: targetRow.amount,
-          cheque_number: targetRow.cheque_number,
-          bank_name: targetRow.bank_name,
-        });
-
-        // Email (don't block success if email fails)
-        try {
-          await notifyCustomerByEmail(targetRow.id, "receive");
-          toast.success("Marked as received. Email sent to customer.");
-        } catch (emailErr: any) {
-          console.error("[email receive] failed:", emailErr);
-          toast.message("Marked as received.", {
-            description:
-              typeof emailErr?.message === "string"
-                ? `Email not sent: ${emailErr.message}`
-                : "Email not sent.",
-          });
-        }
-      } else {
-        const { data: updated, error } = await supabase
-          .from("payments")
-          .update({
-            status: "rejected",
-            received_at: null,
-            received_by: null,
-          })
-          .eq("id", targetRow.id)
-          .eq("status", "pending")
-          .select("id")
-          .maybeSingle();
-
-        if (error) throw error;
-        if (!updated) {
-          toast.warning("This cheque was already processed by someone else.");
-          return;
-        }
-
-        setPayments((prev) =>
-          prev.map((p) =>
-            p.id === targetRow.id
-              ? { ...p, status: "rejected", received_at: null, received_by: null }
-              : p
-          )
-        );
-
-        await logActivity("Reject Payment Cheque", {
-          payment_id: targetRow.id,
-          customer_id: targetRow.customer_id,
-          amount: targetRow.amount,
-          cheque_number: targetRow.cheque_number,
-          bank_name: targetRow.bank_name,
-        });
-
-        try {
-          await notifyCustomerByEmail(targetRow.id, "reject");
-          toast.success("Cheque rejected. Email sent to customer.");
-        } catch (emailErr: any) {
-          console.error("[email reject] failed:", emailErr);
-          toast.message("Cheque rejected.", {
-            description:
-              typeof emailErr?.message === "string"
-                ? `Email not sent: ${emailErr.message}`
-                : "Email not sent.",
-          });
-        }
-      }
     } catch (err: any) {
       console.error(err);
       toast.error(err?.message || "Action failed.");

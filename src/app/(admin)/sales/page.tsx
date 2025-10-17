@@ -38,6 +38,8 @@ type OrderWithDetails = {
   total_amount: number;
   status: string;
   date_created: string;
+  payment_terms?: number | null;
+  interest_percent?: number | null;
   customers: {
     name: string;
     email: string;
@@ -77,9 +79,7 @@ function SalesPageContent() {
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showModal, setShowModal] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
-    null
-  );
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
 
   const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
@@ -88,8 +88,12 @@ function SalesPageContent() {
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
+
+  // Terms/Interest
   const [numberOfTerms, setNumberOfTerms] = useState(1);
   const [interestPercent, setInterestPercent] = useState(0);
+  
+
   const [showSalesOrderModal, setShowSalesOrderModal] = useState(false);
   const [showFinalConfirm, setShowFinalConfirm] = useState(false);
   const [poNumber, setPoNumber] = useState("");
@@ -97,12 +101,11 @@ function SalesPageContent() {
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
-  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(
-    null
-  );
+  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [salesman, setSalesman] = useState("");
   const [forwarder, setForwarder] = useState("");
+
   const resetSalesForm = () => {
     setPoNumber("");
     setRepName("");
@@ -114,6 +117,7 @@ function SalesPageContent() {
     setEditedDiscounts([]);
     setFieldErrors({ poNumber: false, repName: false });
   };
+
   // Validation state
   const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
     poNumber: false,
@@ -186,59 +190,103 @@ function SalesPageContent() {
     setLogsLoading(false);
   }
 
-  const [fastMovingProducts, setFastMovingProducts] = useState<
-    FastMovingProduct[]
-  >([]);
+  const [fastMovingProducts, setFastMovingProducts] = useState<FastMovingProduct[]>([]);
   const [showFastMovingModal, setShowFastMovingModal] = useState(false);
-  const [slowMovingProducts, setSlowMovingProducts] = useState<
-    FastMovingProduct[]
-  >([]);
+  const [slowMovingProducts, setSlowMovingProducts] = useState<FastMovingProduct[]>([]);
   const [showSlowMovingModal, setShowSlowMovingModal] = useState(false);
+  
 
   const ordersPerPage = 10;
 
-  const computedOrderTotal = useMemo(() => {
-    if (!selectedOrder) return 0;
-    return selectedOrder.order_items.reduce((sum, item, idx) => {
+  // ---- Helper: derive default interest from terms (if interestPercent isn't set) ----
+  const interestFromTerms = (terms: number) => {
+    if (!terms || terms <= 0) return 0;
+    // You can tweak this mapping as needed
+    if (terms <= 1) return 2;     // 1 month → 2%
+    if (terms <= 3) return 6;     // up to 3 months → 6%
+    if (terms <= 6) return 12;    // up to 6 months → 12%
+    if (terms <= 12) return 24;   // up to 12 months → 24%
+    return Math.min(30, Math.round((terms / 12) * 24)); // cap at 30%
+  };
+
+  // ---- Centralized totals (single source of truth) ----
+  const totals = useMemo(() => {
+    if (!selectedOrder) {
+      return {
+        subtotalBeforeDiscount: 0,
+        totalDiscount: 0,
+        subtotalAfterDiscount: 0,
+        tax: 0,
+        effectiveInterestPercent: 0,
+        interestAmount: 0,
+        grandTotal: 0,
+        perTerm: 0,
+      };
+    }
+
+    // 1) Subtotal BEFORE discount (based on current edited qty)
+    const subtotalBeforeDiscountCalc = selectedOrder.order_items.reduce((sum, item, idx) => {
+      if (item.inventory.quantity === 0) return sum;
+      const qty = editedQuantities[idx] ?? item.quantity;
+      return sum + qty * item.price;
+    }, 0);
+
+    // 2) Item-level discount total
+    const totalDiscountCalc = selectedOrder.order_items.reduce((sum, item, idx) => {
       if (item.inventory.quantity === 0) return sum;
       const qty = editedQuantities[idx] ?? item.quantity;
       const percent = editedDiscounts[idx] ?? 0;
-      const price = item.price;
-      const discounted = qty * price * (1 - percent / 100);
-      return sum + discounted;
+      return sum + qty * item.price * (percent / 100);
     }, 0);
-  }, [selectedOrder, editedQuantities, editedDiscounts]);
-  const salesTaxValue = isSalesTaxOn ? computedOrderTotal * 0.12 : 0;
-  const getGrandTotalWithInterest = () => {
-    if (!selectedOrder) return 0;
-    const baseTotal = computedOrderTotal + salesTaxValue;
-    if (
-      selectedOrder.customers.payment_type === "Credit" &&
-      numberOfTerms > 0
-    ) {
-      return baseTotal * (1 + interestPercent / 100);
-    }
-    return baseTotal;
-  };
-  const getPerTermAmount = () => {
-    if (
-      selectedOrder &&
-      selectedOrder.customers.payment_type === "Credit" &&
-      numberOfTerms > 0
-    ) {
-      return getGrandTotalWithInterest() / numberOfTerms;
-    }
-    return getGrandTotalWithInterest();
-  };
-  const subtotalBeforeDiscount = selectedOrder
-    ? selectedOrder.order_items.reduce(
-        (sum, item, idx) =>
-          item.inventory.quantity === 0
-            ? sum
-            : sum + (editedQuantities[idx] ?? item.quantity) * item.price,
-        0
-      )
-    : 0;
+
+    // 3) Subtotal AFTER discount
+    const subtotalAfterDiscount = Math.max(0, subtotalBeforeDiscountCalc - totalDiscountCalc);
+
+    // 4) VAT
+    const tax = isSalesTaxOn ? subtotalAfterDiscount * 0.12 : 0;
+
+    // 5) Base for interest
+    const baseTotal = subtotalAfterDiscount + tax;
+
+    // 6) Effective interest percent (state value if provided; else derive from terms)
+    const isCredit = selectedOrder.customers.payment_type === "Credit";
+    const effectiveInterestPercent = isCredit ? (interestPercent || interestFromTerms(numberOfTerms)) : 0;
+
+    // 7) Interest
+    const interestAmount = baseTotal * (effectiveInterestPercent / 100);
+
+    // 8) Grand total and per-term
+    const grandTotal = baseTotal + interestAmount;
+    const perTerm = isCredit && numberOfTerms > 0 ? grandTotal / numberOfTerms : grandTotal;
+
+    return {
+      subtotalBeforeDiscount: subtotalBeforeDiscountCalc,
+      totalDiscount: totalDiscountCalc,
+      subtotalAfterDiscount,
+      tax,
+      effectiveInterestPercent,
+      interestAmount,
+      grandTotal,
+      perTerm,
+    };
+  }, [
+    selectedOrder,
+    editedQuantities,
+    editedDiscounts,
+    isSalesTaxOn,
+    numberOfTerms,
+    interestPercent,
+  ]);
+
+  // Keep previous names for UI compatibility
+  const computedOrderTotal = totals.subtotalAfterDiscount;  // after discount
+  const salesTaxValue = totals.tax;
+  const getGrandTotalWithInterest = () => totals.grandTotal;
+  const getPerTermAmount = () => totals.perTerm;
+  const subtotalBeforeDiscount = totals.subtotalBeforeDiscount;
+  const totalDiscount = totals.totalDiscount;
+  
+
   function scrollToOrder(orderId: string) {
     const el = orderRefs.current[orderId];
     if (el) {
@@ -252,35 +300,23 @@ function SalesPageContent() {
 
     const exists = orders.some((o) => o.id === pendingScrollId);
     if (exists) {
-      // optional: bring the section into view first
       document.getElementById("pending-orders-section")?.scrollIntoView({
         behavior: "smooth",
         block: "start",
       });
-
-      // then scroll/highlight the specific card
-      // use rAF to ensure DOM is ready
       requestAnimationFrame(() => {
         scrollToOrder(pendingScrollId);
       });
-
       setPendingScrollId(null);
     }
   }, [orders, pendingScrollId]);
 
-  const totalDiscount = selectedOrder
-    ? selectedOrder.order_items.reduce((sum, item, idx) => {
-        if (item.inventory.quantity === 0) return sum;
-        const qty = editedQuantities[idx] ?? item.quantity;
-        const percent = editedDiscounts[idx] ?? 0;
-        return sum + qty * item.price * (percent / 100);
-      }, 0)
-    : 0;
   function getPHISOString() {
     const now = new Date();
     const ph = new Date(now.getTime() + 8 * 60 * 60 * 1000);
     return ph.toISOString().replace("T", " ").slice(0, 19);
   }
+
   const totalSales = useMemo(
     () =>
       orders
@@ -300,21 +336,21 @@ function SalesPageContent() {
 
   // Fetch all inventory items
   const fetchItems = async () => {
-    const { data, error } = await supabase
-      .from("inventory")
-      .select("*, profit");
+    const { data, error } = await supabase.from("inventory").select("*, profit");
     if (!error) setItems(data || []);
   };
+
   // Fetch orders with related customer & items
   const fetchOrders = async () => {
     const { data, error } = await supabase
       .from("orders")
-      .select(
-        `
-        id,
-        status,
-        total_amount,
-        date_created,
+.select(`
+  id,
+  status,
+  total_amount,
+  date_created,
+  payment_terms,
+  interest_percent,
         customer:customer_id (
           name,
           email,
@@ -354,14 +390,13 @@ function SalesPageContent() {
         customers: Array.isArray(o.customer) ? o.customer[0] : o.customer,
         order_items: o.order_items.map((item: any) => ({
           ...item,
-          inventory: Array.isArray(item.inventory)
-            ? item.inventory[0]
-            : item.inventory,
+          inventory: Array.isArray(item.inventory) ? item.inventory[0] : item.inventory,
         })),
       }));
       setOrders(formatted);
     }
   };
+
   // Fast/Slow Moving
   const fetchFastMovingProducts = async () => {
     const { data, error } = await supabase
@@ -377,6 +412,7 @@ function SalesPageContent() {
       .order("units_90d", { ascending: true });
     if (!error && data) setSlowMovingProducts(data.slice(0, 20));
   };
+
   useEffect(() => {
     fetchItems();
     fetchOrders();
@@ -384,36 +420,30 @@ function SalesPageContent() {
     fetchSlowMovingProducts();
     const inventoryChannel: RealtimeChannel = supabase
       .channel("inventory-channel")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "inventory" },
-        () => {
-          fetchItems();
-          fetchFastMovingProducts();
-          fetchSlowMovingProducts();
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "inventory" }, () => {
+        fetchItems();
+        fetchFastMovingProducts();
+        fetchSlowMovingProducts();
+      })
       .subscribe();
     const ordersChannel: RealtimeChannel = supabase
       .channel("orders-channel")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "orders" },
-        () => {
-          fetchOrders();
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, () => {
+        fetchOrders();
+      })
       .subscribe();
     return () => {
       supabase.removeChannel(inventoryChannel);
       supabase.removeChannel(ordersChannel);
     };
   }, []);
+
   useEffect(() => {
     if (!showModal && !showSalesOrderModal) {
       resetSalesForm();
     }
   }, [showModal, showSalesOrderModal]);
+
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
@@ -447,27 +477,24 @@ function SalesPageContent() {
     } catch (err) {
       console.error("Failed to log activity for order acceptance:", err);
     }
-    setSelectedOrder(order);
-    setEditedQuantities(order.order_items.map((item) => item.quantity));
-    setEditedDiscounts(order.order_items.map(() => 0));
-    setShowModal(true);
-    setNumberOfTerms(1);
-    setInterestPercent(0);
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "accepted" },
-    ]);
-  };
+
+ setSelectedOrder(order);
+  setEditedQuantities(order.order_items.map((item) => item.quantity));
+  setEditedDiscounts(order.order_items.map(() => 0));
+
+
+  setNumberOfTerms(order.payment_terms || 1);
+  setInterestPercent(order.interest_percent || interestFromTerms(order.payment_terms || 1));
+
+  // then open the modal
+  setShowModal(true);
+
+  setPickingStatus((prev) => [...prev, { orderId: order.id, status: "accepted" }]);
+};
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "rejected" },
-    ]);
-    await supabase
-      .from("orders")
-      .update({ status: "rejected" })
-      .eq("id", order.id);
+    setPickingStatus((prev) => [...prev, { orderId: order.id, status: "rejected" }]);
+    await supabase.from("orders").update({ status: "rejected" }).eq("id", order.id);
     try {
       const {
         data: { user },
@@ -500,11 +527,11 @@ function SalesPageContent() {
     fetchOrders();
   };
 
-  // --- 🎯 THE VALIDATED "COMPLETE" HANDLER ---
+  // --- COMPLETE HANDLER ---
   const handleOrderComplete = async () => {
     if (!selectedOrder || isCompletingOrder) return;
     setFieldErrors({ poNumber: false, repName: false });
-    let errors: any = {};
+    const errors: Record<string, boolean> = {};
     if (!poNumber || !poNumber.trim()) errors.poNumber = true;
     if (!repName || !repName.trim()) errors.repName = true;
     if (Object.keys(errors).length > 0) {
@@ -512,9 +539,10 @@ function SalesPageContent() {
       toast.error("Please fill all required fields!");
       return;
     }
+
     setIsCompletingOrder(true);
     try {
-      // 1. UPDATE FULFILLED QUANTITY for each item
+      // 1) Update fulfilled quantities
       for (let i = 0; i < selectedOrder.order_items.length; i++) {
         const oi = selectedOrder.order_items[i];
         await supabase
@@ -523,38 +551,38 @@ function SalesPageContent() {
           .eq("order_id", selectedOrder.id)
           .eq("inventory_id", oi.inventory.id);
       }
-      // 2. Update Inventory, Sales, etc (your existing logic)
+
+      // 2) Update inventory, discounts, and sales
       for (let i = 0; i < selectedOrder.order_items.length; i++) {
         const oi = selectedOrder.order_items[i];
         if (oi.inventory.quantity === 0) continue;
+
         const invId = oi.inventory.id;
         const remaining = oi.inventory.quantity - editedQuantities[i];
+
         if (remaining < 0) {
           toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
           setShowFinalConfirm(false);
           throw new Error("Insufficient stock");
         }
-        // Update inventory
-        await supabase
-          .from("inventory")
-          .update({ quantity: remaining })
-          .eq("id", invId);
-        // Update discount_percent in order_items
+
+        // Inventory
+        await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
+
+        // Discount percent
         await supabase
           .from("order_items")
-          .update({
-            discount_percent: editedDiscounts[i] || 0,
-          })
+          .update({ discount_percent: editedDiscounts[i] || 0 })
           .eq("order_id", selectedOrder.id)
           .eq("inventory_id", invId);
-        // Calculate earnings (profit per item)
+
+        // Sales row
         const qty = editedQuantities[i];
         const unitPrice = oi.price;
         const discountPercent = editedDiscounts[i] || 0;
         const costPrice = oi.inventory.cost_price || 0;
-        const earnings =
-          (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
-        // Insert to sales table
+        const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
+
         await supabase.from("sales").insert([
           {
             inventory_id: invId,
@@ -565,22 +593,20 @@ function SalesPageContent() {
           },
         ]);
       }
-      // ...Rest of your order completion logic...
+
       const isCredit = selectedOrder.customers.payment_type === "Credit";
+
+      // 3) Update the order with final amounts
       const updateFields = {
         status: "completed",
         date_completed: getPHISOString(),
-        sales_tax: isSalesTaxOn ? computedOrderTotal * 0.12 : 0,
+        sales_tax: salesTaxValue,
         po_number: poNumber,
         salesman: repName,
-        terms: isCredit
-          ? `Net ${numberOfTerms} Monthly`
-          : selectedOrder.customers.payment_type,
+        terms: isCredit ? `Net ${numberOfTerms} Monthly` : selectedOrder.customers.payment_type,
         payment_terms: isCredit ? numberOfTerms : null,
-        interest_percent: isCredit ? interestPercent : null,
-        grand_total_with_interest: isCredit
-          ? getGrandTotalWithInterest()
-          : null,
+        interest_percent: isCredit ? totals.effectiveInterestPercent : 0,
+        grand_total_with_interest: getGrandTotalWithInterest(), // always set final grand total
         per_term_amount: isCredit ? getPerTermAmount() : null,
         forwarder,
         processed_by_email: processor?.email ?? "unknown",
@@ -588,17 +614,17 @@ function SalesPageContent() {
         processed_by_role: processor?.role ?? "unknown",
         processed_at: getPHISOString(),
       } as const;
-      const { error: ordersErr } = await supabase
-        .from("orders")
-        .update(updateFields)
-        .eq("id", selectedOrder.id);
+
+      const { error: ordersErr } = await supabase.from("orders").update(updateFields).eq("id", selectedOrder.id);
       if (ordersErr) throw ordersErr;
-      // ✅ After marking the order as completed, mark this customer row as "Existing"
+
+      // 4) Customer becomes "Existing"
       await supabase
         .from("customers")
         .update({ customer_type: "Existing Customer" })
         .eq("code", selectedOrder.customers.code);
 
+      // 5) Activity log
       try {
         const {
           data: { user },
@@ -628,62 +654,21 @@ function SalesPageContent() {
           },
         ]);
       } catch (err) {
-        console.error(
-          "Failed to log activity for sales order completion:",
-          err
-        );
+        console.error("Failed to log activity for sales order completion:", err);
       }
+
       setShowSalesOrderModal(false);
       setShowModal(false);
       setShowFinalConfirm(false);
       resetSalesForm();
       setSelectedOrder(null);
-      setPickingStatus((prev) =>
-        prev.filter((p) => p.orderId !== selectedOrder.id)
-      );
+      setPickingStatus((prev) => prev.filter((p) => p.orderId !== selectedOrder.id));
       await Promise.all([fetchOrders(), fetchItems()]);
       toast.success("Order successfully completed!");
-      // Compose the HTML body for the receipt email
-      const receiptHtml = `
-  <h2>Thank you for your order with UniAsia!</h2>
-  <p><b>Order No:</b> ${selectedOrder.customers.code}</p>
-  <p><b>Name:</b> ${selectedOrder.customers.name}</p>
-  <p><b>Date:</b> ${new Date().toLocaleString("en-PH")}</p>
-  <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;margin-top:12px;">
-    <thead>
-      <tr>
-        <th>Product</th>
-        <th>Qty</th>
-        <th>Unit Price</th>
-        <th>Amount</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${selectedOrder.order_items
-        .map(
-          (item, idx) => `
-        <tr>
-          <td>${item.inventory.product_name}</td>
-          <td style="text-align:center">${editedQuantities[idx]}</td>
-          <td style="text-align:right">₱${item.price.toLocaleString()}</td>
-          <td style="text-align:right">₱${(
-            editedQuantities[idx] * item.price
-          ).toLocaleString()}</td>
-        </tr>
-        `
-        )
-        .join("")}
-    </tbody>
-  </table>
-  <p style="margin-top:18px;font-size:1.1em"><b>Total Paid: ₱${getGrandTotalWithInterest().toLocaleString(
-    undefined,
-    { minimumFractionDigits: 2 }
-  )}</b></p>
-  <p>If you have any questions, please contact UniAsia Support.<br>Thank you!</p>
-`;
 
-      // Send the email via your API
+      // 6) Send receipt
       try {
+        setIsSendingEmail(true);
         const emailRes = await fetch("/api/send-receipt", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -697,23 +682,20 @@ function SalesPageContent() {
         }
       } catch (err) {
         toast.error("Failed to send receipt email.");
+      } finally {
+        setIsSendingEmail(false);
       }
 
       setIsCompletingOrder(false);
     } catch (err: any) {
-      if (
-        err?.message &&
-        err.message.includes('unique constraint "unique_po_number"')
-      ) {
+      if (err?.message && err.message.includes('unique constraint "unique_po_number"')) {
         toast.error("PO Number is already used, try another.");
         setIsCompletingOrder(false);
         setShowFinalConfirm(false);
         setShowSalesOrderModal(true);
         return;
       }
-      toast.error(
-        `Failed to complete order: ${err?.message ?? "Unexpected error"}`
-      );
+      toast.error(`Failed to complete order: ${err?.message ?? "Unexpected error"}`);
       setIsCompletingOrder(false);
       setShowFinalConfirm(false);
       setShowSalesOrderModal(true);
@@ -742,18 +724,15 @@ function SalesPageContent() {
   const handleResetDiscount = (idx: number) => {
     setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
   };
+
   // --- RENDER ---
   return (
     <div className="p-6">
       {isCompletingOrder && <PageLoader label="Completing order…" />}
       {/* Header */}
       <div className="mb-6 -mt-4">
-        <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
-          Sales Processing
-        </h1>
-        <p className="text-sm text-gray-500 mt-2">
-          Manage customer orders, picking lists, and sales confirmations.
-        </p>
+        <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Sales Processing</h1>
+        <p className="text-sm text-gray-500 mt-2">Manage customer orders, picking lists, and sales confirmations.</p>
       </div>
 
       <input
@@ -772,20 +751,16 @@ function SalesPageContent() {
           title="Click to view Top 20 Fast Moving Products"
           onClick={() => setShowFastMovingModal(true)}
         >
-          <div className="text-xs text-gray-500 font-semibold mb-2">
-            Fast Moving Product
-          </div>
+          <div className="text-xs text-gray-500 font-semibold mb-2">Fast Moving Product</div>
           {fastMovingProducts.length > 0 ? (
             <>
               <div className="text-base font-bold text-blue-700 mb-1 underline hover:text-blue-900 transition">
                 {fastMovingProducts[0].product_name}
               </div>
               <div className="text-sm text-gray-600">
-                Sold in last 90d:{" "}
-                <b>{fastMovingProducts[0].units_90d.toLocaleString()}</b> units
+                Sold in last 90d: <b>{fastMovingProducts[0].units_90d.toLocaleString()}</b> units
                 <br />
-                Stock Left:{" "}
-                <b>{fastMovingProducts[0].current_stock.toLocaleString()}</b>
+                Stock Left: <b>{fastMovingProducts[0].current_stock.toLocaleString()}</b>
               </div>
             </>
           ) : (
@@ -799,20 +774,16 @@ function SalesPageContent() {
           title="Click to view Top 20 Slow Moving Products"
           onClick={() => setShowSlowMovingModal(true)}
         >
-          <div className="text-xs text-gray-500 font-semibold mb-2">
-            Slow Moving Product
-          </div>
+          <div className="text-xs text-gray-500 font-semibold mb-2">Slow Moving Product</div>
           {slowMovingProducts.length > 0 ? (
             <>
               <div className="text-base font-bold text-orange-600 mb-1 underline hover:text-orange-800 transition">
                 {slowMovingProducts[0].product_name}
               </div>
               <div className="text-sm text-gray-600">
-                Sold in last 90d:{" "}
-                <b>{slowMovingProducts[0].units_90d.toLocaleString()}</b> units
+                Sold in last 90d: <b>{slowMovingProducts[0].units_90d.toLocaleString()}</b> units
                 <br />
-                Stock Left:{" "}
-                <b>{slowMovingProducts[0].current_stock.toLocaleString()}</b>
+                Stock Left: <b>{slowMovingProducts[0].current_stock.toLocaleString()}</b>
               </div>
             </>
           ) : (
@@ -825,25 +796,17 @@ function SalesPageContent() {
           className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
           title="Total Orders"
         >
-          <div className="text-xs text-gray-500 font-semibold mb-2">
-            Total Orders
-          </div>
-          <div className="text-2xl font-bold text-black mb-1">
-            {totalOrders}
-          </div>
+          <div className="text-xs text-gray-500 font-semibold mb-2">Total Orders</div>
+          <div className="text-2xl font-bold text-black mb-1">{totalOrders}</div>
         </div>
 
         {/* Completed Orders */}
         <div
-          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
+          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:-translate-y-1 hover:shadow-lg transition"
           title="Completed Orders"
         >
-          <div className="text-xs text-gray-500 font-semibold mb-2">
-            Completed Orders
-          </div>
-          <div className="text-2xl font-bold text-blue-700 mb-1">
-            {completedOrders}
-          </div>
+          <div className="text-xs text-gray-500 font-semibold mb-2">Completed Orders</div>
+          <div className="text-2xl font-bold text-blue-700 mb-1">{completedOrders}</div>
         </div>
 
         {/* Pending Orders */}
@@ -852,26 +815,17 @@ function SalesPageContent() {
           title="Jump to Pending Orders"
           onClick={() => {
             if (pendingOrders > 0) {
-              const ordersSection = document.getElementById(
-                "pending-orders-section"
-              );
+              const ordersSection = document.getElementById("pending-orders-section");
               if (ordersSection) {
-                ordersSection.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                });
+                ordersSection.scrollIntoView({ behavior: "smooth", block: "start" });
               }
             } else {
               toast.info("No Available Orders");
             }
           }}
         >
-          <div className="text-xs text-gray-500 font-semibold mb-2">
-            Pending Orders
-          </div>
-          <div className="text-2xl font-bold text-orange-500 mb-1">
-            {pendingOrders}
-          </div>
+          <div className="text-xs text-gray-500 font-semibold mb-2">Pending Orders</div>
+          <div className="text-2xl font-bold text-orange-500 mb-1">{pendingOrders}</div>
         </div>
       </div>
 
@@ -883,14 +837,7 @@ function SalesPageContent() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
-            style={{
-              zIndex: 9999,
-              minHeight: "100vh",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "0",
-            }}
+            style={{ zIndex: 9999, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "0" }}
             onClick={() => setShowFastMovingModal(false)}
           >
             <motion.div
@@ -899,21 +846,12 @@ function SalesPageContent() {
               exit={{ scale: 0.97, y: 0 }}
               transition={{ type: "spring", stiffness: 400, damping: 32 }}
               className="bg-white rounded-2xl shadow-2xl w-full max-w-[98vw] md:max-w-4xl p-0 md:p-8 border border-blue-200 overflow-x-auto"
-              style={{
-                margin: "0 auto",
-                position: "relative",
-                maxHeight: "90vh",
-                overflowY: "auto",
-                boxSizing: "border-box",
-              }}
+              style={{ margin: "0 auto", position: "relative", maxHeight: "90vh", overflowY: "auto", boxSizing: "border-box" }}
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex justify-between items-center mb-6">
                 <span className="text-xl font-bold text-black">
-                  Top 20 Fast Moving Products{" "}
-                  <span className="font-normal text-base text-gray-600">
-                    (last 90 days)
-                  </span>
+                  Top 20 Fast Moving Products <span className="font-normal text-base text-gray-600">(last 90 days)</span>
                 </span>
                 <button
                   className="w-8 h-8 text-gray-400 hover:bg-gray-100 rounded-full flex items-center justify-center text-xl"
@@ -938,36 +876,20 @@ function SalesPageContent() {
                   </thead>
                   <tbody>
                     {fastMovingProducts.map((prod, idx) => (
-                      <tr
-                        key={prod.id}
-                        className="border-b hover:bg-blue-50/80"
-                      >
-                        <td className="py-2 px-3 font-semibold text-center">
-                          {idx + 1}
-                        </td>
-                        <td className="py-2 px-3 font-bold">
-                          {prod.product_name}
-                        </td>
+                      <tr key={prod.id} className="border-b hover:bg-blue-50/80">
+                        <td className="py-2 px-3 font-semibold text-center">{idx + 1}</td>
+                        <td className="py-2 px-3 font-bold">{prod.product_name}</td>
                         <td className="py-2 px-3">{prod.category}</td>
                         <td className="py-2 px-3">{prod.subcategory}</td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.units_90d.toLocaleString()}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.current_stock.toLocaleString()}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.est_days_of_cover
-                            ? prod.est_days_of_cover.toFixed(1)
-                            : "-"}
-                        </td>
+                        <td className="py-2 px-3 text-right">{prod.units_90d.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-right">{prod.current_stock.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-right">{prod.est_days_of_cover ? prod.est_days_of_cover.toFixed(1) : "-"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
                 <div className="text-xs text-gray-500 mt-4">
-                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last
-                  90 days). Shows how long the stock will last at current sales
+                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last 90 days). Shows how long the stock will last at current sales
                   velocity.
                 </div>
               </div>
@@ -984,14 +906,7 @@ function SalesPageContent() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
-            style={{
-              zIndex: 9999,
-              minHeight: "100vh",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "0",
-            }}
+            style={{ zIndex: 9999, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "0" }}
             onClick={() => setShowSlowMovingModal(false)}
           >
             <motion.div
@@ -1000,21 +915,12 @@ function SalesPageContent() {
               exit={{ scale: 0.97, y: 0 }}
               transition={{ type: "spring", stiffness: 400, damping: 32 }}
               className="bg-white rounded-2xl shadow-2xl w-full max-w-[98vw] md:max-w-4xl p-0 md:p-8 border border-orange-200 overflow-x-auto"
-              style={{
-                margin: "0 auto",
-                position: "relative",
-                maxHeight: "90vh",
-                overflowY: "auto",
-                boxSizing: "border-box",
-              }}
+              style={{ margin: "0 auto", position: "relative", maxHeight: "90vh", overflowY: "auto", boxSizing: "border-box" }}
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex justify-between items-center mb-6">
                 <span className="text-xl font-bold text-black">
-                  Top 20 Slow Moving Products{" "}
-                  <span className="font-normal text-base text-gray-600">
-                    (last 90 days)
-                  </span>
+                  Top 20 Slow Moving Products <span className="font-normal text-base text-gray-600">(last 90 days)</span>
                 </span>
                 <button
                   className="w-8 h-8 text-gray-400 hover:bg-gray-100 rounded-full flex items-center justify-center text-xl"
@@ -1039,36 +945,20 @@ function SalesPageContent() {
                   </thead>
                   <tbody>
                     {slowMovingProducts.map((prod, idx) => (
-                      <tr
-                        key={prod.id}
-                        className="border-b hover:bg-orange-50/80"
-                      >
-                        <td className="py-2 px-3 font-semibold text-center">
-                          {idx + 1}
-                        </td>
-                        <td className="py-2 px-3 font-bold">
-                          {prod.product_name}
-                        </td>
+                      <tr key={prod.id} className="border-b hover:bg-orange-50/80">
+                        <td className="py-2 px-3 font-semibold text-center">{idx + 1}</td>
+                        <td className="py-2 px-3 font-bold">{prod.product_name}</td>
                         <td className="py-2 px-3">{prod.category}</td>
                         <td className="py-2 px-3">{prod.subcategory}</td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.units_90d.toLocaleString()}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.current_stock.toLocaleString()}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.est_days_of_cover
-                            ? prod.est_days_of_cover.toFixed(1)
-                            : "-"}
-                        </td>
+                        <td className="py-2 px-3 text-right">{prod.units_90d.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-right">{prod.current_stock.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-right">{prod.est_days_of_cover ? prod.est_days_of_cover.toFixed(1) : "-"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
                 <div className="text-xs text-gray-500 mt-4">
-                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last
-                  90 days). Indicates how long the current inventory will last.
+                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last 90 days). Indicates how long the current inventory will last.
                 </div>
               </div>
             </motion.div>
@@ -1094,19 +984,12 @@ function SalesPageContent() {
           </thead>
           <tbody>
             {items
-              .filter((it) =>
-                it.product_name
-                  .toLowerCase()
-                  .includes(searchQuery.toLowerCase())
-              )
+              .filter((it) => it.product_name.toLowerCase().includes(searchQuery.toLowerCase()))
               .map((it) => (
                 <tr
                   key={it.id}
                   className={
-                    "border-b hover:bg-gray-100 " +
-                    (it.quantity === 0
-                      ? "bg-red-100 text-red-700 font-semibold"
-                      : "")
+                    "border-b hover:bg-gray-100 " + (it.quantity === 0 ? "bg-red-100 text-red-700 font-semibold" : "")
                   }
                 >
                   <td className="py-2 px-4">{it.sku}</td>
@@ -1115,17 +998,11 @@ function SalesPageContent() {
                   <td className="py-2 px-4">{it.subcategory}</td>
                   <td className="py-2 px-4">{it.unit}</td>
                   <td className="py-2 px-4 text-right">{it.quantity}</td>
+                  <td className="py-2 px-4 text-right">₱{it.unit_price?.toLocaleString()}</td>
                   <td className="py-2 px-4 text-right">
-                    ₱{it.unit_price?.toLocaleString()}
+                    {it.cost_price !== undefined && it.cost_price !== null ? `₱${it.cost_price.toLocaleString()}` : "—"}
                   </td>
-                  <td className="py-2 px-4 text-right">
-                    {it.cost_price !== undefined && it.cost_price !== null
-                      ? `₱${it.cost_price.toLocaleString()}`
-                      : "—"}
-                  </td>
-                  <td className="py-2 px-4 text-right">
-                    ₱{(it.unit_price * it.quantity).toLocaleString()}
-                  </td>
+                  <td className="py-2 px-4 text-right">₱{(it.unit_price * it.quantity).toLocaleString()}</td>
                 </tr>
               ))}
           </tbody>
@@ -1133,20 +1010,14 @@ function SalesPageContent() {
       </div>
 
       {/* Orders List */}
-      <div
-        className="mt-10"
-        id="pending-orders-section"
-        ref={pendingOrdersSectionRef}
-      >
+      <div className="mt-10" id="pending-orders-section" ref={pendingOrdersSectionRef}>
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
         {orders
           .filter((o) => o.status === "pending" || o.status === "accepted")
           .slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage)
           .map((order) => {
             const isAccepted = isOrderAccepted(order.id);
-            const isRejected = pickingStatus.some(
-              (p) => p.orderId === order.id && p.status === "rejected"
-            );
+            const isRejected = pickingStatus.some((p) => p.orderId === order.id && p.status === "rejected");
             return (
               <div
                 key={order.id}
@@ -1160,10 +1031,7 @@ function SalesPageContent() {
               >
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-bold text-xl">
-                    Transaction ID:{" "}
-                    <span className="text-blue-700">
-                      {order.customers.code}
-                    </span>
+                    Transaction ID: <span className="text-blue-700">{order.customers.code}</span>
                   </span>
                   <span
                     className={`font-bold px-3 py-1 rounded text-base ml-4 ${
@@ -1204,56 +1072,50 @@ function SalesPageContent() {
                       {item.inventory.product_name} - {item.quantity} pcs
                       <br />
                       <span className="text-sm text-gray-600">
-                        Ordered: ₱{item.price.toFixed(2)} | Now: ₱
-                        {item.inventory.unit_price?.toLocaleString()}
+                        Ordered: ₱{item.price.toFixed(2)} | Now: ₱{item.inventory.unit_price?.toLocaleString()}
                       </span>
                     </li>
                   ))}
                 </ul>
-                <p className="mt-2 font-bold text-lg">
-                  Total: ₱{order.total_amount.toLocaleString()}
-                </p>
-                {order.status !== "completed" &&
-                  order.status !== "rejected" && (
-                    <div className="flex gap-2 mt-2">
-                      {!isAccepted && !isRejected && (
-                        <>
-                          <button
-                            onClick={() => handleAcceptOrder(order)}
-                            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-base"
-                          >
-                            Accept Order
-                          </button>
-                          <button
-                            onClick={() => {
-                              setShowRejectConfirm(true);
-                              setOrderToReject(order);
-                            }}
-                            className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
-                          >
-                            Reject Order
-                          </button>
-                        </>
-                      )}
-                      {isAccepted && (
+                <p className="mt-2 font-bold text-lg">Total: ₱{order.total_amount.toLocaleString()}</p>
+                {order.status !== "completed" && order.status !== "rejected" && (
+                  <div className="flex gap-2 mt-2">
+                    {!isAccepted && !isRejected && (
+                      <>
+                        <button
+                          onClick={() => handleAcceptOrder(order)}
+                          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-base"
+                        >
+                          Accept Order
+                        </button>
                         <button
                           onClick={() => {
-                            setPickingStatus((prev) =>
-                              prev.filter((p) => p.orderId !== order.id)
-                            );
-                            setEditedQuantities([]);
-                            setEditedDiscounts([]);
-                            setSelectedOrder(null);
-                            setShowModal(false);
-                            setShowSalesOrderModal(false);
+                            setShowRejectConfirm(true);
+                            setOrderToReject(order);
                           }}
-                          className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                          className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
                         >
-                          Cancel
+                          Reject Order
                         </button>
-                      )}
-                    </div>
-                  )}
+                      </>
+                    )}
+                    {isAccepted && (
+                      <button
+                        onClick={() => {
+                          setPickingStatus((prev) => prev.filter((p) => p.orderId !== order.id));
+                          setEditedQuantities([]);
+                          setEditedDiscounts([]);
+                          setSelectedOrder(null);
+                          setShowModal(false);
+                          setShowSalesOrderModal(false);
+                        }}
+                        className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -1263,49 +1125,31 @@ function SalesPageContent() {
             onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
             disabled={currentPage === 1}
             className={`px-4 py-2 rounded ${
-              currentPage === 1
-                ? "bg-gray-300 text-gray-600 cursor-not-allowed"
-                : "bg-blue-600 text-white hover:bg-blue-700"
+              currentPage === 1 ? "bg-gray-300 text-gray-600 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"
             }`}
           >
             ← Prev
           </button>
           <span className="text-base font-semibold text-gray-700">
             Page {currentPage} of{" "}
-            {Math.ceil(
-              orders.filter(
-                (o) => o.status === "pending" || o.status === "accepted"
-              ).length / ordersPerPage
-            )}
+            {Math.ceil(orders.filter((o) => o.status === "pending" || o.status === "accepted").length / ordersPerPage)}
           </span>
           <button
             onClick={() =>
               setCurrentPage((p) =>
                 p <
-                Math.ceil(
-                  orders.filter(
-                    (o) => o.status === "pending" || o.status === "accepted"
-                  ).length / ordersPerPage
-                )
+                Math.ceil(orders.filter((o) => o.status === "pending" || o.status === "accepted").length / ordersPerPage)
                   ? p + 1
                   : p
               )
             }
             disabled={
               currentPage >=
-              Math.ceil(
-                orders.filter(
-                  (o) => o.status === "pending" || o.status === "accepted"
-                ).length / ordersPerPage
-              )
+              Math.ceil(orders.filter((o) => o.status === "pending" || o.status === "accepted").length / ordersPerPage)
             }
             className={`px-4 py-2 rounded ${
               currentPage >=
-              Math.ceil(
-                orders.filter(
-                  (o) => o.status === "pending" || o.status === "accepted"
-                ).length / ordersPerPage
-              )
+              Math.ceil(orders.filter((o) => o.status === "pending" || o.status === "accepted").length / ordersPerPage)
                 ? "bg-gray-300 text-gray-600 cursor-not-allowed"
                 : "bg-blue-600 text-white hover:bg-blue-700"
             }`}
@@ -1321,67 +1165,49 @@ function SalesPageContent() {
       {showModal &&
         selectedOrder &&
         (() => {
-          const hasZeroStock = selectedOrder.order_items.some(
-            (item) => item.inventory.quantity === 0
-          );
-
-          const hasInsufficientStock = selectedOrder.order_items.some(
-            (item, i) => {
-              const requested = editedQuantities[i] ?? item.quantity;
-              return requested > item.inventory.quantity;
-            }
-          );
-          const hasAnyInsufficient = selectedOrder.order_items.some(
-            (item, idx) => {
-              const qty = editedQuantities[idx] ?? item.quantity;
-              const stock = item.inventory.quantity;
-              return qty > stock || stock === 0;
-            }
-          );
+          const hasZeroStock = selectedOrder.order_items.some((item) => item.inventory.quantity === 0);
+          const hasInsufficientStock = selectedOrder.order_items.some((item, i) => {
+            const requested = editedQuantities[i] ?? item.quantity;
+            return requested > item.inventory.quantity;
+          });
+          const hasAnyInsufficient = selectedOrder.order_items.some((item, idx) => {
+            const qty = editedQuantities[idx] ?? item.quantity;
+            const stock = item.inventory.quantity;
+            return qty > stock || stock === 0;
+          });
 
           return (
             <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
               <div className="bg-white rounded-xl shadow-2xl w-[96vw] max-w-[1800px] mx-auto flex flex-col px-10 py-8 text-[15px] mt-16">
                 {/* PICKING LIST MODAL CONTENT */}
-                <h2 className="text-3xl font-bold mb-6 text-center text-gray-900 tracking-wide">
-                  Picking List
-                </h2>
+                <h2 className="text-3xl font-bold mb-6 text-center text-gray-900 tracking-wide">Picking List</h2>
 
                 {/* Customer & Payment Info */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                   <div className="bg-gray-50 border rounded-xl p-5 shadow-sm">
-                    <h3 className="text-lg font-semibold text-gray-700 mb-3">
-                      Customer Details
-                    </h3>
+                    <h3 className="text-lg font-semibold text-gray-700 mb-3">Customer Details</h3>
                     <p>
-                      <span className="font-bold">Name:</span>{" "}
-                      {selectedOrder.customers.name}
+                      <span className="font-bold">Name:</span> {selectedOrder.customers.name}
                     </p>
                     <p>
-                      <span className="font-bold">Email:</span>{" "}
-                      {selectedOrder.customers.email}
+                      <span className="font-bold">Email:</span> {selectedOrder.customers.email}
                     </p>
                     <p>
-                      <span className="font-bold">Phone:</span>{" "}
-                      {selectedOrder.customers.phone}
+                      <span className="font-bold">Phone:</span> {selectedOrder.customers.phone}
                     </p>
                     <p>
-                      <span className="font-bold">Address:</span>{" "}
-                      {selectedOrder.customers.address}
+                      <span className="font-bold">Address:</span> {selectedOrder.customers.address}
                     </p>
                     {selectedOrder.customers.area && (
                       <p>
-                        <span className="font-bold">Area:</span>{" "}
-                        {selectedOrder.customers.area}
+                        <span className="font-bold">Area:</span> {selectedOrder.customers.area}
                       </p>
                     )}
                   </div>
                   <div className="bg-gray-50 border rounded-xl p-5 shadow-sm flex flex-col gap-3">
-                    <h3 className="text-lg font-semibold text-gray-700 mb-2">
-                      Payment & Totals
-                    </h3>
+                    <h3 className="text-lg font-semibold text-gray-700 mb-2">Payment & Totals</h3>
 
-                    {/* TOTAL */}
+                    {/* TOTAL (after discount, before tax) */}
                     <div>
                       <span className="font-semibold">Total: </span>
                       <span className="text-2xl font-bold text-green-700">
@@ -1390,9 +1216,7 @@ function SalesPageContent() {
                           minimumFractionDigits: 2,
                         })}
                       </span>
-                      <div className="text-xs text-gray-500 ml-1">
-                        Sum of items after discount
-                      </div>
+                      <div className="text-xs text-gray-500 ml-1">Sum of items after discount</div>
                     </div>
 
                     {/* PAYMENT TYPE */}
@@ -1409,9 +1233,7 @@ function SalesPageContent() {
                       >
                         {selectedOrder.customers.payment_type || "N/A"}
                       </span>
-                      <div className="text-xs text-gray-500 ml-1">
-                        Customer chosen payment method
-                      </div>
+                      <div className="text-xs text-gray-500 ml-1">Customer chosen payment method</div>
                     </div>
 
                     {selectedOrder.customers.payment_type === "Credit" && (
@@ -1426,33 +1248,25 @@ function SalesPageContent() {
                           readOnly
                           className="border rounded px-2 py-1 w-20 text-center bg-gray-100 cursor-not-allowed opacity-70"
                         />
-
-                        <div className="text-xs text-gray-500 ml-1">
-                          Number of months to pay (max 48 months / 4 years)
-                        </div>
+                        <div className="text-xs text-gray-500 ml-1">Number of months to pay (max 48 months / 4 years)</div>
                       </div>
                     )}
 
                     {/* INTEREST % (only for Credit) */}
                     {selectedOrder.customers.payment_type === "Credit" && (
                       <div>
-                        <label className="font-semibold mr-2">
-                          Interest %:
-                        </label>
+                        <label className="font-semibold mr-2">Interest %:</label>
                         <input
                           type="number"
                           min={0}
                           max={30}
                           step={1}
-                          value={interestPercent}
+                          value={totals.effectiveInterestPercent}
                           disabled
                           readOnly
                           className="border rounded px-2 py-1 w-20 text-center bg-gray-100 cursor-not-allowed opacity-70"
                         />
-
-                        <div className="text-xs text-gray-500 ml-1">
-                          Interest applied to subtotal + tax
-                        </div>
+                        <div className="text-xs text-gray-500 ml-1">Interest applied to subtotal + tax</div>
                       </div>
                     )}
 
@@ -1465,15 +1279,10 @@ function SalesPageContent() {
                         id="sales-tax-toggle"
                         className="mr-2 accent-blue-600"
                       />
-                      <label
-                        htmlFor="sales-tax-toggle"
-                        className="font-semibold"
-                      >
+                      <label htmlFor="sales-tax-toggle" className="font-semibold">
                         Include Sales Tax (12%)
                       </label>
-                      <div className="text-xs text-gray-500 ml-6">
-                        Check to add 12% VAT to total
-                      </div>
+                      <div className="text-xs text-gray-500 ml-6">Check to add 12% VAT to total</div>
                     </div>
 
                     {/* SALES TAX VALUE */}
@@ -1485,63 +1294,47 @@ function SalesPageContent() {
                           minimumFractionDigits: 2,
                         })}
                       </span>
-                      <div className="text-xs text-gray-500 ml-1">
-                        Tax amount added to subtotal
-                      </div>
+                      <div className="text-xs text-gray-500 ml-1">Tax amount added to subtotal</div>
                     </div>
 
                     {/* INTEREST AMOUNT */}
                     {selectedOrder.customers.payment_type === "Credit" && (
                       <div>
-                        <span className="font-semibold">
-                          Interest Amount ({interestPercent}%):
-                        </span>
+                        <span className="font-semibold">Interest Amount ({totals.effectiveInterestPercent}%):</span>
                         <span>
+                          {" "}
                           ₱
-                          {(
-                            (computedOrderTotal + salesTaxValue) *
-                            (interestPercent / 100)
-                          ).toLocaleString(undefined, {
+                          {totals.interestAmount.toLocaleString(undefined, {
                             minimumFractionDigits: 2,
                           })}
                         </span>
-                        <div className="text-xs text-gray-500 ml-1">
-                          Additional cost due to credit terms
-                        </div>
+                        <div className="text-xs text-gray-500 ml-1">Additional cost due to credit terms</div>
                       </div>
                     )}
 
                     {/* GRAND TOTAL */}
                     <div className="border-t pt-3 text-sm">
-                      <span className="font-bold">
-                        Grand Total w/ Interest:
-                      </span>{" "}
+                      <span className="font-bold">Grand Total w/ Interest:</span>{" "}
                       <span className="font-bold text-blue-700">
                         ₱
                         {getGrandTotalWithInterest().toLocaleString(undefined, {
                           minimumFractionDigits: 2,
                         })}
                       </span>
-                      <div className="text-xs text-gray-500 ml-1">
-                        Final amount after tax & interest
-                      </div>
+                      <div className="text-xs text-gray-500 ml-1">Final amount after tax & interest</div>
                     </div>
 
                     {/* PER TERM */}
                     {selectedOrder.customers.payment_type === "Credit" && (
                       <div>
-                        <span className="font-bold">
-                          Per Term ({numberOfTerms}x):
-                        </span>
+                        <span className="font-bold">Per Term ({numberOfTerms}x):</span>
                         <span className="font-bold text-blue-700 ml-2">
                           ₱
                           {getPerTermAmount().toLocaleString(undefined, {
                             minimumFractionDigits: 2,
                           })}
                         </span>
-                        <div className="text-xs text-gray-500 ml-1">
-                          Amount due per installment/month
-                        </div>
+                        <div className="text-xs text-gray-500 ml-1">Amount due per installment/month</div>
                       </div>
                     )}
                   </div>
@@ -1562,7 +1355,6 @@ function SalesPageContent() {
                         <th className="py-2 px-3 text-right">Amount</th>
                       </tr>
                     </thead>
-
                     <tbody>
                       {selectedOrder.order_items.map((item, idx) => {
                         const qty = editedQuantities[idx] ?? item.quantity;
@@ -1571,19 +1363,15 @@ function SalesPageContent() {
                         const amount = qty * price * (1 - percent / 100);
 
                         const stock = item.inventory.quantity;
-                        const insufficient = qty > stock || stock === 0; // highlight rule
+                        const insufficient = qty > stock || stock === 0;
 
                         return (
                           <tr
                             key={idx}
                             className={
-                              "border-t hover:bg-gray-50 " +
-                              (insufficient
-                                ? "bg-red-100 text-red-700 font-semibold"
-                                : "")
+                              "border-t hover:bg-gray-50 " + (insufficient ? "bg-red-100 text-red-700 font-semibold" : "")
                             }
                           >
-                            {/* Quantity */}
                             <td className="py-2 px-3">
                               <input
                                 type="number"
@@ -1594,51 +1382,28 @@ function SalesPageContent() {
                                 className="border rounded px-2 py-1 w-24 text-center bg-gray-100 font-medium opacity-70 cursor-not-allowed"
                               />
                             </td>
-
-                            {/* Unit */}
                             <td className="py-2 px-3">{item.inventory.unit}</td>
-
-                            {/* Description */}
                             <td className="py-2 px-3">
-                              <div className="font-semibold">
-                                {item.inventory.product_name}
-                              </div>
-                              <div className="text-xs text-gray-500">
-                                SKU: {item.inventory.sku}
-                              </div>
+                              <div className="font-semibold">{item.inventory.product_name}</div>
+                              <div className="text-xs text-gray-500">SKU: {item.inventory.sku}</div>
                             </td>
-
-                            {/* Notes */}
                             <td className="py-2 px-3">
                               {stock === 0 ? (
-                                <span className="text-red-600 font-semibold">
-                                  Out of Stock
-                                </span>
+                                <span className="text-red-600 font-semibold">Out of Stock</span>
                               ) : qty > stock ? (
                                 <span className="text-orange-600 font-semibold">
-                                  Insufficient (Requested {qty}, In stock{" "}
-                                  {stock})
+                                  Insufficient (Requested {qty}, In stock {stock})
                                 </span>
                               ) : (
-                                <span className="text-green-600">
-                                  Available
-                                </span>
+                                <span className="text-green-600">Available</span>
                               )}
                             </td>
-
-                            {/* Unit Price */}
+                            <td className="py-2 px-3 text-right">₱{price.toLocaleString()}</td>
                             <td className="py-2 px-3 text-right">
-                              ₱{price.toLocaleString()}
-                            </td>
-                            {/* Cost Price */}
-                            <td className="py-2 px-3 text-right">
-                              {item.inventory.cost_price !== undefined &&
-                              item.inventory.cost_price !== null
+                              {item.inventory.cost_price !== undefined && item.inventory.cost_price !== null
                                 ? `₱${item.inventory.cost_price.toLocaleString()}`
                                 : "—"}
                             </td>
-
-                            {/* Discount/Add (%) */}
                             <td className="py-2 px-3 text-right align-middle">
                               <div className="flex items-center justify-end gap-1">
                                 <input
@@ -1646,66 +1411,42 @@ function SalesPageContent() {
                                   value={percent}
                                   disabled={item.inventory.quantity === 0}
                                   onChange={(e) => {
-                                    let p = parseFloat(
-                                      e.target.value.replace(/[^0-9]/g, "")
-                                    );
+                                    let p = parseFloat(e.target.value.replace(/[^0-9]/g, ""));
                                     if (isNaN(p)) p = 0;
                                     if (p > 50) p = 50;
                                     if (p < 0) p = 0;
-                                    setEditedDiscounts((prev) =>
-                                      prev.map((d, i) => (i === idx ? p : d))
-                                    );
+                                    setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
                                   }}
                                   className={`w-14 text-center border rounded px-1 py-0.5 font-bold ${
-                                    item.inventory.quantity === 0
-                                      ? "bg-gray-200 text-gray-400 cursor-not-allowed opacity-70"
-                                      : ""
+                                    item.inventory.quantity === 0 ? "bg-gray-200 text-gray-400 cursor-not-allowed opacity-70" : ""
                                   }`}
                                   min={0}
                                   max={50}
                                   step={1}
                                   style={{ fontWeight: 600, color: "#222" }}
-                                  tabIndex={
-                                    item.inventory.quantity === 0 ? -1 : 0
-                                  }
+                                  tabIndex={item.inventory.quantity === 0 ? -1 : 0}
                                 />
                                 <span className="ml-1">%</span>
                                 <button
                                   className={`text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 active:bg-blue-200 transition ${
-                                    item.inventory.quantity === 0
-                                      ? "opacity-50 cursor-not-allowed"
-                                      : ""
+                                    item.inventory.quantity === 0 ? "opacity-50 cursor-not-allowed" : ""
                                   }`}
                                   style={{ fontSize: "11px" }}
-                                  onClick={() =>
-                                    setEditedDiscounts((prev) =>
-                                      prev.map((d, i) => (i === idx ? 0 : d))
-                                    )
-                                  }
+                                  onClick={() => setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)))}
                                   type="button"
                                   disabled={item.inventory.quantity === 0}
-                                  tabIndex={
-                                    item.inventory.quantity === 0 ? -1 : 0
-                                  }
+                                  tabIndex={item.inventory.quantity === 0 ? -1 : 0}
                                 >
                                   Reset
                                 </button>
                               </div>
-                              {/* Optionally show a note if disabled */}
                               {item.inventory.quantity === 0 && (
-                                <div className="text-xs text-red-500 mt-1">
-                                  Out of stock – cannot apply discount
-                                </div>
+                                <div className="text-xs text-red-500 mt-1">Out of stock – cannot apply discount</div>
                               )}
                             </td>
-
-                            {/* Amount */}
                             <td className="py-2 px-3 text-right font-semibold">
                               ₱
-                              {(item.inventory.quantity === 0
-                                ? 0
-                                : amount
-                              ).toLocaleString(undefined, {
+                              {(item.inventory.quantity === 0 ? 0 : amount).toLocaleString(undefined, {
                                 minimumFractionDigits: 2,
                               })}
                             </td>
@@ -1716,38 +1457,25 @@ function SalesPageContent() {
                   </table>
                 </div>
 
-                {/* Action Buttons */}
-
-                {/* Optional warning banner if there are stock issues */}
                 {(hasZeroStock || hasInsufficientStock) && (
                   <div className="mt-4 mb-2 rounded-lg border border-orange-300 bg-orange-50 px-4 py-2 text-sm text-orange-700 text-center">
                     Cannot Proceed please review the highlighted items above.
                   </div>
                 )}
 
-                {/* Action Buttons */}
                 <div className="flex justify-center gap-8 mt-6">
                   <button
                     className={
                       "bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow transition " +
-                      (hasAnyInsufficient
-                        ? "opacity-60 cursor-not-allowed bg-gray-400 hover:bg-gray-400"
-                        : "hover:bg-green-700")
+                      (hasAnyInsufficient ? "opacity-60 cursor-not-allowed bg-gray-400 hover:bg-gray-400" : "hover:bg-green-700")
                     }
                     onClick={async () => {
                       if (!hasAnyInsufficient) {
-                        // Update orders.status to 'accepted'
-                        const { error } = await supabase
-                          .from("orders")
-                          .update({ status: "accepted" })
-                          .eq("id", selectedOrder.id);
+                        const { error } = await supabase.from("orders").update({ status: "accepted" }).eq("id", selectedOrder.id);
                         if (error) {
-                          toast.error(
-                            "Failed to accept order: " + error.message
-                          );
+                          toast.error("Failed to accept order: " + error.message);
                           return;
                         }
-                        // Optionally: Insert your activity log for "Accept Sales Order" here if you want.
                         setShowModal(false);
                         setShowSalesOrderModal(true);
                       }
@@ -1760,7 +1488,6 @@ function SalesPageContent() {
                   <button
                     className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
                     onClick={() => {
-                      // Reset states back to default
                       setShowModal(false);
                       setShowSalesOrderModal(false);
                       setShowFinalConfirm(false);
@@ -1783,23 +1510,18 @@ function SalesPageContent() {
           );
         })()}
 
-      {/* SALES ORDER MODAL (Confirmation Layout) */}
+      {/* SALES ORDER MODAL */}
       {showSalesOrderModal && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-2xl w-[96vw] h-[94vh] mx-auto flex flex-col gap-6 px-10 py-8 my-4 text-[15px] max-w-none max-h-[94vh] overflow-y-auto mt-16">
-            <h2
-              className="text-3xl font-bold mb-6 tracking-wide text-center text-gray-800"
-              style={{ letterSpacing: "0.07em" }}
-            >
+            <h2 className="text-3xl font-bold mb-6 tracking-wide text-center text-gray-800" style={{ letterSpacing: "0.07em" }}>
               SALES ORDER
             </h2>
             <div className="flex flex-col md:flex-row md:justify-between mb-2 gap-2">
               <div>
                 <div>
                   <span className="font-medium">Sales Order Number: </span>
-                  <span className="text-lg text-blue-700 font-bold">
-                    {selectedOrder.customers.code}
-                  </span>
+                  <span className="text-lg text-blue-700 font-bold">{selectedOrder.customers.code}</span>
                 </div>
                 <div>
                   <span className="font-medium">Sales Order Date: </span>
@@ -1807,11 +1529,9 @@ function SalesPageContent() {
                 </div>
               </div>
               <div className="text-right space-y-1">
-                <div className="text-right space-y-1">
-                  {/* Payment Terms display stays here */}
-                </div>
+                <div className="text-right space-y-1">{/* Payment Terms display stays here */}</div>
 
-                {/* PO Number — digits only, max 6, with “No.” prefix */}
+                {/* PO Number */}
                 <div className="flex items-baseline gap-2">
                   <span className="font-medium">PO Number:</span>
                   <span className="text-gray-700">No.</span>
@@ -1821,56 +1541,34 @@ function SalesPageContent() {
                     maxLength={6}
                     value={poNumber}
                     onChange={(e) => {
-                      // keep only digits, clamp to 6 chars
-                      const digitsOnly = e.target.value
-                        .replace(/\D/g, "")
-                        .slice(0, 6);
+                      const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 6);
                       setPoNumber(digitsOnly);
-                      if (fieldErrors.poNumber)
-                        setFieldErrors((f) => ({ ...f, poNumber: false }));
+                      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
                     }}
                     onPaste={(e) => {
-                      // ensure pasted content follows the same rule
                       e.preventDefault();
-                      const text = (e.clipboardData.getData("text") || "")
-                        .replace(/\D/g, "")
-                        .slice(0, 6);
+                      const text = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 6);
                       setPoNumber(text);
-                      if (fieldErrors.poNumber)
-                        setFieldErrors((f) => ({ ...f, poNumber: false }));
+                      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
                     }}
                     className={`border-b outline-none px-1 transition-all duration-150 tracking-widest tabular-nums ${
-                      fieldErrors.poNumber
-                        ? "border-red-500 bg-red-50 animate-shake"
-                        : "border-gray-300"
+                      fieldErrors.poNumber ? "border-red-500 bg-red-50 animate-shake" : "border-gray-300"
                     }`}
                     style={{ minWidth: 110 }}
                     placeholder="000000"
                     aria-label="PO Number (numbers only, max 6)"
                   />
                 </div>
-                {fieldErrors.poNumber && (
-                  <div className="text-xs text-red-600 mt-1">
-                    PO Number is required
-                  </div>
-                )}
+                {fieldErrors.poNumber && <div className="text-xs text-red-600 mt-1">PO Number is required</div>}
 
                 <div>
                   <span className="font-medium">Processed By: </span>
-                  <span className="font-semibold">
-                    {processor?.name || "Unknown"}
-                  </span>
-                  <span className="text-gray-500">
-                    {" "}
-                    ({processor?.email || "-"})
-                  </span>
-                  {processor?.role && (
-                    <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-100">
-                      {processor.role}
-                    </span>
-                  )}
+                  <span className="font-semibold">{processor?.name || "Unknown"}</span>
+                  <span className="text-gray-500"> ({processor?.email || "-"})</span>
+                  {processor?.role && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-100">{processor.role}</span>}
                 </div>
-                {/* Sales Rep Name — letters + spaces only, max 30 chars */}
+
+                {/* Sales Rep Name */}
                 <div>
                   <span className="font-medium">Sales Rep Name: </span>
                   <input
@@ -1878,37 +1576,24 @@ function SalesPageContent() {
                     maxLength={30}
                     value={repName}
                     onChange={(e) => {
-                      // allow only letters and spaces, clamp to 30
-                      const lettersOnly = e.target.value
-                        .replace(/[^A-Za-z\s]/g, "")
-                        .slice(0, 30);
+                      const lettersOnly = e.target.value.replace(/[^A-Za-z\s]/g, "").slice(0, 30);
                       setRepName(lettersOnly);
-                      if (fieldErrors.repName)
-                        setFieldErrors((f) => ({ ...f, repName: false }));
+                      if (fieldErrors.repName) setFieldErrors((f) => ({ ...f, repName: false }));
                     }}
                     onPaste={(e) => {
                       e.preventDefault();
-                      const text = (e.clipboardData.getData("text") || "")
-                        .replace(/[^A-Za-z\s]/g, "")
-                        .slice(0, 30);
+                      const text = (e.clipboardData.getData("text") || "").replace(/[^A-Za-z\s]/g, "").slice(0, 30);
                       setRepName(text);
-                      if (fieldErrors.repName)
-                        setFieldErrors((f) => ({ ...f, repName: false }));
+                      if (fieldErrors.repName) setFieldErrors((f) => ({ ...f, repName: false }));
                     }}
                     className={`border-b outline-none px-1 transition-all duration-150 ${
-                      fieldErrors.repName
-                        ? "border-red-500 bg-red-50 animate-shake"
-                        : "border-gray-300"
+                      fieldErrors.repName ? "border-red-500 bg-red-50 animate-shake" : "border-gray-300"
                     }`}
                     style={{ minWidth: 120 }}
                     placeholder="Input Rep (letters only)"
                     aria-label="Sales Rep Name (letters only, max 30)"
                   />
-                  {fieldErrors.repName && (
-                    <div className="text-xs text-red-600 mt-1">
-                      Sales Rep Name is required
-                    </div>
-                  )}
+                  {fieldErrors.repName && <div className="text-xs text-red-600 mt-1">Sales Rep Name is required</div>}
                 </div>
 
                 <div>
@@ -1916,9 +1601,7 @@ function SalesPageContent() {
                   {selectedOrder.customers.payment_type === "Credit" ? (
                     <>
                       Net {numberOfTerms} Monthly
-                      <span className="text-gray-500 ml-2">
-                        (Terms: {numberOfTerms})
-                      </span>
+                      <span className="text-gray-500 ml-2">(Terms: {numberOfTerms})</span>
                     </>
                   ) : (
                     selectedOrder.customers.payment_type
@@ -1926,6 +1609,7 @@ function SalesPageContent() {
                 </div>
               </div>
             </div>
+
             {/* CUSTOMER DETAILS */}
             <div className="bg-[#f6f6f9] border rounded-lg px-4 py-3 mb-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 text-[15px]">
               <div>
@@ -1963,6 +1647,7 @@ function SalesPageContent() {
                 )}
               </div>
             </div>
+
             {/* Item Table */}
             <div className="rounded-xl border mt-3">
               <table className="w-full text-[15px]">
@@ -1978,57 +1663,37 @@ function SalesPageContent() {
                     <th className="py-1 px-2 text-right">Amount</th>
                   </tr>
                 </thead>
-
                 <tbody>
                   {selectedOrder.order_items.map((item, idx) => {
                     const qty = editedQuantities[idx] ?? item.quantity;
                     const price = item.price;
                     const percent = editedDiscounts[idx] || 0;
                     const amount = qty * price * (1 - percent / 100);
-
                     const stock = item.inventory.quantity;
-                    const insufficient = qty > stock || stock === 0;
 
                     return (
                       <tr key={idx} className="border-t text-[14px]">
                         <td className="py-1 px-2">{qty}</td>
                         <td className="py-1 px-2">{item.inventory.unit}</td>
-                        <td className="py-1 px-2 font-semibold">
-                          {item.inventory.product_name}
-                        </td>
+                        <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
                         <td className="py-1 px-2">
                           {stock === 0 ? (
-                            <span className="text-red-600 font-semibold">
-                              Out of Stock
-                            </span>
+                            <span className="text-red-600 font-semibold">Out of Stock</span>
                           ) : qty > stock ? (
-                            <span className="text-orange-600 font-semibold">
-                              Insufficient (Requested {qty}, In stock {stock})
-                            </span>
+                            <span className="text-orange-600 font-semibold">Insufficient (Requested {qty}, In stock {stock})</span>
                           ) : (
                             <span className="text-green-600">Available</span>
                           )}
                         </td>
+                        <td className="py-1 px-2 text-right">₱{price.toLocaleString()}</td>
                         <td className="py-1 px-2 text-right">
-                          ₱{price.toLocaleString()}
-                        </td>
-                        <td className="py-1 px-2 text-right">
-                          {item.inventory.cost_price !== undefined &&
-                          item.inventory.cost_price !== null
+                          {item.inventory.cost_price !== undefined && item.inventory.cost_price !== null
                             ? `₱${item.inventory.cost_price.toLocaleString()}`
                             : "—"}
                         </td>
-                        {/* --- DISCOUNT COLUMN (blank if 0 or empty) --- */}
                         <td className="py-1 px-2 text-right font-semibold">
-                          {item.quantity === 0
-                            ? ""
-                            : typeof editedDiscounts[idx] === "number" &&
-                              editedDiscounts[idx] !== 0
-                            ? `${editedDiscounts[idx]}%`
-                            : ""}
+                          {typeof editedDiscounts[idx] === "number" && editedDiscounts[idx] !== 0 ? `${editedDiscounts[idx]}%` : ""}
                         </td>
-
-                        {/* --- AMOUNT COLUMN (always show computed value) --- */}
                         <td className="py-1 px-2 text-right font-semibold">
                           ₱
                           {amount.toLocaleString(undefined, {
@@ -2041,16 +1706,14 @@ function SalesPageContent() {
                 </tbody>
               </table>
             </div>
+
             {/* Totals and Terms */}
             <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
               <div className="space-y-2 min-w-[350px]">
-                {/* Subtotal */}
                 <div className="flex justify-between font-medium">
                   <span>
                     Subtotal:
-                    <div className="text-xs text-gray-500">
-                      Sum before tax & discount
-                    </div>
+                    <div className="text-xs text-gray-500">Sum before tax & discount</div>
                   </span>
                   <span>
                     ₱
@@ -2060,13 +1723,10 @@ function SalesPageContent() {
                   </span>
                 </div>
 
-                {/* Sales Tax */}
                 <div className="flex justify-between">
                   <span>
                     Sales Tax (12%):
-                    <div className="text-xs text-gray-500">
-                      Tax applied to subtotal
-                    </div>
+                    <div className="text-xs text-gray-500">Tax applied to subtotal</div>
                   </span>
                   <span>
                     ₱
@@ -2076,75 +1736,50 @@ function SalesPageContent() {
                   </span>
                 </div>
 
-                {/* Total Discount */}
                 <div className="flex justify-between">
                   <span>
                     Discount/Add:
-                    <div className="text-xs text-gray-500">
-                      Sum of per-item discounts/adds
-                    </div>
+                    <div className="text-xs text-gray-500">Sum of per-item discounts/adds</div>
                   </span>
-                  <span
-                    className={
-                      totalDiscount !== 0 ? "text-orange-600 font-semibold" : ""
-                    }
-                  >
+                  <span className={totalDiscount !== 0 ? "text-orange-600 font-semibold" : ""}>
                     {totalDiscount === 0
                       ? "—"
-                      : `${totalDiscount > 0 ? "-" : "+"}₱${Math.abs(
-                          totalDiscount
-                        ).toLocaleString(undefined, {
+                      : `-₱${Math.abs(totalDiscount).toLocaleString(undefined, {
                           minimumFractionDigits: 2,
                         })}`}
                   </span>
                 </div>
 
-                {/* Subtotal with Tax/Discount */}
                 <div className="flex justify-between">
                   <span>
                     Subtotal w/ Tax & Discount:
-                    <div className="text-xs text-gray-500">
-                      Subtotal after discount & tax
-                    </div>
+                    <div className="text-xs text-gray-500">Subtotal after discount & tax</div>
                   </span>
                   <span>
                     ₱
-                    {(
-                      subtotalBeforeDiscount +
-                      salesTaxValue -
-                      totalDiscount
-                    ).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    {(subtotalBeforeDiscount + salesTaxValue - totalDiscount).toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                    })}
                   </span>
                 </div>
 
-                {/* Interest (for Credit) */}
                 {selectedOrder.customers.payment_type === "Credit" && (
                   <div className="flex justify-between">
                     <span>
-                      Interest Amount ({interestPercent}%):
-                      <div className="text-xs text-gray-500">
-                        For credit terms
-                      </div>
+                      Interest Amount ({totals.effectiveInterestPercent}%):
+                      <div className="text-xs text-gray-500">For credit terms</div>
                     </span>
                     <span>
                       ₱
-                      {(
-                        (subtotalBeforeDiscount +
-                          salesTaxValue -
-                          totalDiscount) *
-                        (interestPercent / 100)
-                      ).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      {totals.interestAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </span>
                   </div>
                 )}
 
-                {/* Grand Total */}
                 <div className="flex justify-between text-xl font-bold border-t pt-2">
                   <span>
                     TOTAL ORDER AMOUNT:
-                    <div className="text-xs text-gray-500">
-                      Final total (tax, discount &amp; interest)
-                    </div>
+                    <div className="text-xs text-gray-500">Final total (tax, discount &amp; interest)</div>
                   </span>
                   <span className="text-green-700">
                     ₱
@@ -2154,14 +1789,11 @@ function SalesPageContent() {
                   </span>
                 </div>
 
-                {/* Per Term (for Credit) */}
                 {selectedOrder.customers.payment_type === "Credit" && (
                   <div className="flex justify-between">
                     <span>
                       Payment per Term:
-                      <div className="text-xs text-gray-500">
-                        Amount per installment/month
-                      </div>
+                      <div className="text-xs text-gray-500">Amount per installment/month</div>
                     </span>
                     <span className="font-bold text-blue-700">
                       ₱
@@ -2173,18 +1805,13 @@ function SalesPageContent() {
                 )}
               </div>
             </div>
+
             {/* Action Buttons */}
             <div className="flex justify-center gap-8 mt-6">
-              <button
-                className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
-                onClick={handleOrderConfirm}
-              >
+              <button className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition" onClick={handleOrderConfirm}>
                 Confirm
               </button>
-              <button
-                className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-                onClick={handleBackModal}
-              >
+              <button className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition" onClick={handleBackModal}>
                 Back
               </button>
             </div>
@@ -2197,13 +1824,9 @@ function SalesPageContent() {
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl mx-auto p-10 text-center">
             <div className="text-xl font-bold mb-6 text-gray-800">
-              Are you sure you want to{" "}
-              <span className="text-green-700">COMPLETE</span> this order?
+              Are you sure you want to <span className="text-green-700">COMPLETE</span> this order?
             </div>
-            <div className="text-base mb-6">
-              This will deduct the items from inventory, mark the order as
-              completed, and record the sales transaction.
-            </div>
+            <div className="text-base mb-6">This will deduct the items from inventory, mark the order as completed, and record the sales transaction.</div>
             <div className="flex justify-center gap-10 mt-4">
               <button
                 className={`bg-green-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition flex items-center justify-center ${
@@ -2225,9 +1848,7 @@ function SalesPageContent() {
 
               <button
                 className={`bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow transition ${
-                  isCompletingOrder
-                    ? "opacity-50 cursor-not-allowed"
-                    : "hover:bg-gray-500"
+                  isCompletingOrder ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-500"
                 }`}
                 onClick={() => setShowFinalConfirm(false)}
                 disabled={isCompletingOrder}
@@ -2238,17 +1859,15 @@ function SalesPageContent() {
           </div>
         </div>
       )}
+
       {/* --- REJECT CONFIRMATION MODAL --- */}
       {showRejectConfirm && orderToReject && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-auto p-8 text-center">
             <div className="text-xl font-bold mb-6 text-gray-800">
-              Are you sure you want to{" "}
-              <span className="text-red-600">REJECT</span> this order?
+              Are you sure you want to <span className="text-red-600">REJECT</span> this order?
             </div>
-            <div className="text-base mb-6">
-              This will permanently reject the order and notify the customer.
-            </div>
+            <div className="text-base mb-6">This will permanently reject the order and notify the customer.</div>
             <div className="flex justify-center gap-8 mt-4">
               <button
                 className="bg-red-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-red-700 transition"
@@ -2276,6 +1895,7 @@ function SalesPageContent() {
     </div>
   );
 }
+
 export default function SalesPage() {
   return (
     <Suspense fallback={<PageLoader label="Loading sales…" />}>
