@@ -114,8 +114,12 @@ export default function AdminPaymentsPage() {
   const [confirmType, setConfirmType] = useState<"receive" | "reject" | null>(null);
   const [targetRow, setTargetRow] = useState<PaymentRow | null>(null);
 
-  // row-level lock so BOTH buttons disable after confirming
-  const [locked, setLocked] = useState<Set<string>>(new Set());
+// row-level lock so BOTH buttons disable after confirming
+const [locked, setLocked] = useState<Set<string>>(new Set());
+
+// NEW: prevent double-submit on the confirm modal
+const [confirmBusy, setConfirmBusy] = useState(false);
+
 
   /* ------------------------------ Load data ------------------------------ */
   useEffect(() => {
@@ -249,109 +253,78 @@ export default function AdminPaymentsPage() {
   }
 
   /* ------------------------------ Actions ------------------------------- */
-  async function handleConfirm() {
-    if (!targetRow || !confirmType) return;
+async function handleConfirm() {
+  if (!targetRow || !confirmType) return;
+  if (confirmBusy) return;                 // <-- double-click guard
+  setConfirmBusy(true);
 
-    // lock the row immediately => both buttons disable
-    setLocked((prev) => new Set(prev).add(targetRow.id));
+  // lock the row immediately => both buttons disable
+  setLocked(prev => new Set(prev).add(targetRow.id));
 
-    try {
-if (confirmType === "receive") {
-  if (!meEmail) throw new Error("Missing admin email; please re-login.");
-
-  const orderId = String(targetRow.order_id || "");
-  const amt = Number(targetRow.amount || 0);
-  if (!orderId) throw new Error("Payment is missing order_id.");
-  if (!(amt > 0)) throw new Error("Amount must be greater than 0.");
-
-  // 1) Apply the money to the order's installments (server-side)
-  const { error: rpcErr } = await supabase.rpc("apply_payment_to_installments", {
-    p_order_id: orderId,
-    p_amount: amt,
-  });
-  if (rpcErr) {
-    // Unlock row since we didn't update anything yet
-    setLocked((prev) => {
-      const next = new Set(prev);
-      next.delete(targetRow.id);
-      return next;
-    });
-    throw new Error(`Could not apply to installments: ${rpcErr.message}`);
-  }
-
-  // 2) Mark this payment as received (guard against double processing)
-  const { data: updated, error } = await supabase
-    .from("payments")
-    .update({
-      status: "received",
-      received_at: new Date().toISOString(),
-      received_by: meEmail,
-    })
-    .eq("id", targetRow.id)
-    .eq("status", "pending")
-    .select("id")
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!updated) {
-    toast.warning("This cheque was already processed by someone else.");
-    return;
-  }
-
-  // update local state
-  setPayments((prev) =>
-    prev.map((p) =>
-      p.id === targetRow.id
-        ? {
-            ...p,
-            status: "received",
-            received_at: new Date().toISOString(),
-            received_by: meEmail,
-          }
-        : p
-    )
-  );
-
-  await logActivity("Mark Payment as Received", {
-    payment_id: targetRow.id,
-    customer_id: targetRow.customer_id,
-    amount: targetRow.amount,
-    cheque_number: targetRow.cheque_number,
-    bank_name: targetRow.bank_name,
-    order_id: orderId,
-  });
-
-  // Try to send the email, but don't block success
   try {
-    await notifyCustomerByEmail(targetRow.id, "receive");
-    toast.success("Payment received and applied. Email sent to customer.");
-  } catch (emailErr: any) {
-    console.error("[email receive] failed:", emailErr);
-    toast.message("Payment received and applied.", {
-      description:
-        typeof emailErr?.message === "string"
-          ? `Email not sent: ${emailErr.message}`
-          : "Email not sent.",
-    });
+    if (confirmType === "receive") {
+      // ===== RECEIVE BLOCK (atomic RPC) =====
+      if (!meEmail) throw new Error("Missing admin email; please re-login.");
+      const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
+  p_payment_id: targetRow.id,
+  p_admin_email: meEmail,
+});
+
+      if (rpcErr) {
+        // unlock row on failure
+        setLocked(prev => { const next = new Set(prev); next.delete(targetRow.id); return next; });
+        const msg = String(rpcErr.message || "");
+        throw new Error(
+          msg.includes("already processed") ? "This payment was already processed." : msg
+        );
+      }
+
+      // Optimistic UI update
+      setPayments(prev =>
+        prev.map(p =>
+          p.id === targetRow.id
+            ? { ...p, status: "received", received_at: new Date().toISOString(), received_by: meEmail }
+            : p
+        )
+      );
+
+      toast.success("Payment received and applied to installments.");
+      // (optional) notify + logActivity as you already have
+    } else if (confirmType === "reject") {
+      // ===== KEEP your existing REJECT logic =====
+      const { data: updated, error } = await supabase
+        .from("payments")
+        .update({ status: "rejected" })
+        .eq("id", targetRow.id)
+        .eq("status", "pending")
+        .select("id")
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!updated) {
+        toast.warning("This cheque was already processed by someone else.");
+        return;
+      }
+
+      setPayments(prev =>
+        prev.map(p => (p.id === targetRow.id ? { ...p, status: "rejected" } : p))
+      );
+
+      toast.success("Payment rejected.");
+    }
+  } catch (err: any) {
+    console.error(err);
+    toast.error(err?.message || "Action failed.");
+    // rollback row lock if DB action failed
+    setLocked(prev => { const next = new Set(prev); if (targetRow) next.delete(targetRow.id); return next; });
+  } finally {
+    setConfirmBusy(false);                 // <-- release the guard
+    setConfirmOpen(false);
+    setTargetRow(null);
+    setConfirmType(null);
   }
 }
 
-    } catch (err: any) {
-      console.error(err);
-      toast.error(err?.message || "Action failed.");
-      // rollback lock only if the DB action failed
-      setLocked((prev) => {
-        const next = new Set(prev);
-        if (targetRow) next.delete(targetRow.id);
-        return next;
-      });
-    } finally {
-      setConfirmOpen(false);
-      setTargetRow(null);
-      setConfirmType(null);
-      // keep the row locked on success (so actions remain disabled)
-    }
-  }
 
   /* ---------------------------------- UI ---------------------------------- */
   const cellNowrap =
@@ -558,17 +531,23 @@ if (confirmType === "receive") {
             >
               Cancel
             </button>
-            <button
-              type="button"
-              onClick={handleConfirm}
-              className={`px-4 py-2 rounded text-white ${
-                confirmType === "receive"
-                  ? "bg-green-600 hover:bg-green-700"
-                  : "bg-red-600 hover:bg-red-700"
-              }`}
-            >
-              {confirmType === "receive" ? "Confirm Receive" : "Confirm Reject"}
-            </button>
+<button
+  type="button"
+  onClick={handleConfirm}
+  disabled={confirmBusy} // or: disabled={confirmBusy /* || other conditions */}
+  className={`px-4 py-2 rounded text-white ${
+    confirmType === "receive"
+      ? "bg-green-600 hover:bg-green-700"
+      : "bg-red-600 hover:bg-red-700"
+  } disabled:opacity-60 disabled:cursor-not-allowed`}
+>
+  {confirmBusy
+    ? "Processing…"
+    : confirmType === "receive"
+    ? "Confirm Receive"
+    : "Confirm Reject"}
+</button>
+
           </DialogFooter>
         </DialogContent>
       </Dialog>
