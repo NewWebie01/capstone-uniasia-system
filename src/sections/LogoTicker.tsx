@@ -1,18 +1,33 @@
 "use client";
-import acmeLogo from "@/assets/logo-acme.png";
-import quantumLogo from "@/assets/logo-quantum.png";
-import echoLogo from "@/assets/logo-ingco.png";
-import celestialLogo from "@/assets/logo-bristol.png";
-import pulseLogo from "@/assets/logo-pulse.png";
-import apexLogo from "@/assets/logo-apex.png";
+
 import Image from "next/image";
 import { motion } from "framer-motion";
+
+/* --- Brand logos (renamed to match actual filenames) --- */
+import hitachiLogo from "@/assets/logo-hitachi.png";
+import weberLogo from "@/assets/logo-weber.png";
+import ingcoLogo from "@/assets/logo-ingco.png";
+import bristolLogo from "@/assets/logo-bristol.png";
+import boschLogo from "@/assets/logo-bosch.png";
+import makitaLogo from "@/assets/logo-makita.png";
+
+/* --- List once, we'll duplicate for the seamless loop --- */
+const logos = [
+  { src: hitachiLogo, alt: "Hitachi Logo" },
+  { src: weberLogo, alt: "Weber Logo" },
+  { src: ingcoLogo, alt: "INGCO Logo" },
+  { src: bristolLogo, alt: "Bristol Logo" },
+  { src: boschLogo, alt: "Bosch Logo" },
+  { src: makitaLogo, alt: "Makita Logo" },
+];
 
 export const LogoTicker = () => {
   return (
     <div className="py-8 md:py-12 bg-white">
       <div className="container">
+        {/* Mask fades edges left/right; overflow hidden keeps a clean ticker */}
         <div className="flex overflow-hidden [mask-image:linear-gradient(to_right,transparent,black,transparent)]">
+          {/* Animate the row to the left forever for a smooth marquee effect */}
           <motion.div
             className="flex gap-14 flex-none pr-14"
             animate={{ translateX: "-50%" }}
@@ -23,68 +38,19 @@ export const LogoTicker = () => {
               repeatType: "loop",
             }}
           >
-            <Image
-              src={acmeLogo}
-              alt="Acme Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={quantumLogo}
-              alt="Quantum Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={echoLogo}
-              alt="Echo Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={celestialLogo}
-              alt="Celestial Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={pulseLogo}
-              alt="Pulse Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={apexLogo}
-              alt="Apex Logo"
-              className="logo-ticker-image"
-            />
-            {/*Repeat the logos to create a continuous effect*/}
-
-            <Image
-              src={acmeLogo}
-              alt="Acme Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={quantumLogo}
-              alt="Quantum Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={echoLogo}
-              alt="Echo Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={celestialLogo}
-              alt="Celestial Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={pulseLogo}
-              alt="Pulse Logo"
-              className="logo-ticker-image"
-            />
-            <Image
-              src={apexLogo}
-              alt="Apex Logo"
-              className="logo-ticker-image"
-            />
+            {/* Duplicate the sequence so it loops seamlessly */}
+            {[...logos, ...logos].map((logo, i) => (
+              <Image
+                key={i}
+                src={logo.src}
+                alt={logo.alt}
+                className="logo-ticker-image"
+                /* Optional: set width/height if you want strict sizing
+                   width={140} height={50}
+                */
+                priority={i < 6} // small perf boost for first set
+              />
+            ))}
           </motion.div>
         </div>
       </div>
