@@ -7,6 +7,8 @@ import { AlertTriangle } from "lucide-react";
 import CustomerSidebar from "@/components/CustomerSidebar";
 import GlobalRouteLoader from "@/components/GlobalRouteLoader";
 import supabase from "@/config/supabaseClient";
+import CustomerNotificationBell from "@/components/CustomerNotificationBell";
+
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -74,15 +76,19 @@ export default function CustomerLayout({
         <main className="flex-1 overflow-y-auto p-6 relative">
           <div className="max-w-7xl mx-auto relative">
             {/* User card — aligned with the title, zero gap, scrolls with content */}
-            <div className="absolute top-0 right-6">
-              <div className="greeting-card bg-white rounded-xl px-4 py-2 text-gray-700 shadow-md select-none cursor-default hover:shadow-lg">
-                <span className="font-semibold">Hi,</span>{" "}
-                <span className="text-[#ffba20] font-bold">
-                  {userName || "Guest"}
-                </span>{" "}
-                👋
-              </div>
-            </div>
+<div className="absolute top-0 right-6 flex items-center gap-3">
+  {/* Notification Bell */}
+  <CustomerNotificationBell />
+
+  {/* Greeting Card */}
+  <div className="greeting-card bg-white rounded-xl px-4 py-2 text-gray-700 shadow-md select-none cursor-default hover:shadow-lg">
+    <span className="font-semibold">Hi,</span>{" "}
+    <span className="text-[#ffba20] font-bold">
+      {userName || "Guest"}
+    </span>{" "}
+  </div>
+</div>
+
 
             {/* Your page content (title, subtitle, filters, table, etc.) */}
             {children}
