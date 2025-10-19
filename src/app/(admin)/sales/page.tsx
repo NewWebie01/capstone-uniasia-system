@@ -529,179 +529,166 @@ const { data, error } = await supabase
   };
 
   // --- COMPLETE HANDLER ---
-  const handleOrderComplete = async () => {
-    if (!selectedOrder || isCompletingOrder) return;
-    setFieldErrors({ poNumber: false, repName: false });
-    const errors: Record<string, boolean> = {};
-    if (!poNumber || !poNumber.trim()) errors.poNumber = true;
-    if (!repName || !repName.trim()) errors.repName = true;
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors);
-      toast.error("Please fill all required fields!");
-      return;
+// --- COMPLETE HANDLER (drop-in replacement) ---
+// --- COMPLETE HANDLER (final, single-RPC + mark completed) ---
+const handleOrderComplete = async () => {
+  if (!selectedOrder || isCompletingOrder) return;
+
+  // Validate required fields
+  setFieldErrors({ poNumber: false, repName: false });
+  const errors: Record<string, boolean> = {};
+  if (!poNumber || !poNumber.trim()) errors.poNumber = true;
+  if (!repName || !repName.trim()) errors.repName = true;
+  if (Object.keys(errors).length > 0) {
+    setFieldErrors(errors);
+    toast.error("Please fill all required fields!");
+    return;
+  }
+
+  setIsCompletingOrder(true);
+
+  try {
+    // 1) Update fulfilled quantities on order_items
+    for (let i = 0; i < selectedOrder.order_items.length; i++) {
+      const oi = selectedOrder.order_items[i];
+      await supabase
+        .from("order_items")
+        .update({ fulfilled_quantity: editedQuantities[i] })
+        .eq("order_id", selectedOrder.id)
+        .eq("inventory_id", oi.inventory.id);
     }
 
-    setIsCompletingOrder(true);
-    try {
-      // 1) Update fulfilled quantities
-      for (let i = 0; i < selectedOrder.order_items.length; i++) {
-        const oi = selectedOrder.order_items[i];
-        await supabase
-          .from("order_items")
-          .update({ fulfilled_quantity: editedQuantities[i] })
-          .eq("order_id", selectedOrder.id)
-          .eq("inventory_id", oi.inventory.id);
-      }
+    // 2) Update inventory, discounts and insert sales rows
+    for (let i = 0; i < selectedOrder.order_items.length; i++) {
+      const oi = selectedOrder.order_items[i];
+      if (oi.inventory.quantity === 0) continue;
 
-      // 2) Update inventory, discounts, and sales
-      for (let i = 0; i < selectedOrder.order_items.length; i++) {
-        const oi = selectedOrder.order_items[i];
-        if (oi.inventory.quantity === 0) continue;
+      const invId = oi.inventory.id;
+      const remaining = oi.inventory.quantity - editedQuantities[i];
 
-        const invId = oi.inventory.id;
-        const remaining = oi.inventory.quantity - editedQuantities[i];
-
-        if (remaining < 0) {
-          toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
-          setShowFinalConfirm(false);
-          throw new Error("Insufficient stock");
-        }
-
-        // Inventory
-        await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
-
-        // Discount percent
-        await supabase
-          .from("order_items")
-          .update({ discount_percent: editedDiscounts[i] || 0 })
-          .eq("order_id", selectedOrder.id)
-          .eq("inventory_id", invId);
-
-        // Sales row
-        const qty = editedQuantities[i];
-        const unitPrice = oi.price;
-        const discountPercent = editedDiscounts[i] || 0;
-        const costPrice = oi.inventory.cost_price || 0;
-        const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
-
-        await supabase.from("sales").insert([
-          {
-            inventory_id: invId,
-            quantity_sold: qty,
-            amount: qty * unitPrice * (1 - discountPercent / 100),
-            earnings,
-            date: getPHISOString(),
-          },
-        ]);
-      }
-
-      const isCredit = selectedOrder.customers.payment_type === "Credit";
-
-      // 3) Update the order with final amounts
-      const updateFields = {
-        status: "completed",
-        date_completed: getPHISOString(),
-        sales_tax: salesTaxValue,
-        po_number: poNumber,
-        salesman: repName,
-        terms: isCredit ? `Net ${numberOfTerms} Monthly` : selectedOrder.customers.payment_type,
-        payment_terms: isCredit ? numberOfTerms : null,
-        interest_percent: isCredit ? totals.effectiveInterestPercent : 0,
-        grand_total_with_interest: getGrandTotalWithInterest(), // always set final grand total
-        per_term_amount: isCredit ? getPerTermAmount() : null,
-        forwarder,
-        processed_by_email: processor?.email ?? "unknown",
-        processed_by_name: processor?.name ?? "unknown",
-        processed_by_role: processor?.role ?? "unknown",
-        processed_at: getPHISOString(),
-      } as const;
-
-      const { error: ordersErr } = await supabase.from("orders").update(updateFields).eq("id", selectedOrder.id);
-      if (ordersErr) throw ordersErr;
-
-      // 4) Customer becomes "Existing"
-      await supabase
-        .from("customers")
-        .update({ customer_type: "Existing Customer" })
-        .eq("code", selectedOrder.customers.code);
-
-      // 5) Activity log
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        const userEmail = user?.email || "unknown";
-        const userRole = user?.user_metadata?.role || "unknown";
-        await supabase.from("activity_logs").insert([
-          {
-            user_email: userEmail,
-            user_role: userRole,
-            action: "Complete Sales Order",
-            details: {
-              order_id: selectedOrder.id,
-              customer_name: selectedOrder.customers.name,
-              customer_email: selectedOrder.customers.email,
-              items: selectedOrder.order_items.map((oi, idx) => ({
-                product_name: oi.inventory.product_name,
-                ordered_qty: oi.quantity,
-                fulfilled_qty: editedQuantities[idx],
-                unit_price: oi.price,
-                discount_percent: editedDiscounts[idx] || 0,
-              })),
-              total_amount: getGrandTotalWithInterest(),
-              payment_type: selectedOrder.customers.payment_type,
-            },
-            created_at: getPHISOString(),
-          },
-        ]);
-      } catch (err) {
-        console.error("Failed to log activity for sales order completion:", err);
-      }
-
-      setShowSalesOrderModal(false);
-      setShowModal(false);
-      setShowFinalConfirm(false);
-      resetSalesForm();
-      setSelectedOrder(null);
-      setPickingStatus((prev) => prev.filter((p) => p.orderId !== selectedOrder.id));
-      await Promise.all([fetchOrders(), fetchItems()]);
-      toast.success("Order successfully completed!");
-
-      // 6) Send receipt
-      try {
-        setIsSendingEmail(true);
-        const emailRes = await fetch("/api/send-receipt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ orderId: selectedOrder.id }),
-        });
-        const result = await emailRes.json();
-        if (result.success) {
-          toast.success("Receipt emailed to customer!");
-        } else {
-          toast.error("Failed to send receipt email.");
-        }
-      } catch (err) {
-        toast.error("Failed to send receipt email.");
-      } finally {
-        setIsSendingEmail(false);
-      }
-
-      setIsCompletingOrder(false);
-    } catch (err: any) {
-      if (err?.message && err.message.includes('unique constraint "unique_po_number"')) {
-        toast.error("PO Number is already used, try another.");
-        setIsCompletingOrder(false);
+      if (remaining < 0) {
+        toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
         setShowFinalConfirm(false);
-        setShowSalesOrderModal(true);
-        return;
+        throw new Error("Insufficient stock");
       }
-      toast.error(`Failed to complete order: ${err?.message ?? "Unexpected error"}`);
+
+      // Inventory decrement
+      await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
+
+      // Store per-item discount
+      await supabase
+        .from("order_items")
+        .update({ discount_percent: editedDiscounts[i] || 0 })
+        .eq("order_id", selectedOrder.id)
+        .eq("inventory_id", invId);
+
+      // Sales row
+      const qty = editedQuantities[i];
+      const unitPrice = oi.price;
+      const discountPercent = editedDiscounts[i] || 0;
+      const costPrice = oi.inventory.cost_price || 0;
+      const amount = qty * unitPrice * (1 - discountPercent / 100);
+      const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
+
+      await supabase.from("sales").insert([
+        {
+          inventory_id: invId,
+          quantity_sold: qty,
+          amount,
+          earnings,
+          date: getPHISOString(),
+        },
+      ]);
+    }
+
+    // 3) Approve (schedule + stamp order meta) via ONE RPC call
+    // ---- ONE call to the RPC with full payload ----
+const isCredit = selectedOrder.customers.payment_type === "Credit";
+
+const firstDue = new Date();
+firstDue.setMonth(firstDue.getMonth() + 1);
+const p_first_due = firstDue.toISOString().slice(0, 10);
+
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+
+const { error: rpcErr } = await supabase.rpc("approve_order", {
+  p_order_id: selectedOrder.id,
+  p_terms: isCredit ? numberOfTerms : 1,
+  p_per_term: round2(isCredit ? getPerTermAmount() : getGrandTotalWithInterest()),
+  p_first_due,
+
+  p_grand_total_with_interest: round2(getGrandTotalWithInterest()),
+  p_interest_percent: isCredit ? round2(totals.effectiveInterestPercent) : 0,
+
+  // ADD THIS:
+  p_sales_tax: round2(isSalesTaxOn ? salesTaxValue : 0),
+
+  p_po_number: poNumber,
+  p_salesman: repName,
+  p_forwarder: forwarder || null, // better to send null than "EMPTY"
+  p_processed_by_email: processor?.email ?? "unknown",
+  p_processed_by_name: processor?.name ?? "unknown",
+  p_processed_by_role: processor?.role ?? "unknown",
+});
+
+if (rpcErr) throw rpcErr;
+
+// ---- THEN mark as completed (RPC sets 'approved') ----
+const nowPH = getPHISOString();
+const { error: doneErr } = await supabase
+  .from("orders")
+  .update({
+    status: "completed",
+    date_completed: nowPH,
+    processed_at: nowPH,
+  })
+  .eq("id", selectedOrder.id);
+if (doneErr) throw doneErr;
+
+
+    // 7) Close modals, refresh data, toast, email
+    setShowSalesOrderModal(false);
+    setShowModal(false);
+    setShowFinalConfirm(false);
+    resetSalesForm();
+    setSelectedOrder(null);
+    setPickingStatus((prev) => prev.filter((p) => p.orderId !== selectedOrder.id));
+    await Promise.all([fetchOrders(), fetchItems()]);
+    toast.success("Order successfully completed!");
+
+    try {
+      setIsSendingEmail(true);
+      const emailRes = await fetch("/api/send-receipt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: selectedOrder.id }),
+      });
+      const result = await emailRes.json();
+      if (result.success) toast.success("Receipt emailed to customer!");
+      else toast.error("Failed to send receipt email.");
+    } catch {
+      toast.error("Failed to send receipt email.");
+    } finally {
+      setIsSendingEmail(false);
+    }
+
+    setIsCompletingOrder(false);
+  } catch (err: any) {
+    if (err?.message && err.message.includes('unique constraint "unique_po_number"')) {
+      toast.error("PO Number is already used, try another.");
       setIsCompletingOrder(false);
       setShowFinalConfirm(false);
       setShowSalesOrderModal(true);
+      return;
     }
-  };
+    toast.error(`Failed to complete order: ${err?.message ?? "Unexpected error"}`);
+    setIsCompletingOrder(false);
+    setShowFinalConfirm(false);
+    setShowSalesOrderModal(true);
+  }
+};
+
+
 
   // -- UI Actions --
   const handleOrderConfirm = async () => {
