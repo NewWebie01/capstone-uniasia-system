@@ -261,36 +261,25 @@ async function handleConfirm() {
   // lock the row immediately => both buttons disable
   setLocked(prev => new Set(prev).add(targetRow.id));
 
-  try {
-    if (confirmType === "receive") {
-      // ===== RECEIVE BLOCK (atomic RPC) =====
-      if (!meEmail) throw new Error("Missing admin email; please re-login.");
-      const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
+        try {
+if (confirmType === "receive") {
+const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
   p_payment_id: targetRow.id,
   p_admin_email: meEmail,
 });
+  if (rpcErr) throw rpcErr;
 
-      if (rpcErr) {
-        // unlock row on failure
-        setLocked(prev => { const next = new Set(prev); next.delete(targetRow.id); return next; });
-        const msg = String(rpcErr.message || "");
-        throw new Error(
-          msg.includes("already processed") ? "This payment was already processed." : msg
-        );
-      }
+  setPayments(prev =>
+    prev.map(p =>
+      p.id === targetRow.id
+        ? { ...p, status: "received", received_at: new Date().toISOString(), received_by: meEmail }
+        : p
+    )
+  );
+  toast.success("Payment received and applied to installments.");
+}
 
-      // Optimistic UI update
-      setPayments(prev =>
-        prev.map(p =>
-          p.id === targetRow.id
-            ? { ...p, status: "received", received_at: new Date().toISOString(), received_by: meEmail }
-            : p
-        )
-      );
-
-      toast.success("Payment received and applied to installments.");
-      // (optional) notify + logActivity as you already have
-    } else if (confirmType === "reject") {
+ else if (confirmType === "reject") {
       // ===== KEEP your existing REJECT logic =====
       const { data: updated, error } = await supabase
         .from("payments")
@@ -323,7 +312,7 @@ async function handleConfirm() {
     setTargetRow(null);
     setConfirmType(null);
   }
-}
+  }
 
 
   /* ---------------------------------- UI ---------------------------------- */

@@ -342,52 +342,53 @@ function SalesPageContent() {
 
   // Fetch orders with related customer & items
   const fetchOrders = async () => {
-    const { data, error } = await supabase
-      .from("orders")
-.select(`
-  id,
-  status,
-  total_amount,
-  date_created,
-  payment_terms,
-  interest_percent,
-        customer:customer_id (
-          name,
-          email,
-          phone,
-          address,
-          contact_person,
-          code,
-          area,
-          date,
-          transaction,
-          status,
-          payment_type,
-          customer_type,
-          order_count
-        ),
-        order_items (
-          quantity,
-          price,
-          inventory:inventory_id (
-            id,
-            sku,
-            product_name,
-            category,
-            subcategory,
-            unit,
-            quantity,
-            unit_price,
-            cost_price
-          )
-        )
-      `
+const { data, error } = await supabase
+  .from("orders")
+  .select(`
+    id,
+    status,
+    total_amount,
+    date_created,
+    payment_terms,
+    interest_percent,
+    customers:customer_id (
+      id,
+      name,
+      email,
+      phone,
+      address,
+      contact_person,
+      code,
+      area,
+      date,
+      transaction,
+      status,
+      payment_type,
+      customer_type,
+      order_count
+    ),
+    order_items (
+      quantity,
+      price,
+      inventory:inventory_id (
+        id,
+        sku,
+        product_name,
+        category,
+        subcategory,
+        unit,
+        quantity,
+        unit_price,
+        cost_price
       )
-      .order("date_created", { ascending: false });
+    )
+  `)
+  .order("date_created", { ascending: false });
+
     if (!error && data) {
       const formatted = data.map((o: any) => ({
         ...o,
-        customers: Array.isArray(o.customer) ? o.customer[0] : o.customer,
+        customers: Array.isArray(o.customers) ? o.customers[0] : o.customers,
         order_items: o.order_items.map((item: any) => ({
           ...item,
           inventory: Array.isArray(item.inventory) ? item.inventory[0] : item.inventory,
