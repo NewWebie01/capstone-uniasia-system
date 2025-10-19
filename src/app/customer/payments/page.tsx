@@ -17,6 +17,11 @@ const formatCurrency = (n: number) =>
     minimumFractionDigits: 2,
   });
 
+/* ----------------------------- Utils ------------------------------ */
+const EPS = 0.000001;
+const toNumber = (v: string | number): number =>
+  typeof v === "number" ? v : Number(String(v).replace(/[^\d.]/g, "")) || 0;
+
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
   quantity: number;
@@ -422,9 +427,7 @@ export default function CustomerPaymentsPage() {
   const methodLower = useMemo(() => {
     const fromOrder = (selectedPack?.order as any)?.terms ?? null;
     const fromCustomer =
-      txns.find((t) => t.code === selectedTxnCode)?.payment_type ??
-      txns[0]?.payment_type ??
-      null;
+      txns.find((t) => t.code === selectedTxnCode)?.payment_type ?? txns[0]?.payment_type ?? null;
     return String(fromOrder || fromCustomer || "").toLowerCase();
   }, [selectedPack?.order, selectedTxnCode, txns]);
 
@@ -479,7 +482,7 @@ export default function CustomerPaymentsPage() {
     // eslint-disable-next-line
   }, [selectedTxnCode, termAmount, selectedPack, isCash]);
 
-  // Quick-fill buttons (Pay in Full / Half)
+  // --------- Quick-fill buttons (Pay in Full / Half) ----------
   const applyQuickAmount = (kind: "full" | "half") => {
     if (!selectedPack) return;
     const bal = Number(selectedPack.balance || 0);
@@ -502,19 +505,54 @@ export default function CustomerPaymentsPage() {
     setAmount(String(snapped.toFixed(2)));
   };
 
-  // Validation
+  /* ------------------------ Option A: CAP LOGIC ------------------------ */
+  /** Compute the maximum allowed amount based on payment type */
+  const getMaxAllowed = () => {
+    if (!selectedPack) return 0;
+    const bal = Number(selectedPack.balance || 0);
+
+    if (isCash) return bal;
+
+    // Credit: cap by remaining unpaid installments
+    const remainingTerms = unpaidInstallments.length;
+    const maxByTerms = (termAmount || 0) * remainingTerms;
+    // still cannot exceed outstanding balance
+    return Math.min(bal, maxByTerms);
+  };
+
+  /** Soft-cap on blur and normalize */
+  const handleAmountBlur = () => {
+    const n = toNumber(amount);
+    const maxAllowed = getMaxAllowed();
+    if (maxAllowed <= 0) return;
+
+    let capped = n;
+    if (n > maxAllowed + EPS) {
+      capped = maxAllowed;
+      toast.message("Amount capped to remaining balance.", {
+        description: `We set it to ${formatCurrency(capped)}.`,
+      });
+    }
+
+    // For credit: also snap to multiples of termAmount
+    if (isCredit && termAmount > 0) {
+      const multiples = Math.floor(capped / termAmount);
+      capped = Math.max(0, multiples * termAmount);
+    }
+
+    setAmount(capped ? capped.toFixed(2) : "");
+  };
+
+  // --------------------------- Validation flags ---------------------------
   const enteredAmount = Number(amount) || 0;
   const numTermsCovered =
     termAmount > 0 ? Math.floor(enteredAmount / termAmount) : 0;
   const remainingAfterTerms =
     termAmount > 0 ? enteredAmount - numTermsCovered * termAmount : 0;
 
-  const EPS = 0.01;
-
+  // IMPORTANT CHANGE: cash payments only require > 0 (cap will handle excess)
   const isPaymentExact = isCash
-    ? enteredAmount > 0 &&
-      selectedPack != null &&
-      enteredAmount <= (selectedPack.balance || 0) + EPS
+    ? enteredAmount > 0
     : enteredAmount > 0 &&
       Math.abs(remainingAfterTerms) < EPS &&
       numTermsCovered <= unpaidInstallments.length &&
@@ -574,14 +612,32 @@ export default function CustomerPaymentsPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!isFormValid || !selectedPack?.order?.id) {
+    if (!selectedPack?.order?.id) {
       toast.error("Please complete all fields.");
       return;
     }
 
-    if (exceedsBalance) {
-      toast.error("Amount exceeds remaining balance.");
+    // SAFETY CAP just before submit
+    const maxAllowed = getMaxAllowed();
+    let finalAmount = toNumber(amount);
+
+    if (maxAllowed <= 0 || finalAmount <= 0) {
+      toast.error("Please enter a valid amount greater than 0.");
       return;
+    }
+
+    if (finalAmount > maxAllowed + EPS) {
+      finalAmount = maxAllowed;
+      setAmount(finalAmount.toFixed(2));
+      toast.message("Amount capped to remaining balance.", {
+        description: `We set it to ${formatCurrency(finalAmount)}.`,
+      });
+    }
+
+    if (isCredit && termAmount > 0) {
+      const multiples = Math.floor(finalAmount / termAmount);
+      finalAmount = Math.max(0, multiples * termAmount);
+      setAmount(finalAmount.toFixed(2));
     }
 
     setSubmitting(true);
@@ -596,7 +652,7 @@ export default function CustomerPaymentsPage() {
       let insertData: any = {
         customer_id: meId,
         order_id: orderId,
-        amount: enteredAmount,
+        amount: Number(finalAmount.toFixed(2)),
         method: isCash ? "Cash" : "Cheque",
         cheque_number: null,
         bank_name: null,
@@ -635,9 +691,7 @@ export default function CustomerPaymentsPage() {
         const title = ` New ${isCash ? "Cash" : "Cheque"} Payment Submitted`;
         const message = `${me.name || "Customer"} • ${
           selectedPack.code
-        } • ₱${enteredAmount.toLocaleString("en-PH", {
-          minimumFractionDigits: 2,
-        })}`;
+        } • ${formatCurrency(finalAmount)}`;
         await supabase.from("notifications").insert([
           {
             type: "payment",
@@ -757,13 +811,15 @@ export default function CustomerPaymentsPage() {
                 type="number"
                 step={isCash ? "0.01" : String(termAmount || 0.01)}
                 min={isCash ? "0.01" : String(termAmount || 0.01)}
+                // IMPORTANT: no "max" for cash, to let user type freely (we cap later)
                 max={
-                  isCash
-                    ? String(selectedPack?.balance || 0)
-                    : String((termAmount || 0) * unpaidInstallments.length || 0)
+                  !isCash
+                    ? String((termAmount || 0) * unpaidInstallments.length || 0)
+                    : undefined
                 }
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
+                onBlur={handleAmountBlur}
                 placeholder={
                   isCash
                     ? selectedPack
@@ -774,7 +830,7 @@ export default function CustomerPaymentsPage() {
                     : ""
                 }
                 className={`mt-1 w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${
-                  exceedsBalance || !isPaymentExact
+                  !isCash && (!isPaymentExact || showPartialWarning || exceedsInstallments)
                     ? "border-red-400 focus:ring-red-400"
                     : "border-gray-300 focus:ring-amber-400"
                 }`}
@@ -791,8 +847,7 @@ export default function CustomerPaymentsPage() {
                   Pay in Full
                 </button>
 
-
-                 <button
+                <button
                   type="button"
                   onClick={() => applyQuickAmount("half")}
                   className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]"
@@ -820,8 +875,12 @@ export default function CustomerPaymentsPage() {
                   Amount exceeds all remaining unpaid installments.
                 </div>
               )}
-              {exceedsBalance && (
-                <div className="mt-1 text-xs text-red-600">Amount exceeds remaining balance.</div>
+              {/* Soft hint for over-balance (we'll cap automatically) */}
+              {isCash && exceedsBalance && (
+                <div className="mt-1 text-xs text-amber-600">
+                  Amount exceeds remaining balance. It will be capped to{" "}
+                  <b>{formatCurrency(getMaxAllowed())}</b> on submit.
+                </div>
               )}
             </div>
 
@@ -835,7 +894,6 @@ export default function CustomerPaymentsPage() {
                 maxLength={20}
                 value={chequeNumber}
                 onChange={(e) => {
-                  // digits-only, max 20
                   const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 20);
                   setChequeNumber(digitsOnly);
                 }}
