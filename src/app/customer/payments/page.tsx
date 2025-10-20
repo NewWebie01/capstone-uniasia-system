@@ -26,6 +26,14 @@ const toNumber = (v: string | number): number =>
 const round2 = (n: number) =>
   Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
+// Local YYYY-MM-DD for <input type="date"> (avoids UTC off-by-one)
+const todayLocalISO = () => {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+};
+
+
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
   quantity: number;
@@ -298,6 +306,8 @@ export default function CustomerPaymentsPage() {
     };
   }, [txns]);
 
+  
+
   /* --------------------------- Totals --------------------------- */
   function computeFromOrder(o?: OrderRow | null, extraShippingFee = 0) {
     const items = o?.order_items ?? [];
@@ -404,6 +414,58 @@ export default function CustomerPaymentsPage() {
       .filter((r) => r.balance > 0.01)
       .sort((a, b) => b.balance - a.balance);
   }, [txnOptions, effectivePaidTotalByOrder, shippingFees]);
+
+  /* ----------------------------- Realtime installments ----------------------------- */
+useEffect(() => {
+  // Subscribe for all visible order IDs
+  const orderIds = txnOptions.map(({ order }) => String(order.id));
+  if (!orderIds.length) return;
+
+  const filter = `order_id=in.(${inList(orderIds)})`;
+  const channel = supabase.channel("realtime-installments");
+
+  channel.on(
+    "postgres_changes",
+    { event: "*", schema: "public", table: "order_installments", filter },
+    async (payload) => {
+      const changedOrderId = String(
+        ((payload.new as any)?.order_id ??
+          (payload.old as any)?.order_id ??
+          "") || ""
+      );
+
+      // Figure out the currently selected order id WITHOUT using selectedPack
+      const currentOrderId = txnOptions.find(
+        (t) => t.code === selectedTxnCode
+      )?.order?.id;
+
+      if (currentOrderId && String(currentOrderId) === changedOrderId) {
+        try {
+          setLoadingInstallments(true);
+          const { data } = await supabase
+            .from("order_installments")
+            .select(
+              "id, order_id, term_no, due_date, amount_due, amount_paid, status"
+            )
+            .eq("order_id", changedOrderId)
+            .order("term_no", { ascending: true });
+
+          setInstallments((data as InstallmentRow[]) || []);
+        } finally {
+          setLoadingInstallments(false);
+        }
+      }
+    }
+  );
+
+  channel.subscribe();
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [txnOptions, selectedTxnCode]); // 🔑 no selectedPack here
+
+
+  
 
   /* ---------- Keep selection valid ---------- */
   useEffect(() => {
@@ -668,6 +730,17 @@ const showPartialWarning =
       toast.error("Please enter a valid amount greater than 0.");
       return;
     }
+
+    // Disallow past cheque dates (some browsers allow manual typing)
+if (!isCash && chequeDate) {
+  const min = new Date(todayLocalISO());
+  const chosen = new Date(chequeDate + "T00:00:00");
+  if (chosen < min) {
+    toast.error("Cheque date cannot be in the past.");
+    return;
+  }
+}
+
 
     setSubmitting(true);
     try {
@@ -1013,18 +1086,21 @@ const showPartialWarning =
               />
             </div>
 
-            <div className="col-span-1">
-              <label className="text-xs text-gray-600">
-                Cheque Date {isCash ? "(optional)" : "*"}
-              </label>
-              <input
-                type="date"
-                value={chequeDate}
-                onChange={(e) => setChequeDate(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                required={!isCash}
-              />
-            </div>
+<div className="col-span-1">
+  <label className="text-xs text-gray-600">
+    Cheque Date {isCash ? "(optional)" : "*"}
+  </label>
+<input
+  type="date"
+  value={chequeDate}
+  onChange={(e) => setChequeDate(e.target.value)}
+  min={todayLocalISO()}
+  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
+  required={!isCash}
+/>
+
+</div>
+
 
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
