@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { Upload, FileImage, X, Calendar } from "lucide-react";
+import { Upload, FileImage, X, Calendar, Minus, Plus } from "lucide-react";
 
 /* ----------------------------- Config ----------------------------- */
 const CHEQUE_BUCKET = "payments-cheques";
@@ -21,6 +21,10 @@ const formatCurrency = (n: number) =>
 const EPS = 0.000001;
 const toNumber = (v: string | number): number =>
   typeof v === "number" ? v : Number(String(v).replace(/[^\d.]/g, "")) || 0;
+
+// 2-decimal rounding helper for money
+const round2 = (n: number) =>
+  Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
@@ -49,9 +53,9 @@ type OrderRow = {
   sales_tax?: number | null;
   interest_percent?: number | null;
   per_term_amount?: number | null;
-  shipping_fee?: number | null;   // NEW (selected)
-  paid_amount?: number | null;     // NEW (selected)
-  balance?: number | null;         // NEW (generated)
+  shipping_fee?: number | null;
+  paid_amount?: number | null;
+  balance?: number | null;
   terms?: string | null;
   order_items?: ItemRow[];
 };
@@ -99,7 +103,6 @@ const inList = (vals: (string | number)[]) =>
 
 const isReceived = (p: PaymentRow) =>
   (p?.status || "").toLowerCase() === "received";
-
 const isPending = (p: PaymentRow) =>
   (p?.status || "").toLowerCase() === "pending";
 
@@ -108,35 +111,24 @@ async function fetchShippingFeeForOrder(
   orderId: string | number
 ): Promise<number> {
   try {
-    const { data: ord, error: ordErr } = await supabase
+    const { data: ord } = await supabase
       .from("orders")
       .select("truck_delivery_id")
       .eq("id", orderId)
       .maybeSingle();
 
-    if (ordErr) {
-      console.warn("[shipping] order fetch error:", ordErr.message);
-      return 0;
-    }
-
     const deliveryId = ord?.truck_delivery_id;
     if (!deliveryId) return 0;
 
-    const { data: del, error: delErr } = await supabase
+    const { data: del } = await supabase
       .from("truck_deliveries")
       .select("shipping_fee")
       .eq("id", deliveryId)
       .maybeSingle();
 
-    if (delErr) {
-      console.warn("[shipping] delivery fetch error:", delErr.message);
-      return 0;
-    }
-
     const fee = Number(del?.shipping_fee ?? 0);
     return Number.isFinite(fee) ? fee : 0;
-  } catch (err) {
-    console.warn("[shipping] fetch error:", err);
+  } catch {
     return 0;
   }
 }
@@ -152,7 +144,7 @@ export default function CustomerPaymentsPage() {
   const [selectedTxnCode, setSelectedTxnCode] = useState<string>("");
 
   // Upload form state
-  const [amount, setAmount] = useState<string>("");
+  const [amount, setAmount] = useState<string>(""); // LOCKED display
   const [chequeNumber, setChequeNumber] = useState("");
   const [bankName, setBankName] = useState("");
   const [chequeDate, setChequeDate] = useState<string>("");
@@ -162,10 +154,17 @@ export default function CustomerPaymentsPage() {
   // Shipping fee per order cache
   const [shippingFees, setShippingFees] = useState<Record<string, number>>({});
 
-  // Installments (for modal & payment logic)
+  // Installments
   const [installments, setInstallments] = useState<InstallmentRow[]>([]);
   const [loadingInstallments, setLoadingInstallments] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
+
+  // Multiplier for Credit (installments)
+  const [termMultiplier, setTermMultiplier] = useState<number>(1);
+
+  // Cash stepper
+  const CASH_STEP = 1000;
+  const MIN_CASH = 0.01;
 
   /* ------------------------------- Fetch ------------------------------- */
   useEffect(() => {
@@ -182,7 +181,7 @@ export default function CustomerPaymentsPage() {
           return;
         }
 
-        const { data: customers, error } = await supabase
+        const { data: customers } = await supabase
           .from("customers")
           .select(
             `
@@ -220,22 +219,20 @@ export default function CustomerPaymentsPage() {
           .eq("email", email)
           .order("date", { ascending: false });
 
-        if (error) throw error;
-
         const txList = (customers as CustomerTx[]) || [];
         setTxns(txList);
 
         // Load payments for these customers
         const customerIds = txList.map((c) => String(c.id));
         if (customerIds.length) {
-          const { data: pays, error: payErr } = await supabase
+          const { data: pays } = await supabase
             .from("payments")
             .select(
               "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, status, created_at"
             )
             .in("customer_id", customerIds)
             .order("created_at", { ascending: false });
-          if (!payErr) setPayments((pays as PaymentRow[]) || []);
+          setPayments((pays as PaymentRow[]) || []);
         } else {
           setPayments([]);
         }
@@ -252,6 +249,7 @@ export default function CustomerPaymentsPage() {
             return [oid, fee] as [string, number];
           })
         );
+
         const feeMap: Record<string, number> = {};
         for (const [oid, fee] of feeEntries) feeMap[oid] = fee;
         setShippingFees(feeMap);
@@ -303,28 +301,41 @@ export default function CustomerPaymentsPage() {
   /* --------------------------- Totals --------------------------- */
   function computeFromOrder(o?: OrderRow | null, extraShippingFee = 0) {
     const items = o?.order_items ?? [];
-    const subtotal = items.reduce((s, it) => {
-      const unitPrice = Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
-      const qty = Number(it.quantity || 0);
-      return s + unitPrice * qty;
-    }, 0);
 
-    const totalDiscount = items.reduce((s, it) => {
-      const unitPrice = Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
-      const qty = Number(it.quantity || 0);
-      const pct = Number(it.discount_percent ?? 0);
-      return s + (unitPrice * qty * pct) / 100;
-    }, 0);
+    const subtotal = round2(
+      items.reduce((s, it) => {
+        const unitPrice =
+          Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
+        const qty = Number(it.quantity || 0);
+        return s + unitPrice * qty;
+      }, 0)
+    );
 
-    const salesTax = Number(o?.sales_tax ?? 0);
+    const totalDiscount = round2(
+      items.reduce((s, it) => {
+        const unitPrice =
+          Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
+        const qty = Number(it.quantity || 0);
+        const pct = Number(it.discount_percent ?? 0);
+        return s + (unitPrice * qty * pct) / 100;
+      }, 0)
+    );
+
+    const salesTax = round2(Number(o?.sales_tax ?? 0));
+
+    const computedExclFee = round2(
+      Math.max(subtotal - totalDiscount, 0) + salesTax
+    );
+
     const grandTotalExclFee =
       typeof o?.grand_total_with_interest === "number"
-        ? Number(o!.grand_total_with_interest)
-        : Math.max(subtotal - totalDiscount, 0) + salesTax;
+        ? round2(Number(o!.grand_total_with_interest))
+        : computedExclFee;
 
-    const perTerm = Number(o?.per_term_amount ?? 0);
-    const shippingFee = Number(extraShippingFee || 0);
-    const finalGrandTotal = grandTotalExclFee + shippingFee;
+    const shippingFee = round2(Number(extraShippingFee || 0));
+    const finalGrandTotal = round2(grandTotalExclFee + shippingFee);
+
+    const perTerm = round2(Number(o?.per_term_amount ?? 0));
 
     return {
       subtotal,
@@ -332,8 +343,8 @@ export default function CustomerPaymentsPage() {
       salesTax,
       grandTotalExclFee,
       shippingFee,
-      finalGrandTotal,
-      perTerm,
+      finalGrandTotal, // rounded
+      perTerm, // rounded
     };
   }
 
@@ -385,8 +396,8 @@ export default function CustomerPaymentsPage() {
       const orderId = String(order.id);
       const fee = shippingFees[orderId] ?? 0;
       const totals = computeFromOrder(order, fee);
-      const paid = effectivePaidTotalByOrder.get(orderId) || 0;
-      const balance = Math.max(totals.finalGrandTotal - paid, 0);
+      const paid = round2(effectivePaidTotalByOrder.get(orderId) || 0);
+      const balance = Math.max(round2(totals.finalGrandTotal - paid), 0);
       return { code, order, customerId, balance };
     });
     return rows
@@ -412,8 +423,8 @@ export default function CustomerPaymentsPage() {
     const orderId = String(hit.order.id);
     const fee = shippingFees[orderId] ?? 0;
     const totals = computeFromOrder(hit.order, fee);
-    const paid = effectivePaidTotalByOrder.get(orderId) || 0;
-    const balance = Math.max(totals.finalGrandTotal - paid, 0);
+    const paid = round2(effectivePaidTotalByOrder.get(orderId) || 0);
+    const balance = Math.max(round2(totals.finalGrandTotal - paid), 0);
     return {
       code: selectedTxnCode,
       order: hit.order,
@@ -424,17 +435,28 @@ export default function CustomerPaymentsPage() {
   }, [selectedTxnCode, txnOptions, effectivePaidTotalByOrder, shippingFees]);
 
   /* -------- Determine method from order.terms (fallback to customer) -------- */
-  const methodLower = useMemo(() => {
-    const fromOrder = (selectedPack?.order as any)?.terms ?? null;
-    const fromCustomer =
-      txns.find((t) => t.code === selectedTxnCode)?.payment_type ?? txns[0]?.payment_type ?? null;
-    return String(fromOrder || fromCustomer || "").toLowerCase();
-  }, [selectedPack?.order, selectedTxnCode, txns]);
+  // Treat anything that looks like installments as CREDIT (even if terms ≠ "credit")
+  const termsStr = String(
+    (selectedPack?.order as any)?.terms ?? ""
+  ).toLowerCase();
+  const perTermAmt = Number(selectedPack?.order?.per_term_amount ?? 0);
 
-  const isCash = methodLower === "cash";
-  const isCredit = methodLower === "credit";
+  // Fallback: customer's declared payment_type
+  const customerMethodLower = String(
+    txns.find((t) => t.code === selectedTxnCode)?.payment_type ??
+      txns[0]?.payment_type ??
+      ""
+  ).toLowerCase();
 
-  /* ==================== INSTALLMENT PAYMENT VALIDATION ==================== */
+  // Heuristic: if per-term exists or terms mentions net/month/term/install -> credit
+  const looksInstallment =
+    perTermAmt > 0 || /credit|net|month|term|install/.test(termsStr);
+
+  // Final flags used by the UI
+  const isCredit = customerMethodLower === "credit" || looksInstallment;
+  const isCash = customerMethodLower === "cash" && !isCredit;
+
+  /* ==================== INSTALLMENTS ==================== */
   useEffect(() => {
     async function fetchInstallmentsForSelected() {
       if (!selectedPack?.order?.id) {
@@ -443,7 +465,7 @@ export default function CustomerPaymentsPage() {
       }
       try {
         setLoadingInstallments(true);
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from("order_installments")
           .select(
             "id, order_id, term_no, due_date, amount_due, amount_paid, status"
@@ -451,10 +473,7 @@ export default function CustomerPaymentsPage() {
           .eq("order_id", String(selectedPack.order.id))
           .order("term_no", { ascending: true });
 
-        if (error) throw error;
         setInstallments((data as InstallmentRow[]) || []);
-      } catch {
-        setInstallments([]);
       } finally {
         setLoadingInstallments(false);
       }
@@ -464,102 +483,129 @@ export default function CustomerPaymentsPage() {
   }, [selectedPack?.order?.id]);
 
   const unpaidInstallments = useMemo(
-    () => installments.filter((row) => row.status !== "paid"),
+    () =>
+      installments.filter(
+        (row) => (row.status || "").toLowerCase() !== "paid"
+      ),
     [installments]
   );
   const termAmount =
     unpaidInstallments.length > 0 ? unpaidInstallments[0].amount_due : 0;
 
-  // Autofill amount field
+// -------------------------- CREDIT LIMITS & INIT --------------------------
+const getCreditMaxMultiplier = () => {
+  if (!selectedPack) return 1;
+
+  const remainingTerms = unpaidInstallments.length || 0;
+  const perTerm = round2(Number(termAmount || 0));
+  if (remainingTerms <= 0 || perTerm <= 0) return 1;
+
+  // Round balance & use tolerant rounding when mapping balance -> #terms
+  const balance = round2(Number(selectedPack.balance || 0));
+
+  // If balance is within a centavo of k * perTerm, treat it as k terms.
+  // This avoids byBalance falling to 1 because of ₱0.01–₱0.02 drift.
+  const approxTerms = Math.round((balance / perTerm) + 1e-6);
+
+  // Clamp between 1 and the number of unpaid remaining terms.
+  return Math.max(1, Math.min(remainingTerms, approxTerms));
+};
+
+
+  // Initialize amount whenever txn/mode/schedule changes
   useEffect(() => {
-    if (!selectedPack) return;
-
-    if (isCash) {
-      if (amount === "") setAmount(String(selectedPack.balance || ""));
-    } else if (termAmount && (amount === "" || Number(amount) !== termAmount)) {
-      setAmount(termAmount.toString());
-    }
-    // eslint-disable-next-line
-  }, [selectedTxnCode, termAmount, selectedPack, isCash]);
-
-  // --------- Quick-fill buttons (Pay in Full / Half) ----------
-  const applyQuickAmount = (kind: "full" | "half") => {
-    if (!selectedPack) return;
-    const bal = Number(selectedPack.balance || 0);
-    if (bal <= 0) return;
-
-    if (isCash) {
-      const val = kind === "full" ? bal : Math.max(bal / 2, 0.01);
-      setAmount(String(Math.min(val, bal).toFixed(2)));
+    if (!selectedPack) {
+      setAmount("");
       return;
     }
+    if (isCredit) {
+      const max = getCreditMaxMultiplier();
+      const start = Math.min(1, max) || 1;
+      setTermMultiplier(start);
+      if (termAmount > 0) setAmount((termAmount * start).toFixed(2));
+      else setAmount("");
+    } else {
+      const bal = Number(selectedPack.balance || 0);
+      setAmount(bal > 0 ? bal.toFixed(2) : "");
+      setTermMultiplier(1);
+    }
+    // eslint-disable-next-line
+  }, [selectedPack?.balance, isCredit, termAmount]);
 
-    // Credit: only multiples of termAmount, cannot exceed remaining terms
-    const remainingTerms = unpaidInstallments.length;
-    const maxCredit = (termAmount || 0) * remainingTerms;
-    let target = kind === "full" ? maxCredit : maxCredit / 2;
-
-    // snap to lower multiple of termAmount
-    const multiples = Math.floor(target / (termAmount || 1));
-    const snapped = Math.max(1, Math.min(multiples, remainingTerms)) * termAmount;
-    setAmount(String(snapped.toFixed(2)));
+  /* ===== Buttons-only update helpers ===== */
+  const applyCreditMultiplier = (mult: number) => {
+    if (!selectedPack || !isCredit || !termAmount) return;
+    const clamped = Math.max(1, Math.min(mult, getCreditMaxMultiplier()));
+    setTermMultiplier(clamped);
+    setAmount((termAmount * clamped).toFixed(2));
   };
+  const stepMultiplier = (delta: number) =>
+    applyCreditMultiplier(termMultiplier + delta);
 
-  /* ------------------------ Option A: CAP LOGIC ------------------------ */
-  /** Compute the maximum allowed amount based on payment type */
-  const getMaxAllowed = () => {
-    if (!selectedPack) return 0;
+  const bumpCash = (dir: "inc" | "dec") => {
+    if (!selectedPack || !isCash) return;
     const bal = Number(selectedPack.balance || 0);
-
-    if (isCash) return bal;
-
-    // Credit: cap by remaining unpaid installments
-    const remainingTerms = unpaidInstallments.length;
-    const maxByTerms = (termAmount || 0) * remainingTerms;
-    // still cannot exceed outstanding balance
-    return Math.min(bal, maxByTerms);
+    const cur = toNumber(amount) || 0;
+       const next =
+      dir === "inc"
+        ? Math.min(cur + CASH_STEP, bal)
+        : Math.max(cur - CASH_STEP, MIN_CASH);
+    setAmount(bal > 0 ? next.toFixed(2) : "");
   };
 
-  /** Soft-cap on blur and normalize */
-  const handleAmountBlur = () => {
-    const n = toNumber(amount);
-    const maxAllowed = getMaxAllowed();
-    if (maxAllowed <= 0) return;
+const payInFull = () => {
+  if (!selectedPack) return;
+  const bal = round2(Number(selectedPack.balance || 0));
+  // Set the amount to the exact remaining balance for both cash and credit
+  const val = bal > 0 ? bal.toFixed(2) : "";
+  setAmount(val);
 
-    let capped = n;
-    if (n > maxAllowed + EPS) {
-      capped = maxAllowed;
-      toast.message("Amount capped to remaining balance.", {
-        description: `We set it to ${formatCurrency(capped)}.`,
-      });
+  // For UI clarity on credit, move the multiplier to the max remaining terms
+  // (this doesn't change the amount we just set)
+  if (!isCash) {
+    setTermMultiplier(getCreditMaxMultiplier());
+  }
+};
+
+
+  const payInHalf = () => {
+    if (!selectedPack) return;
+    if (isCash) {
+      const bal = Number(selectedPack.balance || 0);
+      setAmount(Math.max(bal / 2, MIN_CASH).toFixed(2));
+    } else {
+      const max = getCreditMaxMultiplier();
+      applyCreditMultiplier(Math.max(1, Math.floor(max / 2)));
     }
-
-    // For credit: also snap to multiples of termAmount
-    if (isCredit && termAmount > 0) {
-      const multiples = Math.floor(capped / termAmount);
-      capped = Math.max(0, multiples * termAmount);
-    }
-
-    setAmount(capped ? capped.toFixed(2) : "");
   };
 
-  // --------------------------- Validation flags ---------------------------
-  const enteredAmount = Number(amount) || 0;
-  const numTermsCovered =
-    termAmount > 0 ? Math.floor(enteredAmount / termAmount) : 0;
-  const remainingAfterTerms =
-    termAmount > 0 ? enteredAmount - numTermsCovered * termAmount : 0;
+  /* --------------------------- Validation flags --------------------------- */
+const enteredAmount = Number(amount) || 0;
+const numTermsCovered =
+  isCredit && termAmount > 0 ? Math.floor(enteredAmount / termAmount) : 0;
+const remainingAfterTerms =
+  isCredit && termAmount > 0 ? enteredAmount - numTermsCovered * termAmount : 0;
 
-  // IMPORTANT CHANGE: cash payments only require > 0 (cap will handle excess)
-  const isPaymentExact = isCash
-    ? enteredAmount > 0
-    : enteredAmount > 0 &&
-      Math.abs(remainingAfterTerms) < EPS &&
-      numTermsCovered <= unpaidInstallments.length &&
-      numTermsCovered > 0;
+// Also accept the exact remaining balance for credit (handles rounding pennies)
+const exactBalance = selectedPack ? round2(Number(selectedPack.balance || 0)) : 0;
+const isExactByBalance = !isCash && Math.abs(enteredAmount - exactBalance) < EPS;
 
-  const showPartialWarning =
-    !isCash && enteredAmount > 0 && remainingAfterTerms !== 0 && termAmount > 0;
+const isExactByTerms =
+  enteredAmount > 0 &&
+  Math.abs(remainingAfterTerms) < EPS &&
+  numTermsCovered <= unpaidInstallments.length &&
+  numTermsCovered > 0;
+
+const isPaymentExact = isCash ? enteredAmount > 0 : (isExactByTerms || isExactByBalance);
+
+// Only show the partial warning if it isn't the exact balance case
+const showPartialWarning =
+  !isCash &&
+  enteredAmount > 0 &&
+  remainingAfterTerms !== 0 &&
+  termAmount > 0 &&
+  !isExactByBalance;
+
 
   const exceedsInstallments =
     !isCash &&
@@ -617,27 +663,10 @@ export default function CustomerPaymentsPage() {
       return;
     }
 
-    // SAFETY CAP just before submit
-    const maxAllowed = getMaxAllowed();
-    let finalAmount = toNumber(amount);
-
-    if (maxAllowed <= 0 || finalAmount <= 0) {
+    const finalAmount = toNumber(amount);
+    if (finalAmount <= 0) {
       toast.error("Please enter a valid amount greater than 0.");
       return;
-    }
-
-    if (finalAmount > maxAllowed + EPS) {
-      finalAmount = maxAllowed;
-      setAmount(finalAmount.toFixed(2));
-      toast.message("Amount capped to remaining balance.", {
-        description: `We set it to ${formatCurrency(finalAmount)}.`,
-      });
-    }
-
-    if (isCredit && termAmount > 0) {
-      const multiples = Math.floor(finalAmount / termAmount);
-      finalAmount = Math.max(0, multiples * termAmount);
-      setAmount(finalAmount.toFixed(2));
     }
 
     setSubmitting(true);
@@ -671,7 +700,6 @@ export default function CustomerPaymentsPage() {
           image_url,
         };
       } else {
-        // Optional metadata for cash
         insertData = {
           ...insertData,
           cheque_number: chequeNumber || null,
@@ -715,6 +743,7 @@ export default function CustomerPaymentsPage() {
       setBankName("");
       setChequeDate("");
       setFile(null);
+      setTermMultiplier(1);
     } catch (err: any) {
       console.error("Submit failed:", err?.message || err);
       toast.error(
@@ -730,7 +759,10 @@ export default function CustomerPaymentsPage() {
   const closeBreakdown = () => setShowBreakdown(false);
 
   const paidCount = useMemo(
-    () => installments.filter((r) => (r.status || "").toLowerCase() === "paid").length,
+    () =>
+      installments.filter(
+        (r) => (r.status || "").toLowerCase() === "paid"
+      ).length,
     [installments]
   );
 
@@ -766,9 +798,14 @@ export default function CustomerPaymentsPage() {
             </h2>
           </div>
 
-          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <form
+            onSubmit={handleSubmit}
+            className="grid grid-cols-1 md:grid-cols-2 gap-4"
+          >
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Select Transaction (TXN) *</label>
+              <label className="text-xs text-gray-600">
+                Select Transaction (TXN) *
+              </label>
               <select
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 value={selectedTxnCode}
@@ -786,7 +823,9 @@ export default function CustomerPaymentsPage() {
               {!!selectedPack && (
                 <div className="mt-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                   <div className="text-sm md:text-base text-gray-700">
-                    <span className="font-semibold">Remaining balance (incl. shipping):</span>{" "}
+                    <span className="font-semibold">
+                      Remaining balance (incl. shipping):
+                    </span>{" "}
                     <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
                       {formatCurrency(selectedPack.balance)}
                     </span>
@@ -804,89 +843,141 @@ export default function CustomerPaymentsPage() {
               )}
             </div>
 
-            {/* Amount + Quick Buttons */}
+            {/* Amount (LOCKED) + controls */}
             <div className="col-span-1">
               <label className="text-xs text-gray-600">Amount *</label>
-              <input
-                type="number"
-                step={isCash ? "0.01" : String(termAmount || 0.01)}
-                min={isCash ? "0.01" : String(termAmount || 0.01)}
-                // IMPORTANT: no "max" for cash, to let user type freely (we cap later)
-                max={
-                  !isCash
-                    ? String((termAmount || 0) * unpaidInstallments.length || 0)
-                    : undefined
-                }
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                onBlur={handleAmountBlur}
-                placeholder={
-                  isCash
-                    ? selectedPack
-                      ? formatCurrency(selectedPack.balance)
-                      : ""
-                    : termAmount > 0
-                    ? termAmount.toLocaleString("en-PH", { style: "currency", currency: "PHP" })
-                    : ""
-                }
-                className={`mt-1 w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${
-                  !isCash && (!isPaymentExact || showPartialWarning || exceedsInstallments)
-                    ? "border-red-400 focus:ring-red-400"
-                    : "border-gray-300 focus:ring-amber-400"
-                }`}
-                required
-              />
-              {/* Quick-pay buttons */}
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => applyQuickAmount("full")}
-                  className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]"
-                  style={{ backgroundColor: "#ffba20" }}
-                >
-                  Pay in Full
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyQuickAmount("half")}
-                  className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]"
-                  style={{ backgroundColor: "#ffba20" }}
-                >
-                  Pay in Half
-                </button>
+              <div className="mt-1">
+                <input
+                  type="text"
+                  value={amount}
+                  readOnly
+                  onKeyDown={(e) => e.preventDefault()}
+                  onWheel={(e) => e.preventDefault()}
+                  className="w-full rounded-lg border px-3 py-2 border-gray-300 bg-gray-50 cursor-not-allowed focus:outline-none"
+                />
               </div>
 
-              {/* Live feedback */}
-              {!isCash && numTermsCovered > 0 && isPaymentExact && (
+              {/* CREDIT controls — always visible when credit */}
+              {isCredit && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => stepMultiplier(-1)}
+                    className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                    title="Pay fewer months"
+                    disabled={termAmount <= 0 || termMultiplier <= 1}
+                  >
+                    <Minus className="h-4 w-4" />
+                  </button>
+                  <div
+                    className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
+                    title={
+                      termAmount > 0
+                        ? "Number of months to pay"
+                        : "Schedule not loaded yet"
+                    }
+                  >
+                    × {termMultiplier}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => stepMultiplier(+1)}
+                    className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                    title="Pay more months"
+                    disabled={
+                      termAmount <= 0 || termMultiplier >= getCreditMaxMultiplier()
+                    }
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+
+                  <div className="flex gap-2 ml-1">
+                    <button
+                      type="button"
+                      onClick={payInFull}
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20] disabled:opacity-50"
+                      style={{ backgroundColor: "#ffba20" }}
+                      disabled={termAmount <= 0}
+                    >
+                      Pay in Full
+                    </button>
+                    <button
+                      type="button"
+                      onClick={payInHalf}
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20] disabled:opacity-50"
+                      style={{ backgroundColor: "#ffba20" }}
+                      disabled={termAmount <= 0}
+                    >
+                      Pay in Half
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* CASH controls — always visible when cash */}
+              {isCash && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => bumpCash("dec")}
+                    className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
+                    title={`Decrease ₱${CASH_STEP.toLocaleString()}`}
+                  >
+                    <Minus className="h-4 w-4" />
+                  </button>
+                  <div
+                    className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
+                    title="Cash step"
+                  >
+                    ₱{CASH_STEP.toLocaleString()}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => bumpCash("inc")}
+                    className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
+                    title={`Increase ₱${CASH_STEP.toLocaleString()}`}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+
+                  <div className="flex gap-2 ml-1">
+                    <button
+                      type="button"
+                      onClick={payInFull}
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]"
+                      style={{ backgroundColor: "#ffba20" }}
+                    >
+                      Pay in Full
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={payInHalf}
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]"
+                      style={{ backgroundColor: "#ffba20" }}
+                    >
+                      Pay in Half
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Optional hints */}
+              {!isCash && Number(amount) > 0 && termAmount > 0 && (
                 <div className="mt-1 text-xs text-green-700">
-                  This payment will pay off <b>{numTermsCovered}</b> installment{numTermsCovered > 1 ? "s" : ""}.
+                  This payment will pay off{" "}
+                  <b>{Math.floor(Number(amount) / termAmount)}</b> installment
+                  {Math.floor(Number(amount) / termAmount) > 1 ? "s" : ""}.
                 </div>
               )}
-              {!isCash && showPartialWarning && (
-                <div className="mt-1 text-xs text-red-600">
-                  Amount is not an exact multiple of the term payment ({formatCurrency(termAmount)}).
-                  <br />
-                  Only multiples of the monthly term amount are allowed.
-                </div>
-              )}
-              {!isCash && exceedsInstallments && (
-                <div className="mt-1 text-xs text-red-600">
-                  Amount exceeds all remaining unpaid installments.
-                </div>
-              )}
-              {/* Soft hint for over-balance (we'll cap automatically) */}
-              {isCash && exceedsBalance && (
-                <div className="mt-1 text-xs text-amber-600">
-                  Amount exceeds remaining balance. It will be capped to{" "}
-                  <b>{formatCurrency(getMaxAllowed())}</b> on submit.
-                </div>
-              )}
-            </div>
+            </div>{" "}
+            {/* closes the Amount (LOCKED) + controls column */}
 
             {/* Cheque metadata — enabled for Cash (optional) */}
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Cheque Number {isCash ? "(optional)" : "*"}</label>
+              <label className="text-xs text-gray-600">
+                Cheque Number {isCash ? "(optional)" : "*"}
+              </label>
               <input
                 type="text"
                 inputMode="numeric"
@@ -894,7 +985,9 @@ export default function CustomerPaymentsPage() {
                 maxLength={20}
                 value={chequeNumber}
                 onChange={(e) => {
-                  const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 20);
+                  const digitsOnly = e.target.value
+                    .replace(/\D/g, "")
+                    .slice(0, 20);
                   setChequeNumber(digitsOnly);
                 }}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
@@ -907,7 +1000,9 @@ export default function CustomerPaymentsPage() {
             </div>
 
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Bank Name {isCash ? "(optional)" : "*"}</label>
+              <label className="text-xs text-gray-600">
+                Bank Name {isCash ? "(optional)" : "*"}
+              </label>
               <input
                 type="text"
                 value={bankName}
@@ -919,7 +1014,9 @@ export default function CustomerPaymentsPage() {
             </div>
 
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Cheque Date {isCash ? "(optional)" : "*"}</label>
+              <label className="text-xs text-gray-600">
+                Cheque Date {isCash ? "(optional)" : "*"}
+              </label>
               <input
                 type="date"
                 value={chequeDate}
@@ -930,7 +1027,9 @@ export default function CustomerPaymentsPage() {
             </div>
 
             <div className="col-span-1">
-              <label className="text-xs text-gray-600">Cheque Image {isCash ? "(optional)" : "*"}</label>
+              <label className="text-xs text-gray-600">
+                Cheque Image {isCash ? "(optional)" : "*"}
+              </label>
               <div className="mt-1 flex items-center gap-3">
                 <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 cursor-pointer hover:bg-gray-50">
                   <FileImage className="h-4 w-4" />
@@ -959,6 +1058,7 @@ export default function CustomerPaymentsPage() {
                   setBankName("");
                   setChequeDate("");
                   setFile(null);
+                  setTermMultiplier(1);
                 }}
                 className="px-4 py-2 border rounded hover:bg-gray-100"
               >
@@ -985,13 +1085,24 @@ export default function CustomerPaymentsPage() {
             <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
               <table className="w-full text-sm align-middle">
                 <thead>
-                  <tr className="text-black uppercase tracking-wider text-[11px]" style={{ background: "#ffba20" }}>
+                  <tr
+                    className="text-black uppercase tracking-wider text-[11px]"
+                    style={{ background: "#ffba20" }}
+                  >
                     <th className="py-2.5 px-3 text-center font-bold">QTY</th>
                     <th className="py-2.5 px-3 text-center font-bold">UNIT</th>
-                    <th className="py-2.5 px-3 text-left font-bold">ITEM DESCRIPTION</th>
-                    <th className="py-2.5 px-3 text-center font-bold">REMARKS</th>
-                    <th className="py-2.5 px-3 text-center font-bold">UNIT PRICE</th>
-                    <th className="py-2.5 px-3 text-center font-bold">DISCOUNT/ADD (%)</th>
+                    <th className="py-2.5 px-3 text-left font-bold">
+                      ITEM DESCRIPTION
+                    </th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      REMARKS
+                    </th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      UNIT PRICE
+                    </th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      DISCOUNT/ADD (%)
+                    </th>
                     <th className="py-2.5 px-3 text-center font-bold">AMOUNT</th>
                   </tr>
                 </thead>
@@ -999,26 +1110,42 @@ export default function CustomerPaymentsPage() {
                   {(selectedPack.order.order_items ?? []).map((it, idx) => {
                     const unit = it.inventory?.unit?.trim() || "pcs";
                     const desc = it.inventory?.product_name ?? "—";
-                    const unitPrice = Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
+                    const unitPrice =
+                      Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
                     const qty = Number(it.quantity || 0);
                     const amount = qty * unitPrice;
 
                     const inStockFlag =
                       typeof it.inventory?.quantity === "number"
                         ? (it.inventory?.quantity ?? 0) > 0
-                        : (it.inventory?.status || "").toLowerCase().includes("in stock");
+                        : (it.inventory?.status || "")
+                            .toLowerCase()
+                            .includes("in stock");
 
                     return (
-                      <tr key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>
-                        <td className="py-2.5 px-3 text-center font-mono">{qty}</td>
-                        <td className="py-2.5 px-3 text-center font-mono">{unit}</td>
+                      <tr
+                        key={idx}
+                        className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
+                      >
+                        <td className="py-2.5 px-3 text-center font-mono">
+                          {qty}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono">
+                          {unit}
+                        </td>
                         <td className="py-2.5 px-3">
                           <span className="font-semibold">{desc}</span>
                         </td>
-                        <td className="py-2.5 px-3 text-center">{inStockFlag ? "✓" : it.inventory?.status ?? "✗"}</td>
-                        <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">{formatCurrency(unitPrice)}</td>
+                        <td className="py-2.5 px-3 text-center">
+                          {inStockFlag ? "✓" : it.inventory?.status ?? "✗"}
+                        </td>
                         <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
-                          {typeof it.discount_percent === "number" ? `${it.discount_percent}%` : ""}
+                          {formatCurrency(unitPrice)}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
+                          {typeof it.discount_percent === "number"
+                            ? `${it.discount_percent}%`
+                            : ""}
                         </td>
                         <td className="py-2.5 px-3 text-center font-mono font-bold whitespace-nowrap">
                           {formatCurrency(amount)}
@@ -1028,7 +1155,10 @@ export default function CustomerPaymentsPage() {
                   })}
                   {(selectedPack.order.order_items ?? []).length === 0 && (
                     <tr>
-                      <td colSpan={7} className="text-center py-8 text-neutral-400">
+                      <td
+                        colSpan={7}
+                        className="text-center py-8 text-neutral-400"
+                      >
                         No items found.
                       </td>
                     </tr>
@@ -1043,34 +1173,52 @@ export default function CustomerPaymentsPage() {
                 <table className="text-right w-full">
                   <tbody>
                     <tr>
-                      <td className="font-semibold py-0.5">Subtotal (Before Discount):</td>
-                      <td className="pl-2 font-mono">{formatCurrency(selectedPack.totals.subtotal)}</td>
+                      <td className="font-semibold py-0.5">
+                        Subtotal (Before Discount):
+                      </td>
+                      <td className="pl-2 font-mono">
+                        {formatCurrency(selectedPack.totals.subtotal)}
+                      </td>
                     </tr>
                     <tr>
                       <td className="font-semibold py-0.5">Discount</td>
-                      <td className="pl-2 font-mono">-{formatCurrency(selectedPack.totals.totalDiscount)}</td>
+                      <td className="pl-2 font-mono">
+                        -{formatCurrency(selectedPack.totals.totalDiscount)}
+                      </td>
                     </tr>
                     <tr>
-                      <td className="font-semibold py-0.5">Sales Tax (12%):</td>
-                      <td className="pl-2 font-mono">{formatCurrency(selectedPack.totals.salesTax)}</td>
+                      <td className="font-semibold py-0.5">
+                        Sales Tax (12%):
+                      </td>
+                      <td className="pl-2 font-mono">
+                        {formatCurrency(selectedPack.totals.salesTax)}
+                      </td>
                     </tr>
                     {(selectedPack.order?.interest_percent ?? 0) > 0 && (
                       <tr>
-                        <td className="font-semibold py-0.5">Interest ({selectedPack.order.interest_percent}%):</td>
+                        <td className="font-semibold py-0.5">
+                          Interest ({selectedPack.order.interest_percent}%):
+                        </td>
                         <td className="pl-2 font-mono text-blue-700 font-bold">
                           {formatCurrency(
                             ((selectedPack.order.interest_percent ?? 0) / 100) *
-                              (selectedPack.totals.subtotal - selectedPack.totals.totalDiscount + selectedPack.totals.salesTax)
+                              (selectedPack.totals.subtotal -
+                                selectedPack.totals.totalDiscount +
+                                selectedPack.totals.salesTax)
                           )}
                         </td>
                       </tr>
                     )}
                     <tr>
                       <td className="font-semibold py-0.5">Shipping Fee:</td>
-                      <td className="pl-2 font-mono">{formatCurrency(selectedPack.totals.shippingFee)}</td>
+                      <td className="pl-2 font-mono">
+                        {formatCurrency(selectedPack.totals.shippingFee)}
+                      </td>
                     </tr>
                     <tr>
-                      <td className="font-bold py-1.5">Grand Total (Incl. Shipping):</td>
+                      <td className="font-bold py-1.5">
+                        Grand Total (Incl. Shipping):
+                      </td>
                       <td className="pl-2 font-bold text-green-700 font-mono">
                         {formatCurrency(selectedPack.totals.finalGrandTotal)}
                       </td>
@@ -1085,10 +1233,14 @@ export default function CustomerPaymentsPage() {
                     )}
                     <tr>
                       <td className="font-semibold py-0.5">Paid:</td>
-                      <td className="pl-2 font-mono">{formatCurrency(selectedPack.paid)}</td>
+                      <td className="pl-2 font-mono">
+                        {formatCurrency(selectedPack.paid)}
+                      </td>
                     </tr>
                     <tr>
-                      <td className="font-semibold py-0.5">Remaining Balance:</td>
+                      <td className="font-semibold py-0.5">
+                        Remaining Balance:
+                      </td>
                       <td className="pl-2 font-bold text-amber-700 font-mono">
                         {formatCurrency(selectedPack.balance)}
                       </td>
@@ -1152,31 +1304,53 @@ export default function CustomerPaymentsPage() {
                     {(selectedPack?.order?.per_term_amount ?? 0) > 0 && (
                       <div className="w-full max-w-sm mt-3 text-center">
                         <div className="flex flex-col gap-0.5 items-center mb-2">
-                          <span className="font-medium text-gray-500 text-xs">Terms:</span>
+                          <span className="font-medium text-gray-500 text-xs">
+                            Terms:
+                          </span>
                           <span className="font-mono text-base font-bold text-amber-700">
-                            {termCount ?? "—"} month{(termCount ?? 0) > 1 ? "s" : ""}
+                            {termCount ?? "—"} month
+                            {(termCount ?? 0) > 1 ? "s" : ""}
                           </span>
                         </div>
                         <div className="flex flex-col gap-0.5 items-center mb-3">
-                          <span className="font-medium text-gray-500 text-xs">Per Month:</span>
+                          <span className="font-medium text-gray-500 text-xs">
+                            Per Month:
+                          </span>
                           <span className="font-mono text-2xl font-extrabold text-blue-700 drop-shadow">
-                            {formatCurrency(selectedPack?.order?.per_term_amount ?? 0)}
+                            {formatCurrency(
+                              selectedPack?.order?.per_term_amount ?? 0
+                            )}
                           </span>
                         </div>
                         <div className="rounded-xl shadow ring-1 ring-gray-200 overflow-hidden mt-2">
                           <table className="w-full bg-white">
                             <thead>
                               <tr style={{ background: "#ffba20" }}>
-                                <th className="py-2 px-2 text-left font-bold text-neutral-900 text-xs">Month</th>
-                                <th className="py-2 px-2 text-right font-bold text-neutral-900 text-xs">Amount Due</th>
+                                <th className="py-2 px-2 text-left font-bold text-neutral-900 text-xs">
+                                  Month
+                                </th>
+                                <th className="py-2 px-2 text-right font-bold text-neutral-900 text-xs">
+                                  Amount Due
+                                </th>
                               </tr>
                             </thead>
                             <tbody>
-                              {Array.from({ length: termCount ?? 12 }).map((_, i) => (
-                                <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-[#fff7e5]"}>
-                                  <td className="py-1.5 px-2 border-b border-gray-100 font-mono text-sm">Month {i + 1}</td>
+                              {Array.from({
+                                length: termCount ?? 12,
+                              }).map((_, i) => (
+                                <tr
+                                  key={i}
+                                  className={
+                                    i % 2 === 0 ? "bg-white" : "bg-[#fff7e5]"
+                                  }
+                                >
+                                  <td className="py-1.5 px-2 border-b border-gray-100 font-mono text-sm">
+                                    Month {i + 1}
+                                  </td>
                                   <td className="py-1.5 px-2 border-b border-gray-100 text-right font-mono text-blue-700 font-bold text-sm">
-                                    {formatCurrency(selectedPack?.order?.per_term_amount ?? 0)}
+                                    {formatCurrency(
+                                      selectedPack?.order?.per_term_amount ?? 0
+                                    )}
                                   </td>
                                 </tr>
                               ))}
@@ -1186,10 +1360,14 @@ export default function CustomerPaymentsPage() {
                         {/* Summary */}
                         <div className="mt-3 w-full flex items-end justify-between text-xs">
                           <div className="text-amber-700">
-                            ⚠️ Delayed payments may incur penalties. Please pay on or before the due date.
+                            ⚠️ Delayed payments may incur penalties. Please
+                            pay on or before the due date.
                           </div>
                           <div className="font-semibold">
-                            Total Monthly Paid: <span className="font-bold text-blue-700">{paidCount}</span>
+                            Total Monthly Paid:{" "}
+                            <span className="font-bold text-blue-700">
+                              {paidCount}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -1200,12 +1378,25 @@ export default function CustomerPaymentsPage() {
                     <div className="rounded-xl overflow-hidden shadow ring-1 ring-gray-200 bg-white">
                       <table className="w-full text-xs align-middle">
                         <thead>
-                          <tr className="uppercase tracking-wider text-[11px]" style={{ background: "#ffba20" }}>
-                            <th className="py-2 px-2 text-left font-bold text-neutral-900">Term</th>
-                            <th className="py-2 px-2 text-left font-bold text-neutral-900">Due Date</th>
-                            <th className="py-2 px-2 text-right font-bold text-neutral-900">Amount Due</th>
-                            <th className="py-2 px-2 text-right font-bold text-neutral-900">Amount Paid</th>
-                            <th className="py-2 px-2 text-center font-bold text-neutral-900">Status</th>
+                          <tr
+                            className="uppercase tracking-wider text-[11px]"
+                            style={{ background: "#ffba20" }}
+                          >
+                            <th className="py-2 px-2 text-left font-bold text-neutral-900">
+                              Term
+                            </th>
+                            <th className="py-2 px-2 text-left font-bold text-neutral-900">
+                              Due Date
+                            </th>
+                            <th className="py-2 px-2 text-right font-bold text-neutral-900">
+                              Amount Due
+                            </th>
+                            <th className="py-2 px-2 text-right font-bold text-neutral-900">
+                              Amount Paid
+                            </th>
+                            <th className="py-2 px-2 text-center font-bold text-neutral-900">
+                              Status
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1214,17 +1405,28 @@ export default function CustomerPaymentsPage() {
                             const due = Number(row.amount_due || 0);
                             const isPaid = paid >= due;
                             return (
-                              <tr key={row.id || `${row.term_no}:${row.due_date}`} className="border-b last:border-b-0">
-                                <td className="py-1.5 px-2 font-mono">{row.term_no}</td>
+                              <tr
+                                key={row.id || `${row.term_no}:${row.due_date}`}
+                                className="border-b last:border-b-0"
+                              >
+                                <td className="py-1.5 px-2 font-mono">
+                                  {row.term_no}
+                                </td>
                                 <td className="py-1.5 px-2">
-                                  {new Date(row.due_date + "T00:00:00").toLocaleDateString("en-PH", {
+                                  {new Date(
+                                    row.due_date + "T00:00:00"
+                                  ).toLocaleDateString("en-PH", {
                                     year: "numeric",
                                     month: "short",
                                     day: "2-digit",
                                   })}
                                 </td>
-                                <td className="py-1.5 px-2 text-right font-mono">{formatCurrency(due)}</td>
-                                <td className="py-1.5 px-2 text-right font-mono">{formatCurrency(paid)}</td>
+                                <td className="py-1.5 px-2 text-right font-mono">
+                                  {formatCurrency(due)}
+                                </td>
+                                <td className="py-1.5 px-2 text-right font-mono">
+                                  {formatCurrency(paid)}
+                                </td>
                                 <td className="py-1.5 px-2 text-center">
                                   {isPaid ? (
                                     <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 font-semibold">
@@ -1245,10 +1447,14 @@ export default function CustomerPaymentsPage() {
                     {/* Footer note & count */}
                     <div className="mt-3 w-full flex items-end justify-between text-xs">
                       <div className="text-amber-700">
-                        ⚠️ Delayed payments may incur penalties. Please pay on or before the due date.
+                        ⚠️ Delayed payments may incur penalties. Please pay on
+                        or before the due date.
                       </div>
                       <div className="font-semibold">
-                        Total Monthly Paid: <span className="font-bold text-blue-700">{paidCount}</span>
+                        Total Monthly Paid:{" "}
+                        <span className="font-bold text-blue-700">
+                          {paidCount}
+                        </span>
                       </div>
                     </div>
                   </>
