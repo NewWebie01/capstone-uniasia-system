@@ -5,6 +5,13 @@ import supabase from "@/config/supabaseClient";
 import { Loader2, RefreshCcw, X, Clock } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
+import {
+  getPHISOString,
+  formatPHISODate,
+  formatPHDate,
+  formatPHTime,
+} from "@/lib/datetimePH";
+
 type Activity = {
   id: number;
   user_email: string | null;
@@ -13,27 +20,20 @@ type Activity = {
   created_at: string;
 };
 
-function add8HoursToUTC(dateString: string) {
-  const d = new Date(dateString);
-  d.setHours(d.getHours() + 8);
-  return d.toLocaleString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
 function activityLabel(action: string) {
   if (!action) return "";
-  if (action.toLowerCase().includes("login")) return "bg-yellow-100 text-yellow-800";
-  if (action.toLowerCase().includes("logout")) return "bg-yellow-100 text-yellow-800";
-  if (action.toLowerCase().includes("complete")) return "bg-green-100 text-green-800";
-  if (action.toLowerCase().includes("pending")) return "bg-yellow-50 text-yellow-900";
-  if (action.toLowerCase().includes("update")) return "bg-blue-100 text-blue-800";
-  if (action.toLowerCase().includes("add")) return "bg-orange-100 text-orange-800";
+  if (action.toLowerCase().includes("login"))
+    return "bg-yellow-100 text-yellow-800";
+  if (action.toLowerCase().includes("logout"))
+    return "bg-yellow-100 text-yellow-800";
+  if (action.toLowerCase().includes("complete"))
+    return "bg-green-100 text-green-800";
+  if (action.toLowerCase().includes("pending"))
+    return "bg-yellow-50 text-yellow-900";
+  if (action.toLowerCase().includes("update"))
+    return "bg-blue-100 text-blue-800";
+  if (action.toLowerCase().includes("add"))
+    return "bg-orange-100 text-orange-800";
   if (action.toLowerCase().includes("reject")) return "bg-red-100 text-red-800";
   return "bg-gray-100 text-gray-800";
 }
@@ -115,7 +115,9 @@ export default function RecentActivityLog() {
         title="Click to view full activity log"
         onClick={handleOpenModal}
         tabIndex={0}
-        onKeyDown={e => { if (e.key === "Enter") handleOpenModal(); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleOpenModal();
+        }}
         role="button"
       >
         {/* Header: Yellow Bar */}
@@ -125,7 +127,10 @@ export default function RecentActivityLog() {
           </span>
           <span className="font-bold text-lg text-[#181918]">Activity Log</span>
           <button
-            onClick={e => { e.stopPropagation(); fetchActivities(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              fetchActivities();
+            }}
             className="ml-auto text-gray-500 hover:text-yellow-700 transition"
             title="Refresh"
             tabIndex={-1}
@@ -142,32 +147,36 @@ export default function RecentActivityLog() {
           ) : activities.length === 0 ? (
             <p className="text-gray-400 text-sm mt-2">No recent activity.</p>
           ) : (
-           <ul className="divide-y divide-gray-100 pointer-events-none">
-  {activities.map((act) => (
-    <li
-      key={act.id}
-      className="py-3 px-2 hover:bg-gray-50 rounded-xl transition flex flex-col gap-0.5"
-    >
-      <div className="flex items-center gap-2">
-        <span className="font-semibold text-[16px] text-[#222]">
-          {act.user_email || <span className="italic text-gray-400">unknown</span>}
-        </span>
-        <span className="ml-2 px-2 py-0.5 text-[14px] rounded-full border bg-gray-50 text-gray-600 font-bold capitalize">
-          {act.user_role || "User"}
-        </span>
-      </div>
-      <span
-        className={`inline-block font-medium ${activityLabel(act.action)} px-2 py-1 text-[15px] rounded-full mt-1 mb-0.5`}
-      >
-        {act.action}
-      </span>
-      <span className="text-xs text-gray-500">
-        {add8HoursToUTC(act.created_at)}
-      </span>
-    </li>
-  ))}
-</ul>
-
+            <ul className="divide-y divide-gray-100 pointer-events-none">
+              {activities.map((act) => (
+                <li
+                  key={act.id}
+                  className="py-3 px-2 hover:bg-gray-50 rounded-xl transition flex flex-col gap-0.5"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-[16px] text-[#222]">
+                      {act.user_email || (
+                        <span className="italic text-gray-400">unknown</span>
+                      )}
+                    </span>
+                    <span className="ml-2 px-2 py-0.5 text-[14px] rounded-full border bg-gray-50 text-gray-600 font-bold capitalize">
+                      {act.user_role || "User"}
+                    </span>
+                  </div>
+                  <span
+                    className={`inline-block font-medium ${activityLabel(
+                      act.action
+                    )} px-2 py-1 text-[15px] rounded-full mt-1 mb-0.5`}
+                  >
+                    {act.action}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {formatPHDate(act.created_at)},{" "}
+                    {formatPHTime(act.created_at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
           <span className="text-xs text-center text-gray-400 mt-3 pointer-events-none">
             Click card to view more
@@ -196,7 +205,9 @@ export default function RecentActivityLog() {
                 <span className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-yellow-100 text-yellow-700 mr-2">
                   <Clock size={20} />
                 </span>
-                <span className="font-bold text-lg text-[#181918]">Recent Activity Log</span>
+                <span className="font-bold text-lg text-[#181918]">
+                  Recent Activity Log
+                </span>
                 <button
                   className="ml-auto text-gray-500 hover:text-yellow-600 transition"
                   onClick={() => setModalOpen(false)}
@@ -212,7 +223,9 @@ export default function RecentActivityLog() {
                     <Loader2 className="animate-spin" size={24} />
                   </div>
                 ) : topTen.length === 0 ? (
-                  <p className="text-gray-400 text-sm mt-2">No recent activity.</p>
+                  <p className="text-gray-400 text-sm mt-2">
+                    No recent activity.
+                  </p>
                 ) : (
                   <ul className="divide-y divide-gray-100 max-h-[400px] overflow-y-auto">
                     {topTen.map((act) => (
@@ -222,19 +235,26 @@ export default function RecentActivityLog() {
                       >
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-sm text-[#222]">
-                            {act.user_email || <span className="italic text-gray-400">unknown</span>}
+                            {act.user_email || (
+                              <span className="italic text-gray-400">
+                                unknown
+                              </span>
+                            )}
                           </span>
                           <span className="ml-2 px-2 py-0.5 text-xs rounded-full border bg-gray-50 text-gray-600 font-bold capitalize">
                             {act.user_role || "User"}
                           </span>
                         </div>
                         <span
-                          className={`inline-block font-medium ${activityLabel(act.action)} px-2 py-0.5 text-xs rounded-full mt-1 mb-0.5`}
+                          className={`inline-block font-medium ${activityLabel(
+                            act.action
+                          )} px-2 py-0.5 text-xs rounded-full mt-1 mb-0.5`}
                         >
                           {act.action}
                         </span>
                         <span className="text-xs text-gray-500">
-                          {add8HoursToUTC(act.created_at)}
+                          {formatPHDate(act.created_at)},{" "}
+                          {formatPHTime(act.created_at)}
                         </span>
                       </li>
                     ))}
