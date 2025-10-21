@@ -74,7 +74,7 @@ const ROLE_MENUS: Record<string, string[]> = {
     "Transaction History",
   ],
 };
-//
+
 interface SidebarProps {
   open: boolean;
   setOpen: Dispatch<SetStateAction<boolean>>;
