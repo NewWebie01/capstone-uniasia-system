@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { BellRing, CheckCheck, Loader2, Clipboard } from "lucide-react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
@@ -77,8 +76,6 @@ function isAdminDrivenStrict(n: NotificationRow, currentUserEmail?: string | nul
 }
 
 export default function CustomerNotificationBell() {
-  const router = useRouter();
-
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [list, setList] = useState<NotificationRow[]>([]);
@@ -86,6 +83,7 @@ export default function CustomerNotificationBell() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
+  const emailRef = useRef<string | null>(null); // keep latest email for realtime filtering
   const [seenKey, setSeenKey] = useState(SEEN_KEY_BASE);
 
   const ringRef = useRef<HTMLAudioElement | null>(null);
@@ -98,16 +96,20 @@ export default function CustomerNotificationBell() {
   // Load user
   useEffect(() => {
     (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
       const email = user?.email || null;
       const name = (user?.user_metadata?.name as string) || email || null;
       setUserEmail(email);
+      emailRef.current = email; // keep ref current
       setUserName(name);
       setSeenKey(`${SEEN_KEY_BASE}:${email || "guest"}`);
     })();
   }, []);
+
+  // keep ref in sync if email changes later
+  useEffect(() => {
+    emailRef.current = userEmail;
+  }, [userEmail]);
 
   // seen map helpers
   const getSeenMap = () => {
@@ -179,27 +181,20 @@ export default function CustomerNotificationBell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEmail, userName]);
 
-// Realtime for everyone: listen to ALL changes; filter to admin/system only
-useEffect(() => {
-  const ch = supabase.channel("customer-notifs-realtime");
+  // Realtime for everyone: subscribe once, filter in handler
+  useEffect(() => {
+    const ch = supabase.channel("customer-notifs-realtime");
 
-  // INSERT
-  ch.on(
-    "postgres_changes",
-    { event: "INSERT", schema: "public", table: "customer_notifications" },
-    (payload: any) => {
+    const onInsert = (payload: any) => {
       const row = payload.new as NotificationRow;
-      if (isAdminDrivenStrict(row, userEmail)) handleIncoming(row);
-    }
-  );
+      if (isAdminDrivenStrict(row, emailRef.current)) {
+        handleIncoming(row);
+      }
+    };
 
-  // UPDATE
-  ch.on(
-    "postgres_changes",
-    { event: "UPDATE", schema: "public", table: "customer_notifications" },
-    (payload: any) => {
+    const onUpdate = (payload: any) => {
       const row = payload.new as NotificationRow;
-      if (isAdminDrivenStrict(row, userEmail)) {
+      if (isAdminDrivenStrict(row, emailRef.current)) {
         setList((prev) => {
           const idx = prev.findIndex((x) => x.id === row.id);
           if (idx === -1) return prev;
@@ -208,33 +203,41 @@ useEffect(() => {
           return copy;
         });
       }
-    }
-  );
+    };
 
-  // DELETE
-  ch.on(
-    "postgres_changes",
-    { event: "DELETE", schema: "public", table: "customer_notifications" },
-    (payload: any) => {
-      const id = payload.old?.id;
+    const onDelete = (payload: any) => {
+      const id = payload.old?.id as string | number | undefined;
+      if (id == null) return;
       setList((prev) => prev.filter((n) => n.id !== id));
-    }
-  );
+    };
 
-  // IMPORTANT: don't return this promise from the effect
-  void ch.subscribe((status) => console.log("[realtime] status:", status));
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "customer_notifications" },
+      (payload: any) => {
+        switch (payload.eventType) {
+          case "INSERT":
+            onInsert(payload);
+            break;
+          case "UPDATE":
+            onUpdate(payload);
+            break;
+          case "DELETE":
+            onDelete(payload);
+            break;
+        }
+      }
+    );
 
-  // Cleanup must be a function
-  return () => {
-    try {
-      supabase.removeChannel(ch);
-    } catch {}
-  };
-}, [userEmail]);
+    void ch.subscribe();
 
+    return () => {
+      try { supabase.removeChannel(ch); } catch {}
+    };
+  }, []); // subscribe once
 
   const handleIncoming = (row: NotificationRow) => {
-    if (!isAdminDrivenStrict(row, userEmail)) return;
+    if (!isAdminDrivenStrict(row, emailRef.current)) return;
 
     setList((prev) => {
       const dedup = [row, ...prev.filter((x) => x.id !== row.id)];
@@ -288,24 +291,6 @@ useEffect(() => {
     setSelected(n);
     setDetailOpen(true);
     markOneRead(n.id);
-  };
-
-  const goToLink = (n: NotificationRow) => {
-    if (n.href) {
-      router.push(n.href);
-      setDetailOpen(false);
-      setOpen(false);
-      return;
-    }
-    if (n.transaction_code) {
-      router.push(`/customer?txn=${encodeURIComponent(n.transaction_code)}`);
-      setDetailOpen(false);
-      setOpen(false);
-    } else if (n.order_id) {
-      router.push(`/customer/orders/${encodeURIComponent(n.order_id)}`);
-      setDetailOpen(false);
-      setOpen(false);
-    }
   };
 
   return (
