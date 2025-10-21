@@ -8,6 +8,9 @@ import PageLoader from "@/components/PageLoader";
 import { toast } from "sonner";
 import { on, off } from "@/utils/eventEmitter";
 
+
+
+
 import {
   formatPHDate,
   formatPHTime,
@@ -538,6 +541,29 @@ function SalesPageContent() {
       .from("orders")
       .update({ status: "rejected" })
       .eq("id", order.id);
+
+      // 🔔 Notify customer: order rejected
+try {
+  await fetch("/api/notify-customer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipientEmail: order.customers.email,
+      recipientName: order.customers.name,
+      type: "order_rejected",
+      title: "Order Rejected",
+      message: `We're sorry — your order ${order.customers.code ?? order.id} was rejected.`,
+      href: `/customer?txn=${order.customers.code ?? order.id}`,
+      orderId: order.id,
+      transactionCode: order.customers.code ?? null,
+      actorEmail: (await supabase.auth.getUser()).data.user?.email ?? "admin@system",
+    }),
+  });
+} catch (e) {
+  console.error("notify (order_rejected) failed:", e);
+}
+
+
     try {
       const {
         data: { user },
@@ -694,6 +720,33 @@ function SalesPageContent() {
         })
         .eq("id", selectedOrder.id);
       if (doneErr) throw doneErr;
+
+      // 🔔 Notify customer: order completed
+try {
+  await fetch("/api/notify-customer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipientEmail: selectedOrder.customers.email,
+      recipientName: selectedOrder.customers.name,
+      type: "order_completed",
+      title: "Order Completed",
+      message: `Your order ${selectedOrder.customers.code ?? selectedOrder.id} has been completed. Thank you!`,
+      href: `/customer?txn=${selectedOrder.customers.code ?? selectedOrder.id}`,
+      orderId: selectedOrder.id,
+      transactionCode: selectedOrder.customers.code ?? null,
+      metadata: {
+        grand_total: getGrandTotalWithInterest(),
+        terms: selectedOrder.customers.payment_type === "Credit" ? numberOfTerms : 1,
+      },
+      actorEmail: processor?.email ?? "admin@system",
+    }),
+  });
+} catch (e) {
+  console.error("notify (order_completed) failed:", e);
+}
+
+
 
       // 7) Close modals, refresh data, toast, email
       setShowSalesOrderModal(false);
@@ -1743,6 +1796,29 @@ function SalesPageContent() {
                         }
                         setShowModal(false);
                         setShowSalesOrderModal(true);
+
+                        // 🔔 Notify customer: order approved/accepted
+try {
+  await fetch("/api/notify-customer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipientEmail: selectedOrder.customers.email,
+      recipientName: selectedOrder.customers.name,
+      type: "order_approved",
+      title: "Order Approved",
+      message: `Your order ${selectedOrder.customers.code ?? selectedOrder.id} has been approved.`,
+      href: `/customer?txn=${selectedOrder.customers.code ?? selectedOrder.id}`,
+      orderId: selectedOrder.id,
+      transactionCode: selectedOrder.customers.code ?? null,
+      actorEmail: processor?.email ?? "admin@system",
+    }),
+  });
+} catch (e) {
+  console.error("notify (order_approved) failed:", e);
+}
+
+
                       }
                     }}
                     disabled={hasAnyInsufficient}
