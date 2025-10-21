@@ -14,10 +14,18 @@ import powertoolsImage from "@/assets/powertools.jpg";
 /* Define slides with optional captions (edit freely) */
 const slides = [
   { src: toolboxImage, alt: "Toolbox", caption: "Built for builders." },
-  { src: warehouseImage, alt: "Warehouse", caption: "Stocked. Ready. Reliable." },
+  {
+    src: warehouseImage,
+    alt: "Warehouse",
+    caption: "Stocked. Ready. Reliable.",
+  },
   { src: wrenchImage, alt: "Wrench", caption: "Precision in your hands." },
   { src: screwsImage, alt: "Screws", caption: "Every small part matters." },
-  { src: powertoolsImage, alt: "Power Tools", caption: "Power through the job." },
+  {
+    src: powertoolsImage,
+    alt: "Power Tools",
+    caption: "Power through the job.",
+  },
 ] as const;
 
 const AUTOPLAY_MS = 4000;
@@ -29,15 +37,12 @@ export const AboutUs = () => {
   const progressRef = useRef<HTMLDivElement | null>(null);
   const dragStartXRef = useRef<number | null>(null);
 
-  const go = useCallback(
-    (dir: 1 | -1) => {
-      setCurrent((c) => {
-        const next = (c + dir + slides.length) % slides.length;
-        return next;
-      });
-    },
-    []
-  );
+  const go = useCallback((dir: 1 | -1) => {
+    setCurrent((c) => {
+      const next = (c + dir + slides.length) % slides.length;
+      return next;
+    });
+  }, []);
 
   const goTo = (i: number) => setCurrent(i);
 
@@ -107,7 +112,7 @@ export const AboutUs = () => {
           </div>
           <h2 className="section-title mt-5">What is UNIASIA?</h2>
           <p className="section-description mt-5">
-            UniAsia Hardware and Electrical Products is a reliable wholesale
+            UNIASIA HARDWARE & ELECTRICAL MKTG. CORP, is a reliable wholesale
             supplier of construction, electrical, and hardware materials. We
             combine industry expertise with efficient service to meet growing
             demand and ensure customer satisfaction.
@@ -146,7 +151,10 @@ export const AboutUs = () => {
                 // subtle zoom & pan per slide for modern feel
                 initial={{ scale: 1.05 }}
                 animate={{ scale: paused ? 1.05 : 1.1, x: 0, y: 0 }}
-                transition={{ duration: paused ? 0.6 : AUTOPLAY_MS / 1000, ease: "linear" }}
+                transition={{
+                  duration: paused ? 0.6 : AUTOPLAY_MS / 1000,
+                  ease: "linear",
+                }}
               >
                 <Image
                   src={slides[current].src}
@@ -163,7 +171,9 @@ export const AboutUs = () => {
               {/* Caption */}
               <div className="absolute bottom-5 left-5 right-5 text-white">
                 <div className="inline-flex items-center gap-2 rounded-full bg-white/10 backdrop-blur px-4 py-2 ring-1 ring-white/20">
-                  <span className="text-xs">Slide {current + 1}/{slides.length}</span>
+                  <span className="text-xs">
+                    Slide {current + 1}/{slides.length}
+                  </span>
                 </div>
                 {slides[current].caption && (
                   <h3 className="mt-3 text-xl md:text-2xl font-semibold drop-shadow">
@@ -182,7 +192,10 @@ export const AboutUs = () => {
               className="h-full bg-white"
               initial={{ width: "0%" }}
               animate={{ width: paused ? "0%" : "100%" }}
-              transition={{ duration: paused ? 0 : AUTOPLAY_MS / 1000, ease: "linear" }}
+              transition={{
+                duration: paused ? 0 : AUTOPLAY_MS / 1000,
+                ease: "linear",
+              }}
             />
           </div>
 
