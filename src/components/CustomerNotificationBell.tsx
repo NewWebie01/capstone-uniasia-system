@@ -268,6 +268,26 @@ export default function CustomerNotificationBell() {
       }
     );
 
+    // Update handler: keep dialog/list fresh if a row changes
+ch.on(
+  "postgres_changes",
+  { event: "UPDATE", schema: "public", table: "customer_notifications" },
+  (payload: any) => {
+    const row = payload.new as NotificationRow;
+    // Only keep it if it still matches this user and is admin-driven
+    if (matchesUserStrict(row, userEmail, userName) && isAdminDrivenStrict(row, userEmail)) {
+      setList((prev) => {
+        const idx = prev.findIndex((x) => x.id === row.id);
+        if (idx === -1) return prev; // we only update if it’s already shown
+        const copy = [...prev];
+        copy[idx] = row;
+        return copy;
+      });
+    }
+  }
+);
+
+
     ch.subscribe();
     return () => {
       supabase.removeChannel(ch);
@@ -429,18 +449,10 @@ export default function CustomerNotificationBell() {
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center justify-between gap-3">
-              <span>{selected?.title || selected?.type || "Notification"}</span>
-              {selected?.href && (
-                <button
-                  className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
-                  onClick={() => selected && goToLink(selected)}
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  Open
-                </button>
-              )}
-            </DialogTitle>
+<DialogTitle>
+  {selected?.title || selected?.type || "Notification"}
+</DialogTitle>
+
             <DialogDescription>
               {selected?.created_at ? (
                 <span className="text-xs text-gray-500">
@@ -500,30 +512,18 @@ export default function CustomerNotificationBell() {
               )}
             </div>
 
-            {selected?.metadata && (
-              <pre className="text-xs bg-gray-50 rounded-md p-2 overflow-x-auto">
-                {JSON.stringify(selected.metadata, null, 2)}
-              </pre>
-            )}
+
           </div>
 
-          <DialogFooter className="mt-4">
-            {(selected?.href || selected?.transaction_code || selected?.order_id) && (
-              <button
-                onClick={() => selected && goToLink(selected)}
-                className="inline-flex items-center gap-2 rounded-md bg-[#ffba20] text-black px-3 py-2 text-sm font-medium hover:brightness-95"
-              >
-                <ExternalLink className="w-4 h-4" />
-                Open related page
-              </button>
-            )}
-            <button
-              onClick={() => setDetailOpen(false)}
-              className="rounded-md border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              Close
-            </button>
-          </DialogFooter>
+<DialogFooter className="mt-4">
+  <button
+    onClick={() => setDetailOpen(false)}
+    className="rounded-md border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+  >
+    Close
+  </button>
+</DialogFooter>
+
         </DialogContent>
       </Dialog>
     </>

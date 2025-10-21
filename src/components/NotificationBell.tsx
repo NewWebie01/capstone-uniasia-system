@@ -127,7 +127,7 @@ async function upsertRecentNotification(
 ) {
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const { data: existing } = await supabase
-    .from("notifications")
+    .from("system_notifications")
     .select("id")
     .eq("type", payload.type)
     .eq("related_id", payload.related_id)
