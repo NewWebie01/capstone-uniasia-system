@@ -653,7 +653,7 @@ function SalesPageContent() {
 
       const firstDue = new Date();
       firstDue.setMonth(firstDue.getMonth() + 1);
-      const p_first_due = formatPHISODate(firstDue);
+      const p_first_due = firstDue.toISOString().slice(0, 10);
 
       const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
