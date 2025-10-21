@@ -17,6 +17,26 @@ import {
 const MAX_ITEMS = 5;
 const SEEN_KEY_BASE = "customer-notifs-seen-v1";
 
+/** Only show these admin-driven events to customers */
+const ADMIN_EVENT_TYPES = [
+  "order_approved",
+  "order_rejected",
+  "order_completed",
+  "payment_received",
+  "payment_rejected",
+  "invoice_sent",
+  "receipt_sent",
+  "delivery_scheduled",
+  "delivery_to_ship",
+  "delivery_to_receive",
+  "delivery_delivered",
+] as const;
+
+type AdminEventType = (typeof ADMIN_EVENT_TYPES)[number];
+
+/** Which sources count as "admin/system" initiated */
+const ALLOWED_SOURCES = ["system", "admin"] as const;
+
 type NotificationRow = {
   id: string | number;
   type?: string | null;
@@ -26,12 +46,15 @@ type NotificationRow = {
   recipient_email?: string | null;
   recipient_name?: string | null;
 
-  // Optional deep-link fields if you use them
   href?: string | null;
   order_id?: string | null;
   transaction_code?: string | null;
   customer_id?: string | null;
-  // Add any other metadata your table stores (it will render if present)
+
+  actor_email?: string | null;
+  actor_role?: string | null; // "admin" | "customer"
+  source?: string | null;     // "system" | "customer" | "admin"
+
   metadata?: Record<string, any> | null;
 };
 
@@ -48,16 +71,23 @@ function timeAgo(iso?: string | null) {
   return `${days}d ago`;
 }
 
-const ciIncludes = (hay?: string | null, needle?: string | null) =>
-  hay && needle ? hay.toLowerCase().includes(needle.toLowerCase()) : false;
-
-function matchesUser(n: NotificationRow, email?: string | null, name?: string | null) {
+/** Match to this specific user by recipient fields only */
+function matchesUserStrict(n: NotificationRow, email?: string | null, name?: string | null) {
   if (!n) return false;
   if (email && n.recipient_email === email) return true;
-  if (name && n.recipient_name === name) return true;
-  if (email && (ciIncludes(n.title, email) || ciIncludes(n.message, email))) return true;
-  if (name && (ciIncludes(n.title, name) || ciIncludes(n.message, name))) return true;
+  if (!email && name && n.recipient_name === name) return true;
   return false;
+}
+
+/** True if this notification is admin/system driven (not by the current customer) */
+function isAdminDrivenStrict(n: NotificationRow, currentUserEmail?: string | null) {
+  const typeOk = !!n.type && (ADMIN_EVENT_TYPES as readonly string[]).includes(n.type);
+  const roleIsAdmin = String(n.actor_role || "").toLowerCase() === "admin";
+  const sourceIsAllowed = ALLOWED_SOURCES.includes(
+    String(n.source || "").toLowerCase() as (typeof ALLOWED_SOURCES)[number]
+  );
+  const notSelfActor = !n.actor_email || n.actor_email !== currentUserEmail;
+  return !!typeOk && !!notSelfActor && (roleIsAdmin || sourceIsAllowed);
 }
 
 export default function CustomerNotificationBell() {
@@ -75,16 +105,14 @@ export default function CustomerNotificationBell() {
   const ringRef = useRef<HTMLAudioElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // Details modal state
+  // Details modal
   const [detailOpen, setDetailOpen] = useState(false);
   const [selected, setSelected] = useState<NotificationRow | null>(null);
 
   // Load user
   useEffect(() => {
     (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
       const email = user?.email || null;
       const name = (user?.user_metadata?.name as string) || email || null;
       setUserEmail(email);
@@ -108,57 +136,74 @@ export default function CustomerNotificationBell() {
     } catch {}
   };
 
+  const seenMap = useMemo(() => {
+    try {
+      const raw = localStorage.getItem(seenKey);
+      return raw ? (JSON.parse(raw) as Record<string | number, boolean>) : {};
+    } catch {
+      return {};
+    }
+  }, [seenKey]);
+
   const unseenCount = useMemo(() => {
-    const seen = getSeenMap();
-    return list.reduce((acc, n) => (seen[n.id] ? acc : acc + 1), 0);
-  }, [list, seenKey]);
+    return list.reduce((acc, n) => (seenMap[n.id] ? acc : acc + 1), 0);
+  }, [list, seenMap]);
 
   useEffect(() => setUnseen(unseenCount), [unseenCount]);
 
-  // Initial fetch (scoped) — capped to 5
+  /** Initial fetch — recipient-scoped; then strictly admin-driven; cap to 5 */
   async function fetchScoped(email?: string | null, name?: string | null) {
     setLoading(true);
+    try {
+      const ors: string[] = [];
+      if (email) ors.push(`recipient_email.eq.${email}`);
+      if (!email && name) ors.push(`recipient_name.eq.${name}`);
 
-    // Try server-side filter first
-    if (email || name) {
-      try {
-        const ors: string[] = [];
-        if (email) ors.push(`recipient_email.eq.${email}`);
-        if (name) ors.push(`recipient_name.eq.${name}`);
+      if (ors.length > 0) {
+        let query = supabase
+          .from("customer_notifications")        // <<<<<< TABLE CHANGED
+          .select("*")
+          .or(ors.join(","))
+          .in("type", [...ADMIN_EVENT_TYPES])    // <<<<<< array spread fix
+          .order("created_at", { ascending: false })
+          .limit(60);
 
-        if (ors.length > 0) {
-          const { data, error } = await supabase
-            .from("notifications")
-            .select("*")
-            .or(ors.join(","))
-            .order("created_at", { ascending: false })
-            .limit(MAX_ITEMS);
+        if (email) query = query.neq("actor_email", email);
 
-          if (!error && data) {
-            setList((data as NotificationRow[]) ?? []);
-            setLoading(false);
-            return;
-          }
+        const { data, error } = await query;
+        if (!error && data) {
+          const rows = (data as NotificationRow[])
+            .filter((n) => matchesUserStrict(n, email, name))
+            .filter((n) => isAdminDrivenStrict(n, email))
+            .slice(0, MAX_ITEMS);
+
+          setList(rows);
+          setLoading(false);
+          return;
         }
-      } catch {}
-    }
+      }
+    } catch {}
 
-    // Fallback: fetch more then filter client-side, then cap to 5
+    // Fallback: broad fetch then strict client-side filtering
     const { data, error } = await supabase
-      .from("notifications")
+      .from("customer_notifications")            // <<<<<< TABLE CHANGED
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(120);
 
-    if (error) {
+    if (error || !data) {
       console.error(error);
       setList([]);
       setLoading(false);
       return;
     }
 
-    const filtered = (data as NotificationRow[]).filter((n) => matchesUser(n, email, name));
-    setList(filtered.slice(0, MAX_ITEMS));
+    const filtered = (data as NotificationRow[])
+      .filter((n) => matchesUserStrict(n, email, name))
+      .filter((n) => isAdminDrivenStrict(n, email))
+      .slice(0, MAX_ITEMS);
+
+    setList(filtered);
     setLoading(false);
   }
 
@@ -167,45 +212,56 @@ export default function CustomerNotificationBell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEmail, userName]);
 
-  // Realtime: insert (scoped if possible), delete by id
+  // Realtime: only INSERTS, scoped by recipient; then strict client-side checks
   useEffect(() => {
     if (!userEmail && !userName) return;
-    const ch = supabase.channel("notifications-realtime-customer");
+
+    const ch = supabase.channel("customer-notifs-realtime"); // <<<<<< CHANNEL NAME
 
     let usedFiltered = false;
     try {
       if (userEmail) {
         ch.on(
           "postgres_changes",
-          { event: "INSERT", schema: "public", table: "notifications", filter: `recipient_email=eq.${userEmail}` },
-          (payload: any) => handleIncoming(payload.new as NotificationRow)
+          { event: "INSERT", schema: "public", table: "customer_notifications", filter: `recipient_email=eq.${userEmail}` }, // <<<<<< TABLE CHANGED
+          (payload: any) => {
+            const row = payload.new as NotificationRow;
+            if (isAdminDrivenStrict(row, userEmail)) handleIncoming(row);
+          }
         );
         usedFiltered = true;
       }
-      if (userName) {
+      if (!userEmail && userName) {
         ch.on(
           "postgres_changes",
-          { event: "INSERT", schema: "public", table: "notifications", filter: `recipient_name=eq.${userName}` },
-          (payload: any) => handleIncoming(payload.new as NotificationRow)
+          { event: "INSERT", schema: "public", table: "customer_notifications", filter: `recipient_name=eq.${userName}` }, // <<<<<< TABLE CHANGED
+          (payload: any) => {
+            const row = payload.new as NotificationRow;
+            if (isAdminDrivenStrict(row, userEmail)) handleIncoming(row);
+          }
         );
         usedFiltered = true;
       }
     } catch {}
 
     if (!usedFiltered) {
+      // Fallback: listen to all inserts, then client-filter strictly
       ch.on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "notifications" },
+        { event: "INSERT", schema: "public", table: "customer_notifications" }, // <<<<<< TABLE CHANGED
         (payload: any) => {
           const row = payload.new as NotificationRow;
-          if (matchesUser(row, userEmail, userName)) handleIncoming(row);
+          if (matchesUserStrict(row, userEmail, userName) && isAdminDrivenStrict(row, userEmail)) {
+            handleIncoming(row);
+          }
         }
       );
     }
 
+    // If an admin deletes a mirrored notif, remove it client-side
     ch.on(
       "postgres_changes",
-      { event: "DELETE", schema: "public", table: "notifications" },
+      { event: "DELETE", schema: "public", table: "customer_notifications" }, // <<<<<< TABLE CHANGED
       (payload: any) => {
         const id = payload.old?.id;
         setList((prev) => prev.filter((n) => n.id !== id));
@@ -220,13 +276,17 @@ export default function CustomerNotificationBell() {
   }, [userEmail, userName]);
 
   const handleIncoming = (row: NotificationRow) => {
+    if (!isAdminDrivenStrict(row, userEmail)) return;
+
     setList((prev) => {
       const dedup = [row, ...prev.filter((x) => x.id !== row.id)];
       return dedup.slice(0, MAX_ITEMS);
     });
+
     try {
       ringRef.current?.play().catch(() => {});
     } catch {}
+
     toast.info(row.title || "New notification", { description: row.message || "" });
   };
 
@@ -249,14 +309,14 @@ export default function CustomerNotificationBell() {
   }, [open]);
 
   const markAllRead = () => {
-    const seen = getSeenMap();
+    const seen = { ...getSeenMap() };
     for (const n of list) seen[n.id] = true;
     setSeenMap(seen);
     setUnseen(0);
   };
 
   const markOneRead = (id: string | number) => {
-    const seen = getSeenMap();
+    const seen = { ...getSeenMap() };
     if (!seen[id]) {
       seen[id] = true;
       setSeenMap(seen);
@@ -266,14 +326,12 @@ export default function CustomerNotificationBell() {
 
   const toggle = () => setOpen((v) => !v);
 
-  // Open details modal for a clicked notif
   const openDetails = (n: NotificationRow) => {
     setSelected(n);
     setDetailOpen(true);
     markOneRead(n.id);
   };
 
-  // Optional: deep-link button handler
   const goToLink = (n: NotificationRow) => {
     if (n.href) {
       router.push(n.href);
@@ -281,7 +339,6 @@ export default function CustomerNotificationBell() {
       setOpen(false);
       return;
     }
-    // Example fallbacks you can tweak:
     if (n.transaction_code) {
       router.push(`/customer?txn=${encodeURIComponent(n.transaction_code)}`);
       setDetailOpen(false);
@@ -290,15 +347,6 @@ export default function CustomerNotificationBell() {
       router.push(`/customer/orders/${encodeURIComponent(n.order_id)}`);
       setDetailOpen(false);
       setOpen(false);
-    }
-  };
-
-  const copyText = async (txt: string) => {
-    try {
-      await navigator.clipboard.writeText(txt);
-      toast.success("Copied to clipboard");
-    } catch {
-      toast.error("Copy failed");
     }
   };
 
@@ -343,39 +391,29 @@ export default function CustomerNotificationBell() {
                 Loading…
               </div>
             ) : list.length === 0 ? (
-              <div className="p-6 text-center text-gray-500 text-sm">
-                No notifications for your account yet.
-              </div>
+              <div className="p-6 text-center text-gray-500 text-sm">No notifications yet.</div>
             ) : (
               <ul className="divide-y">
                 {list.map((n) => {
-                  const seen = getSeenMap()[n.id];
+                  const seen = !!seenMap[n.id];
                   return (
                     <li
                       key={String(n.id)}
                       onClick={() => openDetails(n)}
-                      className={`px-3 py-3 hover:bg-gray-50 cursor-pointer ${
-                        !seen ? "bg-yellow-50/60" : ""
-                      }`}
+                      className={`px-3 py-3 hover:bg-gray-50 cursor-pointer ${!seen ? "bg-yellow-50/60" : ""}`}
                     >
                       <div className="flex items-start gap-2">
                         <div
-                          className={`mt-0.5 w-2 h-2 rounded-full ${
-                            !seen ? "bg-yellow-500/80" : "bg-gray-300"
-                          } shrink-0`}
+                          className={`mt-0.5 w-2 h-2 rounded-full ${!seen ? "bg-yellow-500/80" : "bg-gray-300"} shrink-0`}
                         />
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-gray-900 line-clamp-1">
                             {n.title || n.type || "Notification"}
                           </div>
                           {n.message && (
-                            <div className="text-[12px] text-gray-600 mt-0.5 line-clamp-2">
-                              {n.message}
-                            </div>
+                            <div className="text-[12px] text-gray-600 mt-0.5 line-clamp-2">{n.message}</div>
                           )}
-                          <div className="text-[11px] text-gray-400 mt-1">
-                            {timeAgo(n.created_at)}
-                          </div>
+                          <div className="text-[11px] text-gray-400 mt-1">{timeAgo(n.created_at)}</div>
                         </div>
                       </div>
                     </li>
@@ -424,7 +462,6 @@ export default function CustomerNotificationBell() {
               <p className="text-sm text-gray-700 whitespace-pre-wrap">{selected.message}</p>
             )}
 
-            {/* Render extra known fields if present */}
             <div className="grid grid-cols-2 gap-2 text-xs">
               {selected?.transaction_code && (
                 <div className="col-span-2 flex items-center justify-between rounded-md bg-gray-50 p-2">
@@ -433,7 +470,7 @@ export default function CustomerNotificationBell() {
                     <code className="text-gray-900">{selected.transaction_code}</code>
                     <button
                       title="Copy TXN code"
-                      onClick={() => copyText(selected.transaction_code!)}
+                      onClick={() => selected?.transaction_code && navigator.clipboard.writeText(selected.transaction_code)}
                       className="p-1 rounded hover:bg-gray-200"
                     >
                       <Clipboard className="w-3.5 h-3.5" />
@@ -463,7 +500,6 @@ export default function CustomerNotificationBell() {
               )}
             </div>
 
-            {/* Generic metadata dump (if you store a JSON object) */}
             {selected?.metadata && (
               <pre className="text-xs bg-gray-50 rounded-md p-2 overflow-x-auto">
                 {JSON.stringify(selected.metadata, null, 2)}
@@ -472,7 +508,6 @@ export default function CustomerNotificationBell() {
           </div>
 
           <DialogFooter className="mt-4">
-            {/* Deep-link button if available or derivable */}
             {(selected?.href || selected?.transaction_code || selected?.order_id) && (
               <button
                 onClick={() => selected && goToLink(selected)}
