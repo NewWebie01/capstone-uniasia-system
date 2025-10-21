@@ -195,14 +195,15 @@ export default function BackupsPage() {
           }
         }}
       >
-        <DialogTrigger asChild>
+        {/* TODO: RESTORE BUTTON */}
+        {/* <DialogTrigger asChild>
           <button
             className="h-9 px-3 inline-flex items-center gap-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 whitespace-nowrap"
             title="Restore this backup to staging"
           >
             <RotateCcw className="w-4 h-4" /> Restore
           </button>
-        </DialogTrigger>
+        </DialogTrigger> */}
 
         <DialogContent className="max-w-md">
           <DialogHeader>
