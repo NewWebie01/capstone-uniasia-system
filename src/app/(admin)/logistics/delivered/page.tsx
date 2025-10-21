@@ -108,10 +108,8 @@ export default function DeliveredPage() {
       if (dateFrom) q = q.gte("schedule_date", dateFrom);
       if (dateTo) q = q.lte("schedule_date", dateTo);
 
-      // NOTE: Supabase doesn't support OR ilike chains super cleanly without .or()
-      // We'll use .or() to match destination/driver/plate_number by query if provided.
       if (query.trim()) {
-        const qEsc = query.trim().replace(/'/g, "''"); // simple escape
+        const qEsc = query.trim().replace(/'/g, "''"); // escape single quotes
         q = q.or(
           `destination.ilike.%${qEsc}%,driver.ilike.%${qEsc}%,plate_number.ilike.%${qEsc}%`
         );
@@ -119,7 +117,7 @@ export default function DeliveredPage() {
 
       // sort newest schedules first
       q = q
-        .order("schedule_date", { ascending: false, nullsFirst: false })
+        .order("schedule_date", { ascending: false })
         .order("created_at", { ascending: false });
 
       // pagination
@@ -204,7 +202,6 @@ export default function DeliveredPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, dateFrom, dateTo]);
 
-  // search submit (debounce could be added; simplest: re-fetch on submit)
   const onSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setPage(1);
@@ -226,14 +223,34 @@ export default function DeliveredPage() {
             View delivered trucks with filters and pagination.
           </p>
         </div>
+
+        {/* Simple search input */}
+        <form onSubmit={onSearch}>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search destination, driver, plate..."
+            className="border rounded-md px-3 py-2 text-sm"
+          />
+          <button
+            type="submit"
+            className="ml-2 px-3 py-2 rounded bg-[#ffba20] text-black font-bold text-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]/60"
+          >
+            Search
+          </button>
+        </form>
       </div>
 
-      {/* Paging */}
+      {/* Paging header */}
       <div className="flex items-center justify-between mb-4">
         <div className="text-sm text-slate-600">
           {loading
             ? "Loading…"
-            : `Showing ${deliveries.length} of ${totalCount} delivered`}
+            : `Showing ${(page - 1) * pageSize + 1}–${Math.min(
+                page * pageSize,
+                totalCount
+              )} of ${totalCount} deliveries`}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -241,7 +258,7 @@ export default function DeliveredPage() {
             disabled={page <= 1 || loading}
             className="px-3 py-1.5 rounded border disabled:opacity-50"
           >
-            Prev
+            ← Prev
           </button>
           <span className="text-sm">
             Page {page} / {totalPages}
@@ -251,7 +268,7 @@ export default function DeliveredPage() {
             disabled={page >= totalPages || loading}
             className="px-3 py-1.5 rounded border disabled:opacity-50"
           >
-            Next
+            Next →
           </button>
         </div>
       </div>
@@ -444,7 +461,33 @@ export default function DeliveredPage() {
         );
       })}
 
-      {/* Empty spacer for bottom */}
+      {/* Pagination footer */}
+      <div className="flex items-center justify-between mt-8 border-t pt-4 text-sm">
+        <div className="text-slate-600">
+          Showing {(page - 1) * pageSize + 1}–
+          {Math.min(page * pageSize, totalCount)} of {totalCount} deliveries
+        </div>
+        <div className="flex gap-2 items-center">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1 || loading}
+            className="px-3 py-1.5 rounded border disabled:opacity-50"
+          >
+            ← Prev
+          </button>
+          <span>
+            Page {page} / {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages || loading}
+            className="px-3 py-1.5 rounded border disabled:opacity-50"
+          >
+            Next →
+          </button>
+        </div>
+      </div>
+
       <div className="h-4" />
     </div>
   );

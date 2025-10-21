@@ -3,7 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { CheckCircle2, XCircle, FileImage, Search, Loader2 } from "lucide-react";
+import {
+  CheckCircle2,
+  XCircle,
+  FileImage,
+  Search,
+  Loader2,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -100,26 +106,34 @@ export default function AdminPaymentsPage() {
 
   // filters
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState<"all" | "pending" | "received" | "rejected">(
-    "pending"
-  );
+  const [status, setStatus] = useState<
+    "all" | "pending" | "received" | "rejected"
+  >("pending");
+
+  // pagination (client-side)
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
 
   // image modal
   const [imgOpen, setImgOpen] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [imgMeta, setImgMeta] = useState<{ cheque?: string | null; bank?: string | null } | null>(null);
+  const [imgMeta, setImgMeta] = useState<{
+    cheque?: string | null;
+    bank?: string | null;
+  } | null>(null);
 
   // confirmation modal
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmType, setConfirmType] = useState<"receive" | "reject" | null>(null);
+  const [confirmType, setConfirmType] = useState<"receive" | "reject" | null>(
+    null
+  );
   const [targetRow, setTargetRow] = useState<PaymentRow | null>(null);
 
-// row-level lock so BOTH buttons disable after confirming
-const [locked, setLocked] = useState<Set<string>>(new Set());
+  // row-level lock so BOTH buttons disable after confirming
+  const [locked, setLocked] = useState<Set<string>>(new Set());
 
-// NEW: prevent double-submit on the confirm modal
-const [confirmBusy, setConfirmBusy] = useState(false);
-
+  // prevent double-submit on the confirm modal
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   /* ------------------------------ Load data ------------------------------ */
   useEffect(() => {
@@ -175,10 +189,14 @@ const [confirmBusy, setConfirmBusy] = useState(false);
           setPayments((prev) => [payload.new as PaymentRow, ...prev]);
         } else if (payload.eventType === "UPDATE") {
           setPayments((prev) =>
-            prev.map((p) => (p.id === (payload.new as any).id ? (payload.new as PaymentRow) : p))
+            prev.map((p) =>
+              p.id === (payload.new as any).id ? (payload.new as PaymentRow) : p
+            )
           );
         } else if (payload.eventType === "DELETE") {
-          setPayments((prev) => prev.filter((p) => p.id !== (payload.old as any).id));
+          setPayments((prev) =>
+            prev.filter((p) => p.id !== (payload.old as any).id)
+          );
         }
       }
     );
@@ -218,6 +236,16 @@ const [confirmBusy, setConfirmBusy] = useState(false);
     });
   }, [payments, status, q, customerById]);
 
+  // reset to page 1 whenever filters change
+  useEffect(() => {
+    setPage(1);
+  }, [q, status]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageStart = (page - 1) * pageSize;
+  const pageEnd = pageStart + pageSize;
+  const paginated = filtered.slice(pageStart, pageEnd);
+
   /* ------------------------------ Helpers ------------------------------- */
   function openConfirm(type: "receive" | "reject", row: PaymentRow) {
     setConfirmType(type);
@@ -239,7 +267,10 @@ const [confirmBusy, setConfirmBusy] = useState(false);
     });
   }
 
-  async function notifyCustomerByEmail(paymentId: string, action: "receive" | "reject") {
+  async function notifyCustomerByEmail(
+    paymentId: string,
+    action: "receive" | "reject"
+  ) {
     const res = await fetch("/api/send-payment-confirmation", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -253,67 +284,81 @@ const [confirmBusy, setConfirmBusy] = useState(false);
   }
 
   /* ------------------------------ Actions ------------------------------- */
-async function handleConfirm() {
-  if (!targetRow || !confirmType) return;
-  if (confirmBusy) return;                 // <-- double-click guard
-  setConfirmBusy(true);
+  async function handleConfirm() {
+    if (!targetRow || !confirmType) return;
+    if (confirmBusy) return; // guard
+    setConfirmBusy(true);
 
-  // lock the row immediately => both buttons disable
-  setLocked(prev => new Set(prev).add(targetRow.id));
+    // lock the row immediately => both buttons disable
+    setLocked((prev) => new Set(prev).add(targetRow.id));
 
-        try {
-if (confirmType === "receive") {
-const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
-  p_payment_id: targetRow.id,
-  p_admin_email: meEmail,
-});
-  if (rpcErr) throw rpcErr;
+    try {
+      if (confirmType === "receive") {
+        const { error: rpcErr } = await supabase.rpc(
+          "receive_payment_and_apply",
+          {
+            p_payment_id: targetRow.id,
+            p_admin_email: meEmail,
+          }
+        );
+        if (rpcErr) throw rpcErr;
 
-  setPayments(prev =>
-    prev.map(p =>
-      p.id === targetRow.id
-        ? { ...p, status: "received", received_at: new Date().toISOString(), received_by: meEmail }
-        : p
-    )
-  );
-  toast.success("Payment received and applied to installments.");
-}
+        setPayments((prev) =>
+          prev.map((p) =>
+            p.id === targetRow.id
+              ? {
+                  ...p,
+                  status: "received",
+                  received_at: new Date().toISOString(),
+                  received_by: meEmail,
+                }
+              : p
+          )
+        );
+        toast.success("Payment received and applied to installments.");
+        // optionally email notify:
+        // await notifyCustomerByEmail(targetRow.id, "receive");
+      } else if (confirmType === "reject") {
+        const { data: updated, error } = await supabase
+          .from("payments")
+          .update({ status: "rejected" })
+          .eq("id", targetRow.id)
+          .eq("status", "pending")
+          .select("id")
+          .maybeSingle();
 
- else if (confirmType === "reject") {
-      // ===== KEEP your existing REJECT logic =====
-      const { data: updated, error } = await supabase
-        .from("payments")
-        .update({ status: "rejected" })
-        .eq("id", targetRow.id)
-        .eq("status", "pending")
-        .select("id")
-        .maybeSingle();
+        if (error) throw error;
+        if (!updated) {
+          toast.warning("This cheque was already processed by someone else.");
+          return;
+        }
 
-      if (error) throw error;
-      if (!updated) {
-        toast.warning("This cheque was already processed by someone else.");
-        return;
+        setPayments((prev) =>
+          prev.map((p) =>
+            p.id === targetRow.id ? { ...p, status: "rejected" } : p
+          )
+        );
+
+        toast.success("Payment rejected.");
+        // optionally email notify:
+        // await notifyCustomerByEmail(targetRow.id, "reject");
       }
-
-      setPayments(prev =>
-        prev.map(p => (p.id === targetRow.id ? { ...p, status: "rejected" } : p))
-      );
-
-      toast.success("Payment rejected.");
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.message || "Action failed.");
+      // rollback row lock if DB action failed
+      setLocked((prev) => {
+        const next = new Set(prev);
+        if (targetRow) next.delete(targetRow.id);
+        return next;
+      });
+    } finally {
+      setConfirmBusy(false);
+      setConfirmOpen(false);
+      setTargetRow(null);
+      setConfirmType(null);
     }
-  } catch (err: any) {
-    console.error(err);
-    toast.error(err?.message || "Action failed.");
-    // rollback row lock if DB action failed
-    setLocked(prev => { const next = new Set(prev); if (targetRow) next.delete(targetRow.id); return next; });
-  } finally {
-    setConfirmBusy(false);                 // <-- release the guard
-    setConfirmOpen(false);
-    setTargetRow(null);
-    setConfirmType(null);
   }
-  }
-
 
   /* ---------------------------------- UI ---------------------------------- */
   const cellNowrap =
@@ -323,11 +368,13 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-7xl px-6 py-6">
         <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payments</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
+            Payments
+          </h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Review submitted cheques. Mark as <b>Received</b> to post the payment and deduct it from
-          the customer’s balance.
+          Review submitted cheques. Mark as <b>Received</b> to post the payment
+          and deduct it from the customer’s balance.
         </p>
 
         {/* Filters */}
@@ -353,8 +400,36 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
           </select>
         </div>
 
+        {/* Pagination header */}
+        <div className="flex items-center justify-between mt-4">
+          <div className="text-sm text-slate-600">
+            {loading
+              ? "Loading…"
+              : `Showing ${paginated.length} of ${filtered.length} filtered payments`}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1 || loading}
+              className="px-3 py-1.5 rounded border disabled:opacity-50"
+            >
+              Prev
+            </button>
+            <span className="text-sm">
+              Page {page} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages || loading}
+              className="px-3 py-1.5 rounded border disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+
         {/* Table */}
-        <div className="mt-4 rounded-xl ring-1 ring-gray-200 bg-white overflow-hidden">
+        <div className="mt-3 rounded-xl ring-1 ring-gray-200 bg-white overflow-hidden">
           <div className="w-full overflow-x-auto overscroll-x-contain">
             <table className="min-w-full bg-white text-sm">
               <thead className="bg-[#ffba20] text-black text-left">
@@ -372,7 +447,7 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
               </thead>
 
               <tbody className="align-middle">
-                {filtered.map((p, idx) => {
+                {paginated.map((p, idx) => {
                   const c = customerById.get(String(p.customer_id));
                   const code = c?.code || "—";
                   const s = (p.status || "pending").toLowerCase();
@@ -387,15 +462,24 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
                           : "bg-yellow-100 text-yellow-900"
                       }`}
                     >
-                      {s === "received" ? "Received" : s === "rejected" ? "Rejected" : "Pending"}
+                      {s === "received"
+                        ? "Received"
+                        : s === "rejected"
+                        ? "Rejected"
+                        : "Pending"}
                     </span>
                   );
 
                   const disableAll = locked.has(p.id) || s !== "pending";
 
                   return (
-                    <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
-                      <td className="py-2.5 px-3 whitespace-nowrap">{formatPH(p.created_at)}</td>
+                    <tr
+                      key={p.id}
+                      className={idx % 2 ? "bg-neutral-50" : "bg-white"}
+                    >
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        {formatPH(p.created_at)}
+                      </td>
                       <td className="py-2.5 px-3">
                         <div className="font-mono truncate">{code}</div>
                         <div className="text-[11px] text-gray-600 truncate">
@@ -405,7 +489,9 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
                       <td className="py-2.5 px-3 font-mono tabular-nums whitespace-nowrap">
                         {formatCurrency(p.amount)}
                       </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap truncate">{p.bank_name ?? "—"}</td>
+                      <td className="py-2.5 px-3 whitespace-nowrap truncate">
+                        {p.bank_name ?? "—"}
+                      </td>
                       <td className="py-2.5 px-3 whitespace-nowrap truncate">
                         {p.cheque_number ?? "—"}
                       </td>
@@ -438,7 +524,11 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
                             onClick={() => openConfirm("receive", p)}
                             disabled={disableAll}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={disableAll ? "Action not available" : "Mark as Received"}
+                            title={
+                              disableAll
+                                ? "Action not available"
+                                : "Mark as Received"
+                            }
                           >
                             <CheckCircle2 className="h-4 w-4" />
                             <span>Receive</span>
@@ -447,7 +537,9 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
                             onClick={() => openConfirm("reject", p)}
                             disabled={disableAll}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={disableAll ? "Action not available" : "Reject"}
+                            title={
+                              disableAll ? "Action not available" : "Reject"
+                            }
                           >
                             <XCircle className="h-4 w-4" />
                             <span>Reject</span>
@@ -458,9 +550,12 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
                   );
                 })}
 
-                {filtered.length === 0 && (
+                {paginated.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-10 text-center text-neutral-400">
+                    <td
+                      colSpan={9}
+                      className="py-10 text-center text-neutral-400"
+                    >
                       {loading ? (
                         <span className="inline-flex items-center gap-2">
                           <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -476,8 +571,30 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
           </div>
         </div>
 
-        <div className="mt-3 text-xs text-gray-500">
-          Only <b>Received</b> payments are deducted from customer balances.
+        {/* Pagination footer */}
+        <div className="flex items-center justify-between mt-4">
+          <div className="text-xs text-gray-500">
+            Only <b>Received</b> payments are deducted from customer balances.
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1 || loading}
+              className="px-3 py-1.5 rounded border disabled:opacity-50"
+            >
+              Prev
+            </button>
+            <span className="text-sm">
+              Page {page} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages || loading}
+              className="px-3 py-1.5 rounded border disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
 
@@ -504,7 +621,9 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Cheque #</span>
-              <span className="font-mono">{targetRow?.cheque_number || "—"}</span>
+              <span className="font-mono">
+                {targetRow?.cheque_number || "—"}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Bank</span>
@@ -520,23 +639,19 @@ const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
             >
               Cancel
             </button>
-<button
-  type="button"
-  onClick={handleConfirm}
-  disabled={confirmBusy} // or: disabled={confirmBusy /* || other conditions */}
-  className={`px-4 py-2 rounded text-white ${
-    confirmType === "receive"
-      ? "bg-green-600 hover:bg-green-700"
-      : "bg-red-600 hover:bg-red-700"
-  } disabled:opacity-60 disabled:cursor-not-allowed`}
->
-  {confirmBusy
-    ? "Processing…"
-    : confirmType === "receive"
-    ? "Confirm Receive"
-    : "Confirm Reject"}
-</button>
-
+            {/* UniAsia yellow button w/ black bold text */}
+            <button
+              type="button"
+              onClick={handleConfirm}
+              disabled={confirmBusy}
+              className="ml-2 px-4 py-2 rounded bg-[#ffba20] text-black font-bold text-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]/60 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {confirmBusy
+                ? "Processing…"
+                : confirmType === "receive"
+                ? "Confirm Receive"
+                : "Confirm Reject"}
+            </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
