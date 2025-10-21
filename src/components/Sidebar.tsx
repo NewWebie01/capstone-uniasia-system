@@ -8,13 +8,7 @@ import Sales from "@/assets/Sales.png";
 import LogoutIcon from "@/assets/power-button.png";
 import { History, ReceiptText } from "lucide-react";
 import { FaHistory } from "react-icons/fa";
-import {
-  UserPlus,
-  Boxes,
-  FileText,
-  Receipt,
-  RotateCcw,
-} from "lucide-react";
+import { UserPlus, Boxes, FileText, Receipt, RotateCcw } from "lucide-react";
 
 import Image, { StaticImageData } from "next/image";
 import NavLink from "@/components/NavLink";
@@ -45,30 +39,39 @@ const Menus: MenuItem[] = [
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
   { title: "Account Request", icon: UserPlus, href: "/account-request" },
-  { title: "Backup & Restore", icon: RotateCcw, href: "/backups" },
+  { title: "Backup", icon: RotateCcw, href: "/backups" },
 ];
 
 // --- Which roles can see which menu titles
 const ROLE_MENUS: Record<string, string[]> = {
   admin: [
-    "Dashboard", "Inventory", "Truck Delivery", "Delivered",
-    "Sales", "Invoice", "Payments", "Returns", "Transaction History",
-    "Activity Log", "Account Request", "Backup & Restore"
+    "Dashboard",
+    "Inventory",
+    "Truck Delivery",
+    "Delivered",
+    "Sales",
+    "Invoice",
+    "Payments",
+    "Returns",
+    "Transaction History",
+    "Activity Log",
+    "Account Request",
+    "Backup",
   ],
-  cashier: [
-     "Sales", "Invoice", "Payments",
-    "Returns", "Transaction History", 
-  ],
-  warehouse: [
-    "Inventory"
-  ],
-  trucker: [
-    "Truck Delivery", "Delivered"
-  ],
+  cashier: ["Sales", "Invoice", "Payments", "Returns", "Transaction History"],
+  warehouse: ["Inventory"],
+  trucker: ["Truck Delivery", "Delivered"],
   supervisor: [
     // Example: show some of admin + cashier, customize as needed
-    "Dashboard", "Inventory", "Truck Delivery", "Delivered",
-    "Sales", "Invoice", "Payments", "Returns", "Transaction History"
+    "Dashboard",
+    "Inventory",
+    "Truck Delivery",
+    "Delivered",
+    "Sales",
+    "Invoice",
+    "Payments",
+    "Returns",
+    "Transaction History",
   ],
 };
 
@@ -136,7 +139,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   };
 
   // --- Filter menus based on current role
-  const filteredMenus: MenuItem[] = Menus.filter(menu =>
+  const filteredMenus: MenuItem[] = Menus.filter((menu) =>
     ROLE_MENUS[role]?.includes(menu.title)
   );
 
