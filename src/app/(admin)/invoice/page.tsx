@@ -436,6 +436,33 @@ export default function InvoicePage() {
     );
   }, [orders, search]);
 
+  /* -------------------- Pagination (10 per page) -------------------- */
+  const ITEMS_PER_PAGE = 10;
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset to page 1 when search query changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search]);
+
+  // Keep page in range when filtered size changes
+  useEffect(() => {
+    const totalPages = Math.max(
+      1,
+      Math.ceil(filteredOrders.length / ITEMS_PER_PAGE)
+    );
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [filteredOrders.length, currentPage]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredOrders.length / ITEMS_PER_PAGE)
+  );
+  const paginatedOrders = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredOrders.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredOrders, currentPage]);
+
   // -------- Open invoice from list (modal) --------
   const openInvoice = async (order: OrderForList) => {
     setOpenId(order.id);
@@ -830,7 +857,7 @@ export default function InvoicePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
-              {filteredOrders.map((order) => {
+              {paginatedOrders.map((order) => {
                 const txn = order.customer?.code || order.id;
                 return (
                   <Dialog
@@ -961,7 +988,7 @@ export default function InvoicePage() {
                               </span>
                             </div>
                           </div>
-                          <div className="px-4 pt-2 pb-4 text-xs text-right text-neutral-700">
+                          <div className="px-4 pt-2 pb-4 text-xs text-neutral-700">
                             <span>
                               <b>Date Completed:</b>{" "}
                               {formatDate(currentDateCompleted)}
@@ -1093,7 +1120,7 @@ export default function InvoicePage() {
                   </Dialog>
                 );
               })}
-              {!filteredOrders.length && (
+              {!paginatedOrders.length && (
                 <tr>
                   <td colSpan={6} className="text-center py-8 text-neutral-400">
                     No invoices found.
@@ -1102,6 +1129,42 @@ export default function InvoicePage() {
               )}
             </tbody>
           </table>
+
+          {/* Pagination footer */}
+          <div className="flex items-center justify-between px-4 py-3 border-t bg-white">
+            <div className="text-xs text-neutral-600">
+              Showing{" "}
+              <b>
+                {filteredOrders.length === 0
+                  ? 0
+                  : (currentPage - 1) * ITEMS_PER_PAGE + 1}
+                -{Math.min(currentPage * ITEMS_PER_PAGE, filteredOrders.length)}
+              </b>{" "}
+              of <b>{filteredOrders.length}</b> invoices
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                className="px-3 py-1 rounded border bg-gray-100 disabled:opacity-50"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                ← Prev
+              </button>
+              <span className="text-xs text-neutral-700">
+                Page <b>{currentPage}</b> of <b>{totalPages}</b>
+              </span>
+              <button
+                className="px-3 py-1 rounded border bg-gray-100 disabled:opacity-50"
+                onClick={() =>
+                  setCurrentPage((p) => Math.min(totalPages, p + 1))
+                }
+                disabled={currentPage === totalPages}
+              >
+                Next →
+              </button>
+            </div>
+          </div>
         </motion.div>
       </div>
     </motion.div>
