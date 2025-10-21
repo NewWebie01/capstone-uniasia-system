@@ -14,8 +14,8 @@ type NotificationRow = {
   type: string; // 'order' | 'payment' | 'expiration' | 'system' | ...
   title: string | null;
   message: string | null;
-  related_id: string | null; // order_id, payment_id, or inventory_id
-  is_read: boolean;
+  related_id: string | null; // order_id, payment_id, or inventory_id (UI only)
+  is_read: boolean; // UI field (maps to DB column "read")
   created_at: string; // ISO
   user_email?: string | null;
 };
@@ -120,31 +120,74 @@ function kindMeta(type?: string) {
   }
 }
 
-/** Avoid dupes for same type+related_id within last 24h */
+/** Avoid dupes for same event in last 24h.
+ *  For 'order' we dedupe by (type, order_id).
+ *  For 'expiration' we dedupe by (type, item_id).
+ *  Other types skip dedupe (safe default).
+ */
 async function upsertRecentNotification(
   supabase: SupabaseClient<any>,
   payload: Omit<NotificationRow, "id" | "is_read" | "created_at">
 ) {
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { data: existing } = await supabase
-    .from("system_notifications")
-    .select("id")
-    .eq("type", payload.type)
-    .eq("related_id", payload.related_id)
-    .gte("created_at", oneDayAgo)
-    .limit(1)
-    .maybeSingle();
+
+  const t = (payload.type || "").toLowerCase();
+  let existing: { id: string } | null = null;
+
+  if (t === "order" && payload.related_id) {
+    const { data } = await supabase
+      .from("system_notifications")
+      .select("id")
+      .eq("type", payload.type)
+      .eq("order_id", payload.related_id) // dedupe by order id
+      .gte("created_at", oneDayAgo)
+      .limit(1)
+      .maybeSingle();
+    existing = (data as any) || null;
+  } else if (t === "expiration" && payload.related_id) {
+    const { data } = await supabase
+      .from("system_notifications")
+      .select("id")
+      .eq("type", payload.type)
+      .eq("item_id", Number(payload.related_id)) // dedupe by item id
+      .gte("created_at", oneDayAgo)
+      .limit(1)
+      .maybeSingle();
+    existing = (data as any) || null;
+  }
 
   if (existing) return existing.id;
 
+  // Build insert row for system_notifications
+  const insertRow: Record<string, any> = {
+    type: payload.type,
+    title: payload.title,
+    message: payload.message,
+    read: false,
+    source: "system",
+    // map related_id smartly
+  };
+
+  if (t === "order" && payload.related_id) {
+    insertRow.order_id = payload.related_id;
+  } else if (t === "payment" && payload.related_id) {
+    // no dedicated column; keep for UI via metadata
+    insertRow.metadata = {
+      ...(insertRow.metadata || {}),
+      payment_id: payload.related_id,
+    };
+  } else if (t === "expiration" && payload.related_id) {
+    insertRow.item_id = Number(payload.related_id);
+  }
+
   const { data: inserted, error } = await supabase
-    .from("notifications")
-    .insert([{ ...payload }])
+    .from("system_notifications")
+    .insert([insertRow])
     .select("id")
     .single();
 
   if (error) {
-    console.error("Failed to insert notification:", error.message);
+    console.error("Failed to insert system notification:", error.message);
     return null;
   }
   return inserted?.id ?? null;
@@ -195,38 +238,88 @@ export default function NotificationBell() {
   // Dedup for realtime orders
   const lastOrderId = useRef<string | null>(null);
 
-  /* ---------- Load existing notifications on mount ---------- */
+  /* ---------- Load existing notifications on mount (ADMIN: system_notifications) ---------- */
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
-        .from("notifications")
+        .from("system_notifications")
         .select("*")
         .order("created_at", { ascending: false })
         .limit(50);
 
-      if (!error && data) setNotifications(data as NotificationRow[]);
+      if (!error && data) {
+        // Map DB read -> UI is_read and reconstruct related_id best-effort
+        const mapped = (data as any[]).map((r) => {
+          let related_id: string | null = null;
+          if (r.order_id) related_id = String(r.order_id);
+          else if (r.item_id) related_id = String(r.item_id);
+          else if (r.metadata?.payment_id)
+            related_id = String(r.metadata.payment_id);
+          return {
+            id: r.id,
+            type: r.type,
+            title: r.title,
+            message: r.message,
+            created_at: r.created_at,
+            related_id,
+            is_read: Boolean(r.read),
+            user_email: r.user_email ?? null, // ignore if not present
+          } as NotificationRow;
+        });
+        setNotifications(mapped);
+      }
     })();
   }, [supabase]);
 
-  /* ---------- Realtime: notifications table (INSERT/UPDATE/DELETE) ---------- */
+  /* ---------- Realtime: system_notifications (INSERT/UPDATE/DELETE) ---------- */
   useEffect(() => {
-    const channel = supabase.channel("notifications_realtime");
+    const channel = supabase.channel("system_notifications_realtime");
 
     channel.on(
       "postgres_changes",
-      { event: "*", schema: "public", table: "notifications" },
+      { event: "*", schema: "public", table: "system_notifications" },
       (payload) => {
         if (payload.eventType === "INSERT") {
-          const row = payload.new as NotificationRow;
-          setNotifications((prev) => [row, ...prev]);
+          const r: any = payload.new;
+          const n: NotificationRow = {
+            id: r.id,
+            type: r.type,
+            title: r.title,
+            message: r.message,
+            created_at: r.created_at,
+            is_read: Boolean(r.read),
+            related_id: r.order_id
+              ? String(r.order_id)
+              : r.item_id
+              ? String(r.item_id)
+              : r.metadata?.payment_id
+              ? String(r.metadata.payment_id)
+              : null,
+            user_email: r.user_email ?? null,
+          };
+          setNotifications((prev) => [n, ...prev]);
         } else if (payload.eventType === "UPDATE") {
-          const row = payload.new as NotificationRow;
-          setNotifications((prev) =>
-            prev.map((n) => (n.id === row.id ? row : n))
-          );
+          const r: any = payload.new;
+          const n: NotificationRow = {
+            id: r.id,
+            type: r.type,
+            title: r.title,
+            message: r.message,
+            created_at: r.created_at,
+            is_read: Boolean(r.read),
+            related_id: r.order_id
+              ? String(r.order_id)
+              : r.item_id
+              ? String(r.item_id)
+              : r.metadata?.payment_id
+              ? String(r.metadata.payment_id)
+              : null,
+            user_email: r.user_email ?? null,
+          };
+          setNotifications((prev) => prev.map((x) => (x.id === n.id ? n : x)));
         } else if (payload.eventType === "DELETE") {
-          const row = payload.old as NotificationRow;
-          setNotifications((prev) => prev.filter((n) => n.id !== row.id));
+          const r: any = payload.old;
+          setNotifications((prev) => prev.filter((x) => x.id !== r.id));
         }
       }
     );
@@ -237,10 +330,10 @@ export default function NotificationBell() {
     };
   }, [supabase]);
 
-  /* ---------- Realtime: orders INSERT -> create notification ---------- */
+  /* ---------- Realtime: orders INSERT -> create admin notification ---------- */
   useEffect(() => {
     const channel = supabase
-      .channel("orders_channel")
+      .channel("orders_channel_for_admin_bell")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "orders" },
@@ -263,10 +356,11 @@ export default function NotificationBell() {
             type: "order",
             title,
             message: msg,
-            related_id: order.id,
+            related_id: order.id, // map to system_notifications.order_id
             user_email: null,
           });
 
+          // Optimistic UI (keeps your current behavior)
           setNotifications((prev) => [
             {
               id: crypto.randomUUID(),
@@ -314,7 +408,7 @@ export default function NotificationBell() {
           message: `${item.product_name} (${item.sku}) • ${item.quantity} ${
             item.unit ?? ""
           } • Exp: ${formatPHDate(item.expiration_date)}`,
-          related_id: String(item.id),
+          related_id: String(item.id), // map to system_notifications.item_id
           user_email: null,
         });
       }
@@ -355,7 +449,10 @@ export default function NotificationBell() {
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
     );
-    await supabase.from("notifications").update({ is_read: true }).eq("id", id);
+    await supabase
+      .from("system_notifications")
+      .update({ read: true })
+      .eq("id", id);
   };
 
   const goToPayments = async (paymentId: string) => {
@@ -393,9 +490,9 @@ export default function NotificationBell() {
   const clearAll = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
     await supabase
-      .from("notifications")
-      .update({ is_read: true })
-      .eq("is_read", false);
+      .from("system_notifications")
+      .update({ read: true })
+      .eq("read", false);
   };
 
   const handleOpenInSales = async () => {
@@ -608,9 +705,7 @@ export default function NotificationBell() {
                       {orderModalData.date_created
                         ? new Date(orderModalData.date_created).toLocaleString(
                             "en-PH",
-                            {
-                              timeZone: "Asia/Manila",
-                            }
+                            { timeZone: "Asia/Manila" }
                           )
                         : "—"}
                     </div>
