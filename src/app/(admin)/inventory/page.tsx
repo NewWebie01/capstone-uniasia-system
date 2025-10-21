@@ -36,6 +36,17 @@ type InventoryItem = {
 const FIXED_UNIT_OPTIONS = ["Piece", "Dozen", "Box", "Pack", "Kg"] as const;
 type FixedUnit = (typeof FIXED_UNIT_OPTIONS)[number];
 
+/* ---------------- Max input limits (edit these as needed) ---------------- */
+const LIMITS = {
+  MAX_WEIGHT_PER_PIECE_KG: 100, // up to 100 kg per piece
+  MAX_QUANTITY: 999_999, // max stock count
+  MAX_COST_PRICE: 1_000_000, // ₱1,000,000 per unit
+  MAX_MARKUP_PERCENT: 50, // up to 50% markup
+} as const;
+
+const clamp = (n: number, min = 0, max = Number.POSITIVE_INFINITY) =>
+  Math.min(Math.max(n, min), max);
+
 export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -95,13 +106,12 @@ export default function InventoryPage() {
     pieces_per_unit: false,
     weight_per_piece_kg: false,
   });
+
   async function handleDeleteDropdownOption(
     type: "category" | "subcategory" | "unit",
     value: string
   ) {
-    // Pick a fallback value (e.g., "Uncategorized")
     const fallback = "Uncategorized";
-
     const { error } = await supabase
       .from("inventory")
       .update({ [type]: fallback })
@@ -115,7 +125,7 @@ export default function InventoryPage() {
     await fetchItems();
   }
 
-  // --- Auto-calculate Unit Price on cost/markup change ---
+  // --- Auto-calculate Unit Price on cost/markup/qty change ---
   useEffect(() => {
     const cost = Number(newItem.cost_price) || 0;
     const markup = Number(newItem.markup_percent) || 0;
@@ -128,6 +138,7 @@ export default function InventoryPage() {
     }));
   }, [newItem.cost_price, newItem.markup_percent, newItem.quantity]);
 
+  // --- Validation (includes "over the limit" checks) ---
   useEffect(() => {
     setValidationErrors((prev) => ({
       ...prev,
@@ -135,20 +146,27 @@ export default function InventoryPage() {
       category: !newItem.category.trim(),
       subcategory: !newItem.subcategory.trim(),
       unit: !newItem.unit.trim(),
-      quantity: newItem.quantity < 0,
-      cost_price: newItem.cost_price === null || newItem.cost_price < 0,
+      quantity: newItem.quantity < 0 || newItem.quantity > LIMITS.MAX_QUANTITY,
+      cost_price:
+        newItem.cost_price === null ||
+        newItem.cost_price < 0 ||
+        newItem.cost_price > LIMITS.MAX_COST_PRICE,
       markup_percent:
-        newItem.markup_percent === null || newItem.markup_percent < 0,
+        newItem.markup_percent === null ||
+        newItem.markup_percent < 0 ||
+        newItem.markup_percent > LIMITS.MAX_MARKUP_PERCENT,
       pieces_per_unit:
         (newItem.unit === "Box" || newItem.unit === "Pack") &&
         (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
       weight_per_piece_kg:
         newItem.unit !== "Kg" && newItem.weight_per_piece_kg !== null
-          ? newItem.weight_per_piece_kg < 0
+          ? newItem.weight_per_piece_kg < 0 ||
+            newItem.weight_per_piece_kg > LIMITS.MAX_WEIGHT_PER_PIECE_KG
           : false,
     }));
   }, [newItem]);
 
+  // Auto set defaults for some units
   useEffect(() => {
     const u = newItem.unit;
     if (u === "Kg") {
@@ -175,6 +193,7 @@ export default function InventoryPage() {
     }
   }, [newItem.unit]);
 
+  // Compute total weight
   useEffect(() => {
     const weightPerPiece =
       newItem.unit === "Kg" ? 1 : Number(newItem.weight_per_piece_kg) || 0;
@@ -289,16 +308,23 @@ export default function InventoryPage() {
         category: !newItem.category,
         subcategory: !newItem.subcategory,
         unit: !newItem.unit,
-        quantity: newItem.quantity < 0,
-        cost_price: newItem.cost_price === null || newItem.cost_price < 0,
+        quantity:
+          newItem.quantity < 0 || newItem.quantity > LIMITS.MAX_QUANTITY,
+        cost_price:
+          newItem.cost_price === null ||
+          newItem.cost_price < 0 ||
+          newItem.cost_price > LIMITS.MAX_COST_PRICE,
         markup_percent:
-          newItem.markup_percent === null || newItem.markup_percent < 0,
+          newItem.markup_percent === null ||
+          newItem.markup_percent < 0 ||
+          newItem.markup_percent > LIMITS.MAX_MARKUP_PERCENT,
         pieces_per_unit:
           (newItem.unit === "Box" || newItem.unit === "Pack") &&
           (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
         weight_per_piece_kg:
           newItem.unit !== "Kg" && newItem.weight_per_piece_kg !== null
-            ? newItem.weight_per_piece_kg < 0
+            ? newItem.weight_per_piece_kg < 0 ||
+              newItem.weight_per_piece_kg > LIMITS.MAX_WEIGHT_PER_PIECE_KG
             : false,
       };
       setValidationErrors(errors);
@@ -416,6 +442,7 @@ export default function InventoryPage() {
 
   const cell = "px-4 py-2 text-left align-middle";
   const cellNowrap = `${cell} whitespace-nowrap`;
+
   return (
     <>
       <div className="px-4 pb-4 pt-1">
@@ -461,6 +488,7 @@ export default function InventoryPage() {
             Add New Item
           </button>
         </div>
+
         <div className="overflow-auto rounded-lg shadow">
           <table className="min-w-full bg-white text-sm">
             <thead className="bg-[#ffba20] text-black text-left">
@@ -588,6 +616,7 @@ export default function InventoryPage() {
             </tbody>
           </table>
         </div>
+
         <div className="mt-4 flex justify-between items-center">
           <button
             disabled={currentPage === 1}
@@ -607,6 +636,7 @@ export default function InventoryPage() {
             Next →
           </button>
         </div>
+
         {showImageModal && imageModalItem && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="bg-white rounded-lg max-w-md w-full overflow-hidden">
@@ -667,9 +697,7 @@ export default function InventoryPage() {
                     {imageModalItem.total_weight_kg
                       ? `${imageModalItem.total_weight_kg.toLocaleString(
                           undefined,
-                          {
-                            maximumFractionDigits: 3,
-                          }
+                          { maximumFractionDigits: 3 }
                         )} kg`
                       : "—"}
                   </div>
@@ -686,12 +714,15 @@ export default function InventoryPage() {
             </div>
           </div>
         )}
+
         {showForm && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
             <div className="bg-white p-8 rounded-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto space-y-4">
               <h2 className="text-lg font-semibold">
                 {editingItemId ? "Edit Item" : "Add New Item"}
               </h2>
+
+              {/* SKU */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   SKU<span className="text-red-500">*</span>
@@ -705,6 +736,8 @@ export default function InventoryPage() {
                   }
                 />
               </div>
+
+              {/* Product Name */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Product Name <span className="text-red-500">*</span>
@@ -721,6 +754,8 @@ export default function InventoryPage() {
                   }
                 />
               </div>
+
+              {/* Category */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Category<span className="text-red-500">*</span>
@@ -762,7 +797,6 @@ export default function InventoryPage() {
                     </Select>
                   )}
 
-                  {/* Rename Category Button */}
                   {!isCustomCategory && newItem.category && (
                     <button
                       type="button"
@@ -778,7 +812,6 @@ export default function InventoryPage() {
                     </button>
                   )}
 
-                  {/* "New" checkbox */}
                   <label className="text-sm flex items-center gap-1">
                     <input
                       type="checkbox"
@@ -790,6 +823,7 @@ export default function InventoryPage() {
                 </div>
               </div>
 
+              {/* Subcategory */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Subcategory<span className="text-red-500">*</span>
@@ -827,7 +861,7 @@ export default function InventoryPage() {
                       ))}
                     </select>
                   )}
-                  {/* Rename Subcategory Button */}
+
                   {!isCustomSubcategory && newItem.subcategory && (
                     <button
                       type="button"
@@ -854,6 +888,7 @@ export default function InventoryPage() {
                 </div>
               </div>
 
+              {/* Unit */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Unit<span className="text-red-500">*</span>
@@ -899,6 +934,7 @@ export default function InventoryPage() {
                         ))}
                     </select>
                   )}
+
                   {!isCustomUnit && newItem.unit && (
                     <button
                       type="button"
@@ -924,6 +960,8 @@ export default function InventoryPage() {
                   </label>
                 </div>
               </div>
+
+              {/* Pieces per Unit (conditional) */}
               {newItem.unit &&
                 newItem.unit !== "Piece" &&
                 newItem.unit !== "Dozen" &&
@@ -953,6 +991,8 @@ export default function InventoryPage() {
                     />
                   </div>
                 )}
+
+              {/* Weight / piece (kg) with cap */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Weight / piece (kg)
@@ -960,7 +1000,10 @@ export default function InventoryPage() {
                 <input
                   type="number"
                   min={0}
+                  max={LIMITS.MAX_WEIGHT_PER_PIECE_KG}
                   step="0.001"
+                  inputMode="decimal"
+                  title={`Max ${LIMITS.MAX_WEIGHT_PER_PIECE_KG} kg per piece`}
                   className={`flex-1 border px-4 py-2 rounded ${
                     validationErrors.weight_per_piece_kg ? "border-red-500" : ""
                   }`}
@@ -975,17 +1018,22 @@ export default function InventoryPage() {
                       : newItem.weight_per_piece_kg ?? ""
                   }
                   disabled={newItem.unit === "Kg"}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const raw = parseFloat(e.target.value) || 0;
+                    const val = clamp(raw, 0, LIMITS.MAX_WEIGHT_PER_PIECE_KG);
+                    if (raw !== val)
+                      toast.info(
+                        `Capped at ${LIMITS.MAX_WEIGHT_PER_PIECE_KG} kg`
+                      );
                     setNewItem((prev) => ({
                       ...prev,
-                      weight_per_piece_kg: Math.max(
-                        0,
-                        parseFloat(e.target.value) || 0
-                      ),
-                    }))
-                  }
+                      weight_per_piece_kg: newItem.unit === "Kg" ? 1 : val,
+                    }));
+                  }}
                 />
               </div>
+
+              {/* Quantity with cap */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Quantity<span className="text-red-500">*</span>
@@ -993,6 +1041,11 @@ export default function InventoryPage() {
                 <input
                   type="number"
                   min={0}
+                  max={LIMITS.MAX_QUANTITY}
+                  step="1"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  title={`Max ${LIMITS.MAX_QUANTITY.toLocaleString()} units`}
                   className={`flex-1 border px-4 py-2 rounded ${
                     validationErrors.quantity ? "border-red-500" : ""
                   }`}
@@ -1003,15 +1056,19 @@ export default function InventoryPage() {
                   }
                   value={newItem.quantity}
                   onFocus={(e) => e.target.select()}
-                  onChange={(e) =>
-                    setNewItem((prev) => ({
-                      ...prev,
-                      quantity: Math.max(0, parseInt(e.target.value) || 0),
-                    }))
-                  }
+                  onChange={(e) => {
+                    const raw = parseInt(e.target.value || "0", 10) || 0;
+                    const val = clamp(raw, 0, LIMITS.MAX_QUANTITY);
+                    if (raw !== val)
+                      toast.info(
+                        `Capped at ${LIMITS.MAX_QUANTITY.toLocaleString()}`
+                      );
+                    setNewItem((prev) => ({ ...prev, quantity: val }));
+                  }}
                 />
               </div>
-              {/* COST PRICE */}
+
+              {/* Cost Price with cap */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Cost Price<span className="text-red-500">*</span>
@@ -1019,21 +1076,29 @@ export default function InventoryPage() {
                 <input
                   type="number"
                   min={0}
+                  max={LIMITS.MAX_COST_PRICE}
+                  step="0.01"
+                  inputMode="decimal"
+                  title={`Max ₱${LIMITS.MAX_COST_PRICE.toLocaleString()} per unit`}
                   className={`flex-1 border px-4 py-2 rounded ${
                     validationErrors.cost_price ? "border-red-500" : ""
                   }`}
                   placeholder="₱ capital per unit"
                   value={newItem.cost_price}
                   onFocus={(e) => e.target.select()}
-                  onChange={(e) =>
-                    setNewItem((prev) => ({
-                      ...prev,
-                      cost_price: Math.max(0, parseFloat(e.target.value) || 0),
-                    }))
-                  }
+                  onChange={(e) => {
+                    const raw = parseFloat(e.target.value) || 0;
+                    const val = clamp(raw, 0, LIMITS.MAX_COST_PRICE);
+                    if (raw !== val)
+                      toast.info(
+                        `Capped at ₱${LIMITS.MAX_COST_PRICE.toLocaleString()}`
+                      );
+                    setNewItem((prev) => ({ ...prev, cost_price: val }));
+                  }}
                 />
               </div>
-              {/* MARKUP */}
+
+              {/* Markup (%) with cap */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Markup (%)<span className="text-red-500">*</span>
@@ -1041,24 +1106,27 @@ export default function InventoryPage() {
                 <input
                   type="number"
                   min={0}
+                  max={LIMITS.MAX_MARKUP_PERCENT}
+                  step="0.01"
+                  inputMode="decimal"
+                  title={`Max ${LIMITS.MAX_MARKUP_PERCENT}%`}
                   className={`flex-1 border px-4 py-2 rounded ${
                     validationErrors.markup_percent ? "border-red-500" : ""
                   }`}
                   placeholder="e.g. 50"
                   value={newItem.markup_percent}
                   onFocus={(e) => e.target.select()}
-                  onChange={(e) =>
-                    setNewItem((prev) => ({
-                      ...prev,
-                      markup_percent: Math.max(
-                        0,
-                        parseFloat(e.target.value) || 0
-                      ),
-                    }))
-                  }
+                  onChange={(e) => {
+                    const raw = parseFloat(e.target.value) || 0;
+                    const val = clamp(raw, 0, LIMITS.MAX_MARKUP_PERCENT);
+                    if (raw !== val)
+                      toast.info(`Capped at ${LIMITS.MAX_MARKUP_PERCENT}%`);
+                    setNewItem((prev) => ({ ...prev, markup_percent: val }));
+                  }}
                 />
               </div>
-              {/* UNIT PRICE (readonly) */}
+
+              {/* Unit Price (readonly) */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Unit Price (auto)
@@ -1071,6 +1139,8 @@ export default function InventoryPage() {
                   disabled
                 />
               </div>
+
+              {/* Total Price (readonly) */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Total Price
@@ -1083,6 +1153,8 @@ export default function InventoryPage() {
                   disabled
                 />
               </div>
+
+              {/* Expiration Date */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Expiration Date
@@ -1118,6 +1190,8 @@ export default function InventoryPage() {
                   </button>
                 )}
               </div>
+
+              {/* Total Weight (readonly) */}
               <div className="flex items-center gap-2">
                 <label className="w-36 text-sm text-gray-700">
                   Total Weight
@@ -1136,6 +1210,8 @@ export default function InventoryPage() {
                   disabled
                 />
               </div>
+
+              {/* Image upload */}
               <input
                 type="file"
                 accept="image/png, image/jpeg, image/webp, image/gif"
@@ -1159,7 +1235,7 @@ export default function InventoryPage() {
                     handleImageSelect(null);
                     return;
                   }
-                  const MAX_BYTES = 5 * 1024 * 1024;
+                  const MAX_BYTES = 5 * 1024 * 1024; // 5MB
                   if (f.size > MAX_BYTES) {
                     toast.error("Image too large. Max size is 5 MB.");
                     e.currentTarget.value = "";
@@ -1173,6 +1249,7 @@ export default function InventoryPage() {
               <p className="text-xs text-gray-500 mt-1">
                 Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
               </p>
+
               {imagePreview && (
                 <button
                   type="button"
@@ -1182,6 +1259,8 @@ export default function InventoryPage() {
                   Remove selected image
                 </button>
               )}
+
+              {/* Actions */}
               <div className="flex justify-end gap-2 pt-4">
                 <button
                   onClick={() => {
@@ -1193,11 +1272,13 @@ export default function InventoryPage() {
                 >
                   Cancel
                 </button>
+
                 <button
                   onClick={handleSubmitItem}
                   disabled={saving}
-                  className={`bg-black text-white px-4 py-2 rounded hover:text-[#ffba20] 
-                  ${saving ? "opacity-70 pointer-events-none" : ""}`}
+                  className={`bg-black text-white px-4 py-2 rounded hover:text-[#ffba20] ${
+                    saving ? "opacity-70 pointer-events-none" : ""
+                  }`}
                 >
                   {saving ? (
                     <span className="inline-flex items-center gap-2">
@@ -1232,6 +1313,8 @@ export default function InventoryPage() {
           </div>
         )}
       </div>
+
+      {/* Rename Modal */}
       {showRenameModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
