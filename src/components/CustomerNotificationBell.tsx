@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BellRing, CheckCheck, Loader2, ExternalLink, Clipboard } from "lucide-react";
+import { BellRing, CheckCheck, Loader2, Clipboard } from "lucide-react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 import {
@@ -32,17 +32,13 @@ const ADMIN_EVENT_TYPES = [
   "delivery_delivered",
 ] as const;
 
-type AdminEventType = (typeof ADMIN_EVENT_TYPES)[number];
-
-/** Which sources count as "admin/system" initiated */
-const ALLOWED_SOURCES = ["system", "admin"] as const;
-
 type NotificationRow = {
   id: string | number;
   type?: string | null;
   title?: string | null;
   message?: string | null;
   created_at?: string | null;
+
   recipient_email?: string | null;
   recipient_name?: string | null;
 
@@ -71,21 +67,11 @@ function timeAgo(iso?: string | null) {
   return `${days}d ago`;
 }
 
-/** Match to this specific user by recipient fields only */
-function matchesUserStrict(n: NotificationRow, email?: string | null, name?: string | null) {
-  if (!n) return false;
-  if (email && n.recipient_email === email) return true;
-  if (!email && name && n.recipient_name === name) return true;
-  return false;
-}
-
 /** True if this notification is admin/system driven (not by the current customer) */
 function isAdminDrivenStrict(n: NotificationRow, currentUserEmail?: string | null) {
   const typeOk = !!n.type && (ADMIN_EVENT_TYPES as readonly string[]).includes(n.type);
   const roleIsAdmin = String(n.actor_role || "").toLowerCase() === "admin";
-  const sourceIsAllowed = ALLOWED_SOURCES.includes(
-    String(n.source || "").toLowerCase() as (typeof ALLOWED_SOURCES)[number]
-  );
+  const sourceIsAllowed = ["system", "admin"].includes(String(n.source || "").toLowerCase());
   const notSelfActor = !n.actor_email || n.actor_email !== currentUserEmail;
   return !!typeOk && !!notSelfActor && (roleIsAdmin || sourceIsAllowed);
 }
@@ -112,7 +98,9 @@ export default function CustomerNotificationBell() {
   // Load user
   useEffect(() => {
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       const email = user?.email || null;
       const name = (user?.user_metadata?.name as string) || email || null;
       setUserEmail(email);
@@ -151,60 +139,39 @@ export default function CustomerNotificationBell() {
 
   useEffect(() => setUnseen(unseenCount), [unseenCount]);
 
-  /** Initial fetch — recipient-scoped; then strictly admin-driven; cap to 5 */
-  async function fetchScoped(email?: string | null, name?: string | null) {
+  /** Initial fetch — show recent admin/system events to everyone; cap to 5 */
+  async function fetchScoped(currentUserEmail?: string | null, _name?: string | null) {
     setLoading(true);
     try {
-      const ors: string[] = [];
-      if (email) ors.push(`recipient_email.eq.${email}`);
-      if (!email && name) ors.push(`recipient_name.eq.${name}`);
+      let query = supabase
+        .from("customer_notifications")
+        .select("*")
+        .in("type", [...ADMIN_EVENT_TYPES])
+        .order("created_at", { ascending: false })
+        .limit(60);
 
-      if (ors.length > 0) {
-        let query = supabase
-          .from("customer_notifications")        // <<<<<< TABLE CHANGED
-          .select("*")
-          .or(ors.join(","))
-          .in("type", [...ADMIN_EVENT_TYPES])    // <<<<<< array spread fix
-          .order("created_at", { ascending: false })
-          .limit(60);
+      // optional: don't show items triggered by this exact user (if ever)
+      if (currentUserEmail) query = query.neq("actor_email", currentUserEmail);
 
-        if (email) query = query.neq("actor_email", email);
-
-        const { data, error } = await query;
-        if (!error && data) {
-          const rows = (data as NotificationRow[])
-            .filter((n) => matchesUserStrict(n, email, name))
-            .filter((n) => isAdminDrivenStrict(n, email))
-            .slice(0, MAX_ITEMS);
-
-          setList(rows);
-          setLoading(false);
-          return;
-        }
+      const { data, error } = await query;
+      if (error || !data) {
+        console.error("customer_notifications fetch error", error);
+        setList([]);
+        setLoading(false);
+        return;
       }
-    } catch {}
 
-    // Fallback: broad fetch then strict client-side filtering
-    const { data, error } = await supabase
-      .from("customer_notifications")            // <<<<<< TABLE CHANGED
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(120);
+      const rows = (data as NotificationRow[])
+        .filter((n) => isAdminDrivenStrict(n, currentUserEmail))
+        .slice(0, MAX_ITEMS);
 
-    if (error || !data) {
-      console.error(error);
+      setList(rows);
+    } catch (e) {
+      console.error("customer_notifications fetch exception", e);
       setList([]);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const filtered = (data as NotificationRow[])
-      .filter((n) => matchesUserStrict(n, email, name))
-      .filter((n) => isAdminDrivenStrict(n, email))
-      .slice(0, MAX_ITEMS);
-
-    setList(filtered);
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -212,31 +179,27 @@ export default function CustomerNotificationBell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEmail, userName]);
 
-// Realtime: listen to ALL row changes; filter client-side per user
+// Realtime for everyone: listen to ALL changes; filter to admin/system only
 useEffect(() => {
-  if (!userEmail && !userName) return;
-
   const ch = supabase.channel("customer-notifs-realtime");
 
-  // INSERT: receive every insert; keep only this user's admin-driven ones
+  // INSERT
   ch.on(
     "postgres_changes",
     { event: "INSERT", schema: "public", table: "customer_notifications" },
     (payload: any) => {
       const row = payload.new as NotificationRow;
-      if (matchesUserStrict(row, userEmail, userName) && isAdminDrivenStrict(row, userEmail)) {
-        handleIncoming(row);
-      }
+      if (isAdminDrivenStrict(row, userEmail)) handleIncoming(row);
     }
   );
 
-  // UPDATE: refresh item if it changes (still filter locally)
+  // UPDATE
   ch.on(
     "postgres_changes",
     { event: "UPDATE", schema: "public", table: "customer_notifications" },
     (payload: any) => {
       const row = payload.new as NotificationRow;
-      if (matchesUserStrict(row, userEmail, userName) && isAdminDrivenStrict(row, userEmail)) {
+      if (isAdminDrivenStrict(row, userEmail)) {
         setList((prev) => {
           const idx = prev.findIndex((x) => x.id === row.id);
           if (idx === -1) return prev;
@@ -248,7 +211,7 @@ useEffect(() => {
     }
   );
 
-  // DELETE: remove from list if it was shown
+  // DELETE
   ch.on(
     "postgres_changes",
     { event: "DELETE", schema: "public", table: "customer_notifications" },
@@ -258,16 +221,16 @@ useEffect(() => {
     }
   );
 
-  // Log status so you can see the socket connect
-  ch.subscribe((status) => console.log("[realtime] status:", status));
+  // IMPORTANT: don't return this promise from the effect
+  void ch.subscribe((status) => console.log("[realtime] status:", status));
 
+  // Cleanup must be a function
   return () => {
-    supabase.removeChannel(ch);
+    try {
+      supabase.removeChannel(ch);
+    } catch {}
   };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [userEmail, userName]);
-
-
+}, [userEmail]);
 
 
   const handleIncoming = (row: NotificationRow) => {
@@ -424,10 +387,7 @@ useEffect(() => {
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-<DialogTitle>
-  {selected?.title || selected?.type || "Notification"}
-</DialogTitle>
-
+            <DialogTitle>{selected?.title || selected?.type || "Notification"}</DialogTitle>
             <DialogDescription>
               {selected?.created_at ? (
                 <span className="text-xs text-gray-500">
@@ -457,7 +417,9 @@ useEffect(() => {
                     <code className="text-gray-900">{selected.transaction_code}</code>
                     <button
                       title="Copy TXN code"
-                      onClick={() => selected?.transaction_code && navigator.clipboard.writeText(selected.transaction_code)}
+                      onClick={() =>
+                        selected?.transaction_code && navigator.clipboard.writeText(selected.transaction_code)
+                      }
                       className="p-1 rounded hover:bg-gray-200"
                     >
                       <Clipboard className="w-3.5 h-3.5" />
@@ -486,19 +448,16 @@ useEffect(() => {
                 </div>
               )}
             </div>
-
-
           </div>
 
-<DialogFooter className="mt-4">
-  <button
-    onClick={() => setDetailOpen(false)}
-    className="rounded-md border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
-  >
-    Close
-  </button>
-</DialogFooter>
-
+          <DialogFooter className="mt-4">
+            <button
+              onClick={() => setDetailOpen(false)}
+              className="rounded-md border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              Close
+            </button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
