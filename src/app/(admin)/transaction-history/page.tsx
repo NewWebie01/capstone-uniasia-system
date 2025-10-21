@@ -175,6 +175,10 @@ export default function TransactionHistoryPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Pagination (10 only)
+  const ITEMS_PER_PAGE = 10;
+  const [currentPage, setCurrentPage] = useState(1);
+
   // Export modal state
   type ExportChoice =
     | "today"
@@ -201,7 +205,6 @@ export default function TransactionHistoryPage() {
   const needsReauth = () =>
     !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
 
-  // Activity: On page load
   useEffect(() => {
     logActivity("Visited Transaction History Page");
   }, []);
@@ -224,7 +227,7 @@ export default function TransactionHistoryPage() {
           )
         `
         )
-        .eq("status", "completed") // <<< Completed-only filter
+        .eq("status", "completed")
         .order("date_created", { ascending: false });
 
       if (error) {
@@ -271,8 +274,217 @@ export default function TransactionHistoryPage() {
     );
   }, [searchQuery, transactions]);
 
-  /* ---------------------- Export Helpers ---------------------- */
-  function describeRangeLabel(choice: ExportChoice, s?: Date, e?: Date) {
+  // Reset to page 1 when results change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, transactions]);
+
+  // Pagination calculations
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE)),
+    [filtered.length]
+  );
+  const pageStartIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+  const paginated = useMemo(
+    () => filtered.slice(pageStartIndex, pageStartIndex + ITEMS_PER_PAGE),
+    [filtered, pageStartIndex]
+  );
+
+  /* ---------------------------- UI ---------------------------- */
+  return (
+    <div className="px-4 pb-4 pt-1">
+      <div className="flex items-start justify-between flex-wrap gap-2">
+        <div>
+          <h1 className="pt-1 text-3xl font-bold mb-1">Transaction History</h1>
+          <p className="text-sm text-gray-500 mb-2">
+            View <span className="font-medium">completed</span> orders with
+            their totals, search, and export by time frame.
+          </p>
+        </div>
+      </div>
+
+      <input
+        type="search"
+        aria-label="Search by date, code, customer, status, or amount"
+        placeholder="Search by date, code, customer, status, or amount…"
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        className="border px-4 py-2 mb-4 w-full md:w-1/2 rounded-full"
+      />
+
+      <button
+        className="h-10 px-4 rounded-xl border bg-black text-white hover:opacity-90 text-sm shrink-0"
+        onClick={() => {
+          setShowExport(true);
+          logActivity("Opened Export Transaction History Modal");
+        }}
+      >
+        Export
+      </button>
+
+      <div className="overflow-x-auto rounded-lg shadow bg-white mt-3">
+        <table className="min-w-full text-sm">
+          <thead className="bg-[#ffba20] text-black text-left">
+            <tr>
+              <th className="px-4 py-3">Date</th>
+              <th className="px-4 py-3">Transaction Code</th>
+              <th className="px-4 py-3">Customer</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3 text-right">Total Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td className="px-4 py-6 text-center text-gray-500" colSpan={5}>
+                  Loading…
+                </td>
+              </tr>
+            ) : paginated.length === 0 ? (
+              <tr>
+                <td className="px-4 py-6 text-center text-gray-500" colSpan={5}>
+                  No completed transactions found.
+                </td>
+              </tr>
+            ) : (
+              paginated.map((t) => (
+                <tr key={t.id} className="border-b hover:bg-gray-100">
+                  <td className="px-4 py-3">{formatDate(t.date)}</td>
+                  <td className="px-4 py-3">{t.code}</td>
+                  <td className="px-4 py-3">{t.customer}</td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={t.status} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {currency(t.total_amount)}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+
+        {/* Pagination controls */}
+        <div className="flex items-center justify-between px-4 py-3 border-t text-sm">
+          <div className="text-gray-600">
+            Showing{" "}
+            <span className="font-medium">
+              {filtered.length === 0 ? 0 : pageStartIndex + 1}
+            </span>{" "}
+            to{" "}
+            <span className="font-medium">
+              {Math.min(pageStartIndex + ITEMS_PER_PAGE, filtered.length)}
+            </span>{" "}
+            of <span className="font-medium">{filtered.length}</span> entries
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              className="px-3 py-1.5 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              ← Prev
+            </button>
+            <span className="px-2">
+              Page <strong>{currentPage}</strong> of{" "}
+              <strong>{totalPages}</strong>
+            </span>
+            <button
+              className="px-3 py-1.5 rounded border bg-white hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Export modal */}
+      {showExport && (
+        <ExportModal
+          exportChoice={exportChoice}
+          setExportChoice={setExportChoice}
+          customStart={customStart}
+          setCustomStart={setCustomStart}
+          customEnd={customEnd}
+          setCustomEnd={setCustomEnd}
+          exportError={exportError}
+          setExportError={setExportError}
+          exporting={exporting}
+          onExport={handleExportNow}
+          onCancel={() => {
+            setShowExport(false);
+            setExportChoice("today");
+            setCustomStart("");
+            setCustomEnd("");
+            setExportError("");
+            logActivity("Canceled Transaction History Export Modal");
+          }}
+        />
+      )}
+
+      {/* Re-auth modal */}
+      {showReauth && (
+        <ReauthModal
+          email={reauthEmail}
+          password={reauthPassword}
+          setPassword={setReauthPassword}
+          error={reauthError}
+          verifying={reauthing}
+          onVerify={async () => {
+            setReauthError("");
+            setReauthing(true);
+            try {
+              const { error } = await supabase.auth.signInWithPassword({
+                email: reauthEmail,
+                password: reauthPassword,
+              });
+              if (error) throw error;
+              setLastReauthAt(Date.now());
+              setShowReauth(false);
+              setReauthPassword("");
+              await doExportNow();
+            } catch (e: any) {
+              setReauthError(e?.message || "Authentication failed.");
+            } finally {
+              setReauthing(false);
+            }
+          }}
+          onCancel={() => {
+            setShowReauth(false);
+            setReauthPassword("");
+            setReauthError("");
+          }}
+        />
+      )}
+    </div>
+  );
+
+  // ---- helpers in component scope ----
+  async function handleExportNow() {
+    setExportError("");
+    if (needsReauth()) {
+      const { data } = await supabase.auth.getUser();
+      setReauthEmail(data?.user?.email || "");
+      setShowReauth(true);
+      return;
+    }
+    await doExportNow();
+  }
+
+  function describeRangeLabel(
+    choice:
+      | "today"
+      | "this_week"
+      | "this_month"
+      | "this_year"
+      | "custom"
+      | "all",
+    s?: Date,
+    e?: Date
+  ) {
     switch (choice) {
       case "today":
         return `TODAY_${fmtPHDateISO(s!)}`;
@@ -323,64 +535,6 @@ export default function TransactionHistoryPage() {
     return { start: s, end: e, label: describeRangeLabel("custom", s, e) };
   }
 
-  // --- Logging on search ---
-  function handleSearchInput(e: React.ChangeEvent<HTMLInputElement>) {
-    setSearchQuery(e.target.value);
-    if (e.target.value.trim()) {
-      logActivity("Searched Transaction History", { query: e.target.value });
-    }
-  }
-
-  // --- Logging on opening Export modal ---
-  function openExportModal() {
-    setShowExport(true);
-    logActivity("Opened Export Transaction History Modal");
-  }
-
-  // --- Logging on cancel Export modal ---
-  function cancelExportModal() {
-    setShowExport(false);
-    setExportChoice("today");
-    setCustomStart("");
-    setCustomEnd("");
-    setExportError("");
-    logActivity("Canceled Transaction History Export Modal");
-  }
-
-  // Gate: ask for password unless recently verified
-  async function handleExportNow() {
-    setExportError("");
-    if (needsReauth()) {
-      const { data } = await supabase.auth.getUser();
-      setReauthEmail(data?.user?.email || "");
-      setShowReauth(true);
-      return;
-    }
-    await doExportNow();
-  }
-
-  async function confirmReauth() {
-    setReauthError("");
-    setReauthing(true);
-    try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: reauthEmail,
-        password: reauthPassword,
-      });
-      if (error) throw error;
-
-      setLastReauthAt(Date.now());
-      setShowReauth(false);
-      setReauthPassword("");
-
-      await doExportNow();
-    } catch (e: any) {
-      setReauthError(e?.message || "Authentication failed.");
-    } finally {
-      setReauthing(false);
-    }
-  }
-
   async function doExportNow() {
     setExporting(true);
     try {
@@ -390,14 +544,14 @@ export default function TransactionHistoryPage() {
         .from("orders")
         .select(
           `
-    id,
-    date_created,
-    total_amount,
-    status,
-    customers(name)
-  `
+          id,
+          date_created,
+          total_amount,
+          status,
+          customers(name)
+        `
         )
-        .eq("status", "completed") // <<< Completed-only filter for export
+        .eq("status", "completed")
         .order("date_created", { ascending: false });
 
       if (exportChoice !== "all") {
@@ -444,7 +598,6 @@ export default function TransactionHistoryPage() {
       const safeLabel = label.replace(/[^\w\-]+/g, "_");
       XLSX.writeFile(wb, `Transaction_History_${safeLabel}_${todayStamp}.xlsx`);
 
-      // ---- Log export activity ----
       await logActivity(
         exportChoice === "all"
           ? "Exported Transaction History (Completed Only, ALL)"
@@ -469,242 +622,203 @@ export default function TransactionHistoryPage() {
       setExporting(false);
     }
   }
+}
 
-  /* ---------------------------- UI ---------------------------- */
+/* ---------------------- Small Components ---------------------- */
+
+function ExportModal(props: {
+  exportChoice:
+    | "today"
+    | "this_week"
+    | "this_month"
+    | "this_year"
+    | "custom"
+    | "all";
+  setExportChoice: (c: any) => void;
+  customStart: string;
+  setCustomStart: (s: string) => void;
+  customEnd: string;
+  setCustomEnd: (s: string) => void;
+  exportError: string;
+  setExportError: (s: string) => void;
+  exporting: boolean;
+  onExport: () => void;
+  onCancel: () => void;
+}) {
+  const {
+    exportChoice,
+    setExportChoice,
+    customStart,
+    setCustomStart,
+    customEnd,
+    setCustomEnd,
+    exportError,
+    exporting,
+    onExport,
+    onCancel,
+  } = props;
+
   return (
-    <div className="px-4 pb-4 pt-1">
-      <div className="flex items-start justify-between flex-wrap gap-2">
-        <div>
-          <h1 className="pt-1 text-3xl font-bold mb-1">Transaction History</h1>
-          <p className="text-sm text-gray-500 mb-2">
-            View <span className="font-medium">completed</span> orders with
-            their totals, search, and export by time frame.
-          </p>
-        </div>
-      </div>
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg">
+        <h3 className="text-base font-semibold mb-2 text-center">
+          Export Transaction History
+        </h3>
+        <p className="text-sm text-gray-700 text-center mb-4">
+          Choose a time frame (PH timezone). <br />
+          <span className="text-xs text-gray-500">
+            *Only <strong>Completed</strong> orders are included.
+          </span>
+        </p>
 
-      <input
-        type="search"
-        aria-label="Search by date, code, customer, status, or amount"
-        placeholder="Search by date, code, customer, status, or amount…"
-        value={searchQuery}
-        onChange={handleSearchInput}
-        className="border px-4 py-2 mb-4 w-full md:w-1/2 rounded-full"
-      />
-
-      <button
-        className="h-10 px-4 rounded-xl border bg-black text-white hover:opacity-90 text-sm shrink-0"
-        onClick={openExportModal}
-      >
-        Export
-      </button>
-
-      <div className="overflow-x-auto rounded-lg shadow bg-white mt-3">
-        <table className="min-w-full text-sm">
-          <thead className="bg-[#ffba20] text-black text-left">
-            <tr>
-              <th className="px-4 py-3">Date</th>
-              <th className="px-4 py-3">Transaction Code</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3 text-right">Total Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td className="px-4 py-6 text-center text-gray-500" colSpan={5}>
-                  Loading…
-                </td>
-              </tr>
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td className="px-4 py-6 text-center text-gray-500" colSpan={5}>
-                  No completed transactions found.
-                </td>
-              </tr>
-            ) : (
-              filtered.map((t) => (
-                <tr key={t.id} className="border-b hover:bg-gray-100">
-                  <td className="px-4 py-3">{formatDate(t.date)}</td>
-                  <td className="px-4 py-3">{t.code}</td>
-                  <td className="px-4 py-3">{t.customer}</td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={t.status} />
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {currency(t.total_amount)}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Export modal */}
-      {showExport && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg">
-            <h3 className="text-base font-semibold mb-2 text-center">
-              Export Transaction History
-            </h3>
-            <p className="text-sm text-gray-700 text-center mb-4">
-              Choose a time frame (PH timezone). <br />
-              <span className="text-xs text-gray-500">
-                *Only <strong>Completed</strong> orders are included.
-              </span>
-            </p>
-
-            <div className="space-y-3 mb-4">
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { key: "today", label: "Today" },
-                  { key: "this_week", label: "This Week" },
-                  { key: "this_month", label: "This Month" },
-                  { key: "this_year", label: "This Year" },
-                  { key: "custom", label: "Custom Range" },
-                  { key: "all", label: "All" },
-                ].map((opt) => (
-                  <label
-                    key={opt.key}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer ${
-                      exportChoice === (opt.key as ExportChoice)
-                        ? "border-black bg-gray-50"
-                        : "hover:bg-gray-50"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="exportChoice"
-                      value={opt.key}
-                      checked={exportChoice === (opt.key as ExportChoice)}
-                      onChange={() => setExportChoice(opt.key as ExportChoice)}
-                    />
-                    <span className="text-sm">{opt.label}</span>
-                  </label>
-                ))}
-              </div>
-
-              {exportChoice === "custom" && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs text-gray-600 block mb-1">
-                      Start date (PH)
-                    </label>
-                    <input
-                      type="date"
-                      className="border rounded-lg px-3 py-2 w-full"
-                      value={customStart}
-                      onChange={(e) => setCustomStart(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-600 block mb-1">
-                      End date (PH)
-                    </label>
-                    <input
-                      type="date"
-                      className="border rounded-lg px-3 py-2 w-full"
-                      value={customEnd}
-                      onChange={(e) => setCustomEnd(e.target.value)}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {exportError && (
-                <div className="text-xs text-red-600">{exportError}</div>
-              )}
-            </div>
-
-            <div className="flex gap-3 justify-center">
-              <button
-                className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
-                onClick={handleExportNow}
-                disabled={
-                  exporting ||
-                  (exportChoice === "custom" && (!customStart || !customEnd))
-                }
+        <div className="space-y-3 mb-4">
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { key: "today", label: "Today" },
+              { key: "this_week", label: "This Week" },
+              { key: "this_month", label: "This Month" },
+              { key: "this_year", label: "This Year" },
+              { key: "custom", label: "Custom Range" },
+              { key: "all", label: "All" },
+            ].map((opt) => (
+              <label
+                key={opt.key}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer ${
+                  exportChoice === (opt.key as any)
+                    ? "border-black bg-gray-50"
+                    : "hover:bg-gray-50"
+                }`}
               >
-                {exporting ? "Exporting…" : "Export Now"}
-              </button>
-              <button
-                className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
-                onClick={cancelExportModal}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Re-auth modal */}
-      {showReauth && (
-        <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-            <h3 className="text-base font-semibold mb-2 text-center">
-              Confirm Your Identity
-            </h3>
-            <p className="text-sm text-gray-700 text-center mb-4">
-              For security, please re-enter your password to export
-              transactions.
-            </p>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-gray-600 mb-1">
-                  Email
-                </label>
                 <input
-                  type="email"
-                  value={reauthEmail}
-                  disabled
-                  aria-disabled="true"
-                  tabIndex={-1}
-                  className="border rounded-lg px-3 py-2 w-full bg-gray-100 text-gray-500 cursor-not-allowed opacity-70"
+                  type="radio"
+                  name="exportChoice"
+                  value={opt.key}
+                  checked={exportChoice === (opt.key as any)}
+                  onChange={() => props.setExportChoice(opt.key as any)}
                 />
-              </div>
+                <span className="text-sm">{opt.label}</span>
+              </label>
+            ))}
+          </div>
+
+          {exportChoice === "custom" && (
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-600 mb-1">
-                  Password
+                <label className="text-xs text-gray-600 block mb-1">
+                  Start date (PH)
                 </label>
                 <input
-                  type="password"
+                  type="date"
                   className="border rounded-lg px-3 py-2 w-full"
-                  value={reauthPassword}
-                  onChange={(e) => setReauthPassword(e.target.value)}
-                  placeholder="Enter your password"
-                  autoFocus
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
                 />
               </div>
-              {reauthError && (
-                <div className="text-xs text-red-600">{reauthError}</div>
-              )}
+              <div>
+                <label className="text-xs text-gray-600 block mb-1">
+                  End date (PH)
+                </label>
+                <input
+                  type="date"
+                  className="border rounded-lg px-3 py-2 w-full"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                />
+              </div>
             </div>
+          )}
 
-            <div className="flex gap-3 justify-center mt-5">
-              <button
-                className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
-                onClick={confirmReauth}
-                disabled={reauthing || !reauthPassword}
-              >
-                {reauthing ? "Verifying…" : "Verify & Continue"}
-              </button>
-              <button
-                className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
-                onClick={() => {
-                  setShowReauth(false);
-                  setReauthPassword("");
-                  setReauthError("");
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
+          {exportError && (
+            <div className="text-xs text-red-600">{exportError}</div>
+          )}
         </div>
-      )}
+
+        <div className="flex gap-3 justify-center">
+          <button
+            className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
+            onClick={onExport}
+            disabled={
+              exporting ||
+              (exportChoice === "custom" && (!customStart || !customEnd))
+            }
+          >
+            {exporting ? "Exporting…" : "Export Now"}
+          </button>
+          <button
+            className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReauthModal(props: {
+  email: string;
+  password: string;
+  setPassword: (s: string) => void;
+  error: string;
+  verifying: boolean;
+  onVerify: () => void;
+  onCancel: () => void;
+}) {
+  const { email, password, setPassword, error, verifying, onVerify, onCancel } =
+    props;
+  return (
+    <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+        <h3 className="text-base font-semibold mb-2 text-center">
+          Confirm Your Identity
+        </h3>
+        <p className="text-sm text-gray-700 text-center mb-4">
+          For security, please re-enter your password to export transactions.
+        </p>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Email</label>
+            <input
+              type="email"
+              value={email}
+              disabled
+              aria-disabled="true"
+              tabIndex={-1}
+              className="border rounded-lg px-3 py-2 w-full bg-gray-100 text-gray-500 cursor-not-allowed opacity-70"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Password</label>
+            <input
+              type="password"
+              className="border rounded-lg px-3 py-2 w-full"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
+              autoFocus
+            />
+          </div>
+          {error && <div className="text-xs text-red-600">{error}</div>}
+        </div>
+
+        <div className="flex gap-3 justify-center mt-5">
+          <button
+            className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
+            onClick={onVerify}
+            disabled={verifying || !password}
+          >
+            {verifying ? "Verifying…" : "Verify & Continue"}
+          </button>
+          <button
+            className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
