@@ -212,88 +212,63 @@ export default function CustomerNotificationBell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEmail, userName]);
 
-  // Realtime: only INSERTS, scoped by recipient; then strict client-side checks
-  useEffect(() => {
-    if (!userEmail && !userName) return;
+// Realtime: listen to ALL row changes; filter client-side per user
+useEffect(() => {
+  if (!userEmail && !userName) return;
 
-    const ch = supabase.channel("customer-notifs-realtime"); // <<<<<< CHANNEL NAME
+  const ch = supabase.channel("customer-notifs-realtime");
 
-    let usedFiltered = false;
-    try {
-      if (userEmail) {
-        ch.on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "customer_notifications", filter: `recipient_email=eq.${userEmail}` }, // <<<<<< TABLE CHANGED
-          (payload: any) => {
-            const row = payload.new as NotificationRow;
-            if (isAdminDrivenStrict(row, userEmail)) handleIncoming(row);
-          }
-        );
-        usedFiltered = true;
+  // INSERT: receive every insert; keep only this user's admin-driven ones
+  ch.on(
+    "postgres_changes",
+    { event: "INSERT", schema: "public", table: "customer_notifications" },
+    (payload: any) => {
+      const row = payload.new as NotificationRow;
+      if (matchesUserStrict(row, userEmail, userName) && isAdminDrivenStrict(row, userEmail)) {
+        handleIncoming(row);
       }
-      if (!userEmail && userName) {
-        ch.on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "customer_notifications", filter: `recipient_name=eq.${userName}` }, // <<<<<< TABLE CHANGED
-          (payload: any) => {
-            const row = payload.new as NotificationRow;
-            if (isAdminDrivenStrict(row, userEmail)) handleIncoming(row);
-          }
-        );
-        usedFiltered = true;
-      }
-    } catch {}
-
-    if (!usedFiltered) {
-      // Fallback: listen to all inserts, then client-filter strictly
-      ch.on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "customer_notifications" }, // <<<<<< TABLE CHANGED
-        (payload: any) => {
-          const row = payload.new as NotificationRow;
-          if (matchesUserStrict(row, userEmail, userName) && isAdminDrivenStrict(row, userEmail)) {
-            handleIncoming(row);
-          }
-        }
-      );
     }
+  );
 
-    // If an admin deletes a mirrored notif, remove it client-side
-    ch.on(
-      "postgres_changes",
-      { event: "DELETE", schema: "public", table: "customer_notifications" }, // <<<<<< TABLE CHANGED
-      (payload: any) => {
-        const id = payload.old?.id;
-        setList((prev) => prev.filter((n) => n.id !== id));
+  // UPDATE: refresh item if it changes (still filter locally)
+  ch.on(
+    "postgres_changes",
+    { event: "UPDATE", schema: "public", table: "customer_notifications" },
+    (payload: any) => {
+      const row = payload.new as NotificationRow;
+      if (matchesUserStrict(row, userEmail, userName) && isAdminDrivenStrict(row, userEmail)) {
+        setList((prev) => {
+          const idx = prev.findIndex((x) => x.id === row.id);
+          if (idx === -1) return prev;
+          const copy = [...prev];
+          copy[idx] = row;
+          return copy;
+        });
       }
-    );
-
-    // Update handler: keep dialog/list fresh if a row changes
-ch.on(
-  "postgres_changes",
-  { event: "UPDATE", schema: "public", table: "customer_notifications" },
-  (payload: any) => {
-    const row = payload.new as NotificationRow;
-    // Only keep it if it still matches this user and is admin-driven
-    if (matchesUserStrict(row, userEmail, userName) && isAdminDrivenStrict(row, userEmail)) {
-      setList((prev) => {
-        const idx = prev.findIndex((x) => x.id === row.id);
-        if (idx === -1) return prev; // we only update if it’s already shown
-        const copy = [...prev];
-        copy[idx] = row;
-        return copy;
-      });
     }
-  }
-);
+  );
+
+  // DELETE: remove from list if it was shown
+  ch.on(
+    "postgres_changes",
+    { event: "DELETE", schema: "public", table: "customer_notifications" },
+    (payload: any) => {
+      const id = payload.old?.id;
+      setList((prev) => prev.filter((n) => n.id !== id));
+    }
+  );
+
+  // Log status so you can see the socket connect
+  ch.subscribe((status) => console.log("[realtime] status:", status));
+
+  return () => {
+    supabase.removeChannel(ch);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [userEmail, userName]);
 
 
-    ch.subscribe();
-    return () => {
-      supabase.removeChannel(ch);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userEmail, userName]);
+
 
   const handleIncoming = (row: NotificationRow) => {
     if (!isAdminDrivenStrict(row, userEmail)) return;
