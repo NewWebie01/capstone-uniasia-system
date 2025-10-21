@@ -58,7 +58,10 @@ export default function LoginPage() {
   function shouldBypassOtp(email: string): boolean {
     const otpVerified = localStorage.getItem("otpVerified") === "true";
     const otpVerifiedEmail = localStorage.getItem("otpVerifiedEmail");
-    const otpVerifiedExpiry = parseInt(localStorage.getItem("otpVerifiedExpiry") || "0", 10);
+    const otpVerifiedExpiry = parseInt(
+      localStorage.getItem("otpVerifiedExpiry") || "0",
+      10
+    );
     return (
       otpVerified &&
       otpVerifiedEmail === email.trim() &&
@@ -113,7 +116,8 @@ export default function LoginPage() {
           },
         ])
         .then(({ error: logError }) => {
-          if (logError) console.error("Failed to insert activity log:", logError);
+          if (logError)
+            console.error("Failed to insert activity log:", logError);
         });
       if (role === "admin") router.replace("/dashboard");
       else if (role === "customer") router.replace("/customer/product-catalog");
@@ -154,13 +158,17 @@ export default function LoginPage() {
       return;
     }
 
-    router.replace(`/otp-verification?email=${encodeURIComponent(email.trim())}`);
+    router.replace(
+      `/otp-verification?email=${encodeURIComponent(email.trim())}`
+    );
   };
 
   if (checking) return null;
 
   return (
-    <div className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}>
+    <div
+      className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}
+    >
       {/* Loading Overlay */}
       <AnimatePresence>
         {isLoading && (
@@ -178,7 +186,9 @@ export default function LoginPage() {
               className="bg-white rounded-xl shadow-2xl px-8 py-6 flex items-center gap-3"
             >
               <span className="h-5 w-5 rounded-full border-2 border-gray-300 border-t-transparent animate-spin" />
-              <span className="text-sm font-medium text-gray-700">Signing in…</span>
+              <span className="text-sm font-medium text-gray-700">
+                Signing in…
+              </span>
             </motion.div>
           </motion.div>
         )}
@@ -324,29 +334,29 @@ export default function LoginPage() {
               </motion.button>
             </form>
             <p className="text-sm text-gray-600">
-  Don’t have an account?{" "}
-  <button
-    type="button"
-    onClick={() => router.push("/account_creation")}
-    className="text-[#181918] font-medium hover:text-[#ffba20] transition-colors"
-  >
-    Sign Up
-  </button>
-</p>
-<button
-  type="button"
-  onClick={() => router.push("/reset")}
-  className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mb-1"
->
-  Forgot password?
-</button>
-<button
-  type="button"
-  onClick={() => setShowPrivacy(true)}
-  className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mt-2"
->
-  Privacy Policy
-</button>
+              Don’t have an account?{" "}
+              <button
+                type="button"
+                onClick={() => router.push("/account_creation")}
+                className="text-[#181918] font-medium hover:text-[#ffba20] transition-colors"
+              >
+                Sign Up
+              </button>
+            </p>
+            <button
+              type="button"
+              onClick={() => router.push("/reset")}
+              className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mb-1"
+            >
+              Forgot password?
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPrivacy(true)}
+              className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mt-2"
+            >
+              Privacy Policy
+            </button>
           </div>
           <Image
             src={splashImage}
@@ -375,21 +385,45 @@ export default function LoginPage() {
                   aria-label="Close"
                 >
                   <span className="sr-only">Close</span>
-                  <svg width={20} height={20} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  <svg
+                    width={20}
+                    height={20}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
                   </svg>
                 </button>
-                <h2 className="text-2xl font-bold mb-2 text-[#181918]">Privacy Policy</h2>
+                <h2 className="text-2xl font-bold mb-2 text-[#181918]">
+                  Privacy Policy
+                </h2>
                 <div className="text-gray-700 text-sm leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto pr-1">
                   <p>
-                    <b>UniAsia Hardware & Electrical Marketing Corp</b> values your privacy.
-                    We collect only the necessary information (such as email and password) to authenticate your account and provide access to our services.
+                    <b>UniAsia Hardware & Electrical Marketing Corp</b> values
+                    your privacy. We collect only the necessary information
+                    (such as email and password) to authenticate your account
+                    and provide access to our services.
                   </p>
                   <p>
-                    Your credentials are never shared or sold. We may use your email to communicate important account information or security alerts.
+                    Your credentials are never shared or sold. We may use your
+                    email to communicate important account information or
+                    security alerts.
                   </p>
                   <p>
-                    For support or more details, contact <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">support@uniasia.com</a>.
+                    For support or more details, contact{" "}
+                    <a
+                      href="mailto:support@uniasia.com"
+                      className="underline text-[#ffba20]"
+                    >
+                      support@uniasia.com
+                    </a>
+                    .
                   </p>
                   <p className="mt-2 text-xs text-gray-400">
                     Last updated: September 2025
