@@ -28,7 +28,7 @@ export default function RootLayout({
         <MobileGate />
 
         {/* ✅ mount globally so it’s on every page */}
-        <NotificationBell />
+        {/* <NotificationBell /> */}
 
         {children}
 
