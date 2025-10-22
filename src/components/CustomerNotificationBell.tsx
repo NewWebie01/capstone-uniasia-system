@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { BellRing, CheckCheck, Loader2, Clipboard, Link as LinkIcon } from "lucide-react";
+import { BellRing, CheckCheck, Loader2, Clipboard } from "lucide-react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 import {
@@ -19,10 +19,9 @@ import {
 type SupabaseChannelState = "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
 const MAX_ITEMS = 5;
 const SEEN_KEY_BASE = "customer-notifs-seen-v1";
-const RT_POLL_MS = 15000; // fallback poll
-const RT_RETRY_MS = 4000;  // quick retry
+const RT_POLL_MS = 15000;
+const RT_RETRY_MS = 4000;
 
-// tiny silent wav so browsers allow play() after any user interaction
 const PLAY_SILENT_WAV =
   "data:audio/wav;base64,UklGRlQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAABAAAAA=";
 
@@ -48,15 +47,12 @@ type NotificationRow = {
   title?: string | null;
   message?: string | null;
   created_at?: string | null;
-  updated_at?: string | null; // optional in DB
+  updated_at?: string | null;
 
   recipient_email?: string | null;
   recipient_name?: string | null;
 
-  href?: string | null;
-  order_id?: string | null;
   transaction_code?: string | null;
-  customer_id?: string | null;
 
   actor_email?: string | null;
   actor_role?: string | null;
@@ -92,7 +88,6 @@ function timeAgo(iso?: string | null) {
   return `${days}d ago`;
 }
 
-/** Allow only customer-facing types; optionally exclude self-authored */
 function isAllowedNotification(n: NotificationRow, currentUserEmail?: string | null) {
   const typeOk = !!n.type && (ADMIN_EVENT_TYPES as readonly string[]).includes(n.type);
   if (!typeOk) return false;
@@ -130,13 +125,11 @@ export default function CustomerNotificationBell() {
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
   const retryTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Allowed set (fast lookups)
   const allowedTypeSet = useMemo(
     () => new Set<string>(ADMIN_EVENT_TYPES as unknown as string[]),
     []
   );
 
-  // Compute a version key so UPDATEs with changed content also toast
   const getVersion = (row: NotificationRow) =>
     (row.updated_at && new Date(row.updated_at).toISOString()) ||
     `${row.title ?? ""}|${row.message ?? ""}|${row.type ?? ""}`;
@@ -147,12 +140,13 @@ export default function CustomerNotificationBell() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      const email = user?.email || null;
+      const email = user?.email ? user.email.toLowerCase() : null; // ✅ force lowercase
       const name = (user?.user_metadata?.name as string) || email || null;
       setUserEmail(email);
       emailRef.current = email;
       setUserName(name);
-      setSeenKey(`${SEEN_KEY_BASE}:${email || "guest"}`);
+      setSeenKey(`${SEEN_KEY_BASE}:${email || "guest"}`); // store key per lowercased email
+      console.log("[bell] userEmail key:", email);
     })();
   }, []);
 
@@ -160,29 +154,34 @@ export default function CustomerNotificationBell() {
     emailRef.current = userEmail;
   }, [userEmail]);
 
-  /* ---------------------- Seen tracking (local) ----------------------- */
-  const getSeenMap = () => {
+  // Refresh when window/tab regains focus — code-only UI robustness
+  useEffect(() => {
+    const onFocus = () => fetchScoped(emailRef.current);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ---------------------- Seen tracking ----------------------- */
+  const [seenMap, setSeenMapState] = useState<Record<string | number, boolean>>({});
+
+  // Load seen map whenever the key (i.e., user) changes
+  useEffect(() => {
     try {
       const raw = localStorage.getItem(seenKey);
-      return raw ? (JSON.parse(raw) as Record<string | number, boolean>) : {};
+      setSeenMapState(raw ? (JSON.parse(raw) as Record<string | number, boolean>) : {});
     } catch {
-      return {};
+      setSeenMapState({});
     }
-  };
+  }, [seenKey]);
+
+  // Helper to persist + update state
   const setSeenMap = (m: Record<string | number, boolean>) => {
     try {
       localStorage.setItem(seenKey, JSON.stringify(m));
     } catch {}
+    setSeenMapState(m);
   };
-
-  const seenMap = useMemo(() => {
-    try {
-      const raw = localStorage.getItem(seenKey);
-      return raw ? (JSON.parse(raw) as Record<string | number, boolean>) : {};
-    } catch {
-      return {};
-    }
-  }, [seenKey]);
 
   const unseenCount = useMemo(
     () => list.reduce((acc, n) => (seenMap[n.id] ? acc : acc + 1), 0),
@@ -190,7 +189,7 @@ export default function CustomerNotificationBell() {
   );
   useEffect(() => setUnseen(unseenCount), [unseenCount]);
 
-  /* --------------------------- Initial fetch -------------------------- */
+  /* --------------------------- Fetch -------------------------- */
   async function fetchScoped(currentUserEmail?: string | null) {
     setLoading(true);
     try {
@@ -200,13 +199,16 @@ export default function CustomerNotificationBell() {
         return;
       }
 
+      const key = currentUserEmail.toLowerCase(); // ✅ lower for equality filter
+      console.log("[bell] fetch key:", key);
+
       const { data, error } = await supabase
         .from("customer_notifications")
         .select("*")
-        .eq("recipient_email", currentUserEmail)
+        .eq("recipient_email", key) // ✅ match lowercase
         .order("created_at", { ascending: false })
         .limit(200)
-        .neq("actor_email", currentUserEmail); // don't show self-authored
+        .neq("actor_email", key); // ✅ avoid self notifs using same key
 
       if (error) {
         console.groupCollapsed("customer_notifications fetch error");
@@ -229,10 +231,9 @@ export default function CustomerNotificationBell() {
       }
 
       const rows = (data as NotificationRow[]).filter(
-        (n) => !!n.type && allowedTypeSet.has(n.type!) && isAllowedNotification(n, currentUserEmail)
+        (n) => !!n.type && allowedTypeSet.has(n.type!) && isAllowedNotification(n, key)
       );
 
-      // Seed dedupe maps
       for (const r of rows) {
         seenIds.current.add(r.id);
         versionsRef.current.set(r.id, getVersion(r));
@@ -298,27 +299,20 @@ export default function CustomerNotificationBell() {
 
   const handleRtPayload = (row: NotificationRow) => {
     if (!row?.recipient_email || !emailRef.current) return;
-    if (row.recipient_email.toLowerCase() !== emailRef.current.toLowerCase()) return;
+    if (row.recipient_email.toLowerCase() !== emailRef.current.toLowerCase()) return; // ✅
     if (!row?.type || !allowedTypeSet.has(row.type)) return;
     if (!isAllowedNotification(row, emailRef.current)) return;
 
     const verNext = getVersion(row);
     const hasId = seenIds.current.has(row.id);
     const verPrev = versionsRef.current.get(row.id);
-
-    // Accept if brand new ID or same ID but content changed
     const isNewId = !hasId;
     const changed = hasId && verPrev !== verNext;
     if (!isNewId && !changed) return;
 
     seenIds.current.add(row.id);
     versionsRef.current.set(row.id, verNext);
-
-    setList((prev) => {
-      const next = [row, ...prev.filter((x) => x.id !== row.id)];
-      return next.slice(0, MAX_ITEMS);
-    });
-
+    setList((prev) => [row, ...prev.filter((x) => x.id !== row.id)].slice(0, MAX_ITEMS));
     showToast(row);
   };
 
@@ -326,9 +320,12 @@ export default function CustomerNotificationBell() {
     teardownChannel();
     rtHealthyRef.current = false;
 
-    const filter = `recipient_email=eq.${email}`;
-    const channel = supabase.channel(`cust-notifs:${email}`, {
-      config: { broadcast: { self: false }, presence: { key: email } },
+    const key = email.toLowerCase(); // ✅ lower for channel filter & presence key
+    console.log("[bell] RT subscribe key:", key);
+
+    const filter = `recipient_email=eq.${key}`;
+    const channel = supabase.channel(`cust-notifs:${key}`, {
+      config: { broadcast: { self: false }, presence: { key } },
     });
 
     channel.on(
@@ -362,7 +359,6 @@ export default function CustomerNotificationBell() {
     channelRef.current = channel;
   };
 
-  // Kick off realtime once we have a user email
   useEffect(() => {
     clearTimers();
     if (!userEmail) {
@@ -380,74 +376,30 @@ export default function CustomerNotificationBell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEmail]);
 
-  // Refetch on going online or tab visible
+  // Extra-safe global click-away using capturing pointerdown
   useEffect(() => {
-    const onOnline = () => fetchScoped(emailRef.current);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") fetchScoped(emailRef.current);
-    };
-    window.addEventListener("online", onOnline);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.removeEventListener("online", onOnline);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, []);
-
-  /* ---------------------- Click-away / ESC close ---------------------- */
-  useEffect(() => {
-    const onClick = (e: MouseEvent) => {
+    const handler = (e: PointerEvent) => {
       if (!open) return;
       const el = rootRef.current;
       if (el && !el.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
+    const opts: AddEventListenerOptions = { capture: true };
+    document.addEventListener("pointerdown", handler, opts);
+    return () => document.removeEventListener("pointerdown", handler, opts);
   }, [open]);
 
-  /* ----------------------------- Actions ----------------------------- */
-  const getSeen = () => getSeenMap();
-  const markAllRead = () => {
-    const seen = { ...getSeen() };
-    for (const n of list) seen[n.id] = true;
-    setSeenMap(seen);
-    setUnseen(0);
-  };
-  const markOneRead = (id: string | number) => {
-    const seen = { ...getSeen() };
-    if (!seen[id]) {
-      seen[id] = true;
-      setSeenMap(seen);
-      setUnseen((u) => Math.max(0, u - 1));
-    }
-  };
-  const toggle = () => setOpen((v) => !v);
-  const openDetails = (n: NotificationRow) => {
-    setSelected(n);
-    setDetailOpen(true);
-    markOneRead(n.id);
-    // No routing here by design
-  };
-
-  /* ------------------------------- UI -------------------------------- */
+  /* ----------------------------- UI ----------------------------- */
   return (
     <>
-      {/* preload tiny audio */}
       <audio ref={ringRef} preload="auto" src={PLAY_SILENT_WAV} />
 
       <div className="relative" ref={rootRef}>
         <button
-          onClick={toggle}
+          onClick={() => setOpen((v) => !v)}
           className="relative rounded-full p-2 bg-white/90 shadow hover:shadow-md transition focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-400"
           title="Notifications"
           aria-label="Notifications"
+          aria-expanded={open}
         >
           <BellRing className="w-5 h-5 text-gray-800" />
           {unseen > 0 && (
@@ -457,17 +409,40 @@ export default function CustomerNotificationBell() {
           )}
         </button>
 
+        {/* Backdrop to guarantee click-away */}
+        {open && (
+          <div
+            className="fixed inset-0 z-40 cursor-default"
+            onClick={() => setOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+
         {open && (
           <div className="absolute right-0 mt-2 w-80 max-h-[70vh] overflow-y-auto rounded-xl bg-white shadow-2xl border border-gray-100 z-50">
             <div className="sticky top-0 flex items-center justify-between px-3 py-2 bg-white/90 backdrop-blur border-b">
               <div className="font-semibold text-sm">Notifications</div>
-              <button
-                onClick={markAllRead}
-                className="inline-flex items-center gap-1 text-[12px] text-gray-600 hover:text-gray-900"
-              >
-                <CheckCheck className="w-4 h-4" />
-                Mark all read
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fetchScoped(emailRef.current)}
+                  className="inline-flex items-center gap-1 text-[12px] text-gray-600 hover:text-gray-900"
+                  title="Refresh"
+                >
+                  Refresh
+                </button>
+                <button
+                  onClick={() => {
+                    const next: Record<string | number, boolean> = { ...seenMap };
+                    for (const n of list) next[n.id] = true;
+                    setSeenMap(next);
+                    setUnseen(0);
+                  }}
+                  className="inline-flex items-center gap-1 text-[12px] text-gray-600 hover:text-gray-900"
+                >
+                  <CheckCheck className="w-4 h-4" />
+                  Mark all read
+                </button>
+              </div>
             </div>
 
             {loading ? (
@@ -476,9 +451,7 @@ export default function CustomerNotificationBell() {
                 Loading…
               </div>
             ) : list.length === 0 ? (
-              <div className="p-6 text-center text-gray-500 text-sm">
-                No notifications yet.
-              </div>
+              <div className="p-6 text-center text-gray-500 text-sm">No notifications yet.</div>
             ) : (
               <ul className="divide-y">
                 {list.map((n) => {
@@ -486,7 +459,15 @@ export default function CustomerNotificationBell() {
                   return (
                     <li
                       key={String(n.id)}
-                      onClick={() => openDetails(n)}
+                      onClick={() => {
+                        setSelected(n);
+                        setDetailOpen(true);
+                        if (!seenMap[n.id]) {
+                          const next = { ...seenMap, [n.id]: true };
+                          setSeenMap(next);
+                          setUnseen((u) => Math.max(0, u - 1));
+                        }
+                      }}
                       className={`px-3 py-3 hover:bg-gray-50 cursor-pointer ${
                         !isSeen ? "bg-yellow-50/60" : ""
                       }`}
@@ -506,8 +487,11 @@ export default function CustomerNotificationBell() {
                               {n.message}
                             </div>
                           )}
-                          <div className="text-[11px] text-gray-400 mt-1">
-                            {n.created_at ? formatPH(n.created_at) : timeAgo(n.created_at)}
+                          <div
+                            className="text-[11px] text-gray-400 mt-1"
+                            title={n.created_at ? formatPH(n.created_at) : ""}
+                          >
+                            {n.created_at ? timeAgo(n.created_at) : ""}
                           </div>
                         </div>
                       </div>
@@ -520,15 +504,15 @@ export default function CustomerNotificationBell() {
         )}
       </div>
 
-      {/* Details Modal (no routing) */}
+      {/* Details Modal (no routing, no Order ID/Link rows) */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{selected?.title || selected?.type || "Notification"}</DialogTitle>
             <DialogDescription>
-              {selected?.created_at ? (
+              {selected?.created_at && (
                 <span className="text-xs text-gray-500">{formatPH(selected.created_at)}</span>
-              ) : null}
+              )}
             </DialogDescription>
           </DialogHeader>
 
@@ -552,31 +536,6 @@ export default function CustomerNotificationBell() {
                       className="p-1 rounded hover:bg-gray-200"
                     >
                       <Clipboard className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {selected?.order_id && (
-                <div className="col-span-2 flex items-center justify-between rounded-md bg-gray-50 p-2">
-                  <span className="text-gray-600">Order ID:</span>
-                  <code className="text-gray-900">{selected.order_id}</code>
-                </div>
-              )}
-
-              {selected?.href && (
-                <div className="col-span-2 flex items-center justify-between rounded-md bg-gray-50 p-2">
-                  <span className="text-gray-600">Link:</span>
-                  <div className="flex items-center gap-2">
-                    <code className="text-gray-900 line-clamp-1 max-w-[200px]">
-                      {selected.href}
-                    </code>
-                    <button
-                      title="Copy link"
-                      onClick={() => selected?.href && navigator.clipboard.writeText(selected.href)}
-                      className="p-1 rounded hover:bg-gray-200"
-                    >
-                      <LinkIcon className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
