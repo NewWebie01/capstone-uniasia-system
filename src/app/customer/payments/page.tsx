@@ -707,10 +707,11 @@ const equalizedPerTerm = useMemo(() => {
   return round2(remainingBalance / remainingTerms);
 }, [isCredit, selectedPack, remainingTerms, remainingBalance]);
 
-// 5) Build the *display* rows for the modal using the equalized amounts.
+// 5) Build the *display* rows for the modal using equalized remaining amounts.
 //    - Keep original "Paid" rows as-is.
-//    - Replace all remaining unpaid rows with equal amounts;
-//      last unpaid row gets the rounding difference so the sum equals the balance.
+//    - For each UNPAID row, set its remaining (due - paid) to the same target.
+//      i.e., amount_due = amount_paid + targetRemainingPerRow.
+//      The last row carries the rounding remainder so the sum equals Remaining Balance.
 const breakdownRows = useMemo<InstallmentRow[]>(() => {
   if (!selectedPack || !isCredit) return installments;
 
@@ -724,7 +725,7 @@ const breakdownRows = useMemo<InstallmentRow[]>(() => {
         order_id: String(selectedPack.order.id),
         term_no: nextNo,
         due_date: todayLocalISO(),
-        amount_due: remainingBalance,
+        amount_due: remainingBalance, // whole leftover as one term
         amount_paid: 0,
         status: "pending",
       },
@@ -733,36 +734,47 @@ const breakdownRows = useMemo<InstallmentRow[]>(() => {
 
   if (remainingTerms <= 0) return installments;
 
-  // Split equally across unpaid rows.
-  const unpaidCount = unpaidInstallments.length;
-  const amounts = new Array(unpaidCount).fill(equalizedPerTerm);
+  // Equalize the REMAINING across unpaid rows.
+  const unpaidRows = installments.filter(
+    (r) => (r.status || "").toLowerCase() !== "paid"
+  );
+  const unpaidCount = unpaidRows.length;
 
-  // Fix rounding on last unpaid row so the sum is exact.
-  const sumFirst = round2(equalizedPerTerm * (unpaidCount - 1));
-  const lastVal = round2(remainingBalance - sumFirst);
-  if (unpaidCount > 0) amounts[unpaidCount - 1] = lastVal;
+  // Equal remaining per each unpaid row
+  const perRemaining = round2(remainingBalance / unpaidCount);
 
-  // Replace amounts for unpaid rows in order.
+  // Remainder goes to the last row to make the sum exact
+  const sumFirst = round2(perRemaining * (unpaidCount - 1));
+  const lastRemaining = round2(remainingBalance - sumFirst);
+
+  // Build targets array of "remaining" values per unpaid row
+  const targets = [
+    ...Array(Math.max(0, unpaidCount - 1)).fill(perRemaining),
+    lastRemaining,
+  ];
+
+  // Replace amount_due for unpaid rows so that (due - paid) == target
   let i = 0;
   return installments.map((row) => {
-    const due = round2(Number(row.amount_due || 0));
+    const due  = round2(Number(row.amount_due || 0));
     const paid = round2(Number(row.amount_paid || 0));
     const isPaid = paid + EPS >= due;
 
     if (isPaid) return row; // keep paid rows untouched
-    const nextAmt = amounts[i++];
-    return { ...row, amount_due: nextAmt };
+
+    const targetRemain = targets[i++] ?? 0;     // equal remaining for this row
+    const newDue = round2(paid + targetRemain); // ensure (newDue - paid) == target
+    return { ...row, amount_due: newDue };
   });
 }, [
   installments,
-  unpaidInstallments.length,
-  equalizedPerTerm,
-  remainingTerms,
-  remainingBalance,
   isCredit,
   selectedPack?.order?.id,
   allTermsPaid,
+  remainingTerms,
+  remainingBalance,
 ]);
+
 
 // 6) Easy helpers driven by the equalized rows.
 const equalizedUnpaidAmounts = useMemo(() => {
