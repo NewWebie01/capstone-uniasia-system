@@ -1679,18 +1679,25 @@ export default function CustomerInventoryPage() {
                 {/* Contact Person (editable, REQUIRED) */}
                 <input
                   placeholder="Contact Person (required)"
+                  maxLength={30}
+                  pattern="[A-Za-z\s]*"
+                  title="Letters only, maximum 30 characters"
                   className={`border px-3 py-2 rounded ${
                     !customerInfo.contact_person?.trim()
                       ? "border-red-400 focus:ring-red-500"
                       : ""
                   }`}
                   value={customerInfo.contact_person}
-                  onChange={(e) =>
-                    setCustomerInfo({
-                      ...customerInfo,
-                      contact_person: e.target.value,
-                    })
-                  }
+                  onChange={(e) => {
+                    // allow letters and spaces only, enforce 30 chars
+                    const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
+                    if (value.length <= 30) {
+                      setCustomerInfo({
+                        ...customerInfo,
+                        contact_person: value,
+                      });
+                    }
+                  }}
                 />
 
                 {/* Address pickers */}
@@ -1781,15 +1788,24 @@ export default function CustomerInventoryPage() {
 
                 <input
                   placeholder="House Number & Street Name"
+                  maxLength={30}
+                  title="Maximum 30 characters only"
                   className="border px-3 py-2 rounded col-span-2"
                   value={houseStreet}
-                  onChange={(e) => setHouseStreet(e.target.value)}
+                  onChange={(e) => {
+                    if (e.target.value.length <= 30) {
+                      setHouseStreet(e.target.value);
+                    }
+                  }}
                 />
                 <input
                   placeholder="Landmark"
+                  maxLength={30}
+                  title="Maximum 30 characters only"
                   className="border px-3 py-2 rounded col-span-2"
                   value={customerInfo.landmark || ""}
                   onChange={(e) =>
+                    e.target.value.length <= 30 &&
                     setCustomerInfo({
                       ...customerInfo,
                       landmark: e.target.value,
