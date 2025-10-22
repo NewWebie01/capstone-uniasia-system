@@ -110,7 +110,7 @@ function toPHDateOnlyISO(date: Date) {
 function formatPHDate(d?: string | Date | null) {
   if (!d) return "—";
   const dt = typeof d === "string" ? new Date(d) : d;
-  return dt.toLocaleString("en-PH", {
+  return new Intl.DateTimeFormat("en-PH", {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -118,7 +118,7 @@ function formatPHDate(d?: string | Date | null) {
     minute: "2-digit",
     hour12: true,
     timeZone: "Asia/Manila",
-  });
+  }).format(dt);
 }
 
 function kindMeta(type?: string) {
@@ -592,19 +592,39 @@ export default function NotificationBell() {
     await router.push("/sales");
   };
 
+  /* ---------- Close modal on Esc ---------- */
+  useEffect(() => {
+    if (!isModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsModalOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isModalOpen]);
+
   /* ============================== UI ============================== */
   const renderNotifItem = (n: NotificationRow) => {
     const meta = kindMeta(n.type);
+    const unread = !n.is_read;
+
+    // Blue scheme for "new"; lighter blue when read
+    const cardClass = unread
+      ? "bg-blue-50 hover:bg-blue-100 text-blue-900 border-blue-300"
+      : "bg-blue-50/50 hover:bg-blue-50 text-blue-800 border-blue-100";
+
+    const badgeClass = unread
+      ? "bg-blue-100 text-blue-800 ring-1 ring-blue-200"
+      : "bg-blue-50 text-blue-700 ring-1 ring-blue-100";
+
     return (
       <li
         key={n.id}
         onClick={() => handleClickNotification(n)}
         className={[
           "border rounded p-3 cursor-pointer transition-colors",
-          meta.cardBorderClass,
-          n.is_read
-            ? "bg-white hover:bg-gray-50 text-gray-900"
-            : "bg-yellow-50 hover:bg-yellow-100 text-yellow-900 border-yellow-200",
+          "border-l-4",
+          "border-blue-400",
+          cardClass,
         ].join(" ")}
         title={
           n.type.toLowerCase().startsWith("order")
@@ -622,12 +642,10 @@ export default function NotificationBell() {
           <span
             className={[
               "inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full",
-              n.is_read
-                ? meta.badgeClass
-                : "bg-yellow-100 text-yellow-800 ring-1 ring-yellow-200",
+              badgeClass,
             ].join(" ")}
           >
-            <span>{meta.icon}</span>
+            <span>🔔</span>
             <span className="text-inherit">{meta.label}</span>
           </span>
         </div>
@@ -636,7 +654,7 @@ export default function NotificationBell() {
         <div
           className={[
             "text-sm",
-            n.is_read ? "text-gray-700" : "text-yellow-900 font-medium",
+            unread ? "text-blue-900" : "text-blue-800",
           ].join(" ")}
         >
           {n.message}
@@ -644,7 +662,7 @@ export default function NotificationBell() {
         <div
           className={[
             "text-xs mt-1",
-            n.is_read ? "text-gray-400" : "text-yellow-700",
+            unread ? "text-blue-700" : "text-blue-600",
           ].join(" ")}
         >
           {formatPHDate(n.created_at)}
@@ -659,7 +677,7 @@ export default function NotificationBell() {
       <div
         className="fixed top-16 right-12 z-50 bg-white shadow-lg rounded-full p-3 cursor-pointer transition-transform hover:scale-110"
         title="Notifications"
-        onClick={openModal}
+        onClick={() => setIsModalOpen(true)}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
@@ -674,10 +692,18 @@ export default function NotificationBell() {
         )}
       </div>
 
-      {/* Main Notifications Modal */}
+      {/* Main Notifications Modal (click outside + Esc to close) */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-lg p-6 w-full max-w-xl shadow-lg max-h-[90vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg p-6 w-full max-w-xl shadow-lg max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-semibold">Notifications</h2>
               <div className="flex gap-2">
@@ -787,19 +813,16 @@ export default function NotificationBell() {
                     <div className="text-xs text-gray-500">Date Created</div>
                     <div className="font-medium">
                       {orderModalData.date_created
-                        ? new Date(orderModalData.date_created).toLocaleString(
-                            "en-PH",
-                            {
-                              timeZone: "Asia/Manila",
-                              year: "numeric",
-                              month: "short",
-                              day: "2-digit",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              second: "2-digit",
-                              hour12: true,
-                            }
-                          )
+                        ? new Intl.DateTimeFormat("en-PH", {
+                            timeZone: "Asia/Manila",
+                            year: "numeric",
+                            month: "short",
+                            day: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                            hour12: true,
+                          }).format(new Date(orderModalData.date_created))
                         : "—"}
                     </div>
                   </div>
