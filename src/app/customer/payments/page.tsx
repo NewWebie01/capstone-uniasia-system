@@ -353,8 +353,8 @@ export default function CustomerPaymentsPage() {
     };
   }
 
-  /* Txn options */
-  const txnOptions = useMemo(() => {
+  /* Txn options (completed orders only) */
+  const rawTxnOptions = useMemo(() => {
     const out: { code: string; order: OrderRow; customerId: string }[] = [];
     for (const c of txns) {
       const code = c.code ?? "";
@@ -395,25 +395,33 @@ export default function CustomerPaymentsPage() {
     return m;
   }, [paymentsByOrder]);
 
-  // Show any TXN with a remaining balance
-  const unpaidTxnOptions = useMemo(() => {
-    const rows = txnOptions.map(({ order, customerId, code }) => {
+  /** Enriched unpaid TXN options with fee; options with fee<=0 are disabled in the UI */
+  type TxnOption = {
+    code: string;
+    order: OrderRow;
+    customerId: string;
+    balance: number;
+    fee: number;
+  };
+
+  const unpaidTxnOptions: TxnOption[] = useMemo(() => {
+    const rows = rawTxnOptions.map(({ order, customerId, code }) => {
       const orderId = String(order.id);
       const fee = shippingFees[orderId] ?? 0;
       const totals = computeFromOrder(order, fee);
       const paid = round2(effectivePaidTotalByOrder.get(orderId) || 0);
       const balance = Math.max(round2(totals.finalGrandTotal - paid), 0);
-      return { code, order, customerId, balance };
+      return { code, order, customerId, balance, fee };
     });
     return rows
       .filter((r) => r.balance > 0.01)
       .sort((a, b) => b.balance - a.balance);
-  }, [txnOptions, effectivePaidTotalByOrder, shippingFees]);
+  }, [rawTxnOptions, effectivePaidTotalByOrder, shippingFees]);
 
   /* ----------------------------- Realtime installments ----------------------------- */
   useEffect(() => {
     // Subscribe for all visible order IDs
-    const orderIds = txnOptions.map(({ order }) => String(order.id));
+    const orderIds = rawTxnOptions.map(({ order }) => String(order.id));
     if (!orderIds.length) return;
 
     const filter = `order_id=in.(${inList(orderIds)})`;
@@ -426,11 +434,10 @@ export default function CustomerPaymentsPage() {
         const changedOrderId = String(
           ((payload.new as any)?.order_id ??
             (payload.old as any)?.order_id ??
-            "") ||
-            ""
+            "") || ""
         );
 
-        const currentOrderId = txnOptions.find(
+        const currentOrderId = rawTxnOptions.find(
           (t) => t.code === selectedTxnCode
         )?.order?.id;
 
@@ -457,21 +464,25 @@ export default function CustomerPaymentsPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [txnOptions, selectedTxnCode]);
+  }, [rawTxnOptions, selectedTxnCode]);
 
-  /* ---------- Keep selection valid ---------- */
+  /* ---------- Keep selection valid (and reject TXNs without shipping fee) ---------- */
   useEffect(() => {
-    if (
-      selectedTxnCode &&
-      !unpaidTxnOptions.some((t) => t.code === selectedTxnCode)
-    ) {
+    if (!selectedTxnCode) return;
+    const opt = unpaidTxnOptions.find((t) => t.code === selectedTxnCode);
+    if (!opt) {
+      setSelectedTxnCode("");
+      return;
+    }
+    if ((opt.fee ?? 0) <= 0) {
+      // fee removed / not set yet — clear selection
       setSelectedTxnCode("");
     }
   }, [selectedTxnCode, unpaidTxnOptions]);
 
   const selectedPack = useMemo(() => {
     if (!selectedTxnCode) return null;
-    const hit = txnOptions.find((t) => t.code === selectedTxnCode);
+    const hit = unpaidTxnOptions.find((t) => t.code === selectedTxnCode);
     if (!hit) return null;
 
     const orderId = String(hit.order.id);
@@ -486,7 +497,7 @@ export default function CustomerPaymentsPage() {
       paid,
       balance,
     };
-  }, [selectedTxnCode, txnOptions, effectivePaidTotalByOrder, shippingFees]);
+  }, [selectedTxnCode, unpaidTxnOptions, effectivePaidTotalByOrder, shippingFees]);
 
   /* -------- Determine method from order.terms (fallback to customer) -------- */
   const termsStr = String(
@@ -777,7 +788,7 @@ export default function CustomerPaymentsPage() {
 
         await supabase.from("system_notifications").insert([
           {
-            type: "payment", // visible in your admin bell
+            type: "payment",
             title,
             message,
             order_id: orderId,
@@ -799,9 +810,7 @@ export default function CustomerPaymentsPage() {
       }
 
       toast.success(
-        ` ${
-          isCash ? "Cash" : "Cheque"
-        } payment submitted. Awaiting admin verification.`
+        ` ${isCash ? "Cash" : "Cheque"} payment submitted. Awaiting admin verification.`
       );
       setSelectedTxnCode("");
       setAmount("");
@@ -813,8 +822,7 @@ export default function CustomerPaymentsPage() {
     } catch (err: any) {
       console.error("Submit failed:", err?.message || err);
       toast.error(
-        err?.message ||
-          `Failed to submit ${isCash ? "cash" : "cheque"} payment.`
+        err?.message || `Failed to submit ${isCash ? "cash" : "cheque"} payment.`
       );
     } finally {
       setSubmitting(false);
@@ -833,8 +841,7 @@ export default function CustomerPaymentsPage() {
   );
 
   const termCount =
-    selectedPack?.order?.per_term_amount &&
-    selectedPack?.totals?.finalGrandTotal
+    selectedPack?.order?.per_term_amount && selectedPack?.totals?.finalGrandTotal
       ? Math.round(
           selectedPack.totals.finalGrandTotal /
             selectedPack.order.per_term_amount
@@ -842,6 +849,10 @@ export default function CustomerPaymentsPage() {
       : undefined;
 
   /* ---------------------------------- UI ---------------------------------- */
+  const allTxnsWaitingForFee =
+    unpaidTxnOptions.length > 0 &&
+    unpaidTxnOptions.every((t) => (t.fee ?? 0) <= 0);
+
   return (
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
@@ -855,6 +866,15 @@ export default function CustomerPaymentsPage() {
           <b>Credit</b> customers, balances update automatically after admin
           verification.
         </p>
+
+        {/* Helpful banner if all options are waiting for shipping fee */}
+        {allTxnsWaitingForFee && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Your orders are almost ready! Please wait for the{" "}
+            <b>shipping fee</b> to be applied to your TXN before submitting a
+            payment.
+          </div>
+        )}
 
         {/* Upload / Submit Payment */}
         <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
@@ -876,13 +896,38 @@ export default function CustomerPaymentsPage() {
               <select
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 value={selectedTxnCode}
-                onChange={(e) => setSelectedTxnCode(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) {
+                    setSelectedTxnCode("");
+                    return;
+                  }
+                  const opt = unpaidTxnOptions.find((t) => t.code === val);
+                  if (!opt) {
+                    setSelectedTxnCode("");
+                    return;
+                  }
+                  if ((opt.fee ?? 0) <= 0) {
+                    toast.warning(
+                      "This TXN is waiting for a shipping fee. Please try again later."
+                    );
+                    // keep previous selection
+                    e.currentTarget.value = selectedTxnCode || "";
+                    return;
+                  }
+                  setSelectedTxnCode(val);
+                }}
                 required
               >
                 <option value="">— Choose a TXN —</option>
-                {unpaidTxnOptions.map(({ code }, i) => (
-                  <option key={`${code}-${i}`} value={code}>
+                {unpaidTxnOptions.map(({ code, fee }, i) => (
+                  <option
+                    key={`${code}-${i}`}
+                    value={code}
+                    disabled={(fee ?? 0) <= 0}
+                  >
                     {code}
+                    {(fee ?? 0) <= 0 ? " — (Waiting for shipping fee)" : ""}
                   </option>
                 ))}
               </select>
@@ -909,6 +954,7 @@ export default function CustomerPaymentsPage() {
                 </div>
               )}
             </div>
+
             {/* Amount (LOCKED) + controls */}
             <div className="col-span-1">
               <label className="text-xs text-gray-600">Amount *</label>
@@ -1037,8 +1083,8 @@ export default function CustomerPaymentsPage() {
                   {Math.floor(Number(amount) / termAmount) > 1 ? "s" : ""}.
                 </div>
               )}
-            </div>{" "}
-            {/* closes the Amount (LOCKED) + controls column */}
+            </div>
+
             {/* Cheque metadata */}
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
@@ -1051,9 +1097,7 @@ export default function CustomerPaymentsPage() {
                 maxLength={20}
                 value={chequeNumber}
                 onChange={(e) => {
-                  const digitsOnly = e.target.value
-                    .replace(/\D/g, "")
-                    .slice(0, 20);
+                  const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 20);
                   setChequeNumber(digitsOnly);
                 }}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
@@ -1143,8 +1187,7 @@ export default function CustomerPaymentsPage() {
         {selectedPack && (
           <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
             <h2 className="text-lg font-semibold mb-3">
-              Items for TXN{" "}
-              <span className="font-mono">{selectedPack.code}</span>
+              Items for TXN <span className="font-mono">{selectedPack.code}</span>
             </h2>
             <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
               <table className="w-full text-sm align-middle">
@@ -1155,21 +1198,11 @@ export default function CustomerPaymentsPage() {
                   >
                     <th className="py-2.5 px-3 text-center font-bold">QTY</th>
                     <th className="py-2.5 px-3 text-center font-bold">UNIT</th>
-                    <th className="py-2.5 px-3 text-left font-bold">
-                      ITEM DESCRIPTION
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      REMARKS
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      UNIT PRICE
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      DISCOUNT/ADD (%)
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      AMOUNT
-                    </th>
+                    <th className="py-2.5 px-3 text-left font-bold">ITEM DESCRIPTION</th>
+                    <th className="py-2.5 px-3 text-center font-bold">REMARKS</th>
+                    <th className="py-2.5 px-3 text-center font-bold">UNIT PRICE</th>
+                    <th className="py-2.5 px-3 text-center font-bold">DISCOUNT/ADD (%)</th>
+                    <th className="py-2.5 px-3 text-center font-bold">AMOUNT</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1193,12 +1226,8 @@ export default function CustomerPaymentsPage() {
                         key={idx}
                         className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
                       >
-                        <td className="py-2.5 px-3 text-center font-mono">
-                          {qty}
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono">
-                          {unit}
-                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono">{qty}</td>
+                        <td className="py-2.5 px-3 text-center font-mono">{unit}</td>
                         <td className="py-2.5 px-3">
                           <span className="font-semibold">{desc}</span>
                         </td>
@@ -1221,10 +1250,7 @@ export default function CustomerPaymentsPage() {
                   })}
                   {(selectedPack.order.order_items ?? []).length === 0 && (
                     <tr>
-                      <td
-                        colSpan={7}
-                        className="text-center py-8 text-neutral-400"
-                      >
+                      <td colSpan={7} className="text-center py-8 text-neutral-400">
                         No items found.
                       </td>
                     </tr>
@@ -1258,6 +1284,7 @@ export default function CustomerPaymentsPage() {
                         {formatCurrency(selectedPack.totals.salesTax)}
                       </td>
                     </tr>
+
                     {(selectedPack.order?.interest_percent ?? 0) > 0 && (
                       <tr>
                         <td className="font-semibold py-0.5">
@@ -1273,20 +1300,27 @@ export default function CustomerPaymentsPage() {
                         </td>
                       </tr>
                     )}
-                    <tr>
-                      <td className="font-semibold py-0.5">Shipping Fee:</td>
-                      <td className="pl-2 font-mono">
-                        {formatCurrency(selectedPack.totals.shippingFee)}
-                      </td>
-                    </tr>
+
+                    {/* Only show Shipping Fee if > 0 */}
+                    {selectedPack.totals.shippingFee > 0 && (
+                      <tr>
+                        <td className="font-semibold py-0.5">Shipping Fee:</td>
+                        <td className="pl-2 font-mono">
+                          {formatCurrency(selectedPack.totals.shippingFee)}
+                        </td>
+                      </tr>
+                    )}
+
                     <tr>
                       <td className="font-bold py-1.5">
-                        Grand Total (Incl. Shipping):
+                        Grand Total
+                        {selectedPack.totals.shippingFee > 0 ? " (Incl. Shipping)" : ""}:
                       </td>
                       <td className="pl-2 font-bold text-green-700 font-mono">
                         {formatCurrency(selectedPack.totals.finalGrandTotal)}
                       </td>
                     </tr>
+
                     {selectedPack.totals.perTerm > 0 && (
                       <tr>
                         <td className="font-semibold py-0.5">Per Term:</td>
@@ -1404,9 +1438,7 @@ export default function CustomerPaymentsPage() {
                               }).map((_, i) => (
                                 <tr
                                   key={i}
-                                  className={
-                                    i % 2 === 0 ? "bg-white" : "bg-[#fff7e5]"
-                                  }
+                                  className={i % 2 === 0 ? "bg-white" : "bg-[#fff7e5]"}
                                 >
                                   <td className="py-1.5 px-2 border-b border-gray-100 font-mono text-sm">
                                     Month {i + 1}
@@ -1473,17 +1505,12 @@ export default function CustomerPaymentsPage() {
                                 key={row.id || `${row.term_no}:${row.due_date}`}
                                 className="border-b last:border-b-0"
                               >
-                                <td className="py-1.5 px-2 font-mono">
-                                  {row.term_no}
-                                </td>
+                                <td className="py-1.5 px-2 font-mono">{row.term_no}</td>
                                 <td className="py-1.5 px-2">
-                                  {new Date(
-                                    row.due_date + "T00:00:00"
-                                  ).toLocaleDateString("en-PH", {
-                                    year: "numeric",
-                                    month: "short",
-                                    day: "2-digit",
-                                  })}
+                                  {new Date(row.due_date + "T00:00:00").toLocaleDateString(
+                                    "en-PH",
+                                    { year: "numeric", month: "short", day: "2-digit" }
+                                  )}
                                 </td>
                                 <td className="py-1.5 px-2 text-right font-mono">
                                   {formatCurrency(due)}
