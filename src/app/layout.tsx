@@ -9,9 +9,6 @@ import { Analytics } from "@vercel/analytics/next";
 import MobileGate from "@/components/MobileGate";
 import ToasterClient from "@/components/ToasterClient";
 
-// ✅ add this
-import NotificationBell from "@/components/NotificationBell";
-
 const dmSans = DM_Sans({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
@@ -25,14 +22,15 @@ export default function RootLayout({
   return (
     <html lang="en" className="relative">
       <body className={clsx(dmSans.className, "antialiased bg-[#dadada]")}>
+        {/* Blocks the UI on small screens */}
         <MobileGate />
-
-        {/* ✅ mount globally so it’s on every page */}
-        <NotificationBell />
 
         {children}
 
+        {/* Analytics can stay in the server layout */}
         <Analytics />
+
+        {/* Sonner Toaster must run on the client */}
         <ToasterClient />
       </body>
     </html>

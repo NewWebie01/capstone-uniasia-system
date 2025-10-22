@@ -1,7 +1,6 @@
 "use client";
 
 import { Sidebar } from "@/components/Sidebar";
-import NotificationBell from "@/components/NotificationBell";
 import { DM_Sans } from "next/font/google";
 import { useState } from "react";
 import { Toaster } from "sonner";
@@ -35,7 +34,7 @@ export default function DashboardLayout({
       </header>
 
       {/* Floating Notification Bell */}
-      <NotificationBell />
+      {/* <NotificationBell /> */}
 
       {/* Layout */}
       <div className="flex h-[calc(100vh-3rem)] overflow-hidden">
