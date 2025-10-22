@@ -64,10 +64,11 @@ type OrderFull = {
 };
 
 /* ----------------------------- Config ----------------------------- */
+/** Remove "order_completed" so it won't show in the bell */
 const VISIBLE_TYPES = new Set([
   "order",
   "order_created",
-  "order_completed",
+  // "order_completed", // ⬅️ intentionally hidden
   "order_approved",
   "payment",
   "payment_received",
@@ -83,7 +84,7 @@ const TYPE_PRIORITY: Record<string, number> = {
   order: 3,
   order_created: 2,
   order_approved: 2,
-  order_completed: 2,
+  // order_completed: 2, // ⬅️ intentionally hidden
   payment_received: 3,
   payment: 2,
   return_created: 3,
@@ -123,7 +124,6 @@ function kindMeta(type?: string) {
   switch ((type || "").toLowerCase()) {
     case "order":
     case "order_created":
-    case "order_completed":
     case "order_approved":
       return {
         icon: "🛒",
@@ -417,7 +417,7 @@ export default function NotificationBell() {
               description: n.message ?? undefined,
               action: {
                 label: "Review",
-                onClick: async () => router.push("/admin/accounts"),
+                onClick: async () => router.push("/account-request"),
               },
             });
           }
@@ -546,7 +546,7 @@ export default function NotificationBell() {
     }
 
     if (t === "account_request_submitted") {
-      await router.push("/admin/accounts");
+      await router.push("/account-request");
       setIsModalOpen(false);
       return;
     }
