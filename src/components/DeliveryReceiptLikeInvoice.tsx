@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 
+/* ----------------------------- Types ----------------------------- */
 export type InvoiceItem = {
   id: string;
   qty: number;
@@ -24,6 +25,7 @@ export function peso(n: number) {
   })}`;
 }
 
+/* ----------------------------- Component ----------------------------- */
 export default function DeliveryReceiptLikeInvoice({
   customer,
   initialItems,
@@ -33,12 +35,12 @@ export default function DeliveryReceiptLikeInvoice({
   customer: CustomerInfo;
   initialItems: InvoiceItem[];
   initialDate?: string;
-  initialTerms?: string; // 👈 now passed from Sales
+  initialTerms?: string;
 }) {
   const [poNo, setPoNo] = useState("");
   const [forwarder, setForwarder] = useState("");
   const [salesman, setSalesman] = useState("");
-  const [terms] = useState(initialTerms ?? "—"); // 👈 no editing, just display
+  const [terms] = useState(initialTerms ?? "—");
   const [dateStr, setDateStr] = useState(
     initialDate ?? new Date().toISOString().slice(0, 10)
   );
@@ -57,22 +59,19 @@ export default function DeliveryReceiptLikeInvoice({
         ]
   );
 
-  // --- Compute Totals ---
+  /* ----------------------------- Computations ----------------------------- */
   const subtotal = useMemo(
     () => items.reduce((sum, it) => sum + it.qty * it.unitPrice, 0),
     [items]
   );
-
   const totalDiscount = useMemo(
     () => items.reduce((sum, it) => sum + (it.discount || 0), 0),
     [items]
   );
-
   const salesTax = useMemo(
     () => (subtotal - totalDiscount) * 0.12,
     [subtotal, totalDiscount]
   );
-
   const grandTotal = useMemo(
     () => subtotal - totalDiscount + salesTax,
     [subtotal, totalDiscount, salesTax]
@@ -82,22 +81,25 @@ export default function DeliveryReceiptLikeInvoice({
     id: string,
     key: K,
     value: InvoiceItem[K]
-  ) => setItems((p) => p.map((r) => (r.id === id ? { ...r, [key]: value } : r)));
+  ) =>
+    setItems((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, [key]: value } : r))
+    );
 
+  /* ----------------------------- Render ----------------------------- */
   return (
-    <div className="bg-white text-[13px] leading-tight text-neutral-900 print:text-black">
-      <div className="text-center mb-2">
-        <h1 className="text-xl font-extrabold tracking-wide">UNIASIA</h1>
-        <div className="text-[11px] -mt-1">JASON S. TO - Proprietor</div>
-      </div>
+    <div className="bg-white text-[13px] leading-tight text-neutral-900 print:text-black border border-neutral-300 rounded-lg p-3">
+      {/* Header */}
       <div className="text-center mb-3">
-        <div className="inline-block border border-neutral-300 px-3 py-1 text-[13px] font-extrabold tracking-wide">
+        <h1 className="text-xl font-extrabold tracking-wide">UNIASIA</h1>
+        <div className="text-[11px] -mt-1">JASON S. TO – Proprietor</div>
+        <div className="inline-block border border-neutral-400 px-3 py-1 mt-2 text-[13px] font-extrabold tracking-wide">
           DELIVERY RECEIPT
         </div>
       </div>
 
-      {/* Header */}
-      <div className="grid grid-cols-2 gap-x-8 gap-y-1 mb-3">
+      {/* Customer Info */}
+      <div className="grid grid-cols-2 gap-x-8 gap-y-1 mb-3 text-sm">
         <div className="flex gap-2 items-end">
           <span className="w-28 font-semibold">CUSTOMER:</span>
           <span className="flex-1 border-b border-neutral-300">
@@ -110,10 +112,9 @@ export default function DeliveryReceiptLikeInvoice({
             type="date"
             value={dateStr}
             onChange={(e) => setDateStr(e.target.value)}
-            className="flex-1 border-b border-neutral-300 outline-none"
+            className="flex-1 border-b border-neutral-300 outline-none bg-transparent"
           />
         </div>
-
         <div className="flex gap-2 items-end">
           <span className="w-28 font-semibold">ADDRESS:</span>
           <span className="flex-1 border-b border-neutral-300">
@@ -122,17 +123,14 @@ export default function DeliveryReceiptLikeInvoice({
         </div>
         <div className="flex gap-2 items-end">
           <span className="w-28 font-semibold">TERMS:</span>
-          <span className="flex-1 border-b border-neutral-300">
-            {terms}
-          </span>
+          <span className="flex-1 border-b border-neutral-300">{terms}</span>
         </div>
-
         <div className="flex gap-2 items-end">
           <span className="w-28 font-semibold">FORWARDER:</span>
           <input
             value={forwarder}
             onChange={(e) => setForwarder(e.target.value)}
-            className="flex-1 border-b border-neutral-300 outline-none"
+            className="flex-1 border-b border-neutral-300 outline-none bg-transparent"
           />
         </div>
         <div className="flex gap-2 items-end">
@@ -140,22 +138,21 @@ export default function DeliveryReceiptLikeInvoice({
           <input
             value={poNo}
             onChange={(e) => setPoNo(e.target.value)}
-            className="flex-1 border-b border-neutral-300 outline-none"
+            className="flex-1 border-b border-neutral-300 outline-none bg-transparent"
           />
         </div>
-
         <div className="flex gap-2 items-end">
           <span className="w-28 font-semibold">SALESMAN:</span>
           <input
             value={salesman}
             onChange={(e) => setSalesman(e.target.value)}
-            className="flex-1 border-b border-neutral-300 outline-none"
+            className="flex-1 border-b border-neutral-300 outline-none bg-transparent"
           />
         </div>
       </div>
 
       {/* Table */}
-      <div className="border border-neutral-300">
+      <div className="border border-neutral-300 rounded overflow-hidden">
         <table className="w-full text-[12.5px]">
           <thead className="bg-neutral-100">
             <tr className="[&>th]:border [&>th]:border-neutral-300 [&>th]:px-2 [&>th]:py-1 text-left">
@@ -180,7 +177,7 @@ export default function DeliveryReceiptLikeInvoice({
                   <td>
                     <input
                       type="number"
-                      className="w-full text-right outline-none"
+                      className="w-full text-right outline-none bg-transparent"
                       value={r.qty}
                       onChange={(e) =>
                         updateItem(r.id, "qty", Number(e.target.value || 0))
@@ -189,14 +186,14 @@ export default function DeliveryReceiptLikeInvoice({
                   </td>
                   <td>
                     <input
-                      className="w-full outline-none"
+                      className="w-full outline-none bg-transparent"
                       value={r.unit}
                       onChange={(e) => updateItem(r.id, "unit", e.target.value)}
                     />
                   </td>
                   <td>
                     <textarea
-                      className="w-full outline-none resize-none min-h-[36px]"
+                      className="w-full outline-none resize-none min-h-[36px] bg-transparent"
                       value={r.description}
                       onChange={(e) =>
                         updateItem(r.id, "description", e.target.value)
@@ -206,7 +203,7 @@ export default function DeliveryReceiptLikeInvoice({
                   <td className="text-right">
                     <input
                       type="number"
-                      className="w-full text-right outline-none"
+                      className="w-full text-right outline-none bg-transparent"
                       value={r.unitPrice}
                       onChange={(e) =>
                         updateItem(
@@ -220,10 +217,14 @@ export default function DeliveryReceiptLikeInvoice({
                   <td className="text-right">
                     <input
                       type="number"
-                      className="w-full text-right outline-none"
+                      className="w-full text-right outline-none bg-transparent"
                       value={r.discount}
                       onChange={(e) =>
-                        updateItem(r.id, "discount", Number(e.target.value || 0))
+                        updateItem(
+                          r.id,
+                          "discount",
+                          Number(e.target.value || 0)
+                        )
                       }
                     />
                   </td>
@@ -238,21 +239,24 @@ export default function DeliveryReceiptLikeInvoice({
 
       {/* Notes + Totals */}
       <div className="grid grid-cols-2 mt-4">
-        <div className="pr-4">
-          <div className="text-[11px] leading-snug mt-2">
-            <p className="font-semibold">NOTE:</p>
-            <ol className="list-decimal list-inside space-y-1">
-              <li>
-                All goods are checked in good condition and complete after
-                received and signed.
-              </li>
-              <li>Cash advances to salesman not allowed.</li>
-              <li>All checks payable to By-Grace Trading only.</li>
-            </ol>
-          </div>
+        {/* Notes */}
+        <div className="pr-4 text-[11px] leading-snug">
+          <p className="font-semibold mb-1">NOTE:</p>
+          <ol className="list-decimal list-inside space-y-1">
+            <li>
+              All goods are checked in good condition and complete after being
+              received and signed.
+            </li>
+            <li>Cash advances to salesman not allowed.</li>
+            <li>
+              All checks payable to UNIASIA Hardware & Electrical Marketing.
+            </li>
+          </ol>
         </div>
+
+        {/* Totals */}
         <div className="pl-6">
-          <div className="w-full border border-neutral-300">
+          <div className="w-full border border-neutral-300 rounded overflow-hidden">
             <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-300">
               <span className="font-semibold">Subtotal (Before Discount)</span>
               <span className="font-bold">{peso(subtotal)}</span>
@@ -274,6 +278,7 @@ export default function DeliveryReceiptLikeInvoice({
               </span>
             </div>
           </div>
+
           <div className="text-[11px] mt-3">
             Checked and received by: ______________________________
           </div>
