@@ -9,13 +9,21 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "@/utils/eventEmitter";
 import { toast } from "sonner";
 
+/* ------------------------------------------------------------------
+   TIMEZONE CONTROL
+   - Set to "PH" to force Asia/Manila everywhere
+   - Set to "LOCAL" to use the user's computer timezone everywhere
+------------------------------------------------------------------- */
+const DISPLAY_TIMEZONE: "PH" | "LOCAL" = "PH"; // ← change to "LOCAL" if you prefer device time
+const PH_TZ = "Asia/Manila";
+
 /* ----------------------------- Types ----------------------------- */
 type NotificationRow = {
   id: string;
   type: string;
   title: string | null;
   message: string | null;
-  related_id: string | null; // order_id / payment_id / item_id / etc (for UI)
+  related_id: string | null; // order_id / payment_id / item_id / etc
   is_read: boolean;
   created_at: string;
   user_email?: string | null;
@@ -68,7 +76,7 @@ type OrderFull = {
 const VISIBLE_TYPES = new Set([
   "order",
   "order_created",
-  // "order_completed", // ⬅️ intentionally hidden
+  // "order_completed", // intentionally hidden
   "order_approved",
   "payment",
   "payment_received",
@@ -84,7 +92,6 @@ const TYPE_PRIORITY: Record<string, number> = {
   order: 3,
   order_created: 2,
   order_approved: 2,
-  // order_completed: 2, // ⬅️ intentionally hidden
   payment_received: 3,
   payment: 2,
   return_created: 3,
@@ -95,31 +102,50 @@ const TYPE_PRIORITY: Record<string, number> = {
   delivery_to_ship: 1,
 };
 
-/* ----------------------------- Helpers ----------------------------- */
-function toPHDateOnlyISO(date: Date) {
-  const ph = new Date(
-    date.toLocaleString("en-US", { timeZone: "Asia/Manila" })
-  );
-  const yyyy = ph.getFullYear();
-  const mm = String(ph.getMonth() + 1).padStart(2, "0");
-  const dd = String(ph.getDate()).padStart(2, "0");
+/* ----------------------------- Time helpers ----------------------------- */
+/** Return a Date object **interpreted** in our chosen timezone. */
+function dateInDisplayTZ(input: string | Date): Date {
+  const d = typeof input === "string" ? new Date(input) : input;
+  if (DISPLAY_TIMEZONE === "LOCAL") return new Date(d); // device local
+  // Convert to PH wall clock time by re-parsing a PH-localized string.
+  return new Date(d.toLocaleString("en-US", { timeZone: PH_TZ }));
+}
+
+/** yyyy-mm-dd for grouping ("Today / Earlier") computed in our display tz */
+function dayKey(input: string | Date) {
+  const d = dateInDisplayTZ(input);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function formatPHDate(d?: string | Date | null) {
-  if (!d) return "—";
-  const dt = typeof d === "string" ? new Date(d) : d;
-  return new Intl.DateTimeFormat("en-PH", {
+/** Pretty date-time formatter using our display tz */
+function formatDisplayDate(input?: string | Date | null) {
+  if (!input) return "—";
+  const d = typeof input === "string" ? new Date(input) : input;
+  const opts: Intl.DateTimeFormatOptions = {
     year: "numeric",
     month: "short",
     day: "2-digit",
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
-    timeZone: "Asia/Manila",
-  }).format(dt);
+    ...(DISPLAY_TIMEZONE === "PH" ? { timeZone: PH_TZ } : {}),
+  };
+  return new Intl.DateTimeFormat("en-PH", opts).format(d);
 }
 
+/** yyyy-mm-dd in display tz (used by expiring scan bounds) */
+function dateOnlyISO(input: Date) {
+  const d = dateInDisplayTZ(input);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/* ----------------------------- Other helpers ----------------------------- */
 function kindMeta(type?: string) {
   switch ((type || "").toLowerCase()) {
     case "order":
@@ -302,7 +328,7 @@ export default function NotificationBell() {
 
   const seenKeysRef = useRef<Set<string>>(new Set());
 
-  /* ---------- Load existing (filter + collapse duplicates by canonical key) ---------- */
+  /* ---------- Load existing & collapse duplicates ---------- */
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
@@ -319,11 +345,8 @@ export default function NotificationBell() {
 
           const key = canonicalKeyFromSystemRow(r);
           const existing = bucket.get(key);
-          if (!existing) {
-            bucket.set(key, r);
-          } else {
-            bucket.set(key, choosePreferred(existing, r));
-          }
+          if (!existing) bucket.set(key, r);
+          else bucket.set(key, choosePreferred(existing, r));
         }
 
         const finalRows = Array.from(bucket.values()).sort(
@@ -342,7 +365,7 @@ export default function NotificationBell() {
     })();
   }, [supabase]);
 
-  /* ---------- Realtime (filter + canonical dedupe) + toasts ---------- */
+  /* ---------- Realtime + toasts ---------- */
   useEffect(() => {
     const channel = supabase.channel("system_notifications_realtime");
     channel.on(
@@ -443,8 +466,8 @@ export default function NotificationBell() {
   /* ---------- Expiring items scanner (every 5 min) ---------- */
   useEffect(() => {
     const scan = async () => {
-      const todayPH = toPHDateOnlyISO(new Date());
-      const in7PH = toPHDateOnlyISO(
+      const todayKey = dateOnlyISO(new Date());
+      const in7Key = dateOnlyISO(
         new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
       );
 
@@ -452,8 +475,8 @@ export default function NotificationBell() {
         .from("inventory")
         .select("id, sku, product_name, quantity, unit, expiration_date")
         .not("expiration_date", "is", null)
-        .lte("expiration_date", in7PH)
-        .gte("expiration_date", todayPH);
+        .lte("expiration_date", in7Key)
+        .gte("expiration_date", todayKey);
 
       if (!data || error) return;
       const items = data as unknown as ExpiringItem[];
@@ -464,7 +487,7 @@ export default function NotificationBell() {
           title: `⏰ Expiring soon: ${item.product_name}`,
           message: `${item.product_name} (${item.sku}) • ${item.quantity} ${
             item.unit ?? ""
-          } • Exp: ${formatPHDate(item.expiration_date)}`,
+          } • Exp: ${formatDisplayDate(item.expiration_date)}`,
         });
       }
     };
@@ -481,16 +504,11 @@ export default function NotificationBell() {
   );
 
   const grouped = useMemo(() => {
-    const today = new Date().toLocaleDateString("en-PH", {
-      timeZone: "Asia/Manila",
-    });
+    const today = dayKey(new Date());
     const todayList: NotificationRow[] = [];
     const earlierList: NotificationRow[] = [];
     for (const n of notifications) {
-      const day = new Date(n.created_at).toLocaleDateString("en-PH", {
-        timeZone: "Asia/Manila",
-      });
-      (day === today ? todayList : earlierList).push(n);
+      (dayKey(n.created_at) === today ? todayList : earlierList).push(n);
     }
     return { todayList, earlierList };
   }, [notifications]);
@@ -575,24 +593,22 @@ export default function NotificationBell() {
     await router.push("/sales");
   };
 
-  /* ---------- Close notifications modal on Esc ---------- */
+  /* ---------- Close on Esc ---------- */
   useEffect(() => {
     if (!isModalOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setIsModalOpen(false);
-    };
+    const onKey = (e: KeyboardEvent) =>
+      e.key === "Escape" && setIsModalOpen(false);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isModalOpen]);
 
-  /* ---------- Close order modal on Esc (and close all) ---------- */
   useEffect(() => {
     if (!orderModalOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setOrderModalOpen(false);
         setOrderModalData(null);
-        setIsModalOpen(false); // close all modals
+        setIsModalOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -604,7 +620,6 @@ export default function NotificationBell() {
     const meta = kindMeta(n.type);
     const unread = !n.is_read;
 
-    // Unread: blue; Read: grayscale (black & white)
     const cardClass = unread
       ? "bg-blue-50 hover:bg-blue-100 text-blue-900 border-blue-300"
       : "bg-white hover:bg-gray-50 text-gray-800 border-gray-200";
@@ -658,7 +673,7 @@ export default function NotificationBell() {
         </div>
         <div className={["text-sm", msgClass].join(" ")}>{n.message}</div>
         <div className={["text-xs mt-1", timeClass].join(" ")}>
-          {formatPHDate(n.created_at)}
+          {formatDisplayDate(n.created_at)}
         </div>
       </li>
     );
@@ -685,7 +700,7 @@ export default function NotificationBell() {
         )}
       </div>
 
-      {/* Main Notifications Modal (click outside + Esc to close) */}
+      {/* Main Notifications Modal */}
       {isModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
@@ -745,12 +760,11 @@ export default function NotificationBell() {
         </div>
       )}
 
-      {/* ==================== Order Details Modal ==================== */}
+      {/* Order Details Modal */}
       {orderModalOpen && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
           onClick={() => {
-            // Click outside closes EVERYTHING
             setOrderModalOpen(false);
             setOrderModalData(null);
             setIsModalOpen(false);
@@ -758,7 +772,7 @@ export default function NotificationBell() {
         >
           <div
             className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-auto shadow-2xl"
-            onClick={(e) => e.stopPropagation()} // Prevent backdrop close when clicking inside
+            onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
           >
@@ -819,16 +833,7 @@ export default function NotificationBell() {
                     <div className="text-xs text-gray-500">Date Created</div>
                     <div className="font-medium">
                       {orderModalData.date_created
-                        ? new Intl.DateTimeFormat("en-PH", {
-                            timeZone: "Asia/Manila",
-                            year: "numeric",
-                            month: "short",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            second: "2-digit",
-                            hour12: true,
-                          }).format(new Date(orderModalData.date_created))
+                        ? formatDisplayDate(orderModalData.date_created)
                         : "—"}
                     </div>
                   </div>
