@@ -267,7 +267,9 @@ export default function TruckDeliveryPage() {
 
     if (deliveriesList.length === 0) return;
 
-    const ids = deliveriesList.map((d) => d.id);
+    const ids = deliveriesList.map((d) => String(d.id));
+    if (ids.length === 0) return;
+
     const { data: oData, error: oErr } = await supabase
       .from("orders")
       .select(
@@ -278,7 +280,7 @@ export default function TruckDeliveryPage() {
     truck_delivery_id,
     salesman,
     terms,
-    accepted_at,
+    date_created,
     customer:customer_id (
       id,
       name,
@@ -303,18 +305,18 @@ export default function TruckDeliveryPage() {
   `
       )
       .in("truck_delivery_id", ids)
-      .order("accepted_at", { ascending: false }); // instead of created_at
+      .order("date_created", { ascending: false }); // ✅ valid column
 
     if (oErr) {
-      console.error("Fetch assigned orders error:", oErr);
+      console.error("Fetch assigned orders error:", oErr.message ?? oErr);
       return;
     }
 
     const fetchedOrders = (oData as any[]) ?? [];
 
-    const byDelivery = new Map<number, OrderWithCustomer[]>();
-    fetchedOrders.forEach((oRaw) => {
-      // supabase returns nested object customer: { ... } - keep as-is
+    const byDelivery = new Map<string, OrderWithCustomer[]>();
+
+    for (const oRaw of fetchedOrders) {
       const o: OrderWithCustomer = {
         id: oRaw.id,
         total_amount: oRaw.total_amount,
@@ -325,17 +327,16 @@ export default function TruckDeliveryPage() {
         customer: oRaw.customer ?? null,
         order_items: oRaw.order_items ?? [],
       };
-      if (!o.truck_delivery_id) return;
-      if (!byDelivery.has(o.truck_delivery_id)) {
-        byDelivery.set(o.truck_delivery_id, []);
-      }
-      byDelivery.get(o.truck_delivery_id)!.push(o);
-    });
+      if (!o.truck_delivery_id) continue;
+      const key = String(o.truck_delivery_id);
+      if (!byDelivery.has(key)) byDelivery.set(key, []);
+      byDelivery.get(key)!.push(o);
+    }
 
     setDeliveries((prev) =>
       prev.map((d) => ({
         ...d,
-        _orders: byDelivery.get(d.id) || [],
+        _orders: byDelivery.get(String(d.id)) || [],
       }))
     );
   };
@@ -585,7 +586,10 @@ export default function TruckDeliveryPage() {
   };
   function openFormPrefilledFromOrder(order: OrderWithCustomer) {
     const addr = order?.customer?.address?.trim() || "";
+
+    // remember the order (full) + id for later linking and optimistic UI
     setPrefillOrderId(order.id);
+    setPrefillOrderObj(order);
     setPrefillOrderAddress(addr);
 
     setNewDelivery((prev) => ({
@@ -607,12 +611,14 @@ export default function TruckDeliveryPage() {
 
   const handleAddDelivery = async (e: React.FormEvent) => {
     e.preventDefault();
+
     const region = regions.find((r) => r.code === regionCode)?.name || "";
     const province = provinces.find((p) => p.code === provinceCode)?.name || "";
     const destinationComposed =
       newDelivery.destination?.trim() ||
       [region, province].filter(Boolean).join(", ");
 
+    // 1) Create the delivery and return its core fields (so we can render immediately)
     const { error: insErr, data: insData } = await supabase
       .from("truck_deliveries")
       .insert([
@@ -626,16 +632,18 @@ export default function TruckDeliveryPage() {
           arrival_date: newDelivery.arrivalDate || null,
         },
       ])
-      .select("id")
+      .select(
+        "id, destination, plate_number, driver, status, schedule_date, arrival_date, participants, created_at, shipping_fee"
+      )
       .single();
 
-    if (insErr) {
+    if (insErr || !insData) {
       console.error("Insert error:", insErr);
       toast.error("Failed to add delivery");
       return;
     }
 
-    // 👇 NEW: Assign to order if opened via "Create Delivery"
+    // 2) If we started from "Create Delivery" for a specific order, link it now
     if (prefillOrderId) {
       const { error: linkErr } = await supabase
         .from("orders")
@@ -648,13 +656,40 @@ export default function TruckDeliveryPage() {
         toast.error("Delivery created, but failed to link the invoice.");
       } else {
         toast.success("Invoice linked to the new truck.");
-      }
 
-      setPrefillOrderId(null);
-      setPrefillOrderAddress("");
+        // 3) ✅ Optimistic UI: inject the newly created delivery with the prefilled order
+        //    so the TXN appears immediately under "Invoices on this truck".
+        if (prefillOrderObj) {
+          const optimisticDelivery: Delivery = {
+            id: insData.id,
+            destination: insData.destination,
+            plate_number: insData.plate_number,
+            driver: insData.driver,
+            status: insData.status,
+            schedule_date: insData.schedule_date,
+            arrival_date: insData.arrival_date,
+            participants: insData.participants ?? [],
+            created_at: insData.created_at,
+            shipping_fee: insData.shipping_fee ?? null,
+            _orders: [
+              {
+                ...prefillOrderObj,
+                truck_delivery_id: insData.id,
+              },
+            ],
+          };
+
+          setDeliveries((prev) => {
+            // put new delivery in the list; keep your existing sort
+            const next = [optimisticDelivery, ...prev];
+            // optional: keep the same status/date ordering you already apply elsewhere
+            return next;
+          });
+        }
+      }
     }
 
-    // ✅ ACTIVITY LOG ON SAVE
+    // 4) Activity log
     await logActivity("Added Delivery Schedule", {
       destination: destinationComposed,
       plate_number: newDelivery.plateNumber,
@@ -665,7 +700,16 @@ export default function TruckDeliveryPage() {
       arrival_date: newDelivery.arrivalDate || null,
     });
 
+    // 5) Reset prefill helpers
+    setPrefillOrderId(null);
+    setPrefillOrderObj(null);
+    setPrefillOrderAddress("");
+
+    // 6) Optionally refresh from server to be 100% consistent (keeps realtime in sync)
+    //    If you want to rely purely on optimistic UI, you may comment this out.
     await fetchDeliveriesAndAssignments();
+
+    // 7) Close form
     hideForm();
   };
 
@@ -681,7 +725,9 @@ export default function TruckDeliveryPage() {
         return null;
     }
   };
-
+  // remember which order we used to prefill the "Create Delivery" form
+  const [prefillOrderObj, setPrefillOrderObj] =
+    useState<OrderWithCustomer | null>(null);
   const updateDeliveryStatusInState = (id: number, status: string) => {
     setDeliveries((prev) =>
       prev.map((d) => (d.id === id ? { ...d, status } : d))
@@ -692,28 +738,12 @@ export default function TruckDeliveryPage() {
     const { id, newStatus } = confirmDialog;
     if (id == null) return;
 
-    const { error } = await supabase
-      .from("truck_deliveries")
-      .update({ status: newStatus })
-      .eq("id", id);
+    // use the shared helper (handles optimistic UI, DB call, log, toasts)
+    await changeDeliveryStatus(id, newStatus);
 
-    if (error) {
-      console.error("Update error:", error);
-      toast.error("Failed to update delivery status");
-    } else {
-      if (newStatus === "To Receive") {
-        setDeliveries((prev) => prev.filter((d) => d.id !== id));
-        toast.success("Marked as Delivered — moved to Delivered History.");
-      } else {
-        updateDeliveryStatusInState(id, newStatus);
-        toast.success("Delivery status changed successfully");
-      }
-
-      // ✅ ACTIVITY LOG FOR STATUS CHANGE
-      await logActivity("Changed Delivery Status", {
-        delivery_id: id,
-        new_status: newStatus,
-      });
+    // if you want “To Receive” to disappear from the active list immediately:
+    if (newStatus === "To Receive") {
+      setDeliveries((prev) => prev.filter((d) => d.id !== id));
     }
 
     setConfirmDialog({ open: false, id: null, newStatus: "" });
@@ -842,6 +872,49 @@ export default function TruckDeliveryPage() {
         : [...prev, orderId]
     );
   };
+
+  // ---- STATUS UPDATE (optimistic) ----
+  // ---- STATUS UPDATE (optimistic + UUID-safe) ----
+  // ---- STATUS UPDATE (optimistic & safe) ----
+  async function changeDeliveryStatus(deliveryId: number, newStatus: string) {
+    // Only allow the statuses you use in the UI
+    const allowed = ["Scheduled", "To Ship", "To Receive"];
+    if (!allowed.includes(newStatus)) {
+      toast.error("Invalid delivery status");
+      console.error("Invalid delivery status:", newStatus);
+      return;
+    }
+
+    // snapshot for rollback
+    const snapshot = deliveries;
+
+    // optimistic UI
+    setDeliveries((prev) =>
+      prev.map((d) =>
+        String(d.id) === String(deliveryId) ? { ...d, status: newStatus } : d
+      )
+    );
+
+    // persist in DB
+    const { error } = await supabase
+      .from("truck_deliveries")
+      .update({ status: newStatus })
+      .eq("id", String(deliveryId)); // stringify in case id is UUID/text
+
+    if (error) {
+      // rollback if DB failed
+      setDeliveries(snapshot);
+      toast.error("Failed to update delivery status");
+      console.error("Update delivery status error:", error);
+      return;
+    }
+
+    toast.success(`Delivery status changed to "${newStatus}"`);
+    await logActivity("Changed Delivery Status", {
+      delivery_id: String(deliveryId),
+      new_status: newStatus,
+    });
+  }
 
   const assignSelected = async () => {
     if (!assignForDeliveryId || selectedOrderIds.length === 0) {
