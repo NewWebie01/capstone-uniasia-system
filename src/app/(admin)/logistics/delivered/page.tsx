@@ -5,6 +5,8 @@ import { motion } from "framer-motion";
 import { CheckCircle, Clock, Truck } from "lucide-react";
 import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs";
 import { toast } from "sonner";
+import { ReceiptText } from "lucide-react";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 
 /* =========================
    TYPES
@@ -61,6 +63,28 @@ type OrderWithCustomer = {
    PAGE
 ========================= */
 export default function DeliveredPage() {
+  const [invoiceDialogOpenId, setInvoiceDialogOpenId] = useState<number | null>(
+    null
+  );
+  const [selectedOrderForInvoice, setSelectedOrderForInvoice] =
+    useState<OrderWithCustomer | null>(null);
+
+  const openInvoiceDialogForOrder = (
+    deliveryId: number,
+    order?: OrderWithCustomer
+  ) => {
+    setInvoiceDialogOpenId(deliveryId);
+    setSelectedOrderForInvoice(order ?? null);
+  };
+  const closeInvoiceDialog = () => {
+    setInvoiceDialogOpenId(null);
+    setSelectedOrderForInvoice(null);
+  };
+  const pesoOrBlank = (v?: number | string | null) => {
+    const n = Number(v ?? 0);
+    return n > 0 ? `₱${n}` : "";
+  };
+
   const supabase = createPagesBrowserClient();
 
   // list + paging
@@ -102,7 +126,7 @@ export default function DeliveredPage() {
       let q = supabase
         .from("truck_deliveries")
         .select("*", { count: "exact" })
-        .in("status", ["To Receive", "Delivered"]);
+        .eq("status", "To Receive"); // <- only To Receive
 
       // filters
       if (dateFrom) q = q.gte("schedule_date", dateFrom);
@@ -146,18 +170,18 @@ export default function DeliveredPage() {
           .from("orders")
           .select(
             `
-            id, total_amount, status, truck_delivery_id, salesman, terms, accepted_at,
-            customer:customer_id (
-              id, name, code, address, landmark, contact_person, phone, status, date, created_at
-            ),
-            order_items (
-              quantity, price,
-              inventory:inventory_id ( product_name, category, subcategory, status )
-            )
-          `
+    id, total_amount, status, truck_delivery_id, salesman, terms, date_created,
+    customer:customer_id (
+      id, name, code, address, landmark, contact_person, phone, status, date, created_at
+    ),
+    order_items (
+      quantity, price,
+      inventory:inventory_id ( product_name, category, subcategory, status )
+    )
+  `
           )
           .in("truck_delivery_id", ids)
-          .order("accepted_at", { ascending: false });
+          .order("date_created", { ascending: false }); // <- change from accepted_at
 
         if (oErr) {
           console.error("Fetch delivered orders error:", oErr);
@@ -374,9 +398,15 @@ export default function DeliveredPage() {
                             key={o.id}
                             className="grid grid-cols-12 items-center gap-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100"
                           >
-                            <div className="col-span-12 sm:col-span-3 border rounded-lg px-3 py-1.5 font-mono text-xs bg-white">
+                            <button
+                              className="col-span-12 sm:col-span-3 border rounded-lg px-3 py-1.5 font-mono text-xs bg-white hover:bg-slate-50 shadow-sm"
+                              onClick={() =>
+                                openInvoiceDialogForOrder(delivery.id, o)
+                              }
+                              title="Open invoice"
+                            >
                               {o.customer?.code}
-                            </div>
+                            </button>
 
                             <div className="col-span-12 sm:col-span-6">
                               <div className="font-medium truncate">
@@ -436,22 +466,6 @@ export default function DeliveredPage() {
                           <option value="Delivered">Delivered</option>
                         </select>
                       </div>
-
-                      <button
-                        disabled
-                        className="px-3 py-2 rounded-md border text-sm bg-gray-100 text-gray-400 cursor-not-allowed"
-                        title="Delivered history is read-only"
-                      >
-                        Assign Invoices
-                      </button>
-
-                      <button
-                        disabled
-                        className="px-3 py-2 rounded-md border text-sm bg-gray-100 text-gray-400 cursor-not-allowed"
-                        title="Delivered history is read-only"
-                      >
-                        Clear Invoices
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -460,7 +474,7 @@ export default function DeliveredPage() {
           </div>
         );
       })}
-
+      {/* ANG BUHAY AY WEATHER WEATHER LANG */}
       {/* Pagination footer */}
       <div className="flex items-center justify-between mt-8 border-t pt-4 text-sm">
         <div className="text-slate-600">

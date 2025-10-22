@@ -101,7 +101,7 @@ type ConfirmDialogState = {
   id: number | null;
   newStatus: string;
 };
-
+//
 export default function TruckDeliveryPage() {
   const supabase = createPagesBrowserClient();
 
