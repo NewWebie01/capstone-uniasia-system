@@ -64,7 +64,6 @@ type OrderFull = {
 };
 
 /* ----------------------------- Config ----------------------------- */
-/** Only show these types in the Admin bell UI */
 const VISIBLE_TYPES = new Set([
   "order",
   "order_created",
@@ -80,7 +79,6 @@ const VISIBLE_TYPES = new Set([
   "delivery_delivered",
 ]);
 
-/** When collapsing duplicates, prefer higher number */
 const TYPE_PRIORITY: Record<string, number> = {
   order: 3,
   order_created: 2,
@@ -181,7 +179,6 @@ function kindMeta(type?: string) {
   }
 }
 
-/** Canonical key for dedupe across different types representing same event */
 function canonicalKeyFromSystemRow(r: any): string {
   if (r.order_id) return `order:${r.order_id}`;
   if (r.metadata?.payment_id) return `payment:${String(r.metadata.payment_id)}`;
@@ -192,7 +189,6 @@ function canonicalKeyFromSystemRow(r: any): string {
   return `${String(r.type || "system").toLowerCase()}:${r.id}`;
 }
 
-/** Normalize a system row to the UI NotificationRow */
 function normalizeSystemRow(r: any): NotificationRow {
   let related_id: string | null = null;
   if (r.order_id) related_id = String(r.order_id);
@@ -214,20 +210,17 @@ function normalizeSystemRow(r: any): NotificationRow {
   };
 }
 
-/** Choose which row wins when keys collide (by priority then recency) */
 function choosePreferred(a: any, b: any) {
   const ta = String(a.type || "").toLowerCase();
   const tb = String(b.type || "").toLowerCase();
   const pa = TYPE_PRIORITY[ta] ?? 0;
   const pb = TYPE_PRIORITY[tb] ?? 0;
   if (pa !== pb) return pa > pb ? a : b;
-  // tie-breaker: newer created_at wins
   const da = new Date(a.created_at).getTime();
   const db = new Date(b.created_at).getTime();
   return db > da ? b : a;
 }
 
-/** Only used for expiration scans (orders/payments/returns/accounts come from server) */
 async function upsertRecentExpiration(
   supabase: SupabaseClient<any>,
   payload: { item_id: number; title: string; message: string }
@@ -307,7 +300,6 @@ export default function NotificationBell() {
   const [orderModalLoading, setOrderModalLoading] = useState(false);
   const [orderModalData, setOrderModalData] = useState<OrderFull | null>(null);
 
-  /** Keys we've already displayed (order:<id>, payment:<id>, return:<id>, account:<id>, expiration:<id>) */
   const seenKeysRef = useRef<Set<string>>(new Set());
 
   /* ---------- Load existing (filter + collapse duplicates by canonical key) ---------- */
@@ -363,13 +355,12 @@ export default function NotificationBell() {
           if (!VISIBLE_TYPES.has(tLower)) return;
 
           const key = canonicalKeyFromSystemRow(r);
-          if (seenKeysRef.current.has(key)) return; // stop 2nd copy (e.g., order + order_created)
+          if (seenKeysRef.current.has(key)) return;
           seenKeysRef.current.add(key);
 
           const n = normalizeSystemRow(r);
           setNotifications((prev) => [n, ...prev]);
 
-          // Toasts: fire only once per key (first time we see it)
           if (key.startsWith("order:")) {
             toast.success(n.title ?? "New Order", {
               description: n.message ?? undefined,
@@ -415,9 +406,7 @@ export default function NotificationBell() {
               description: n.message ?? undefined,
               action: {
                 label: "Returns",
-                onClick: async () => {
-                  await router.push("/returns");
-                },
+                onClick: async () => router.push("/returns"),
               },
             });
           } else if (
@@ -428,9 +417,7 @@ export default function NotificationBell() {
               description: n.message ?? undefined,
               action: {
                 label: "Review",
-                onClick: async () => {
-                  await router.push("/admin/accounts");
-                },
+                onClick: async () => router.push("/admin/accounts"),
               },
             });
           }
@@ -438,7 +425,6 @@ export default function NotificationBell() {
           const r: any = payload.new;
           const tLower = String(r.type || "").toLowerCase();
           if (!VISIBLE_TYPES.has(tLower)) return;
-
           setNotifications((prev) =>
             prev.map((x) => (x.id === r.id ? normalizeSystemRow(r) : x))
           );
@@ -577,14 +563,11 @@ export default function NotificationBell() {
   const handleOpenInSales = async () => {
     const id = orderModalData?.id;
     if (!id) return;
-
     try {
       sessionStorage.setItem("scroll-to-order-id", id);
     } catch {}
-
     setOrderModalOpen(false);
     setOrderModalData(null);
-
     if (pathname === "/sales") {
       setTimeout(() => emit("scroll-to-order", id), 50);
       return;
@@ -592,7 +575,7 @@ export default function NotificationBell() {
     await router.push("/sales");
   };
 
-  /* ---------- Close modal on Esc ---------- */
+  /* ---------- Close notifications modal on Esc ---------- */
   useEffect(() => {
     if (!isModalOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -602,19 +585,39 @@ export default function NotificationBell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [isModalOpen]);
 
+  /* ---------- Close order modal on Esc (and close all) ---------- */
+  useEffect(() => {
+    if (!orderModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOrderModalOpen(false);
+        setOrderModalData(null);
+        setIsModalOpen(false); // close all modals
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [orderModalOpen]);
+
   /* ============================== UI ============================== */
   const renderNotifItem = (n: NotificationRow) => {
     const meta = kindMeta(n.type);
     const unread = !n.is_read;
 
-    // Blue scheme for "new"; lighter blue when read
+    // Unread: blue; Read: grayscale (black & white)
     const cardClass = unread
       ? "bg-blue-50 hover:bg-blue-100 text-blue-900 border-blue-300"
-      : "bg-blue-50/50 hover:bg-blue-50 text-blue-800 border-blue-100";
+      : "bg-white hover:bg-gray-50 text-gray-800 border-gray-200";
+
+    const leftBarClass = unread ? "border-blue-400" : "border-gray-300";
 
     const badgeClass = unread
       ? "bg-blue-100 text-blue-800 ring-1 ring-blue-200"
-      : "bg-blue-50 text-blue-700 ring-1 ring-blue-100";
+      : "bg-gray-100 text-gray-700 ring-1 ring-gray-200";
+
+    const titleClass = unread ? "text-blue-900" : "text-gray-900";
+    const msgClass = unread ? "text-blue-800" : "text-gray-700";
+    const timeClass = unread ? "text-blue-700" : "text-gray-500";
 
     return (
       <li
@@ -623,7 +626,7 @@ export default function NotificationBell() {
         className={[
           "border rounded p-3 cursor-pointer transition-colors",
           "border-l-4",
-          "border-blue-400",
+          leftBarClass,
           cardClass,
         ].join(" ")}
         title={
@@ -650,21 +653,11 @@ export default function NotificationBell() {
           </span>
         </div>
 
-        <div className="mt-1 font-medium">{n.title || "(no title)"}</div>
-        <div
-          className={[
-            "text-sm",
-            unread ? "text-blue-900" : "text-blue-800",
-          ].join(" ")}
-        >
-          {n.message}
+        <div className={["mt-1 font-medium", titleClass].join(" ")}>
+          {n.title || "(no title)"}
         </div>
-        <div
-          className={[
-            "text-xs mt-1",
-            unread ? "text-blue-700" : "text-blue-600",
-          ].join(" ")}
-        >
+        <div className={["text-sm", msgClass].join(" ")}>{n.message}</div>
+        <div className={["text-xs mt-1", timeClass].join(" ")}>
           {formatPHDate(n.created_at)}
         </div>
       </li>
@@ -754,8 +747,21 @@ export default function NotificationBell() {
 
       {/* ==================== Order Details Modal ==================== */}
       {orderModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-auto shadow-2xl">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+          onClick={() => {
+            // Click outside closes EVERYTHING
+            setOrderModalOpen(false);
+            setOrderModalData(null);
+            setIsModalOpen(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-auto shadow-2xl"
+            onClick={(e) => e.stopPropagation()} // Prevent backdrop close when clicking inside
+            role="dialog"
+            aria-modal="true"
+          >
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <div className="flex items-center gap-3">
                 <h3 className="text-lg font-semibold">Order Details</h3>
