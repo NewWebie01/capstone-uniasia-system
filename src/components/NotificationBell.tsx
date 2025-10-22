@@ -15,7 +15,7 @@ type NotificationRow = {
   type: string;
   title: string | null;
   message: string | null;
-  related_id: string | null;
+  related_id: string | null; // order_id / payment_id / item_id / etc (for UI)
   is_read: boolean;
   created_at: string;
   user_email?: string | null;
@@ -64,7 +64,6 @@ type OrderFull = {
 };
 
 /* ----------------------------- Config ----------------------------- */
-/** Visible types for the Admin bell UI */
 const VISIBLE_TYPES = new Set([
   "order",
   "order_created",
@@ -72,13 +71,14 @@ const VISIBLE_TYPES = new Set([
   "order_approved",
   "payment",
   "payment_received",
+  "return_created",
+  "account_request_submitted",
   "expiration",
   "delivery_to_ship",
   "delivery_to_receive",
   "delivery_delivered",
 ]);
 
-/** When collapsing duplicates, prefer higher number */
 const TYPE_PRIORITY: Record<string, number> = {
   order: 3,
   order_created: 2,
@@ -86,6 +86,8 @@ const TYPE_PRIORITY: Record<string, number> = {
   order_completed: 2,
   payment_received: 3,
   payment: 2,
+  return_created: 3,
+  account_request_submitted: 3,
   expiration: 1,
   delivery_delivered: 2,
   delivery_to_receive: 2,
@@ -106,7 +108,7 @@ function toPHDateOnlyISO(date: Date) {
 function formatPHDate(d?: string | Date | null) {
   if (!d) return "—";
   const dt = typeof d === "string" ? new Date(d) : d;
-  return dt.toLocaleString("en-PH", {
+  return new Intl.DateTimeFormat("en-PH", {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -114,7 +116,7 @@ function formatPHDate(d?: string | Date | null) {
     minute: "2-digit",
     hour12: true,
     timeZone: "Asia/Manila",
-  });
+  }).format(dt);
 }
 
 function kindMeta(type?: string) {
@@ -136,6 +138,20 @@ function kindMeta(type?: string) {
         label: "Payment",
         badgeClass: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200",
         cardBorderClass: "border-l-4 border-emerald-400",
+      };
+    case "return_created":
+      return {
+        icon: "🔁",
+        label: "Return",
+        badgeClass: "bg-pink-50 text-pink-700 ring-1 ring-pink-200",
+        cardBorderClass: "border-l-4 border-pink-400",
+      };
+    case "account_request_submitted":
+      return {
+        icon: "🧾",
+        label: "Account",
+        badgeClass: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200",
+        cardBorderClass: "border-l-4 border-indigo-400",
       };
     case "expiration":
       return {
@@ -163,20 +179,24 @@ function kindMeta(type?: string) {
   }
 }
 
-/** Canonical key for dedupe across different types representing same event */
 function canonicalKeyFromSystemRow(r: any): string {
   if (r.order_id) return `order:${r.order_id}`;
   if (r.metadata?.payment_id) return `payment:${String(r.metadata.payment_id)}`;
+  if (r.metadata?.return_id) return `return:${String(r.metadata.return_id)}`;
+  if (r.metadata?.account_request_id)
+    return `account:${String(r.metadata.account_request_id)}`;
   if (r.item_id) return `expiration:${r.item_id}`;
   return `${String(r.type || "system").toLowerCase()}:${r.id}`;
 }
 
-/** Normalize a system row to the UI NotificationRow */
 function normalizeSystemRow(r: any): NotificationRow {
   let related_id: string | null = null;
   if (r.order_id) related_id = String(r.order_id);
   else if (r.item_id) related_id = String(r.item_id);
   else if (r.metadata?.payment_id) related_id = String(r.metadata.payment_id);
+  else if (r.metadata?.return_id) related_id = String(r.metadata.return_id);
+  else if (r.metadata?.account_request_id)
+    related_id = String(r.metadata.account_request_id);
 
   return {
     id: r.id,
@@ -190,20 +210,17 @@ function normalizeSystemRow(r: any): NotificationRow {
   };
 }
 
-/** Choose which row wins when keys collide (by priority then recency) */
 function choosePreferred(a: any, b: any) {
   const ta = String(a.type || "").toLowerCase();
   const tb = String(b.type || "").toLowerCase();
   const pa = TYPE_PRIORITY[ta] ?? 0;
   const pb = TYPE_PRIORITY[tb] ?? 0;
   if (pa !== pb) return pa > pb ? a : b;
-  // tie-breaker: newer created_at wins
   const da = new Date(a.created_at).getTime();
   const db = new Date(b.created_at).getTime();
   return db > da ? b : a;
 }
 
-/** Only used for expiration scans (orders/payments come from server) */
 async function upsertRecentExpiration(
   supabase: SupabaseClient<any>,
   payload: { item_id: number; title: string; message: string }
@@ -283,7 +300,6 @@ export default function NotificationBell() {
   const [orderModalLoading, setOrderModalLoading] = useState(false);
   const [orderModalData, setOrderModalData] = useState<OrderFull | null>(null);
 
-  /** Keys we've already displayed (order:<id>, payment:<id>, expiration:<id>) */
   const seenKeysRef = useRef<Set<string>>(new Set());
 
   /* ---------- Load existing (filter + collapse duplicates by canonical key) ---------- */
@@ -296,7 +312,6 @@ export default function NotificationBell() {
         .limit(200);
 
       if (!error && data) {
-        // collapse duplicates by canonical key
         const bucket = new Map<string, any>();
         for (const r of data as any[]) {
           const tLower = String(r.type || "").toLowerCase();
@@ -316,7 +331,6 @@ export default function NotificationBell() {
             new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         );
 
-        // seed dedupe set and map to UI rows
         const mapped = finalRows.map((r) => {
           const key = canonicalKeyFromSystemRow(r);
           seenKeysRef.current.add(key);
@@ -341,13 +355,12 @@ export default function NotificationBell() {
           if (!VISIBLE_TYPES.has(tLower)) return;
 
           const key = canonicalKeyFromSystemRow(r);
-          if (seenKeysRef.current.has(key)) return; // <- stop 2nd copy (e.g., order + order_created)
+          if (seenKeysRef.current.has(key)) return;
           seenKeysRef.current.add(key);
 
           const n = normalizeSystemRow(r);
           setNotifications((prev) => [n, ...prev]);
 
-          // Toasts fire only once per key (first time we see it)
           if (key.startsWith("order:")) {
             toast.success(n.title ?? "New Order", {
               description: n.message ?? undefined,
@@ -388,12 +401,30 @@ export default function NotificationBell() {
                 },
               },
             });
+          } else if (key.startsWith("return:") || tLower === "return_created") {
+            toast.info(n.title ?? "Return Request", {
+              description: n.message ?? undefined,
+              action: {
+                label: "Returns",
+                onClick: async () => router.push("/returns"),
+              },
+            });
+          } else if (
+            key.startsWith("account:") ||
+            tLower === "account_request_submitted"
+          ) {
+            toast.info(n.title ?? "New Account Request", {
+              description: n.message ?? undefined,
+              action: {
+                label: "Review",
+                onClick: async () => router.push("/admin/accounts"),
+              },
+            });
           }
         } else if (payload.eventType === "UPDATE") {
           const r: any = payload.new;
           const tLower = String(r.type || "").toLowerCase();
           if (!VISIBLE_TYPES.has(tLower)) return;
-
           setNotifications((prev) =>
             prev.map((x) => (x.id === r.id ? normalizeSystemRow(r) : x))
           );
@@ -492,6 +523,7 @@ export default function NotificationBell() {
     await markOneRead(n.id);
 
     const t = n.type.toLowerCase();
+
     if (t.startsWith("order") && n.related_id) {
       setOrderModalOpen(true);
       setOrderModalLoading(true);
@@ -503,6 +535,18 @@ export default function NotificationBell() {
 
     if (t.startsWith("payment") && n.related_id) {
       await goToPayments(n.related_id);
+      setIsModalOpen(false);
+      return;
+    }
+
+    if (t === "return_created") {
+      await router.push("/returns");
+      setIsModalOpen(false);
+      return;
+    }
+
+    if (t === "account_request_submitted") {
+      await router.push("/admin/accounts");
       setIsModalOpen(false);
       return;
     }
@@ -519,14 +563,11 @@ export default function NotificationBell() {
   const handleOpenInSales = async () => {
     const id = orderModalData?.id;
     if (!id) return;
-
     try {
       sessionStorage.setItem("scroll-to-order-id", id);
     } catch {}
-
     setOrderModalOpen(false);
     setOrderModalData(null);
-
     if (pathname === "/sales") {
       setTimeout(() => emit("scroll-to-order", id), 50);
       return;
@@ -534,25 +575,69 @@ export default function NotificationBell() {
     await router.push("/sales");
   };
 
+  /* ---------- Close notifications modal on Esc ---------- */
+  useEffect(() => {
+    if (!isModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsModalOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isModalOpen]);
+
+  /* ---------- Close order modal on Esc (and close all) ---------- */
+  useEffect(() => {
+    if (!orderModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOrderModalOpen(false);
+        setOrderModalData(null);
+        setIsModalOpen(false); // close all modals
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [orderModalOpen]);
+
   /* ============================== UI ============================== */
   const renderNotifItem = (n: NotificationRow) => {
     const meta = kindMeta(n.type);
+    const unread = !n.is_read;
+
+    // Unread: blue; Read: grayscale (black & white)
+    const cardClass = unread
+      ? "bg-blue-50 hover:bg-blue-100 text-blue-900 border-blue-300"
+      : "bg-white hover:bg-gray-50 text-gray-800 border-gray-200";
+
+    const leftBarClass = unread ? "border-blue-400" : "border-gray-300";
+
+    const badgeClass = unread
+      ? "bg-blue-100 text-blue-800 ring-1 ring-blue-200"
+      : "bg-gray-100 text-gray-700 ring-1 ring-gray-200";
+
+    const titleClass = unread ? "text-blue-900" : "text-gray-900";
+    const msgClass = unread ? "text-blue-800" : "text-gray-700";
+    const timeClass = unread ? "text-blue-700" : "text-gray-500";
+
     return (
       <li
         key={n.id}
         onClick={() => handleClickNotification(n)}
         className={[
           "border rounded p-3 cursor-pointer transition-colors",
-          meta.cardBorderClass,
-          n.is_read
-            ? "bg-white hover:bg-gray-50 text-gray-900"
-            : "bg-yellow-50 hover:bg-yellow-100 text-yellow-900 border-yellow-200",
+          "border-l-4",
+          leftBarClass,
+          cardClass,
         ].join(" ")}
         title={
           n.type.toLowerCase().startsWith("order")
             ? "View Order Details"
             : n.type.toLowerCase().startsWith("payment")
             ? "Open Payment"
+            : n.type === "return_created"
+            ? "Open Returns"
+            : n.type === "account_request_submitted"
+            ? "Review Account Request"
             : undefined
         }
       >
@@ -560,31 +645,19 @@ export default function NotificationBell() {
           <span
             className={[
               "inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full",
-              n.is_read
-                ? meta.badgeClass
-                : "bg-yellow-100 text-yellow-800 ring-1 ring-yellow-200",
+              badgeClass,
             ].join(" ")}
           >
-            <span>{meta.icon}</span>
+            <span>🔔</span>
             <span className="text-inherit">{meta.label}</span>
           </span>
         </div>
 
-        <div className="mt-1 font-medium">{n.title || "(no title)"}</div>
-        <div
-          className={[
-            "text-sm",
-            n.is_read ? "text-gray-700" : "text-yellow-900 font-medium",
-          ].join(" ")}
-        >
-          {n.message}
+        <div className={["mt-1 font-medium", titleClass].join(" ")}>
+          {n.title || "(no title)"}
         </div>
-        <div
-          className={[
-            "text-xs mt-1",
-            n.is_read ? "text-gray-400" : "text-yellow-700",
-          ].join(" ")}
-        >
+        <div className={["text-sm", msgClass].join(" ")}>{n.message}</div>
+        <div className={["text-xs mt-1", timeClass].join(" ")}>
           {formatPHDate(n.created_at)}
         </div>
       </li>
@@ -597,7 +670,7 @@ export default function NotificationBell() {
       <div
         className="fixed top-16 right-12 z-50 bg-white shadow-lg rounded-full p-3 cursor-pointer transition-transform hover:scale-110"
         title="Notifications"
-        onClick={openModal}
+        onClick={() => setIsModalOpen(true)}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
@@ -612,10 +685,18 @@ export default function NotificationBell() {
         )}
       </div>
 
-      {/* Main Notifications Modal */}
+      {/* Main Notifications Modal (click outside + Esc to close) */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-lg p-6 w-full max-w-xl shadow-lg max-h-[90vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg p-6 w-full max-w-xl shadow-lg max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-semibold">Notifications</h2>
               <div className="flex gap-2">
@@ -666,8 +747,21 @@ export default function NotificationBell() {
 
       {/* ==================== Order Details Modal ==================== */}
       {orderModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-auto shadow-2xl">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+          onClick={() => {
+            // Click outside closes EVERYTHING
+            setOrderModalOpen(false);
+            setOrderModalData(null);
+            setIsModalOpen(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-auto shadow-2xl"
+            onClick={(e) => e.stopPropagation()} // Prevent backdrop close when clicking inside
+            role="dialog"
+            aria-modal="true"
+          >
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <div className="flex items-center gap-3">
                 <h3 className="text-lg font-semibold">Order Details</h3>
@@ -725,10 +819,16 @@ export default function NotificationBell() {
                     <div className="text-xs text-gray-500">Date Created</div>
                     <div className="font-medium">
                       {orderModalData.date_created
-                        ? new Date(orderModalData.date_created).toLocaleString(
-                            "en-PH",
-                            { timeZone: "Asia/Manila" }
-                          )
+                        ? new Intl.DateTimeFormat("en-PH", {
+                            timeZone: "Asia/Manila",
+                            year: "numeric",
+                            month: "short",
+                            day: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                            hour12: true,
+                          }).format(new Date(orderModalData.date_created))
                         : "—"}
                     </div>
                   </div>

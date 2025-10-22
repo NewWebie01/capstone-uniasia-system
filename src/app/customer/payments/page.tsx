@@ -33,23 +33,20 @@ const todayLocalISO = () => {
   return d.toISOString().slice(0, 10); // YYYY-MM-DD
 };
 
-
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
   quantity: number;
   price: number;
   discount_percent?: number | null;
-  inventory?:
-    | {
-        product_name?: string | null;
-        category?: string | null;
-        subcategory?: string | null;
-        status?: string | null;
-        unit?: string | null;
-        unit_price?: number | null;
-        quantity?: number | null;
-      }
-    | null;
+  inventory?: {
+    product_name?: string | null;
+    category?: string | null;
+    subcategory?: string | null;
+    status?: string | null;
+    unit?: string | null;
+    unit_price?: number | null;
+    quantity?: number | null;
+  } | null;
 };
 
 type OrderRow = {
@@ -306,8 +303,6 @@ export default function CustomerPaymentsPage() {
     };
   }, [txns]);
 
-  
-
   /* --------------------------- Totals --------------------------- */
   function computeFromOrder(o?: OrderRow | null, extraShippingFee = 0) {
     const items = o?.order_items ?? [];
@@ -416,56 +411,53 @@ export default function CustomerPaymentsPage() {
   }, [txnOptions, effectivePaidTotalByOrder, shippingFees]);
 
   /* ----------------------------- Realtime installments ----------------------------- */
-useEffect(() => {
-  // Subscribe for all visible order IDs
-  const orderIds = txnOptions.map(({ order }) => String(order.id));
-  if (!orderIds.length) return;
+  useEffect(() => {
+    // Subscribe for all visible order IDs
+    const orderIds = txnOptions.map(({ order }) => String(order.id));
+    if (!orderIds.length) return;
 
-  const filter = `order_id=in.(${inList(orderIds)})`;
-  const channel = supabase.channel("realtime-installments");
+    const filter = `order_id=in.(${inList(orderIds)})`;
+    const channel = supabase.channel("realtime-installments");
 
-  channel.on(
-    "postgres_changes",
-    { event: "*", schema: "public", table: "order_installments", filter },
-    async (payload) => {
-      const changedOrderId = String(
-        ((payload.new as any)?.order_id ??
-          (payload.old as any)?.order_id ??
-          "") || ""
-      );
+    channel.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "order_installments", filter },
+      async (payload) => {
+        const changedOrderId = String(
+          ((payload.new as any)?.order_id ??
+            (payload.old as any)?.order_id ??
+            "") ||
+            ""
+        );
 
-      // Figure out the currently selected order id WITHOUT using selectedPack
-      const currentOrderId = txnOptions.find(
-        (t) => t.code === selectedTxnCode
-      )?.order?.id;
+        const currentOrderId = txnOptions.find(
+          (t) => t.code === selectedTxnCode
+        )?.order?.id;
 
-      if (currentOrderId && String(currentOrderId) === changedOrderId) {
-        try {
-          setLoadingInstallments(true);
-          const { data } = await supabase
-            .from("order_installments")
-            .select(
-              "id, order_id, term_no, due_date, amount_due, amount_paid, status"
-            )
-            .eq("order_id", changedOrderId)
-            .order("term_no", { ascending: true });
+        if (currentOrderId && String(currentOrderId) === changedOrderId) {
+          try {
+            setLoadingInstallments(true);
+            const { data } = await supabase
+              .from("order_installments")
+              .select(
+                "id, order_id, term_no, due_date, amount_due, amount_paid, status"
+              )
+              .eq("order_id", changedOrderId)
+              .order("term_no", { ascending: true });
 
-          setInstallments((data as InstallmentRow[]) || []);
-        } finally {
-          setLoadingInstallments(false);
+            setInstallments((data as InstallmentRow[]) || []);
+          } finally {
+            setLoadingInstallments(false);
+          }
         }
       }
-    }
-  );
+    );
 
-  channel.subscribe();
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}, [txnOptions, selectedTxnCode]); // 🔑 no selectedPack here
-
-
-  
+    channel.subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [txnOptions, selectedTxnCode]);
 
   /* ---------- Keep selection valid ---------- */
   useEffect(() => {
@@ -497,24 +489,20 @@ useEffect(() => {
   }, [selectedTxnCode, txnOptions, effectivePaidTotalByOrder, shippingFees]);
 
   /* -------- Determine method from order.terms (fallback to customer) -------- */
-  // Treat anything that looks like installments as CREDIT (even if terms ≠ "credit")
   const termsStr = String(
     (selectedPack?.order as any)?.terms ?? ""
   ).toLowerCase();
   const perTermAmt = Number(selectedPack?.order?.per_term_amount ?? 0);
 
-  // Fallback: customer's declared payment_type
   const customerMethodLower = String(
     txns.find((t) => t.code === selectedTxnCode)?.payment_type ??
       txns[0]?.payment_type ??
       ""
   ).toLowerCase();
 
-  // Heuristic: if per-term exists or terms mentions net/month/term/install -> credit
   const looksInstallment =
     perTermAmt > 0 || /credit|net|month|term|install/.test(termsStr);
 
-  // Final flags used by the UI
   const isCredit = customerMethodLower === "credit" || looksInstallment;
   const isCash = customerMethodLower === "cash" && !isCredit;
 
@@ -546,33 +534,24 @@ useEffect(() => {
 
   const unpaidInstallments = useMemo(
     () =>
-      installments.filter(
-        (row) => (row.status || "").toLowerCase() !== "paid"
-      ),
+      installments.filter((row) => (row.status || "").toLowerCase() !== "paid"),
     [installments]
   );
   const termAmount =
     unpaidInstallments.length > 0 ? unpaidInstallments[0].amount_due : 0;
 
-// -------------------------- CREDIT LIMITS & INIT --------------------------
-const getCreditMaxMultiplier = () => {
-  if (!selectedPack) return 1;
+  // -------------------------- CREDIT LIMITS & INIT --------------------------
+  const getCreditMaxMultiplier = () => {
+    if (!selectedPack) return 1;
 
-  const remainingTerms = unpaidInstallments.length || 0;
-  const perTerm = round2(Number(termAmount || 0));
-  if (remainingTerms <= 0 || perTerm <= 0) return 1;
+    const remainingTerms = unpaidInstallments.length || 0;
+    const perTerm = round2(Number(termAmount || 0));
+    if (remainingTerms <= 0 || perTerm <= 0) return 1;
 
-  // Round balance & use tolerant rounding when mapping balance -> #terms
-  const balance = round2(Number(selectedPack.balance || 0));
-
-  // If balance is within a centavo of k * perTerm, treat it as k terms.
-  // This avoids byBalance falling to 1 because of ₱0.01–₱0.02 drift.
-  const approxTerms = Math.round((balance / perTerm) + 1e-6);
-
-  // Clamp between 1 and the number of unpaid remaining terms.
-  return Math.max(1, Math.min(remainingTerms, approxTerms));
-};
-
+    const balance = round2(Number(selectedPack.balance || 0));
+    const approxTerms = Math.round(balance / perTerm + 1e-6);
+    return Math.max(1, Math.min(remainingTerms, approxTerms));
+  };
 
   // Initialize amount whenever txn/mode/schedule changes
   useEffect(() => {
@@ -608,27 +587,20 @@ const getCreditMaxMultiplier = () => {
     if (!selectedPack || !isCash) return;
     const bal = Number(selectedPack.balance || 0);
     const cur = toNumber(amount) || 0;
-       const next =
+    const next =
       dir === "inc"
         ? Math.min(cur + CASH_STEP, bal)
         : Math.max(cur - CASH_STEP, MIN_CASH);
     setAmount(bal > 0 ? next.toFixed(2) : "");
   };
 
-const payInFull = () => {
-  if (!selectedPack) return;
-  const bal = round2(Number(selectedPack.balance || 0));
-  // Set the amount to the exact remaining balance for both cash and credit
-  const val = bal > 0 ? bal.toFixed(2) : "";
-  setAmount(val);
-
-  // For UI clarity on credit, move the multiplier to the max remaining terms
-  // (this doesn't change the amount we just set)
-  if (!isCash) {
-    setTermMultiplier(getCreditMaxMultiplier());
-  }
-};
-
+  const payInFull = () => {
+    if (!selectedPack) return;
+    const bal = round2(Number(selectedPack.balance || 0));
+    const val = bal > 0 ? bal.toFixed(2) : "";
+    setAmount(val);
+    if (!isCash) setTermMultiplier(getCreditMaxMultiplier());
+  };
 
   const payInHalf = () => {
     if (!selectedPack) return;
@@ -642,32 +614,36 @@ const payInFull = () => {
   };
 
   /* --------------------------- Validation flags --------------------------- */
-const enteredAmount = Number(amount) || 0;
-const numTermsCovered =
-  isCredit && termAmount > 0 ? Math.floor(enteredAmount / termAmount) : 0;
-const remainingAfterTerms =
-  isCredit && termAmount > 0 ? enteredAmount - numTermsCovered * termAmount : 0;
+  const enteredAmount = Number(amount) || 0;
+  const numTermsCovered =
+    isCredit && termAmount > 0 ? Math.floor(enteredAmount / termAmount) : 0;
+  const remainingAfterTerms =
+    isCredit && termAmount > 0
+      ? enteredAmount - numTermsCovered * termAmount
+      : 0;
 
-// Also accept the exact remaining balance for credit (handles rounding pennies)
-const exactBalance = selectedPack ? round2(Number(selectedPack.balance || 0)) : 0;
-const isExactByBalance = !isCash && Math.abs(enteredAmount - exactBalance) < EPS;
+  const exactBalance = selectedPack
+    ? round2(Number(selectedPack.balance || 0))
+    : 0;
+  const isExactByBalance =
+    !isCash && Math.abs(enteredAmount - exactBalance) < EPS;
 
-const isExactByTerms =
-  enteredAmount > 0 &&
-  Math.abs(remainingAfterTerms) < EPS &&
-  numTermsCovered <= unpaidInstallments.length &&
-  numTermsCovered > 0;
+  const isExactByTerms =
+    enteredAmount > 0 &&
+    Math.abs(remainingAfterTerms) < EPS &&
+    numTermsCovered <= unpaidInstallments.length &&
+    numTermsCovered > 0;
 
-const isPaymentExact = isCash ? enteredAmount > 0 : (isExactByTerms || isExactByBalance);
+  const isPaymentExact = isCash
+    ? enteredAmount > 0
+    : isExactByTerms || isExactByBalance;
 
-// Only show the partial warning if it isn't the exact balance case
-const showPartialWarning =
-  !isCash &&
-  enteredAmount > 0 &&
-  remainingAfterTerms !== 0 &&
-  termAmount > 0 &&
-  !isExactByBalance;
-
+  const showPartialWarning =
+    !isCash &&
+    enteredAmount > 0 &&
+    remainingAfterTerms !== 0 &&
+    termAmount > 0 &&
+    !isExactByBalance;
 
   const exceedsInstallments =
     !isCash &&
@@ -731,16 +707,15 @@ const showPartialWarning =
       return;
     }
 
-    // Disallow past cheque dates (some browsers allow manual typing)
-if (!isCash && chequeDate) {
-  const min = new Date(todayLocalISO());
-  const chosen = new Date(chequeDate + "T00:00:00");
-  if (chosen < min) {
-    toast.error("Cheque date cannot be in the past.");
-    return;
-  }
-}
-
+    // Disallow past cheque dates
+    if (!isCash && chequeDate) {
+      const min = new Date(todayLocalISO());
+      const chosen = new Date(chequeDate + "T00:00:00");
+      if (chosen < min) {
+        toast.error("Cheque date cannot be in the past.");
+        return;
+      }
+    }
 
     setSubmitting(true);
     try {
@@ -781,34 +756,52 @@ if (!isCash && chequeDate) {
         };
       }
 
-      const { error: insertErr } = await supabase
+      // Insert payment and RETURN the new id for dedupe
+      const { data: paymentRow, error: insertErr } = await supabase
         .from("payments")
-        .insert(insertData);
+        .insert(insertData)
+        .select("id, created_at")
+        .single();
 
       if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
+      const newPaymentId = String(paymentRow?.id);
 
-      // Soft notify admins
+      // 🔔 Notify Admin Bell via system_notifications (type: 'payment', title: 'Payment Request')
       try {
-        const title = ` New ${isCash ? "Cash" : "Cheque"} Payment Submitted`;
+        const title = "💳 Payment Request";
         const message = `${me.name || "Customer"} • ${
           selectedPack.code
-        } • ${formatCurrency(finalAmount)}`;
-        await supabase.from("notifications").insert([
+        } • ${formatCurrency(finalAmount)} ${
+          isCash ? "(Cash)" : `(Cheque ${chequeNumber || ""})`
+        }`.trim();
+
+        await supabase.from("system_notifications").insert([
           {
-            type: "payment",
+            type: "payment", // visible in your admin bell
             title,
             message,
-            related_id: orderId,
-            is_read: false,
-            user_email: me.email || null,
+            order_id: orderId,
+            customer_id: meId,
+            source: "customer",
+            read: false,
+            metadata: {
+              payment_id: newPaymentId,
+              amount: Number(finalAmount.toFixed(2)),
+              method: isCash ? "cash" : "cheque",
+              cheque_number: chequeNumber || null,
+              bank_name: bankName || null,
+              cheque_date: chequeDate || null,
+            },
           },
         ]);
       } catch (notifyErr) {
-        console.error("Notification insert failed:", notifyErr);
+        console.error("system_notifications insert failed:", notifyErr);
       }
 
       toast.success(
-        ` ${isCash ? "Cash" : "Cheque"} payment submitted. Awaiting admin verification.`
+        ` ${
+          isCash ? "Cash" : "Cheque"
+        } payment submitted. Awaiting admin verification.`
       );
       setSelectedTxnCode("");
       setAmount("");
@@ -820,7 +813,8 @@ if (!isCash && chequeDate) {
     } catch (err: any) {
       console.error("Submit failed:", err?.message || err);
       toast.error(
-        err?.message || `Failed to submit ${isCash ? "cash" : "cheque"} payment.`
+        err?.message ||
+          `Failed to submit ${isCash ? "cash" : "cheque"} payment.`
       );
     } finally {
       setSubmitting(false);
@@ -833,14 +827,14 @@ if (!isCash && chequeDate) {
 
   const paidCount = useMemo(
     () =>
-      installments.filter(
-        (r) => (r.status || "").toLowerCase() === "paid"
-      ).length,
+      installments.filter((r) => (r.status || "").toLowerCase() === "paid")
+        .length,
     [installments]
   );
 
   const termCount =
-    selectedPack?.order?.per_term_amount && selectedPack?.totals?.finalGrandTotal
+    selectedPack?.order?.per_term_amount &&
+    selectedPack?.totals?.finalGrandTotal
       ? Math.round(
           selectedPack.totals.finalGrandTotal /
             selectedPack.order.per_term_amount
@@ -915,7 +909,6 @@ if (!isCash && chequeDate) {
                 </div>
               )}
             </div>
-
             {/* Amount (LOCKED) + controls */}
             <div className="col-span-1">
               <label className="text-xs text-gray-600">Amount *</label>
@@ -930,7 +923,7 @@ if (!isCash && chequeDate) {
                 />
               </div>
 
-              {/* CREDIT controls — always visible when credit */}
+              {/* CREDIT controls */}
               {isCredit && (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
@@ -958,7 +951,8 @@ if (!isCash && chequeDate) {
                     className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
                     title="Pay more months"
                     disabled={
-                      termAmount <= 0 || termMultiplier >= getCreditMaxMultiplier()
+                      termAmount <= 0 ||
+                      termMultiplier >= getCreditMaxMultiplier()
                     }
                   >
                     <Plus className="h-4 w-4" />
@@ -987,7 +981,7 @@ if (!isCash && chequeDate) {
                 </div>
               )}
 
-              {/* CASH controls — always visible when cash */}
+              {/* CASH controls */}
               {isCash && (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
@@ -1045,8 +1039,7 @@ if (!isCash && chequeDate) {
               )}
             </div>{" "}
             {/* closes the Amount (LOCKED) + controls column */}
-
-            {/* Cheque metadata — enabled for Cash (optional) */}
+            {/* Cheque metadata */}
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
                 Cheque Number {isCash ? "(optional)" : "*"}
@@ -1071,7 +1064,6 @@ if (!isCash && chequeDate) {
                 Up to 20 digits. Letters or symbols are not allowed.
               </div>
             </div>
-
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
                 Bank Name {isCash ? "(optional)" : "*"}
@@ -1085,23 +1077,19 @@ if (!isCash && chequeDate) {
                 required={!isCash}
               />
             </div>
-
-<div className="col-span-1">
-  <label className="text-xs text-gray-600">
-    Cheque Date {isCash ? "(optional)" : "*"}
-  </label>
-<input
-  type="date"
-  value={chequeDate}
-  onChange={(e) => setChequeDate(e.target.value)}
-  min={todayLocalISO()}
-  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
-  required={!isCash}
-/>
-
-</div>
-
-
+            <div className="col-span-1">
+              <label className="text-xs text-gray-600">
+                Cheque Date {isCash ? "(optional)" : "*"}
+              </label>
+              <input
+                type="date"
+                value={chequeDate}
+                onChange={(e) => setChequeDate(e.target.value)}
+                min={todayLocalISO()}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                required={!isCash}
+              />
+            </div>
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
                 Cheque Image {isCash ? "(optional)" : "*"}
@@ -1123,7 +1111,6 @@ if (!isCash && chequeDate) {
                 </span>
               </div>
             </div>
-
             <div className="col-span-1 md:col-span-2 flex justify-end gap-2">
               <button
                 type="button"
@@ -1156,7 +1143,8 @@ if (!isCash && chequeDate) {
         {selectedPack && (
           <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
             <h2 className="text-lg font-semibold mb-3">
-              Items for TXN <span className="font-mono">{selectedPack.code}</span>
+              Items for TXN{" "}
+              <span className="font-mono">{selectedPack.code}</span>
             </h2>
             <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
               <table className="w-full text-sm align-middle">
@@ -1179,7 +1167,9 @@ if (!isCash && chequeDate) {
                     <th className="py-2.5 px-3 text-center font-bold">
                       DISCOUNT/ADD (%)
                     </th>
-                    <th className="py-2.5 px-3 text-center font-bold">AMOUNT</th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      AMOUNT
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1263,9 +1253,7 @@ if (!isCash && chequeDate) {
                       </td>
                     </tr>
                     <tr>
-                      <td className="font-semibold py-0.5">
-                        Sales Tax (12%):
-                      </td>
+                      <td className="font-semibold py-0.5">Sales Tax (12%):</td>
                       <td className="pl-2 font-mono">
                         {formatCurrency(selectedPack.totals.salesTax)}
                       </td>
@@ -1436,8 +1424,8 @@ if (!isCash && chequeDate) {
                         {/* Summary */}
                         <div className="mt-3 w-full flex items-end justify-between text-xs">
                           <div className="text-amber-700">
-                            ⚠️ Delayed payments may incur penalties. Please
-                            pay on or before the due date.
+                            ⚠️ Delayed payments may incur penalties. Please pay
+                            on or before the due date.
                           </div>
                           <div className="font-semibold">
                             Total Monthly Paid:{" "}

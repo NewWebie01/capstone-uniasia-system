@@ -3,6 +3,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
+import { toast } from "sonner";
 
 /* ----------------------------- Helpers ----------------------------- */
 const formatPH = (d?: string | number | Date | null) =>
@@ -99,14 +100,12 @@ const StatusChip = ({ status }: { status: string }) => {
 export default function ReturnedItemsPage() {
   const [loading, setLoading] = useState(true);
   const [authEmail, setAuthEmail] = useState<string | null>(null);
-
   const [returnsList, setReturnsList] = useState<ReturnRow[]>([]);
   const [orderIdToTxn, setOrderIdToTxn] = useState<Record<string, string>>({});
   const orderIdsRef = useRef<Set<string>>(new Set());
-
-  // Simple client search
   const [search, setSearch] = useState("");
 
+  /* ------------------- Fetch customer + returns ------------------- */
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -163,6 +162,7 @@ export default function ReturnedItemsPage() {
     };
   }, []);
 
+  /* ---------------------- Refresh returns ---------------------- */
   const refreshReturns = async () => {
     const orderIds = Array.from(orderIdsRef.current);
     if (orderIds.length === 0) {
@@ -195,16 +195,42 @@ export default function ReturnedItemsPage() {
     setReturnsList(normalizeReturns(rtns ?? []));
   };
 
+  /* ---------------------- Realtime updates ---------------------- */
   const setupRealtime = () => {
     const ch = supabase
       .channel("cust-returned-items")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "returns" },
-        (payload) => {
+        async (payload) => {
           const row: any = payload.new ?? payload.old;
           if (row && orderIdsRef.current.has(String(row.order_id))) {
-            refreshReturns();
+            await refreshReturns();
+
+            // ✅ When a customer creates a return -> send admin notification
+            if (payload.eventType === "INSERT") {
+              try {
+                const reason = row.reason || "Other";
+                const note = row.note || "";
+                const txn = orderIdToTxn[row.order_id] || "—";
+
+                await supabase.from("system_notifications").insert([
+                  {
+                    type: "return",
+                    title: "📦 Return Request Submitted",
+                    message: `A customer submitted a return request for TXN ${txn}. Reason: ${reason}`,
+                    order_id: row.order_id,
+                    source: "customer",
+                    read: false,
+                    metadata: { reason, note },
+                  },
+                ]);
+
+                toast.success("Return request sent and admin notified!");
+              } catch (err) {
+                console.warn("Return notification failed:", err);
+              }
+            }
           }
         }
       )
@@ -222,9 +248,8 @@ export default function ReturnedItemsPage() {
     };
   };
 
-  // Only show Approved & Completed
+  /* -------------------- Display filtered returns -------------------- */
   const allowedStatuses = useMemo(() => new Set(["approved", "completed"]), []);
-
   type FlatRow = {
     id: string;
     returnId: string;
@@ -281,22 +306,18 @@ export default function ReturnedItemsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const groupsPerPage = 5;
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [txnGroups.length]);
-
+  useEffect(() => setCurrentPage(1), [txnGroups.length]);
   const totalPages = Math.max(1, Math.ceil(txnGroups.length / groupsPerPage));
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
   const pageStart = (currentPage - 1) * groupsPerPage;
-  const pageEnd = pageStart + groupsPerPage;
-  const pagedGroups = txnGroups.slice(pageStart, pageEnd);
-
+  const pagedGroups = txnGroups.slice(pageStart, pageStart + groupsPerPage);
   const goToPage = (p: number) =>
     setCurrentPage(Math.max(1, Math.min(totalPages, p)));
 
+  /* ---------------------- Render ---------------------- */
   return (
     <div className="p-4">
       <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
@@ -325,24 +346,21 @@ export default function ReturnedItemsPage() {
           {/* Controls */}
           <div className="mb-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="flex items-center gap-3">
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search by product, return code, or TXN…"
-                  className="border px-3 py-2 rounded w-72"
-                />
-              </div>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by product, return code, or TXN…"
+                className="border px-3 py-2 rounded w-72"
+              />
               <div className="text-sm text-gray-500">
                 Showing <span className="font-medium">{flatRows.length}</span>{" "}
-                item
-                {flatRows.length === 1 ? "" : "s"}
+                item{flatRows.length === 1 ? "" : "s"}
               </div>
             </div>
           </div>
 
-          {/* Tables grouped by TXN */}
+          {/* Tables */}
           {pagedGroups.length === 0 ? (
             <div className="bg-white border rounded-2xl p-4 shadow-sm">
               <p className="text-sm text-gray-600">No returned items found.</p>
@@ -418,28 +436,26 @@ export default function ReturnedItemsPage() {
             ))
           )}
 
-          {/* Pagination Controls */}
+          {/* Pagination */}
           {txnGroups.length > groupsPerPage && (
-            <div className="mt-4">
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-                <button
-                  onClick={() => goToPage(currentPage - 1)}
-                  disabled={currentPage === 1}
-                  className="px-4 py-2 rounded border bg-white disabled:opacity-50"
-                >
-                  Prev
-                </button>
-                <div className="text-sm font-medium">
-                  Page {currentPage} of {totalPages}
-                </div>
-                <button
-                  onClick={() => goToPage(currentPage + 1)}
-                  disabled={currentPage >= totalPages}
-                  className="px-4 py-2 rounded border bg-white disabled:opacity-50"
-                >
-                  Next
-                </button>
+            <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <button
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage === 1}
+                className="px-4 py-2 rounded border bg-white disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <div className="text-sm font-medium">
+                Page {currentPage} of {totalPages}
               </div>
+              <button
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage >= totalPages}
+                className="px-4 py-2 rounded border bg-white disabled:opacity-50"
+              >
+                Next
+              </button>
             </div>
           )}
         </>

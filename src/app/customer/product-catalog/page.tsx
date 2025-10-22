@@ -1044,7 +1044,7 @@ export default function CustomerInventoryPage() {
       if (customer.payment_type === "Credit") {
         const months = termsMonths ?? 1;
         orderPayload.terms = `Net ${months} Monthly`;
-        orderPayload.payment_terms = months;                      // ✅ store months
+        orderPayload.payment_terms = months; // ✅ store months
         orderPayload.interest_percent = TERM_TO_INTEREST[months]; // ✅ mapped %
       }
 
@@ -1070,26 +1070,39 @@ export default function CustomerInventoryPage() {
 
       /*  NEW: add a notification for admin */
       try {
-        // Summarize up to 3 items for the message
         const preview = items
           .slice(0, 3)
           .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
           .join(", ");
         const more = items.length > 3 ? `, +${items.length - 3} more` : "";
 
-        await supabase.from("notifications").insert([
+        await supabase.from("system_notifications").insert([
           {
             type: "order",
-            title: " New Order Submitted",
+            title: "🛒 Order Request",
             message: `${customer.name} • TXN ${
               finalOrderDetails.customer.code || "—"
             } • ${preview}${more} • Total: ${formatPeso(totalAmount)}`,
-            related_id: orderId, // so the bell can deep-link
-            user_email: customer.email || null, // optional
+            order_id: orderId,
+            customer_id: customerId,
+            source: "customer",
+            read: false,
+            metadata: {
+              order_id: orderId,
+              txn_code: finalOrderDetails.customer.code || null,
+              total_amount: Number(totalAmount || 0),
+              item_count: items.length,
+              payment_type: customer.payment_type || "Cash",
+              terms_months:
+                customer.payment_type === "Credit" ? termsMonths ?? null : null,
+              interest_percent:
+                customer.payment_type === "Credit"
+                  ? interestPercent ?? null
+                  : null,
+            },
           },
         ]);
       } catch (notifErr) {
-        // Don't block the order flow if this fails; just log it.
         console.warn("Failed to create order notification:", notifErr);
       }
 
@@ -1666,18 +1679,25 @@ export default function CustomerInventoryPage() {
                 {/* Contact Person (editable, REQUIRED) */}
                 <input
                   placeholder="Contact Person (required)"
+                  maxLength={30}
+                  pattern="[A-Za-z\s]*"
+                  title="Letters only, maximum 30 characters"
                   className={`border px-3 py-2 rounded ${
                     !customerInfo.contact_person?.trim()
                       ? "border-red-400 focus:ring-red-500"
                       : ""
                   }`}
                   value={customerInfo.contact_person}
-                  onChange={(e) =>
-                    setCustomerInfo({
-                      ...customerInfo,
-                      contact_person: e.target.value,
-                    })
-                  }
+                  onChange={(e) => {
+                    // allow letters and spaces only, enforce 30 chars
+                    const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
+                    if (value.length <= 30) {
+                      setCustomerInfo({
+                        ...customerInfo,
+                        contact_person: value,
+                      });
+                    }
+                  }}
                 />
 
                 {/* Address pickers */}
@@ -1768,16 +1788,28 @@ export default function CustomerInventoryPage() {
 
                 <input
                   placeholder="House Number & Street Name"
+                  maxLength={30}
+                  title="Maximum 30 characters only"
                   className="border px-3 py-2 rounded col-span-2"
                   value={houseStreet}
-                  onChange={(e) => setHouseStreet(e.target.value)}
+                  onChange={(e) => {
+                    if (e.target.value.length <= 30) {
+                      setHouseStreet(e.target.value);
+                    }
+                  }}
                 />
                 <input
                   placeholder="Landmark"
+                  maxLength={30}
+                  title="Maximum 30 characters only"
                   className="border px-3 py-2 rounded col-span-2"
                   value={customerInfo.landmark || ""}
                   onChange={(e) =>
-                    setCustomerInfo({ ...customerInfo, landmark: e.target.value })
+                    e.target.value.length <= 30 &&
+                    setCustomerInfo({
+                      ...customerInfo,
+                      landmark: e.target.value,
+                    })
                   }
                 />
                 <input
