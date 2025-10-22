@@ -9,13 +9,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "@/utils/eventEmitter";
 import { toast } from "sonner";
 
-/* ------------------------------------------------------------------
-   TIMEZONE CONTROL
-   - Set to "PH" to force Asia/Manila everywhere
-   - Set to "LOCAL" to use the user's computer timezone everywhere
-------------------------------------------------------------------- */
-const DISPLAY_TIMEZONE: "PH" | "LOCAL" = "PH"; // ← change to "LOCAL" if you prefer device time
-const PH_TZ = "Asia/Manila";
+// ✅ PH datetime helpers (your lib)
+import {
+  formatPHDate,
+  formatPHTime,
+  formatPHISODate,
+  parseDbDate,
+} from "@/lib/datetimePH";
 
 /* ----------------------------- Types ----------------------------- */
 type NotificationRow = {
@@ -102,47 +102,24 @@ const TYPE_PRIORITY: Record<string, number> = {
   delivery_to_ship: 1,
 };
 
-/* ----------------------------- Time helpers ----------------------------- */
-/** Return a Date object **interpreted** in our chosen timezone. */
-function dateInDisplayTZ(input: string | Date): Date {
-  const d = typeof input === "string" ? new Date(input) : input;
-  if (DISPLAY_TIMEZONE === "LOCAL") return new Date(d); // device local
-  // Convert to PH wall clock time by re-parsing a PH-localized string.
-  return new Date(d.toLocaleString("en-US", { timeZone: PH_TZ }));
-}
-
-/** yyyy-mm-dd for grouping ("Today / Earlier") computed in our display tz */
-function dayKey(input: string | Date) {
-  const d = dateInDisplayTZ(input);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-/** Pretty date-time formatter using our display tz */
-function formatDisplayDate(input?: string | Date | null) {
-  if (!input) return "—";
-  const d = typeof input === "string" ? new Date(input) : input;
-  const opts: Intl.DateTimeFormatOptions = {
+/* ----------------------------- PH time helpers ----------------------------- */
+/** yyyy-mm-dd for grouping using PH day boundaries */
+function dayKeyPH(input: string | Date) {
+  const d = input instanceof Date ? input : parseDbDate(input);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
     year: "numeric",
-    month: "short",
+    month: "2-digit",
     day: "2-digit",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-    ...(DISPLAY_TIMEZONE === "PH" ? { timeZone: PH_TZ } : {}),
-  };
-  return new Intl.DateTimeFormat("en-PH", opts).format(d);
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-/** yyyy-mm-dd in display tz (used by expiring scan bounds) */
-function dateOnlyISO(input: Date) {
-  const d = dateInDisplayTZ(input);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+/** Add N days and return PH yyyy-mm-dd (for expiring scan bounds) */
+function addDaysPHISO(date: Date, days: number) {
+  const d = new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+  return formatPHISODate(d); // uses Asia/Manila internally
 }
 
 /* ----------------------------- Other helpers ----------------------------- */
@@ -463,13 +440,11 @@ export default function NotificationBell() {
     };
   }, [supabase, pathname, router]);
 
-  /* ---------- Expiring items scanner (every 5 min) ---------- */
+  /* ---------- Expiring items scanner (every 5 min) — PH dates ---------- */
   useEffect(() => {
     const scan = async () => {
-      const todayKey = dateOnlyISO(new Date());
-      const in7Key = dateOnlyISO(
-        new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      );
+      const todayKey = formatPHISODate(new Date()); // yyyy-mm-dd in PH
+      const in7Key = addDaysPHISO(new Date(), 7); // +7 days in PH
 
       const { data, error } = await supabase
         .from("inventory")
@@ -487,7 +462,7 @@ export default function NotificationBell() {
           title: `⏰ Expiring soon: ${item.product_name}`,
           message: `${item.product_name} (${item.sku}) • ${item.quantity} ${
             item.unit ?? ""
-          } • Exp: ${formatDisplayDate(item.expiration_date)}`,
+          } • Exp: ${formatPHDate(item.expiration_date)}`,
         });
       }
     };
@@ -497,18 +472,18 @@ export default function NotificationBell() {
     return () => clearInterval(timer);
   }, [supabase]);
 
-  /* ---------- Badge & groups ---------- */
+  /* ---------- Badge & groups (PH day boundaries) ---------- */
   const unreadCount = useMemo(
     () => notifications.filter((n) => !n.is_read).length,
     [notifications]
   );
 
   const grouped = useMemo(() => {
-    const today = dayKey(new Date());
+    const today = dayKeyPH(new Date());
     const todayList: NotificationRow[] = [];
     const earlierList: NotificationRow[] = [];
     for (const n of notifications) {
-      (dayKey(n.created_at) === today ? todayList : earlierList).push(n);
+      (dayKeyPH(n.created_at) === today ? todayList : earlierList).push(n);
     }
     return { todayList, earlierList };
   }, [notifications]);
@@ -673,7 +648,8 @@ export default function NotificationBell() {
         </div>
         <div className={["text-sm", msgClass].join(" ")}>{n.message}</div>
         <div className={["text-xs mt-1", timeClass].join(" ")}>
-          {formatDisplayDate(n.created_at)}
+          {/* TODO: UPDATED TIME AND DATE */}
+          {/* {formatPHTime(n.created_at)} · {formatPHDate(n.created_at)} */}
         </div>
       </li>
     );
@@ -833,7 +809,9 @@ export default function NotificationBell() {
                     <div className="text-xs text-gray-500">Date Created</div>
                     <div className="font-medium">
                       {orderModalData.date_created
-                        ? formatDisplayDate(orderModalData.date_created)
+                        ? `${formatPHTime(
+                            orderModalData.date_created
+                          )} · ${formatPHDate(orderModalData.date_created)}`
                         : "—"}
                     </div>
                   </div>

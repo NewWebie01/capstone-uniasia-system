@@ -16,6 +16,15 @@ import {
   Info,
 } from "lucide-react";
 
+function makeInFilter(col: string, ids: (string | number)[]) {
+  if (!ids.length) return `${col}=in.(NULL)`; // harmless no-op
+  if (typeof ids[0] === "string") {
+    const quoted = ids.map((v) => `"${String(v)}"`).join(",");
+    return `${col}=in.(${quoted})`;
+  }
+  return `${col}=in.(${ids.join(",")})`;
+}
+
 /* ----------------------------- Date formatter ----------------------------- */
 const formatPH = (
   d?: string | number | Date | null,
@@ -61,7 +70,7 @@ type OrderRow = {
   id: number;
   total_amount: number | null;
   status: string | null; // fallback only; prefer truck_deliveries.status
-  truck_delivery_id?: number | null;
+  truck_delivery_id?: string | null;
   // NEW: admin-saved totals/fields
   grand_total_with_interest?: number | null;
   sales_tax?: number | null;
@@ -82,7 +91,7 @@ type CustomerTx = {
 };
 
 type Delivery = {
-  id: number;
+  id: string;
   status: string | null;
   schedule_date: string | null;
   eta_date?: string | null;
@@ -167,18 +176,18 @@ export default function TrackPage() {
 
   const [txns, setTxns] = useState<CustomerTx[]>([]);
   const [deliveriesById, setDeliveriesById] = useState<
-    Record<number, Delivery>
+    Record<string, Delivery>
   >({});
 
   // Confirm modal
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [selectedDeliveryId, setSelectedDeliveryId] = useState<number | null>(
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(
     null
   );
 
   // Realtime
-  const [orderIds, setOrderIds] = useState<number[]>([]);
-  const [deliveryIds, setDeliveryIds] = useState<number[]>([]);
+  const [orderIds, setOrderIds] = useState<string[]>([]);
+  const [deliveryIds, setDeliveryIds] = useState<string[]>([]);
   const ordersSubKey = useRef<string>("");
   const deliveriesSubKey = useRef<string>("");
 
@@ -215,7 +224,7 @@ export default function TrackPage() {
     setCurrentPage(Math.max(1, Math.min(totalPages, p)));
 
   /* -------------------------- Helper: fetch deliveries --------------------- */
-  const fetchDeliveriesByIds = async (ids: number[]) => {
+  const fetchDeliveriesByIds = async (ids: string[]) => {
     if (!ids.length) return;
     const { data, error } = await supabase
       .from("truck_deliveries")
@@ -298,12 +307,12 @@ order_items (
         setTxns(txList);
 
         // Collect order & delivery IDs
-        const oset = new Set<number>();
-        const dset = new Set<number>();
+        const oset = new Set<string>();
+        const dset = new Set<string>();
         for (const t of txList) {
           for (const o of t.orders ?? []) {
-            oset.add(o.id);
-            if (o.truck_delivery_id != null) dset.add(o.truck_delivery_id);
+            oset.add(String(o.id));
+            if (o.truck_delivery_id) dset.add(String(o.truck_delivery_id));
           }
         }
         const oids = Array.from(oset);
@@ -319,22 +328,25 @@ order_items (
   }, []);
 
   /* ----------------------- Realtime: truck_deliveries ---------------------- */
+  /* ----------------------- Realtime: truck_deliveries ---------------------- */
   useEffect(() => {
+    // ✅ use deliveryIds here (not orderIds)
     const key = deliveryIds
       .slice()
-      .sort((a, b) => a - b)
+      .sort((a, b) => a.localeCompare(b))
       .join(",");
     if (!key || key === deliveriesSubKey.current) return;
     deliveriesSubKey.current = key;
 
-    const channel = supabase.channel("realtime-truck-deliveries");
+    const channel = supabase.channel(`realtime-truck-deliveries-${key}`);
+    const filter = makeInFilter("id", deliveryIds); // ids are UUID strings → quoted
     channel.on(
       "postgres_changes",
       {
         event: "*",
         schema: "public",
         table: "truck_deliveries",
-        filter: `id=in.(${key})`,
+        filter,
       },
       (payload) => {
         const n = payload.new as Delivery | undefined;
@@ -362,14 +374,14 @@ order_items (
 
   /* ----------------------------- Realtime: orders -------------------------- */
   useEffect(() => {
-    const key = orderIds
+    const key = deliveryIds
       .slice()
-      .sort((a, b) => a - b)
+      .sort((a, b) => a.localeCompare(b))
       .join(",");
     if (!key || key === ordersSubKey.current) return;
     ordersSubKey.current = key;
 
-    const channel = supabase.channel("realtime-orders");
+    const channel = supabase.channel(`realtime-orders-${key}`);
     channel.on(
       "postgres_changes",
       {
@@ -382,7 +394,7 @@ order_items (
         const newRow = payload.new as {
           id: number;
           status: string | null;
-          truck_delivery_id: number | null;
+          truck_delivery_id: string | null;
           grand_total_with_interest?: number | null;
           sales_tax?: number | null;
           per_term_amount?: number | null;
@@ -414,8 +426,11 @@ order_items (
         );
 
         // If order linked to a delivery, ensure we fetched that delivery
-        if (newRow && newRow.truck_delivery_id != null) {
-          const id: number = newRow.truck_delivery_id;
+        if (
+          typeof newRow?.truck_delivery_id === "string" &&
+          newRow.truck_delivery_id
+        ) {
+          const id = newRow.truck_delivery_id; // string (UUID)
           setDeliveryIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
           await fetchDeliveriesByIds([id]);
         }
@@ -936,11 +951,9 @@ order_items (
 
                 if (error) {
                   console.error("Delivery update failed:", error);
-                  toast.error(
-                    "❌ Failed to confirm delivery. Please try again."
-                  );
+                  toast.error("Failed to confirm delivery. Please try again.");
                 } else {
-                  toast.success("✅ Thank you! Delivery has been confirmed.");
+                  toast.success("Thank you! Delivery has been confirmed.");
                 }
 
                 setConfirmOpen(false);

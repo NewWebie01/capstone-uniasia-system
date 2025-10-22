@@ -1,7 +1,7 @@
 // app/transaction-history/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs";
 import * as XLSX from "xlsx";
 
@@ -10,11 +10,11 @@ type OrderStatus = "pending" | "rejected" | "completed" | string;
 
 type Transaction = {
   id: string;
-  date: string;
-  code: string; // generated TXN code
-  customer: string | null;
-  status: OrderStatus;
-  total_amount: number | null;
+  date: string; // v_transaction_history_full.date_completed
+  code: string; // v_transaction_history_full.transaction_code
+  customer: string | null; // v_transaction_history_full.customer_name
+  status: OrderStatus; // v_transaction_history_full.status
+  total: number | null; // v_transaction_history_full.grand_total_with_interest
 };
 
 /* ---------------------- PH Time Utilities ----------------------- */
@@ -23,15 +23,15 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const addHours = (d: Date, h: number) =>
   new Date(d.getTime() + h * 3600 * 1000);
 
-function startOfPHDay(dUTC: Date): Date {
+function startOfPHDay(dUTC: Date) {
   const msLocal = dUTC.getTime() + PH_OFFSET_HOURS * 3600 * 1000;
   const localMid = new Date(Math.floor(msLocal / MS_PER_DAY) * MS_PER_DAY);
   return new Date(localMid.getTime() - PH_OFFSET_HOURS * 3600 * 1000);
 }
-function endOfPHDay(dUTC: Date): Date {
+function endOfPHDay(dUTC: Date) {
   return new Date(startOfPHDay(dUTC).getTime() + MS_PER_DAY - 1);
 }
-function startOfPHWeek(dUTC: Date): Date {
+function startOfPHWeek(dUTC: Date) {
   const start = startOfPHDay(dUTC);
   const local = addHours(start, PH_OFFSET_HOURS);
   const day = local.getUTCDay();
@@ -39,39 +39,39 @@ function startOfPHWeek(dUTC: Date): Date {
   const localMonday = new Date(local.getTime() - mondayDelta * MS_PER_DAY);
   return addHours(localMonday, -PH_OFFSET_HOURS);
 }
-function endOfPHWeek(dUTC: Date): Date {
+function endOfPHWeek(dUTC: Date) {
   return new Date(startOfPHWeek(dUTC).getTime() + 7 * MS_PER_DAY - 1);
 }
-function startOfPHMonth(dUTC: Date): Date {
+function startOfPHMonth(dUTC: Date) {
   const local = addHours(dUTC, PH_OFFSET_HOURS);
   const firstLocal = new Date(
     Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1)
   );
   return addHours(firstLocal, -PH_OFFSET_HOURS);
 }
-function endOfPHMonth(dUTC: Date): Date {
+function endOfPHMonth(dUTC: Date) {
   const local = addHours(dUTC, PH_OFFSET_HOURS);
   const firstNextLocal = new Date(
     Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 1)
   );
   return new Date(addHours(firstNextLocal, -PH_OFFSET_HOURS).getTime() - 1);
 }
-function startOfPHYear(dUTC: Date): Date {
+function startOfPHYear(dUTC: Date) {
   const local = addHours(dUTC, PH_OFFSET_HOURS);
   const firstLocal = new Date(Date.UTC(local.getUTCFullYear(), 0, 1));
   return addHours(firstLocal, -PH_OFFSET_HOURS);
 }
-function endOfPHYear(dUTC: Date): Date {
+function endOfPHYear(dUTC: Date) {
   const local = addHours(dUTC, PH_OFFSET_HOURS);
   const firstNextLocal = new Date(Date.UTC(local.getUTCFullYear() + 1, 0, 1));
   return new Date(addHours(firstNextLocal, -PH_OFFSET_HOURS).getTime() - 1);
 }
-function startOfPHDateString(yyyy_mm_dd: string): Date {
+function startOfPHDateString(yyyy_mm_dd: string) {
   const [y, m, d] = yyyy_mm_dd.split("-").map((n) => parseInt(n, 10));
   const localMidnightUTC = new Date(Date.UTC(y, m - 1, d));
   return addHours(localMidnightUTC, -PH_OFFSET_HOURS);
 }
-function endOfPHDateString(yyyy_mm_dd: string): Date {
+function endOfPHDateString(yyyy_mm_dd: string) {
   return new Date(startOfPHDateString(yyyy_mm_dd).getTime() + MS_PER_DAY - 1);
 }
 function fmtPHDateISO(d: Date) {
@@ -98,19 +98,6 @@ function formatDate(value: string) {
     day: "2-digit",
   });
 }
-function formatDateTimePH(value: string) {
-  const d = new Date(value);
-  d.setHours(d.getHours() + PH_OFFSET_HOURS);
-  return d.toLocaleString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-    timeZone: "Asia/Manila",
-  });
-}
 function currency(value: number | null | undefined) {
   const n = value ?? 0;
   if (Number.isNaN(n)) return "—";
@@ -128,10 +115,8 @@ function StatusBadge({ status }: { status: OrderStatus }) {
       : s === "rejected"
       ? "bg-red-100 text-red-700 border-red-200"
       : "bg-yellow-100 text-yellow-700 border-yellow-200";
-
   const label =
     s === "completed" ? "Completed" : s === "rejected" ? "Rejected" : "Pending";
-
   return (
     <span
       className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-medium ${styles}`}
@@ -157,15 +142,17 @@ async function logActivity(action: string, details: any = {}) {
         .single();
       if (u?.role) userRole = u.role;
     }
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: userEmail,
-        user_role: userRole,
-        action,
-        details,
-        created_at: new Date().toISOString(),
-      },
-    ]);
+    await supabase
+      .from("activity_logs")
+      .insert([
+        {
+          user_email: userEmail,
+          user_role: userRole,
+          action,
+          details,
+          created_at: new Date().toISOString(),
+        },
+      ]);
   } catch {}
 }
 
@@ -175,7 +162,7 @@ export default function TransactionHistoryPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Pagination (10 only)
+  // Pagination (10 per page)
   const ITEMS_PER_PAGE = 10;
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -194,7 +181,7 @@ export default function TransactionHistoryPage() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
 
-  // --- Re-auth (password gate) ---
+  // Re-auth
   const [showReauth, setShowReauth] = useState(false);
   const [reauthEmail, setReauthEmail] = useState<string>("");
   const [reauthPassword, setReauthPassword] = useState("");
@@ -205,57 +192,92 @@ export default function TransactionHistoryPage() {
   const needsReauth = () =>
     !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
 
+  // Debounced refetch timer for realtime
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshSoon = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      loadTransactions();
+    }, 400);
+  }, []);
+
+  // Shared loader so Realtime can reuse it
+  const loadTransactions = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("v_transaction_history_full")
+      .select(
+        `
+        id,
+        date_completed,
+        transaction_code,
+        customer_name,
+        status,
+        grand_total_with_interest
+      `
+      )
+      .order("date_completed", { ascending: false });
+
+    if (error) {
+      console.error("Error loading transactions:", error.message);
+      setTransactions([]);
+    } else {
+      const rows: Transaction[] = (data ?? []).map((o: any) => ({
+        id: String(o.id),
+        date: o.date_completed,
+        code: o.transaction_code ?? "",
+        customer: o.customer_name ?? "—",
+        status: (o.status ?? "completed") as OrderStatus,
+        total: o.grand_total_with_interest ?? null,
+      }));
+      setTransactions(rows);
+    }
+    setLoading(false);
+  }, []);
+
   useEffect(() => {
     logActivity("Visited Transaction History Page");
   }, []);
 
-  // Load initial list (COMPLETED ONLY)
+  // Initial load
   useEffect(() => {
-    async function load() {
-      setLoading(true);
+    let cancelled = false;
+    (async () => {
+      await loadTransactions();
+      if (cancelled) return;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadTransactions]);
 
-      const { data, error } = await supabase
-        .from("orders")
-        .select(
-          `
-          id,
-          date_created,
-          total_amount,
-          status,
-          customers (
-            name
-          )
-        `
-        )
-        .eq("status", "completed")
-        .order("date_created", { ascending: false });
+  // Realtime: listen on ORDERS (source of the view) and refetch the view
+  useEffect(() => {
+    // We refetch on any INSERT/UPDATE/DELETE because status/paid_amount/total can change the view membership.
+    const channel = supabase
+      .channel("txn-history-realtime")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "orders" },
+        () => refreshSoon()
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "orders" },
+        () => refreshSoon()
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "orders" },
+        () => refreshSoon()
+      )
+      .subscribe();
 
-      if (error) {
-        setTransactions([]);
-        setLoading(false);
-        return;
-      }
-
-      const rows: Transaction[] = (data ?? []).map((o: any) => {
-        const date = new Date(o.date_created);
-        const dateCode = date.toISOString().split("T")[0].replace(/-/g, "");
-        const shortId = String(o.id).split("-")[0].toUpperCase();
-        const txnCode = `TXN-${dateCode}-${shortId}`;
-        return {
-          id: String(o.id),
-          date: o.date_created,
-          code: txnCode,
-          customer: o?.customers?.name ?? "—",
-          status: (o?.status ?? "pending") as OrderStatus,
-          total_amount: o.total_amount ?? null,
-        };
-      });
-
-      setTransactions(rows);
-      setLoading(false);
-    }
-    load();
-  }, []);
+    return () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      supabase.removeChannel(channel);
+    };
+  }, [refreshSoon]);
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -266,7 +288,7 @@ export default function TransactionHistoryPage() {
         t.code ?? "",
         t.customer ?? "",
         t.status,
-        currency(t.total_amount),
+        currency(t.total),
       ]
         .join(" ")
         .toLowerCase()
@@ -274,12 +296,10 @@ export default function TransactionHistoryPage() {
     );
   }, [searchQuery, transactions]);
 
-  // Reset to page 1 when results change
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, transactions]);
 
-  // Pagination calculations
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE)),
     [filtered.length]
@@ -297,16 +317,16 @@ export default function TransactionHistoryPage() {
         <div>
           <h1 className="pt-1 text-3xl font-bold mb-1">Transaction History</h1>
           <p className="text-sm text-gray-500 mb-2">
-            View <span className="font-medium">completed</span> orders with
-            their totals, search, and export by time frame.
+            View <span className="font-medium">completed & fully-paid</span>{" "}
+            orders. Search and export by time frame.
           </p>
         </div>
       </div>
 
       <input
         type="search"
-        aria-label="Search by date, code, customer, status, or amount"
-        placeholder="Search by date, code, customer, status, or amount…"
+        aria-label="Search by date, code, customer, status, or total"
+        placeholder="Search by date, code, customer, status, or total…"
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
         className="border px-4 py-2 mb-4 w-full md:w-1/2 rounded-full"
@@ -330,20 +350,20 @@ export default function TransactionHistoryPage() {
               <th className="px-4 py-3">Transaction Code</th>
               <th className="px-4 py-3">Customer</th>
               <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3 text-right">Total Amount</th>
+              <th className="px-4 py-3 text-right">Total</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="px-4 py-6 text-center text-gray-500" colSpan={5}>
+                <td colSpan={5} className="text-center py-6 text-gray-500">
                   Loading…
                 </td>
               </tr>
             ) : paginated.length === 0 ? (
               <tr>
-                <td className="px-4 py-6 text-center text-gray-500" colSpan={5}>
-                  No completed transactions found.
+                <td colSpan={5} className="text-center py-6 text-gray-500">
+                  No fully paid transactions found.
                 </td>
               </tr>
             ) : (
@@ -355,16 +375,14 @@ export default function TransactionHistoryPage() {
                   <td className="px-4 py-3">
                     <StatusBadge status={t.status} />
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    {currency(t.total_amount)}
-                  </td>
+                  <td className="px-4 py-3 text-right">{currency(t.total)}</td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
 
-        {/* Pagination controls */}
+        {/* Pagination */}
         <div className="flex items-center justify-between px-4 py-3 border-t text-sm">
           <div className="text-gray-600">
             Showing{" "}
@@ -462,7 +480,7 @@ export default function TransactionHistoryPage() {
     </div>
   );
 
-  // ---- helpers in component scope ----
+  /* ---------------------- handlers ---------------------- */
   async function handleExportNow() {
     setExportError("");
     if (needsReauth()) {
@@ -474,17 +492,7 @@ export default function TransactionHistoryPage() {
     await doExportNow();
   }
 
-  function describeRangeLabel(
-    choice:
-      | "today"
-      | "this_week"
-      | "this_month"
-      | "this_year"
-      | "custom"
-      | "all",
-    s?: Date,
-    e?: Date
-  ) {
+  function describeRangeLabel(choice: ExportChoice, s?: Date, e?: Date) {
     switch (choice) {
       case "today":
         return `TODAY_${fmtPHDateISO(s!)}`;
@@ -504,20 +512,19 @@ export default function TransactionHistoryPage() {
   function resolveRange(): { start?: Date; end?: Date; label: string } {
     const now = new Date();
     if (exportChoice === "all") return { label: "ALL" };
-
     if (exportChoice === "today") {
-      const s = startOfPHDay(now);
-      const e = endOfPHDay(now);
+      const s = startOfPHDay(now),
+        e = endOfPHDay(now);
       return { start: s, end: e, label: describeRangeLabel("today", s, e) };
     }
     if (exportChoice === "this_week") {
-      const s = startOfPHWeek(now);
-      const e = endOfPHWeek(now);
+      const s = startOfPHWeek(now),
+        e = endOfPHWeek(now);
       return { start: s, end: e, label: describeRangeLabel("this_week", s, e) };
     }
     if (exportChoice === "this_month") {
-      const s = startOfPHMonth(now);
-      const e = endOfPHMonth(now);
+      const s = startOfPHMonth(now),
+        e = endOfPHMonth(now);
       return {
         start: s,
         end: e,
@@ -525,13 +532,13 @@ export default function TransactionHistoryPage() {
       };
     }
     if (exportChoice === "this_year") {
-      const s = startOfPHYear(now);
-      const e = endOfPHYear(now);
+      const s = startOfPHYear(now),
+        e = endOfPHYear(now);
       return { start: s, end: e, label: describeRangeLabel("this_year", s, e) };
     }
     if (!customStart || !customEnd) return { label: "CUSTOM_INVALID" };
-    const s = startOfPHDateString(customStart);
-    const e = endOfPHDateString(customEnd);
+    const s = startOfPHDateString(customStart),
+      e = endOfPHDateString(customEnd);
     return { start: s, end: e, label: describeRangeLabel("custom", s, e) };
   }
 
@@ -540,19 +547,19 @@ export default function TransactionHistoryPage() {
     try {
       const { start, end, label } = resolveRange();
 
+      // Export from the SAME VIEW for consistency
       let q = supabase
-        .from("orders")
+        .from("v_transaction_history_full")
         .select(
           `
-          id,
-          date_created,
-          total_amount,
+          date_completed,
+          transaction_code,
+          customer_name,
           status,
-          customers(name)
+          grand_total_with_interest
         `
         )
-        .eq("status", "completed")
-        .order("date_created", { ascending: false });
+        .order("date_completed", { ascending: false });
 
       if (exportChoice !== "all") {
         if (!start || !end) {
@@ -560,35 +567,29 @@ export default function TransactionHistoryPage() {
           setExporting(false);
           return;
         }
-        const endExclusive = new Date(end.getTime() + 1);
-        const startPH = toPHSqlNoTZ(start);
-        const endPH = toPHSqlNoTZ(endExclusive);
-        q = q.gte("date_created", startPH).lt("date_created", endPH);
+        const endExclusive = new Date(end.getTime() + 1); // inclusive UI → exclusive query
+        q = q
+          .gte("date_completed", toPHSqlNoTZ(start))
+          .lt("date_completed", toPHSqlNoTZ(endExclusive));
       }
 
       const { data, error } = await q;
       if (error) throw error;
 
-      const rows = (data ?? []).map((o: any) => {
-        const date = new Date(o.date_created);
-        const dateCode = date.toISOString().split("T")[0].replace(/-/g, "");
-        const shortId = String(o.id).split("-")[0].toUpperCase();
-        const txnCode = `TXN-${dateCode}-${shortId}`;
-        return [
-          txnCode,
-          o?.customers?.name ?? "—",
-          (o?.status ?? "pending") as string,
-          currency(o.total_amount ?? 0),
-          formatDateTimePH(o.date_created),
-        ];
-      });
+      const rows = (data ?? []).map((o: any) => [
+        formatDate(o.date_completed),
+        o.transaction_code ?? "",
+        o.customer_name ?? "—",
+        String(o.status ?? "completed"),
+        currency(o.grand_total_with_interest ?? 0),
+      ]);
 
       const headers = [
+        "Date",
         "Transaction Code",
         "Customer",
         "Status",
-        "Total Amount (PHP)",
-        "Created (PH)",
+        "Total (PHP)",
       ];
       const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
       const wb = XLSX.utils.book_new();
@@ -600,17 +601,14 @@ export default function TransactionHistoryPage() {
 
       await logActivity(
         exportChoice === "all"
-          ? "Exported Transaction History (Completed Only, ALL)"
-          : `Exported Transaction History (Completed Only, ${label})`,
+          ? "Exported Transaction History (Fully Paid, ALL)"
+          : `Exported Transaction History (Fully Paid, ${label})`,
         {
           rows: rows.length,
           filter: exportChoice,
-          completed_only: true,
+          fully_paid_only: true,
           ...(exportChoice !== "all"
-            ? {
-                start_utc: start?.toISOString(),
-                end_utc: end?.toISOString(),
-              }
+            ? { start_utc: start?.toISOString(), end_utc: end?.toISOString() }
             : {}),
         }
       );
@@ -667,7 +665,7 @@ function ExportModal(props: {
         <p className="text-sm text-gray-700 text-center mb-4">
           Choose a time frame (PH timezone). <br />
           <span className="text-xs text-gray-500">
-            *Only <strong>Completed</strong> orders are included.
+            *Only <strong>Completed & Fully Paid</strong> orders are included.
           </span>
         </p>
 
@@ -694,7 +692,7 @@ function ExportModal(props: {
                   name="exportChoice"
                   value={opt.key}
                   checked={exportChoice === (opt.key as any)}
-                  onChange={() => props.setExportChoice(opt.key as any)}
+                  onChange={() => setExportChoice(opt.key as any)}
                 />
                 <span className="text-sm">{opt.label}</span>
               </label>
