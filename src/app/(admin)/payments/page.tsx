@@ -3,13 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import {
-  CheckCircle2,
-  XCircle,
-  FileImage,
-  Search,
-  Loader2,
-} from "lucide-react";
+import { CheckCircle2, XCircle, FileImage, Search, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -36,9 +30,7 @@ const formatPH = (
         year: "numeric",
         month: "short",
         day: "numeric",
-        ...(opts === "datetime"
-          ? { hour: "numeric", minute: "2-digit", hour12: true }
-          : {}),
+        ...(opts === "datetime" ? { hour: "numeric", minute: "2-digit", hour12: true } : {}),
         timeZone: "Asia/Manila",
       }).format(new Date(d))
     : "—";
@@ -94,8 +86,26 @@ type CustomerLite = {
   id: string;
   code: string | null; // TXN
   name: string | null;
-  email: string | null;
+  email: string | null; // stored lowercase
 };
+
+/* ---------------- Customer notifications (to Customer) via API ---------------- */
+async function createCustomerNotifPaymentReceived(paymentId: string, adminEmail: string | null) {
+  try {
+    const res = await fetch("/api/customer-notifications/payment-received", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paymentId, adminEmail }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j?.error || "API failed");
+    }
+  } catch (e: any) {
+    console.error("[notif] API error:", e?.message || e);
+    toast.error(`Couldn't create customer notification: ${e?.message || "API error"}`);
+  }
+}
 
 export default function AdminPaymentsPage() {
   const [loading, setLoading] = useState(true);
@@ -106,27 +116,24 @@ export default function AdminPaymentsPage() {
 
   // filters
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState<
-    "all" | "pending" | "received" | "rejected"
-  >("pending");
+  const [status, setStatus] = useState<"all" | "pending" | "received" | "rejected">("pending");
 
   // pagination (client-side)
   const [page, setPage] = useState(1);
   const pageSize = 10;
 
   // image modal
+  theImageModal: {
+  }
   const [imgOpen, setImgOpen] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [imgMeta, setImgMeta] = useState<{
-    cheque?: string | null;
-    bank?: string | null;
-  } | null>(null);
+  const [imgMeta, setImgMeta] = useState<{ cheque?: string | null; bank?: string | null } | null>(
+    null
+  );
 
   // confirmation modal
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmType, setConfirmType] = useState<"receive" | "reject" | null>(
-    null
-  );
+  const [confirmType, setConfirmType] = useState<"receive" | "reject" | null>(null);
   const [targetRow, setTargetRow] = useState<PaymentRow | null>(null);
 
   // row-level lock so BOTH buttons disable after confirming
@@ -151,12 +158,13 @@ export default function AdminPaymentsPage() {
           .order("date", { ascending: false });
         if (cErr) throw cErr;
 
+        // store emails lowercased for exact match with customer bell
         setCustomers(
           (custs ?? []).map((c: any) => ({
             id: String(c.id),
             code: c.code ?? null,
             name: c.name ?? null,
-            email: c.email ?? null,
+            email: c.email ? String(c.email).toLowerCase() : null, // ✅
           }))
         );
 
@@ -189,14 +197,10 @@ export default function AdminPaymentsPage() {
           setPayments((prev) => [payload.new as PaymentRow, ...prev]);
         } else if (payload.eventType === "UPDATE") {
           setPayments((prev) =>
-            prev.map((p) =>
-              p.id === (payload.new as any).id ? (payload.new as PaymentRow) : p
-            )
+            prev.map((p) => (p.id === (payload.new as any).id ? (payload.new as PaymentRow) : p))
           );
         } else if (payload.eventType === "DELETE") {
-          setPayments((prev) =>
-            prev.filter((p) => p.id !== (payload.old as any).id)
-          );
+          setPayments((prev) => prev.filter((p) => p.id !== (payload.old as any).id));
         }
       }
     );
@@ -253,10 +257,7 @@ export default function AdminPaymentsPage() {
     setConfirmOpen(true);
   }
 
-  function openImage(
-    url: string,
-    meta?: { cheque?: string | null; bank?: string | null }
-  ) {
+  function openImage(url: string, meta?: { cheque?: string | null; bank?: string | null }) {
     setImgSrc(url);
     setImgMeta(meta || null);
     setImgOpen(true);
@@ -267,10 +268,7 @@ export default function AdminPaymentsPage() {
     });
   }
 
-  async function notifyCustomerByEmail(
-    paymentId: string,
-    action: "receive" | "reject"
-  ) {
+  async function notifyCustomerByEmail(paymentId: string, action: "receive" | "reject") {
     const res = await fetch("/api/send-payment-confirmation", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -294,13 +292,10 @@ export default function AdminPaymentsPage() {
 
     try {
       if (confirmType === "receive") {
-        const { error: rpcErr } = await supabase.rpc(
-          "receive_payment_and_apply",
-          {
-            p_payment_id: targetRow.id,
-            p_admin_email: meEmail,
-          }
-        );
+        const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
+          p_payment_id: targetRow.id,
+          p_admin_email: meEmail,
+        });
         if (rpcErr) throw rpcErr;
 
         setPayments((prev) =>
@@ -315,8 +310,13 @@ export default function AdminPaymentsPage() {
               : p
           )
         );
+
         toast.success("Payment received and applied to installments.");
-        // optionally email notify:
+
+        // 🔔 Notify the customer via API (service role insert)
+        await createCustomerNotifPaymentReceived(targetRow.id, meEmail);
+
+        // (optional) email:
         // await notifyCustomerByEmail(targetRow.id, "receive");
       } else if (confirmType === "reject") {
         const { data: updated, error } = await supabase
@@ -334,13 +334,11 @@ export default function AdminPaymentsPage() {
         }
 
         setPayments((prev) =>
-          prev.map((p) =>
-            p.id === targetRow.id ? { ...p, status: "rejected" } : p
-          )
+          prev.map((p) => (p.id === targetRow.id ? { ...p, status: "rejected" } : p))
         );
 
         toast.success("Payment rejected.");
-        // optionally email notify:
+        // (optional) email:
         // await notifyCustomerByEmail(targetRow.id, "reject");
       }
     } catch (err: any) {
@@ -368,13 +366,11 @@ export default function AdminPaymentsPage() {
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-7xl px-6 py-6">
         <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
-            Payments
-          </h1>
+          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payments</h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Review submitted cheques. Mark as <b>Received</b> to post the payment
-          and deduct it from the customer’s balance.
+          Review submitted cheques. Mark as <b>Received</b> to post the payment and deduct it from
+          the customer’s balance.
         </p>
 
         {/* Filters */}
@@ -403,9 +399,7 @@ export default function AdminPaymentsPage() {
         {/* Pagination header */}
         <div className="flex items-center justify-between mt-4">
           <div className="text-sm text-slate-600">
-            {loading
-              ? "Loading…"
-              : `Showing ${paginated.length} of ${filtered.length} filtered payments`}
+            {loading ? "Loading…" : `Showing ${paginated.length} of ${filtered.length} filtered payments`}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -462,24 +456,15 @@ export default function AdminPaymentsPage() {
                           : "bg-yellow-100 text-yellow-900"
                       }`}
                     >
-                      {s === "received"
-                        ? "Received"
-                        : s === "rejected"
-                        ? "Rejected"
-                        : "Pending"}
+                      {s === "received" ? "Received" : s === "rejected" ? "Rejected" : "Pending"}
                     </span>
                   );
 
                   const disableAll = locked.has(p.id) || s !== "pending";
 
                   return (
-                    <tr
-                      key={p.id}
-                      className={idx % 2 ? "bg-neutral-50" : "bg-white"}
-                    >
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        {formatPH(p.created_at)}
-                      </td>
+                    <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
+                      <td className="py-2.5 px-3 whitespace-nowrap">{formatPH(p.created_at)}</td>
                       <td className="py-2.5 px-3">
                         <div className="font-mono truncate">{code}</div>
                         <div className="text-[11px] text-gray-600 truncate">
@@ -489,12 +474,8 @@ export default function AdminPaymentsPage() {
                       <td className="py-2.5 px-3 font-mono tabular-nums whitespace-nowrap">
                         {formatCurrency(p.amount)}
                       </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap truncate">
-                        {p.bank_name ?? "—"}
-                      </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap truncate">
-                        {p.cheque_number ?? "—"}
-                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap truncate">{p.bank_name ?? "—"}</td>
+                      <td className="py-2.5 px-3 whitespace-nowrap truncate">{p.cheque_number ?? "—"}</td>
                       <td className="py-2.5 px-3 whitespace-nowrap">
                         {p.cheque_date ? formatPH(p.cheque_date, "date") : "—"}
                       </td>
@@ -524,11 +505,7 @@ export default function AdminPaymentsPage() {
                             onClick={() => openConfirm("receive", p)}
                             disabled={disableAll}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={
-                              disableAll
-                                ? "Action not available"
-                                : "Mark as Received"
-                            }
+                            title={disableAll ? "Action not available" : "Mark as Received"}
                           >
                             <CheckCircle2 className="h-4 w-4" />
                             <span>Receive</span>
@@ -537,9 +514,7 @@ export default function AdminPaymentsPage() {
                             onClick={() => openConfirm("reject", p)}
                             disabled={disableAll}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={
-                              disableAll ? "Action not available" : "Reject"
-                            }
+                            title={disableAll ? "Action not available" : "Reject"}
                           >
                             <XCircle className="h-4 w-4" />
                             <span>Reject</span>
@@ -552,10 +527,7 @@ export default function AdminPaymentsPage() {
 
                 {paginated.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={9}
-                      className="py-10 text-center text-neutral-400"
-                    >
+                    <td colSpan={9} className="py-10 text-center text-neutral-400">
                       {loading ? (
                         <span className="inline-flex items-center gap-2">
                           <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -602,9 +574,7 @@ export default function AdminPaymentsPage() {
       <Dialog open={confirmOpen} onOpenChange={(o) => setConfirmOpen(o)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>
-              {confirmType === "receive" ? "Mark as Received" : "Reject Cheque"}
-            </DialogTitle>
+            <DialogTitle>{confirmType === "receive" ? "Mark as Received" : "Reject Cheque"}</DialogTitle>
             <DialogDescription>
               {confirmType === "receive"
                 ? "This will post the payment and deduct it from the customer’s balance."
@@ -615,15 +585,11 @@ export default function AdminPaymentsPage() {
           <div className="mt-2 rounded border p-3 text-sm">
             <div className="flex justify-between">
               <span className="text-gray-600">Amount</span>
-              <span className="font-mono font-semibold">
-                {formatCurrency(targetRow?.amount || 0)}
-              </span>
+              <span className="font-mono font-semibold">{formatCurrency(targetRow?.amount || 0)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Cheque #</span>
-              <span className="font-mono">
-                {targetRow?.cheque_number || "—"}
-              </span>
+              <span className="font-mono">{targetRow?.cheque_number || "—"}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Bank</span>
@@ -662,18 +628,13 @@ export default function AdminPaymentsPage() {
           <DialogHeader>
             <DialogTitle>Cheque Image</DialogTitle>
             <DialogDescription className="text-xs">
-              {imgMeta?.bank ? `Bank: ${imgMeta.bank}` : ""}{" "}
-              {imgMeta?.cheque ? `• Cheque #: ${imgMeta.cheque}` : ""}
+              {imgMeta?.bank ? `Bank: ${imgMeta.bank}` : ""} {imgMeta?.cheque ? `• Cheque #: ${imgMeta.cheque}` : ""}
             </DialogDescription>
           </DialogHeader>
 
           <div className="rounded-lg overflow-hidden border">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={imgSrc || ""}
-              alt="Cheque"
-              className="w-full h-auto object-contain max-h-[70vh] bg-black/5"
-            />
+            <img src={imgSrc || ""} alt="Cheque" className="w-full h-auto object-contain max-h-[70vh] bg-black/5" />
           </div>
 
           <DialogFooter>
