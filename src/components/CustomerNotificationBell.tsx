@@ -1,5 +1,5 @@
+// src/components/CustomerNotificationBell.tsx
 "use client";
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BellRing, CheckCheck, Loader2, Clipboard } from "lucide-react";
 import supabase from "@/config/supabaseClient";
@@ -13,10 +13,14 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 
+// Add this just under your imports
+type SupabaseChannelState = "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
+
+
 const MAX_ITEMS = 5;
 const SEEN_KEY_BASE = "customer-notifs-seen-v1";
 
-/** Only show these admin-driven events to customers */
+/** Customer-facing events we show */
 const ADMIN_EVENT_TYPES = [
   "order_approved",
   "order_rejected",
@@ -47,8 +51,8 @@ type NotificationRow = {
   customer_id?: string | null;
 
   actor_email?: string | null;
-  actor_role?: string | null; // "admin" | "customer"
-  source?: string | null;     // "system" | "customer" | "admin"
+  actor_role?: string | null;
+  source?: string | null;
 
   metadata?: Record<string, any> | null;
 };
@@ -66,13 +70,13 @@ function timeAgo(iso?: string | null) {
   return `${days}d ago`;
 }
 
-/** True if this notification is admin/system driven (not by the current customer) */
-function isAdminDrivenStrict(n: NotificationRow, currentUserEmail?: string | null) {
+/** Allow only customer-facing types; optionally exclude self-authored */
+function isAllowedNotification(n: NotificationRow, currentUserEmail?: string | null) {
   const typeOk = !!n.type && (ADMIN_EVENT_TYPES as readonly string[]).includes(n.type);
-  const roleIsAdmin = String(n.actor_role || "").toLowerCase() === "admin";
-  const sourceIsAllowed = ["system", "admin"].includes(String(n.source || "").toLowerCase());
-  const notSelfActor = !n.actor_email || n.actor_email !== currentUserEmail;
-  return !!typeOk && !!notSelfActor && (roleIsAdmin || sourceIsAllowed);
+  if (!typeOk) return false;
+  // Optional: avoid showing notifications triggered by this same user
+  if (currentUserEmail && n.actor_email && n.actor_email === currentUserEmail) return false;
+  return true;
 }
 
 export default function CustomerNotificationBell() {
@@ -83,7 +87,7 @@ export default function CustomerNotificationBell() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
-  const emailRef = useRef<string | null>(null); // keep latest email for realtime filtering
+  const emailRef = useRef<string | null>(null); // always-latest email for realtime filter
   const [seenKey, setSeenKey] = useState(SEEN_KEY_BASE);
 
   const ringRef = useRef<HTMLAudioElement | null>(null);
@@ -93,14 +97,20 @@ export default function CustomerNotificationBell() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [selected, setSelected] = useState<NotificationRow | null>(null);
 
-  // Load user
+  // Dedupe guard for realtime payloads
+  const seenIds = useRef<Set<string | number>>(new Set());
+
+  // A fast lookup set for allowed types
+  const allowedTypeSet = useMemo(() => new Set<string>(ADMIN_EVENT_TYPES as unknown as string[]), []);
+
+  // Load user once
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       const email = user?.email || null;
       const name = (user?.user_metadata?.name as string) || email || null;
       setUserEmail(email);
-      emailRef.current = email; // keep ref current
+      emailRef.current = email;
       setUserName(name);
       setSeenKey(`${SEEN_KEY_BASE}:${email || "guest"}`);
     })();
@@ -141,19 +151,25 @@ export default function CustomerNotificationBell() {
 
   useEffect(() => setUnseen(unseenCount), [unseenCount]);
 
-  /** Initial fetch — show recent admin/system events to everyone; cap to 5 */
-  async function fetchScoped(currentUserEmail?: string | null, _name?: string | null) {
+  /** Initial fetch — scope to this customer's email; cap to MAX_ITEMS and dedupe */
+  async function fetchScoped(currentUserEmail?: string | null) {
     setLoading(true);
     try {
+      if (!currentUserEmail) {
+        setList([]);
+        setLoading(false);
+        return;
+      }
+
       let query = supabase
         .from("customer_notifications")
         .select("*")
-        .in("type", [...ADMIN_EVENT_TYPES])
+        .eq("recipient_email", currentUserEmail)
         .order("created_at", { ascending: false })
         .limit(60);
 
-      // optional: don't show items triggered by this exact user (if ever)
-      if (currentUserEmail) query = query.neq("actor_email", currentUserEmail);
+      // Optional: don't show items triggered by this exact user
+      query = query.neq("actor_email", currentUserEmail);
 
       const { data, error } = await query;
       if (error || !data) {
@@ -163,11 +179,14 @@ export default function CustomerNotificationBell() {
         return;
       }
 
+      // Filter by allowed types and slice
       const rows = (data as NotificationRow[])
-        .filter((n) => isAdminDrivenStrict(n, currentUserEmail))
-        .slice(0, MAX_ITEMS);
+        .filter((n) => !!n.type && allowedTypeSet.has(n.type!) && isAllowedNotification(n, currentUserEmail));
 
-      setList(rows);
+      // Seed dedupe set
+      for (const r of rows) seenIds.current.add(r.id);
+
+      setList(rows.slice(0, MAX_ITEMS));
     } catch (e) {
       console.error("customer_notifications fetch exception", e);
       setList([]);
@@ -176,80 +195,90 @@ export default function CustomerNotificationBell() {
     }
   }
 
+  // Fetch when we know the user
   useEffect(() => {
-    if (userEmail || userName) fetchScoped(userEmail, userName);
+    fetchScoped(userEmail);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userEmail, userName]);
+  }, [userEmail]);
 
-  // Realtime for everyone: subscribe once, filter in handler
+  /**
+   * Realtime: subscribe INSERT-only with server-side filter.
+   * Re-created whenever userEmail changes, and auto-logs connection states.
+   */
   useEffect(() => {
-    const ch = supabase.channel("customer-notifs-realtime");
+    if (!userEmail) return; // wait for session
 
-    const onInsert = (payload: any) => {
-      const row = payload.new as NotificationRow;
-      if (isAdminDrivenStrict(row, emailRef.current)) {
-        handleIncoming(row);
-      }
-    };
+    const channel = supabase.channel(`customer-notifs:${userEmail}`, {
+      config: {
+        broadcast: { self: false },
+        presence: { key: userEmail },
+      },
+    });
 
-    const onUpdate = (payload: any) => {
-      const row = payload.new as NotificationRow;
-      if (isAdminDrivenStrict(row, emailRef.current)) {
-        setList((prev) => {
-          const idx = prev.findIndex((x) => x.id === row.id);
-          if (idx === -1) return prev;
-          const copy = [...prev];
-          copy[idx] = row;
-          return copy;
-        });
-      }
-    };
-
-    const onDelete = (payload: any) => {
-      const id = payload.old?.id as string | number | undefined;
-      if (id == null) return;
-      setList((prev) => prev.filter((n) => n.id !== id));
-    };
-
-    ch.on(
+    channel.on(
       "postgres_changes",
-      { event: "*", schema: "public", table: "customer_notifications" },
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "customer_notifications",
+        filter: `recipient_email=eq.${userEmail}`,
+      },
       (payload: any) => {
-        switch (payload.eventType) {
-          case "INSERT":
-            onInsert(payload);
-            break;
-          case "UPDATE":
-            onUpdate(payload);
-            break;
-          case "DELETE":
-            onDelete(payload);
-            break;
-        }
+        const row = payload.new as NotificationRow;
+
+        // Dedupe guard: ignore if we've seen this id already
+        if (row?.id != null && seenIds.current.has(row.id)) return;
+
+        // Filter by allowed types & not self-authored
+        if (!row?.type || !allowedTypeSet.has(row.type)) return;
+        if (!isAllowedNotification(row, emailRef.current)) return;
+
+        // Accept now and mark seen in-memory so it won't duplicate
+        if (row?.id != null) seenIds.current.add(row.id);
+
+        // Insert at top, cap
+        setList((prev) => {
+          const next = [row, ...prev.filter((x) => x.id !== row.id)];
+          return next.slice(0, MAX_ITEMS);
+        });
+
+        // SFX + Toast
+        try {
+          ringRef.current?.play().catch(() => {});
+        } catch {}
+        toast.info(row.title || "New notification", {
+          description: row.message || "",
+        });
       }
     );
 
-    void ch.subscribe();
+
+
+// ...
+
+// Subscribe with correct type guard (string comparisons are fine)
+void channel.subscribe((status: SupabaseChannelState) => {
+  console.log("[customer-notifs realtime]", status, "for", userEmail);
+
+  if (status === "SUBSCRIBED") {
+    // initial subscribe or re-subscribe: backfill anything missed
+    fetchScoped(emailRef.current);
+  } else if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+    // optional: soft refetch after a short delay
+    setTimeout(() => fetchScoped(emailRef.current), 1000);
+  }
+  // CLOSED => nothing to do; cleanup handled in return()
+});
+
+
+
 
     return () => {
-      try { supabase.removeChannel(ch); } catch {}
+      try {
+        supabase.removeChannel(channel);
+      } catch {}
     };
-  }, []); // subscribe once
-
-  const handleIncoming = (row: NotificationRow) => {
-    if (!isAdminDrivenStrict(row, emailRef.current)) return;
-
-    setList((prev) => {
-      const dedup = [row, ...prev.filter((x) => x.id !== row.id)];
-      return dedup.slice(0, MAX_ITEMS);
-    });
-
-    try {
-      ringRef.current?.play().catch(() => {});
-    } catch {}
-
-    toast.info(row.title || "New notification", { description: row.message || "" });
-  };
+  }, [userEmail, allowedTypeSet]); // rebind when email changes
 
   // Click-away & ESC to close dropdown
   useEffect(() => {
@@ -261,6 +290,7 @@ export default function CustomerNotificationBell() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
+
     document.addEventListener("mousedown", onClick);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -338,16 +368,16 @@ export default function CustomerNotificationBell() {
             ) : (
               <ul className="divide-y">
                 {list.map((n) => {
-                  const seen = !!seenMap[n.id];
+                  const isSeen = !!seenMap[n.id];
                   return (
                     <li
                       key={String(n.id)}
                       onClick={() => openDetails(n)}
-                      className={`px-3 py-3 hover:bg-gray-50 cursor-pointer ${!seen ? "bg-yellow-50/60" : ""}`}
+                      className={`px-3 py-3 hover:bg-gray-50 cursor-pointer ${!isSeen ? "bg-yellow-50/60" : ""}`}
                     >
                       <div className="flex items-start gap-2">
                         <div
-                          className={`mt-0.5 w-2 h-2 rounded-full ${!seen ? "bg-yellow-500/80" : "bg-gray-300"} shrink-0`}
+                          className={`mt-0.5 w-2 h-2 rounded-full ${!isSeen ? "bg-yellow-500/80" : "bg-gray-300"} shrink-0`}
                         />
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-gray-900 line-clamp-1">
@@ -383,6 +413,7 @@ export default function CustomerNotificationBell() {
                     hour: "numeric",
                     minute: "2-digit",
                     hour12: true,
+                    timeZone: "Asia/Manila",
                   })}
                 </span>
               ) : null}
