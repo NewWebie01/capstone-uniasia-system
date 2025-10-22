@@ -7,16 +7,17 @@ import { BellIcon } from "@heroicons/react/24/solid";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "@/utils/eventEmitter";
+import { toast } from "sonner";
 
 /* ----------------------------- Types ----------------------------- */
 type NotificationRow = {
   id: string;
-  type: string; // 'order' | 'payment' | 'expiration' | 'system' | ...
+  type: string;
   title: string | null;
   message: string | null;
-  related_id: string | null; // order_id, payment_id, or inventory_id
+  related_id: string | null;
   is_read: boolean;
-  created_at: string; // ISO
+  created_at: string;
   user_email?: string | null;
 };
 
@@ -57,9 +58,38 @@ type OrderFull = {
     email: string | null;
     phone: string | null;
     address: string | null;
-    code?: string | null; // transaction code
+    code?: string | null;
   } | null;
   order_items: OrderItemFull[];
+};
+
+/* ----------------------------- Config ----------------------------- */
+/** Visible types for the Admin bell UI */
+const VISIBLE_TYPES = new Set([
+  "order",
+  "order_created",
+  "order_completed",
+  "order_approved",
+  "payment",
+  "payment_received",
+  "expiration",
+  "delivery_to_ship",
+  "delivery_to_receive",
+  "delivery_delivered",
+]);
+
+/** When collapsing duplicates, prefer higher number */
+const TYPE_PRIORITY: Record<string, number> = {
+  order: 3,
+  order_created: 2,
+  order_approved: 2,
+  order_completed: 2,
+  payment_received: 3,
+  payment: 2,
+  expiration: 1,
+  delivery_delivered: 2,
+  delivery_to_receive: 2,
+  delivery_to_ship: 1,
 };
 
 /* ----------------------------- Helpers ----------------------------- */
@@ -90,6 +120,9 @@ function formatPHDate(d?: string | Date | null) {
 function kindMeta(type?: string) {
   switch ((type || "").toLowerCase()) {
     case "order":
+    case "order_created":
+    case "order_completed":
+    case "order_approved":
       return {
         icon: "🛒",
         label: "Order",
@@ -97,6 +130,7 @@ function kindMeta(type?: string) {
         cardBorderClass: "border-l-4 border-blue-400",
       };
     case "payment":
+    case "payment_received":
       return {
         icon: "💳",
         label: "Payment",
@@ -110,6 +144,15 @@ function kindMeta(type?: string) {
         badgeClass: "bg-orange-50 text-orange-700 ring-1 ring-orange-200",
         cardBorderClass: "border-l-4 border-orange-400",
       };
+    case "delivery_to_ship":
+    case "delivery_to_receive":
+    case "delivery_delivered":
+      return {
+        icon: "🚚",
+        label: "Delivery",
+        badgeClass: "bg-purple-50 text-purple-700 ring-1 ring-purple-200",
+        cardBorderClass: "border-l-4 border-purple-400",
+      };
     default:
       return {
         icon: "🔔",
@@ -120,17 +163,58 @@ function kindMeta(type?: string) {
   }
 }
 
-/** Avoid dupes for same type+related_id within last 24h */
-async function upsertRecentNotification(
+/** Canonical key for dedupe across different types representing same event */
+function canonicalKeyFromSystemRow(r: any): string {
+  if (r.order_id) return `order:${r.order_id}`;
+  if (r.metadata?.payment_id) return `payment:${String(r.metadata.payment_id)}`;
+  if (r.item_id) return `expiration:${r.item_id}`;
+  return `${String(r.type || "system").toLowerCase()}:${r.id}`;
+}
+
+/** Normalize a system row to the UI NotificationRow */
+function normalizeSystemRow(r: any): NotificationRow {
+  let related_id: string | null = null;
+  if (r.order_id) related_id = String(r.order_id);
+  else if (r.item_id) related_id = String(r.item_id);
+  else if (r.metadata?.payment_id) related_id = String(r.metadata.payment_id);
+
+  return {
+    id: r.id,
+    type: r.type,
+    title: r.title,
+    message: r.message,
+    created_at: r.created_at,
+    related_id,
+    is_read: Boolean(r.read),
+    user_email: r.user_email ?? null,
+  };
+}
+
+/** Choose which row wins when keys collide (by priority then recency) */
+function choosePreferred(a: any, b: any) {
+  const ta = String(a.type || "").toLowerCase();
+  const tb = String(b.type || "").toLowerCase();
+  const pa = TYPE_PRIORITY[ta] ?? 0;
+  const pb = TYPE_PRIORITY[tb] ?? 0;
+  if (pa !== pb) return pa > pb ? a : b;
+  // tie-breaker: newer created_at wins
+  const da = new Date(a.created_at).getTime();
+  const db = new Date(b.created_at).getTime();
+  return db > da ? b : a;
+}
+
+/** Only used for expiration scans (orders/payments come from server) */
+async function upsertRecentExpiration(
   supabase: SupabaseClient<any>,
-  payload: Omit<NotificationRow, "id" | "is_read" | "created_at">
+  payload: { item_id: number; title: string; message: string }
 ) {
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
   const { data: existing } = await supabase
     .from("system_notifications")
     .select("id")
-    .eq("type", payload.type)
-    .eq("related_id", payload.related_id)
+    .eq("type", "expiration")
+    .eq("item_id", payload.item_id)
     .gte("created_at", oneDayAgo)
     .limit(1)
     .maybeSingle();
@@ -138,19 +222,27 @@ async function upsertRecentNotification(
   if (existing) return existing.id;
 
   const { data: inserted, error } = await supabase
-    .from("notifications")
-    .insert([{ ...payload }])
+    .from("system_notifications")
+    .insert([
+      {
+        type: "expiration",
+        title: payload.title,
+        message: payload.message,
+        item_id: payload.item_id,
+        read: false,
+        source: "system",
+      },
+    ])
     .select("id")
     .single();
 
   if (error) {
-    console.error("Failed to insert notification:", error.message);
+    console.error("Failed to insert system notification:", error.message);
     return null;
   }
   return inserted?.id ?? null;
 }
 
-/** Fetch a full order with FKs resolved (customers + items->inventory) */
 async function fetchOrderFull(
   supabase: SupabaseClient<any>,
   orderId: string
@@ -187,107 +279,135 @@ export default function NotificationBell() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
 
-  // order-details modal
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [orderModalLoading, setOrderModalLoading] = useState(false);
   const [orderModalData, setOrderModalData] = useState<OrderFull | null>(null);
 
-  // Dedup for realtime orders
-  const lastOrderId = useRef<string | null>(null);
+  /** Keys we've already displayed (order:<id>, payment:<id>, expiration:<id>) */
+  const seenKeysRef = useRef<Set<string>>(new Set());
 
-  /* ---------- Load existing notifications on mount ---------- */
+  /* ---------- Load existing (filter + collapse duplicates by canonical key) ---------- */
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
-        .from("notifications")
+        .from("system_notifications")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(200);
 
-      if (!error && data) setNotifications(data as NotificationRow[]);
+      if (!error && data) {
+        // collapse duplicates by canonical key
+        const bucket = new Map<string, any>();
+        for (const r of data as any[]) {
+          const tLower = String(r.type || "").toLowerCase();
+          if (!VISIBLE_TYPES.has(tLower)) continue;
+
+          const key = canonicalKeyFromSystemRow(r);
+          const existing = bucket.get(key);
+          if (!existing) {
+            bucket.set(key, r);
+          } else {
+            bucket.set(key, choosePreferred(existing, r));
+          }
+        }
+
+        const finalRows = Array.from(bucket.values()).sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+
+        // seed dedupe set and map to UI rows
+        const mapped = finalRows.map((r) => {
+          const key = canonicalKeyFromSystemRow(r);
+          seenKeysRef.current.add(key);
+          return normalizeSystemRow(r);
+        });
+
+        setNotifications(mapped);
+      }
     })();
   }, [supabase]);
 
-  /* ---------- Realtime: notifications table (INSERT/UPDATE/DELETE) ---------- */
+  /* ---------- Realtime (filter + canonical dedupe) + toasts ---------- */
   useEffect(() => {
-    const channel = supabase.channel("notifications_realtime");
-
+    const channel = supabase.channel("system_notifications_realtime");
     channel.on(
       "postgres_changes",
-      { event: "*", schema: "public", table: "notifications" },
+      { event: "*", schema: "public", table: "system_notifications" },
       (payload) => {
         if (payload.eventType === "INSERT") {
-          const row = payload.new as NotificationRow;
-          setNotifications((prev) => [row, ...prev]);
+          const r: any = payload.new;
+          const tLower = String(r.type || "").toLowerCase();
+          if (!VISIBLE_TYPES.has(tLower)) return;
+
+          const key = canonicalKeyFromSystemRow(r);
+          if (seenKeysRef.current.has(key)) return; // <- stop 2nd copy (e.g., order + order_created)
+          seenKeysRef.current.add(key);
+
+          const n = normalizeSystemRow(r);
+          setNotifications((prev) => [n, ...prev]);
+
+          // Toasts fire only once per key (first time we see it)
+          if (key.startsWith("order:")) {
+            toast.success(n.title ?? "New Order", {
+              description: n.message ?? undefined,
+              action: {
+                label: "Open",
+                onClick: async () => {
+                  if (n.related_id) {
+                    setOrderModalOpen(true);
+                    setOrderModalLoading(true);
+                    const full = await fetchOrderFull(supabase, n.related_id);
+                    setOrderModalData(full);
+                    setOrderModalLoading(false);
+                  }
+                },
+              },
+            });
+          } else if (key.startsWith("payment:")) {
+            toast.success(n.title ?? "Payment Received", {
+              description: n.message ?? undefined,
+              action: {
+                label: "Payments",
+                onClick: async () => {
+                  try {
+                    if (n.related_id)
+                      sessionStorage.setItem(
+                        "scroll-to-payment-id",
+                        n.related_id
+                      );
+                  } catch {}
+                  if (pathname === "/payments") {
+                    setTimeout(
+                      () => emit("scroll-to-payment", n.related_id || ""),
+                      50
+                    );
+                  } else {
+                    await router.push("/payments");
+                  }
+                },
+              },
+            });
+          }
         } else if (payload.eventType === "UPDATE") {
-          const row = payload.new as NotificationRow;
+          const r: any = payload.new;
+          const tLower = String(r.type || "").toLowerCase();
+          if (!VISIBLE_TYPES.has(tLower)) return;
+
           setNotifications((prev) =>
-            prev.map((n) => (n.id === row.id ? row : n))
+            prev.map((x) => (x.id === r.id ? normalizeSystemRow(r) : x))
           );
         } else if (payload.eventType === "DELETE") {
-          const row = payload.old as NotificationRow;
-          setNotifications((prev) => prev.filter((n) => n.id !== row.id));
+          const r: any = payload.old;
+          setNotifications((prev) => prev.filter((x) => x.id !== r.id));
         }
       }
     );
-
     channel.subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [supabase]);
-
-  /* ---------- Realtime: orders INSERT -> create notification ---------- */
-  useEffect(() => {
-    const channel = supabase
-      .channel("orders_channel")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "orders" },
-        async (payload) => {
-          const order = payload.new as { id: string; customer_id: string };
-          if (lastOrderId.current === order.id) return;
-          lastOrderId.current = order.id;
-
-          const full = await fetchOrderFull(supabase, order.id);
-          const custName = full?.customers?.name || "Customer";
-          const items = full?.order_items?.length || 0;
-
-          const title = "🛒 New Order Received";
-          const code = full?.customers?.code;
-          const msg = `${custName}${code ? ` • ${code}` : ""}: ${items} item${
-            items === 1 ? "" : "s"
-          }`;
-
-          await upsertRecentNotification(supabase, {
-            type: "order",
-            title,
-            message: msg,
-            related_id: order.id,
-            user_email: null,
-          });
-
-          setNotifications((prev) => [
-            {
-              id: crypto.randomUUID(),
-              type: "order",
-              title,
-              message: msg,
-              related_id: order.id,
-              is_read: false,
-              created_at: new Date().toISOString(),
-              user_email: null,
-            },
-            ...prev,
-          ]);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [supabase]);
+  }, [supabase, pathname, router]);
 
   /* ---------- Expiring items scanner (every 5 min) ---------- */
   useEffect(() => {
@@ -308,14 +428,12 @@ export default function NotificationBell() {
       const items = data as unknown as ExpiringItem[];
 
       for (const item of items) {
-        await upsertRecentNotification(supabase, {
-          type: "expiration",
+        await upsertRecentExpiration(supabase, {
+          item_id: item.id,
           title: `⏰ Expiring soon: ${item.product_name}`,
           message: `${item.product_name} (${item.sku}) • ${item.quantity} ${
             item.unit ?? ""
           } • Exp: ${formatPHDate(item.expiration_date)}`,
-          related_id: String(item.id),
-          user_email: null,
         });
       }
     };
@@ -347,15 +465,16 @@ export default function NotificationBell() {
   }, [notifications]);
 
   /* ---------- Actions ---------- */
-  const openModal = () => {
-    setIsModalOpen(true); // open only; don't auto-mark read
-  };
+  const openModal = () => setIsModalOpen(true);
 
   const markOneRead = async (id: string) => {
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
     );
-    await supabase.from("notifications").update({ is_read: true }).eq("id", id);
+    await supabase
+      .from("system_notifications")
+      .update({ read: true })
+      .eq("id", id);
   };
 
   const goToPayments = async (paymentId: string) => {
@@ -363,7 +482,6 @@ export default function NotificationBell() {
       sessionStorage.setItem("scroll-to-payment-id", paymentId);
     } catch {}
     if (pathname === "/payments") {
-      // already there -> ask page to scroll now
       setTimeout(() => emit("scroll-to-payment", paymentId), 50);
     } else {
       await router.push("/payments");
@@ -373,7 +491,8 @@ export default function NotificationBell() {
   const handleClickNotification = async (n: NotificationRow) => {
     await markOneRead(n.id);
 
-    if (n.type === "order" && n.related_id) {
+    const t = n.type.toLowerCase();
+    if (t.startsWith("order") && n.related_id) {
       setOrderModalOpen(true);
       setOrderModalLoading(true);
       const full = await fetchOrderFull(supabase, n.related_id);
@@ -382,8 +501,7 @@ export default function NotificationBell() {
       return;
     }
 
-    if (n.type === "payment" && n.related_id) {
-      // open the payments page and scroll/highlight the exact cheque row
+    if (t.startsWith("payment") && n.related_id) {
       await goToPayments(n.related_id);
       setIsModalOpen(false);
       return;
@@ -393,9 +511,9 @@ export default function NotificationBell() {
   const clearAll = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
     await supabase
-      .from("notifications")
-      .update({ is_read: true })
-      .eq("is_read", false);
+      .from("system_notifications")
+      .update({ read: true })
+      .eq("read", false);
   };
 
   const handleOpenInSales = async () => {
@@ -431,9 +549,9 @@ export default function NotificationBell() {
             : "bg-yellow-50 hover:bg-yellow-100 text-yellow-900 border-yellow-200",
         ].join(" ")}
         title={
-          n.type === "order"
+          n.type.toLowerCase().startsWith("order")
             ? "View Order Details"
-            : n.type === "payment"
+            : n.type.toLowerCase().startsWith("payment")
             ? "Open Payment"
             : undefined
         }
@@ -579,11 +697,12 @@ export default function NotificationBell() {
               </div>
             </div>
 
-            {orderModalLoading ? (
-              <div className="p-6">Loading…</div>
-            ) : !orderModalData ? (
+            {!orderModalData && !orderModalLoading && (
               <div className="p-6 text-sm text-red-600">Order not found.</div>
-            ) : (
+            )}
+            {orderModalLoading && <div className="p-6">Loading…</div>}
+
+            {orderModalData && (
               <div className="p-6 space-y-4">
                 {/* Header facts */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -608,9 +727,7 @@ export default function NotificationBell() {
                       {orderModalData.date_created
                         ? new Date(orderModalData.date_created).toLocaleString(
                             "en-PH",
-                            {
-                              timeZone: "Asia/Manila",
-                            }
+                            { timeZone: "Asia/Manila" }
                           )
                         : "—"}
                     </div>
