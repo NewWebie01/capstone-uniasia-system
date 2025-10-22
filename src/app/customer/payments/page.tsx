@@ -4,7 +4,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { Upload, FileImage, X, Calendar, Minus, Plus } from "lucide-react";
+import { Upload, FileImage, Minus, Plus } from "lucide-react";
+
 
 /* ----------------------------- Config ----------------------------- */
 const CHEQUE_BUCKET = "payments-cheques";
@@ -167,7 +168,6 @@ export default function CustomerPaymentsPage() {
   // Installments
   const [installments, setInstallments] = useState<InstallmentRow[]>([]);
   const [loadingInstallments, setLoadingInstallments] = useState(false);
-  const [showBreakdown, setShowBreakdown] = useState(false);
 
   // Multiplier for Credit (installments)
   const [termMultiplier, setTermMultiplier] = useState<number>(1);
@@ -1148,8 +1148,7 @@ const isFormValid =
   }
 
   /* ---------------------- Installment breakdown modal ---------------------- */
-  const openBreakdown = () => setShowBreakdown(true);
-  const closeBreakdown = () => setShowBreakdown(false);
+
 
   // Count rows paid (trust backend values)
   const paidCount = useMemo(() => {
@@ -1258,28 +1257,37 @@ const isFormValid =
                 })}
               </select>
 
-              {!!selectedPack && (
-                <div className="mt-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                  <div className="text-sm md:text-base text-gray-700">
-                    <span className="font-semibold">
-                      Remaining balance (incl. shipping):
-                    </span>{" "}
-                    <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
-                      {formatCurrency(selectedPack.balance)}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={openBreakdown}
-                    className="inline-flex items-center gap-2 self-start md:self-auto rounded-lg border border-amber-400 px-3 py-2 text-amber-700 hover:bg-amber-50"
-                    title="See your monthly payment schedule for this TXN"
-                  >
-                    <Calendar className="h-4 w-4" />
-                    View Breakdown
-                  </button>
-                </div>
-              )}
-            </div>
+               </div>  
+
+{/* Selected TXN summary + installment counters */}
+{!!selectedPack && (
+  <div className="mt-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+    <div className="text-sm md:text-base text-gray-700">
+      <span className="font-semibold">
+        Remaining balance (incl. shipping):
+      </span>{" "}
+      <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
+        {formatCurrency(selectedPack.balance)}
+      </span>
+    </div>
+
+    {/* Inline counters (Credit only) */}
+    {isCredit && (
+      <div className="inline-flex items-center gap-3 self-start md:self-auto rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <div>
+          <span className="font-semibold">Total Monthly Paid:</span>{" "}
+          <span className="font-bold">{paidCount}</span>
+        </div>
+        <span className="opacity-50">•</span>
+        <div>
+          <span className="font-semibold">Remaining Months:</span>{" "}
+          <span className="font-bold">{Math.max(0, remainingTerms)}</span>
+        </div>
+      </div>
+    )}
+  </div>
+)}
+
 
 {/* Amount (LOCKED) + controls */}
 <div className="col-span-1">
@@ -1701,190 +1709,7 @@ const isFormValid =
         )}
       </div>
 
-      {/* =================== Modal: Installment Breakdown =================== */}
-      {showBreakdown && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={closeBreakdown}
-            aria-hidden="true"
-          />
-          {/* Modal Box */}
-          <div className="absolute inset-0 flex items-center justify-center px-2 py-4">
-            <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl ring-1 ring-black/10 overflow-hidden animate-in fade-in zoom-in-90">
-              {/* Header */}
-              <div className="flex items-center justify-between px-7 py-4 border-b bg-gradient-to-r from-[#ffba20]/90 to-white/80">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Calendar className="h-5 w-5 text-amber-600 shrink-0" />
-                  <h3 className="text-lg md:text-xl font-bold tracking-tight text-neutral-900">
-                    Installment Breakdown
-                  </h3>
-                  {selectedPack?.code && (
-                    <span
-                      className="ml-3 truncate max-w-[220px] font-mono text-xs md:text-sm text-neutral-700 bg-yellow-100 rounded px-2 py-1 border border-yellow-300"
-                      title={selectedPack.code}
-                    >
-                      {selectedPack.code}
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={closeBreakdown}
-                  className="rounded-full p-2 hover:bg-amber-100 transition"
-                  aria-label="Close"
-                >
-                  <X className="h-4 w-4 text-neutral-600" />
-                </button>
-              </div>
 
-              {/* Body */}
-              <div className="px-7 py-5 bg-white">
-                {loadingInstallments ? (
-                  <div className="py-10 text-center text-sm text-gray-500 tracking-wide animate-pulse">
-                    Loading schedule…
-                  </div>
-                ) : installments.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-4">
-                    <span className="font-bold text-base text-gray-700 mb-1">
-                      No installment schedule found for this TXN.
-                    </span>
-                    {(selectedPack?.order?.per_term_amount ?? 0) > 0 && (
-                      <div className="w-full max-w-sm mt-3 text-center">
-                        <div className="flex flex-col gap-0.5 items-center mb-2">
-                          <span className="font-medium text-gray-500 text-xs">
-                            Terms:
-                          </span>
-                          <span className="font-mono text-base font-bold text-amber-700">
-                            {/* We can't know term count exactly without a schedule; omit here */}
-                            —
-                          </span>
-                        </div>
-                        <div className="flex flex-col gap-0.5 items-center mb-3">
-                          <span className="font-medium text-gray-500 text-xs">
-                            Per Month:
-                          </span>
-                          <span className="font-mono text-2xl font-extrabold text-blue-700 drop-shadow">
-                            {formatCurrency(
-                              round2(selectedPack?.order?.per_term_amount ?? 0)
-                            )}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    <div className="rounded-xl overflow-hidden shadow ring-1 ring-gray-200 bg-white">
-                      <table className="w-full text-xs align-middle">
-                        <thead>
-                          <tr
-                            className="uppercase tracking-wider text-[11px]"
-                            style={{ background: "#ffba20" }}
-                          >
-                            <th className="py-2 px-2 text-left font-bold text-neutral-900">
-                              Term
-                            </th>
-                            <th className="py-2 px-2 text-left font-bold text-neutral-900">
-                              Due Date
-                            </th>
-                            <th className="py-2 px-2 text-right font-bold text-neutral-900">
-                              Amount Due
-                            </th>
-                            <th className="py-2 px-2 text-right font-bold text-neutral-900">
-                              Amount Paid
-                            </th>
-                            <th className="py-2 px-2 text-center font-bold text-neutral-900">
-                              Status
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-{breakdownRows.map((row) => {
-  const due = round2(Number(row.amount_due || 0));
-  const paid = round2(Number(row.amount_paid || 0));
-  const isPaid = paid + EPS >= due;
-  const isLeftover = row.id === "__leftover__";
-
-  return (
-    <tr
-      key={row.id || `${row.term_no}:${row.due_date}`}
-      className="border-b last:border-b-0"
-    >
-      <td className="py-1.5 px-2 font-mono">
-        {row.term_no}{isLeftover ? "*" : ""}
-      </td>
-      <td className="py-1.5 px-2">
-        {isLeftover ? (
-          <>
-            —{" "}
-            <span className="ml-1 px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 text-[10px] align-middle">
-              Shipping / Adjustment
-            </span>
-          </>
-        ) : (
-          new Date(row.due_date + "T00:00:00").toLocaleDateString(
-            "en-PH",
-            { year: "numeric", month: "short", day: "2-digit" }
-          )
-        )}
-      </td>
-      <td className="py-1.5 px-2 text-right font-mono">
-        {formatCurrency(due)}
-      </td>
-      <td className="py-1.5 px-2 text-right font-mono">
-        {formatCurrency(paid)}
-      </td>
-      <td className="py-1.5 px-2 text-center">
-        {isPaid ? (
-          <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 font-semibold">
-            Paid
-          </span>
-        ) : (
-          <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700 font-semibold">
-            Pending
-          </span>
-        )}
-      </td>
-    </tr>
-  );
-})}
-
-                        </tbody>
-                      </table>
-
-
-                    </div>
-                    {/* Footer note & count */}
-                    <div className="mt-3 w-full flex items-end justify-between text-xs">
-                      <div className="text-amber-700">
-                        ⚠️ Delayed payments may incur penalties. Please pay on
-                        or before the due date.
-                      </div>
-                      <div className="font-semibold">
-                        Total Monthly Paid:{" "}
-                        <span className="font-bold text-blue-700">
-                          {paidCount}
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Footer */}
-              <div className="px-7 py-3 border-t bg-gray-50 flex justify-end">
-                <button
-                  onClick={closeBreakdown}
-                  className="px-5 py-1.5 rounded-lg border border-black font-semibold bg-black text-white hover:opacity-90 transition text-base"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
