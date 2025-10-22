@@ -15,7 +15,7 @@ type NotificationRow = {
   type: string;
   title: string | null;
   message: string | null;
-  related_id: string | null;
+  related_id: string | null; // order_id / payment_id / item_id / etc (for UI)
   is_read: boolean;
   created_at: string;
   user_email?: string | null;
@@ -64,7 +64,7 @@ type OrderFull = {
 };
 
 /* ----------------------------- Config ----------------------------- */
-/** Visible types for the Admin bell UI */
+/** Only show these types in the Admin bell UI */
 const VISIBLE_TYPES = new Set([
   "order",
   "order_created",
@@ -72,6 +72,8 @@ const VISIBLE_TYPES = new Set([
   "order_approved",
   "payment",
   "payment_received",
+  "return_created",
+  "account_request_submitted",
   "expiration",
   "delivery_to_ship",
   "delivery_to_receive",
@@ -86,6 +88,8 @@ const TYPE_PRIORITY: Record<string, number> = {
   order_completed: 2,
   payment_received: 3,
   payment: 2,
+  return_created: 3,
+  account_request_submitted: 3,
   expiration: 1,
   delivery_delivered: 2,
   delivery_to_receive: 2,
@@ -137,6 +141,20 @@ function kindMeta(type?: string) {
         badgeClass: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200",
         cardBorderClass: "border-l-4 border-emerald-400",
       };
+    case "return_created":
+      return {
+        icon: "🔁",
+        label: "Return",
+        badgeClass: "bg-pink-50 text-pink-700 ring-1 ring-pink-200",
+        cardBorderClass: "border-l-4 border-pink-400",
+      };
+    case "account_request_submitted":
+      return {
+        icon: "🧾",
+        label: "Account",
+        badgeClass: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200",
+        cardBorderClass: "border-l-4 border-indigo-400",
+      };
     case "expiration":
       return {
         icon: "⏰",
@@ -167,6 +185,9 @@ function kindMeta(type?: string) {
 function canonicalKeyFromSystemRow(r: any): string {
   if (r.order_id) return `order:${r.order_id}`;
   if (r.metadata?.payment_id) return `payment:${String(r.metadata.payment_id)}`;
+  if (r.metadata?.return_id) return `return:${String(r.metadata.return_id)}`;
+  if (r.metadata?.account_request_id)
+    return `account:${String(r.metadata.account_request_id)}`;
   if (r.item_id) return `expiration:${r.item_id}`;
   return `${String(r.type || "system").toLowerCase()}:${r.id}`;
 }
@@ -177,6 +198,9 @@ function normalizeSystemRow(r: any): NotificationRow {
   if (r.order_id) related_id = String(r.order_id);
   else if (r.item_id) related_id = String(r.item_id);
   else if (r.metadata?.payment_id) related_id = String(r.metadata.payment_id);
+  else if (r.metadata?.return_id) related_id = String(r.metadata.return_id);
+  else if (r.metadata?.account_request_id)
+    related_id = String(r.metadata.account_request_id);
 
   return {
     id: r.id,
@@ -203,7 +227,7 @@ function choosePreferred(a: any, b: any) {
   return db > da ? b : a;
 }
 
-/** Only used for expiration scans (orders/payments come from server) */
+/** Only used for expiration scans (orders/payments/returns/accounts come from server) */
 async function upsertRecentExpiration(
   supabase: SupabaseClient<any>,
   payload: { item_id: number; title: string; message: string }
@@ -283,7 +307,7 @@ export default function NotificationBell() {
   const [orderModalLoading, setOrderModalLoading] = useState(false);
   const [orderModalData, setOrderModalData] = useState<OrderFull | null>(null);
 
-  /** Keys we've already displayed (order:<id>, payment:<id>, expiration:<id>) */
+  /** Keys we've already displayed (order:<id>, payment:<id>, return:<id>, account:<id>, expiration:<id>) */
   const seenKeysRef = useRef<Set<string>>(new Set());
 
   /* ---------- Load existing (filter + collapse duplicates by canonical key) ---------- */
@@ -296,7 +320,6 @@ export default function NotificationBell() {
         .limit(200);
 
       if (!error && data) {
-        // collapse duplicates by canonical key
         const bucket = new Map<string, any>();
         for (const r of data as any[]) {
           const tLower = String(r.type || "").toLowerCase();
@@ -316,7 +339,6 @@ export default function NotificationBell() {
             new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         );
 
-        // seed dedupe set and map to UI rows
         const mapped = finalRows.map((r) => {
           const key = canonicalKeyFromSystemRow(r);
           seenKeysRef.current.add(key);
@@ -341,13 +363,13 @@ export default function NotificationBell() {
           if (!VISIBLE_TYPES.has(tLower)) return;
 
           const key = canonicalKeyFromSystemRow(r);
-          if (seenKeysRef.current.has(key)) return; // <- stop 2nd copy (e.g., order + order_created)
+          if (seenKeysRef.current.has(key)) return; // stop 2nd copy (e.g., order + order_created)
           seenKeysRef.current.add(key);
 
           const n = normalizeSystemRow(r);
           setNotifications((prev) => [n, ...prev]);
 
-          // Toasts fire only once per key (first time we see it)
+          // Toasts: fire only once per key (first time we see it)
           if (key.startsWith("order:")) {
             toast.success(n.title ?? "New Order", {
               description: n.message ?? undefined,
@@ -385,6 +407,29 @@ export default function NotificationBell() {
                   } else {
                     await router.push("/payments");
                   }
+                },
+              },
+            });
+          } else if (key.startsWith("return:") || tLower === "return_created") {
+            toast.info(n.title ?? "Return Request", {
+              description: n.message ?? undefined,
+              action: {
+                label: "Returns",
+                onClick: async () => {
+                  await router.push("/returns");
+                },
+              },
+            });
+          } else if (
+            key.startsWith("account:") ||
+            tLower === "account_request_submitted"
+          ) {
+            toast.info(n.title ?? "New Account Request", {
+              description: n.message ?? undefined,
+              action: {
+                label: "Review",
+                onClick: async () => {
+                  await router.push("/admin/accounts");
                 },
               },
             });
@@ -492,6 +537,7 @@ export default function NotificationBell() {
     await markOneRead(n.id);
 
     const t = n.type.toLowerCase();
+
     if (t.startsWith("order") && n.related_id) {
       setOrderModalOpen(true);
       setOrderModalLoading(true);
@@ -503,6 +549,18 @@ export default function NotificationBell() {
 
     if (t.startsWith("payment") && n.related_id) {
       await goToPayments(n.related_id);
+      setIsModalOpen(false);
+      return;
+    }
+
+    if (t === "return_created") {
+      await router.push("/returns");
+      setIsModalOpen(false);
+      return;
+    }
+
+    if (t === "account_request_submitted") {
+      await router.push("/admin/accounts");
       setIsModalOpen(false);
       return;
     }
@@ -553,6 +611,10 @@ export default function NotificationBell() {
             ? "View Order Details"
             : n.type.toLowerCase().startsWith("payment")
             ? "Open Payment"
+            : n.type === "return_created"
+            ? "Open Returns"
+            : n.type === "account_request_submitted"
+            ? "Review Account Request"
             : undefined
         }
       >
@@ -727,7 +789,16 @@ export default function NotificationBell() {
                       {orderModalData.date_created
                         ? new Date(orderModalData.date_created).toLocaleString(
                             "en-PH",
-                            { timeZone: "Asia/Manila" }
+                            {
+                              timeZone: "Asia/Manila",
+                              year: "numeric",
+                              month: "short",
+                              day: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                              hour12: true,
+                            }
                           )
                         : "—"}
                     </div>
