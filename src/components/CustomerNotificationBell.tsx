@@ -1,7 +1,9 @@
 // src/components/CustomerNotificationBell.tsx
 "use client";
+
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BellRing, CheckCheck, Loader2, Clipboard } from "lucide-react";
+import type { RealtimeChannel } from "@supabase/supabase-js";
+import { BellRing, CheckCheck, Loader2, Clipboard, Link as LinkIcon } from "lucide-react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 import {
@@ -13,14 +15,18 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 
-// Add this just under your imports
+/* ----------------------------- Config ----------------------------- */
 type SupabaseChannelState = "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
-
-
 const MAX_ITEMS = 5;
 const SEEN_KEY_BASE = "customer-notifs-seen-v1";
+const RT_POLL_MS = 15000; // fallback poll
+const RT_RETRY_MS = 4000;  // quick retry
 
-/** Customer-facing events we show */
+// tiny silent wav so browsers allow play() after any user interaction
+const PLAY_SILENT_WAV =
+  "data:audio/wav;base64,UklGRlQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAABAAAAA=";
+
+/** Customer-facing events we show (admin/system-driven only) */
 const ADMIN_EVENT_TYPES = [
   "order_approved",
   "order_rejected",
@@ -35,12 +41,14 @@ const ADMIN_EVENT_TYPES = [
   "delivery_delivered",
 ] as const;
 
+/* ----------------------------- Types ------------------------------ */
 type NotificationRow = {
   id: string | number;
   type?: string | null;
   title?: string | null;
   message?: string | null;
   created_at?: string | null;
+  updated_at?: string | null; // optional in DB
 
   recipient_email?: string | null;
   recipient_name?: string | null;
@@ -56,6 +64,20 @@ type NotificationRow = {
 
   metadata?: Record<string, any> | null;
 };
+
+/* ----------------------------- Helpers ---------------------------- */
+const formatPH = (d?: string | number | Date | null) =>
+  d
+    ? new Intl.DateTimeFormat("en-PH", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: "Asia/Manila",
+      }).format(new Date(d))
+    : "";
 
 function timeAgo(iso?: string | null) {
   if (!iso) return "";
@@ -74,11 +96,12 @@ function timeAgo(iso?: string | null) {
 function isAllowedNotification(n: NotificationRow, currentUserEmail?: string | null) {
   const typeOk = !!n.type && (ADMIN_EVENT_TYPES as readonly string[]).includes(n.type);
   if (!typeOk) return false;
-  // Optional: avoid showing notifications triggered by this same user
   if (currentUserEmail && n.actor_email && n.actor_email === currentUserEmail) return false;
+  if (n.source && !["admin", "system"].includes(n.source)) return false;
   return true;
 }
 
+/* ========================= Component ========================= */
 export default function CustomerNotificationBell() {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -87,26 +110,43 @@ export default function CustomerNotificationBell() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
-  const emailRef = useRef<string | null>(null); // always-latest email for realtime filter
+  const emailRef = useRef<string | null>(null);
   const [seenKey, setSeenKey] = useState(SEEN_KEY_BASE);
 
   const ringRef = useRef<HTMLAudioElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // Details modal
+  // Detail modal
   const [detailOpen, setDetailOpen] = useState(false);
   const [selected, setSelected] = useState<NotificationRow | null>(null);
 
-  // Dedupe guard for realtime payloads
+  // Dedupe guards
   const seenIds = useRef<Set<string | number>>(new Set());
+  const versionsRef = useRef<Map<string | number, string>>(new Map()); // id -> version
 
-  // A fast lookup set for allowed types
-  const allowedTypeSet = useMemo(() => new Set<string>(ADMIN_EVENT_TYPES as unknown as string[]), []);
+  // Channel & health
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const rtHealthyRef = useRef<boolean>(false);
+  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const retryTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load user once
+  // Allowed set (fast lookups)
+  const allowedTypeSet = useMemo(
+    () => new Set<string>(ADMIN_EVENT_TYPES as unknown as string[]),
+    []
+  );
+
+  // Compute a version key so UPDATEs with changed content also toast
+  const getVersion = (row: NotificationRow) =>
+    (row.updated_at && new Date(row.updated_at).toISOString()) ||
+    `${row.title ?? ""}|${row.message ?? ""}|${row.type ?? ""}`;
+
+  /* ------------------------- Load current user ------------------------- */
   useEffect(() => {
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       const email = user?.email || null;
       const name = (user?.user_metadata?.name as string) || email || null;
       setUserEmail(email);
@@ -116,12 +156,11 @@ export default function CustomerNotificationBell() {
     })();
   }, []);
 
-  // keep ref in sync if email changes later
   useEffect(() => {
     emailRef.current = userEmail;
   }, [userEmail]);
 
-  // seen map helpers
+  /* ---------------------- Seen tracking (local) ----------------------- */
   const getSeenMap = () => {
     try {
       const raw = localStorage.getItem(seenKey);
@@ -145,13 +184,13 @@ export default function CustomerNotificationBell() {
     }
   }, [seenKey]);
 
-  const unseenCount = useMemo(() => {
-    return list.reduce((acc, n) => (seenMap[n.id] ? acc : acc + 1), 0);
-  }, [list, seenMap]);
-
+  const unseenCount = useMemo(
+    () => list.reduce((acc, n) => (seenMap[n.id] ? acc : acc + 1), 0),
+    [list, seenMap]
+  );
   useEffect(() => setUnseen(unseenCount), [unseenCount]);
 
-  /** Initial fetch — scope to this customer's email; cap to MAX_ITEMS and dedupe */
+  /* --------------------------- Initial fetch -------------------------- */
   async function fetchScoped(currentUserEmail?: string | null) {
     setLoading(true);
     try {
@@ -161,30 +200,43 @@ export default function CustomerNotificationBell() {
         return;
       }
 
-      let query = supabase
+      const { data, error } = await supabase
         .from("customer_notifications")
         .select("*")
         .eq("recipient_email", currentUserEmail)
         .order("created_at", { ascending: false })
-        .limit(60);
+        .limit(200)
+        .neq("actor_email", currentUserEmail); // don't show self-authored
 
-      // Optional: don't show items triggered by this exact user
-      query = query.neq("actor_email", currentUserEmail);
-
-      const { data, error } = await query;
-      if (error || !data) {
-        console.error("customer_notifications fetch error", error);
+      if (error) {
+        console.groupCollapsed("customer_notifications fetch error");
+        console.error("message:", error.message);
+        // @ts-ignore
+        console.error("details:", error.details);
+        // @ts-ignore
+        console.error("hint:", error.hint);
+        console.groupEnd();
         setList([]);
         setLoading(false);
         return;
       }
 
-      // Filter by allowed types and slice
-      const rows = (data as NotificationRow[])
-        .filter((n) => !!n.type && allowedTypeSet.has(n.type!) && isAllowedNotification(n, currentUserEmail));
+      if (!Array.isArray(data)) {
+        console.error("customer_notifications fetch returned non-array:", data);
+        setList([]);
+        setLoading(false);
+        return;
+      }
 
-      // Seed dedupe set
-      for (const r of rows) seenIds.current.add(r.id);
+      const rows = (data as NotificationRow[]).filter(
+        (n) => !!n.type && allowedTypeSet.has(n.type!) && isAllowedNotification(n, currentUserEmail)
+      );
+
+      // Seed dedupe maps
+      for (const r of rows) {
+        seenIds.current.add(r.id);
+        versionsRef.current.set(r.id, getVersion(r));
+      }
 
       setList(rows.slice(0, MAX_ITEMS));
     } catch (e) {
@@ -195,92 +247,154 @@ export default function CustomerNotificationBell() {
     }
   }
 
-  // Fetch when we know the user
   useEffect(() => {
     fetchScoped(userEmail);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEmail]);
 
-  /**
-   * Realtime: subscribe INSERT-only with server-side filter.
-   * Re-created whenever userEmail changes, and auto-logs connection states.
-   */
-  useEffect(() => {
-    if (!userEmail) return; // wait for session
+  /* --------------------- Realtime + robust fallback ------------------- */
+  const clearTimers = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  };
 
-    const channel = supabase.channel(`customer-notifs:${userEmail}`, {
-      config: {
-        broadcast: { self: false },
-        presence: { key: userEmail },
+  const teardownChannel = () => {
+    try {
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+    } catch {}
+  };
+
+  const startPollFallback = () => {
+    if (pollTimerRef.current) return;
+    pollTimerRef.current = setInterval(() => {
+      if (!rtHealthyRef.current) fetchScoped(emailRef.current);
+    }, RT_POLL_MS);
+  };
+
+  const showToast = (row: NotificationRow) => {
+    toast.info(row.title || "New notification", {
+      description: row.message || "",
+      action: {
+        label: "Details",
+        onClick: () => {
+          setSelected(row);
+          setDetailOpen(true);
+        },
       },
+    });
+    try {
+      ringRef.current?.play().catch(() => {});
+    } catch {}
+  };
+
+  const handleRtPayload = (row: NotificationRow) => {
+    if (!row?.recipient_email || !emailRef.current) return;
+    if (row.recipient_email.toLowerCase() !== emailRef.current.toLowerCase()) return;
+    if (!row?.type || !allowedTypeSet.has(row.type)) return;
+    if (!isAllowedNotification(row, emailRef.current)) return;
+
+    const verNext = getVersion(row);
+    const hasId = seenIds.current.has(row.id);
+    const verPrev = versionsRef.current.get(row.id);
+
+    // Accept if brand new ID or same ID but content changed
+    const isNewId = !hasId;
+    const changed = hasId && verPrev !== verNext;
+    if (!isNewId && !changed) return;
+
+    seenIds.current.add(row.id);
+    versionsRef.current.set(row.id, verNext);
+
+    setList((prev) => {
+      const next = [row, ...prev.filter((x) => x.id !== row.id)];
+      return next.slice(0, MAX_ITEMS);
+    });
+
+    showToast(row);
+  };
+
+  const subscribeRealtime = (email: string) => {
+    teardownChannel();
+    rtHealthyRef.current = false;
+
+    const filter = `recipient_email=eq.${email}`;
+    const channel = supabase.channel(`cust-notifs:${email}`, {
+      config: { broadcast: { self: false }, presence: { key: email } },
     });
 
     channel.on(
       "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "customer_notifications",
-        filter: `recipient_email=eq.${userEmail}`,
-      },
-      (payload: any) => {
-        const row = payload.new as NotificationRow;
-
-        // Dedupe guard: ignore if we've seen this id already
-        if (row?.id != null && seenIds.current.has(row.id)) return;
-
-        // Filter by allowed types & not self-authored
-        if (!row?.type || !allowedTypeSet.has(row.type)) return;
-        if (!isAllowedNotification(row, emailRef.current)) return;
-
-        // Accept now and mark seen in-memory so it won't duplicate
-        if (row?.id != null) seenIds.current.add(row.id);
-
-        // Insert at top, cap
-        setList((prev) => {
-          const next = [row, ...prev.filter((x) => x.id !== row.id)];
-          return next.slice(0, MAX_ITEMS);
-        });
-
-        // SFX + Toast
-        try {
-          ringRef.current?.play().catch(() => {});
-        } catch {}
-        toast.info(row.title || "New notification", {
-          description: row.message || "",
-        });
-      }
+      { event: "INSERT", schema: "public", table: "customer_notifications", filter },
+      (payload: any) => handleRtPayload(payload.new as NotificationRow)
     );
 
+    channel.on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "customer_notifications", filter },
+      (payload: any) => handleRtPayload(payload.new as NotificationRow)
+    );
 
+    channel.subscribe(async (status: SupabaseChannelState) => {
+      if (status === "SUBSCRIBED") {
+        rtHealthyRef.current = true;
+        await fetchScoped(emailRef.current);
+      } else if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+        rtHealthyRef.current = false;
+        if (!retryTimerRef.current) {
+          retryTimerRef.current = setTimeout(() => {
+            if (emailRef.current) subscribeRealtime(emailRef.current);
+          }, RT_RETRY_MS);
+        }
+      } else if (status === "CLOSED") {
+        rtHealthyRef.current = false;
+      }
+    });
 
-// ...
+    channelRef.current = channel;
+  };
 
-// Subscribe with correct type guard (string comparisons are fine)
-void channel.subscribe((status: SupabaseChannelState) => {
-  console.log("[customer-notifs realtime]", status, "for", userEmail);
-
-  if (status === "SUBSCRIBED") {
-    // initial subscribe or re-subscribe: backfill anything missed
-    fetchScoped(emailRef.current);
-  } else if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
-    // optional: soft refetch after a short delay
-    setTimeout(() => fetchScoped(emailRef.current), 1000);
-  }
-  // CLOSED => nothing to do; cleanup handled in return()
-});
-
-
-
+  // Kick off realtime once we have a user email
+  useEffect(() => {
+    clearTimers();
+    if (!userEmail) {
+      teardownChannel();
+      startPollFallback();
+      return;
+    }
+    subscribeRealtime(userEmail);
+    startPollFallback();
 
     return () => {
-      try {
-        supabase.removeChannel(channel);
-      } catch {}
+      clearTimers();
+      teardownChannel();
     };
-  }, [userEmail, allowedTypeSet]); // rebind when email changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userEmail]);
 
-  // Click-away & ESC to close dropdown
+  // Refetch on going online or tab visible
+  useEffect(() => {
+    const onOnline = () => fetchScoped(emailRef.current);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") fetchScoped(emailRef.current);
+    };
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  /* ---------------------- Click-away / ESC close ---------------------- */
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (!open) return;
@@ -290,7 +404,6 @@ void channel.subscribe((status: SupabaseChannelState) => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
-
     document.addEventListener("mousedown", onClick);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -299,37 +412,36 @@ void channel.subscribe((status: SupabaseChannelState) => {
     };
   }, [open]);
 
+  /* ----------------------------- Actions ----------------------------- */
+  const getSeen = () => getSeenMap();
   const markAllRead = () => {
-    const seen = { ...getSeenMap() };
+    const seen = { ...getSeen() };
     for (const n of list) seen[n.id] = true;
     setSeenMap(seen);
     setUnseen(0);
   };
-
   const markOneRead = (id: string | number) => {
-    const seen = { ...getSeenMap() };
+    const seen = { ...getSeen() };
     if (!seen[id]) {
       seen[id] = true;
       setSeenMap(seen);
       setUnseen((u) => Math.max(0, u - 1));
     }
   };
-
   const toggle = () => setOpen((v) => !v);
-
   const openDetails = (n: NotificationRow) => {
     setSelected(n);
     setDetailOpen(true);
     markOneRead(n.id);
+    // No routing here by design
   };
 
+  /* ------------------------------- UI -------------------------------- */
   return (
     <>
-      <audio
-        ref={ringRef}
-        preload="auto"
-        src="data:audio/wav;base64,UklGRlQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAABAAAAA="
-      />
+      {/* preload tiny audio */}
+      <audio ref={ringRef} preload="auto" src={PLAY_SILENT_WAV} />
+
       <div className="relative" ref={rootRef}>
         <button
           onClick={toggle}
@@ -364,7 +476,9 @@ void channel.subscribe((status: SupabaseChannelState) => {
                 Loading…
               </div>
             ) : list.length === 0 ? (
-              <div className="p-6 text-center text-gray-500 text-sm">No notifications yet.</div>
+              <div className="p-6 text-center text-gray-500 text-sm">
+                No notifications yet.
+              </div>
             ) : (
               <ul className="divide-y">
                 {list.map((n) => {
@@ -373,20 +487,28 @@ void channel.subscribe((status: SupabaseChannelState) => {
                     <li
                       key={String(n.id)}
                       onClick={() => openDetails(n)}
-                      className={`px-3 py-3 hover:bg-gray-50 cursor-pointer ${!isSeen ? "bg-yellow-50/60" : ""}`}
+                      className={`px-3 py-3 hover:bg-gray-50 cursor-pointer ${
+                        !isSeen ? "bg-yellow-50/60" : ""
+                      }`}
                     >
                       <div className="flex items-start gap-2">
                         <div
-                          className={`mt-0.5 w-2 h-2 rounded-full ${!isSeen ? "bg-yellow-500/80" : "bg-gray-300"} shrink-0`}
+                          className={`mt-0.5 w-2 h-2 rounded-full ${
+                            !isSeen ? "bg-yellow-500/80" : "bg-gray-300"
+                          } shrink-0`}
                         />
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-gray-900 line-clamp-1">
                             {n.title || n.type || "Notification"}
                           </div>
                           {n.message && (
-                            <div className="text-[12px] text-gray-600 mt-0.5 line-clamp-2">{n.message}</div>
+                            <div className="text-[12px] text-gray-600 mt-0.5 line-clamp-2">
+                              {n.message}
+                            </div>
                           )}
-                          <div className="text-[11px] text-gray-400 mt-1">{timeAgo(n.created_at)}</div>
+                          <div className="text-[11px] text-gray-400 mt-1">
+                            {n.created_at ? formatPH(n.created_at) : timeAgo(n.created_at)}
+                          </div>
                         </div>
                       </div>
                     </li>
@@ -398,24 +520,14 @@ void channel.subscribe((status: SupabaseChannelState) => {
         )}
       </div>
 
-      {/* Details Modal */}
+      {/* Details Modal (no routing) */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{selected?.title || selected?.type || "Notification"}</DialogTitle>
             <DialogDescription>
               {selected?.created_at ? (
-                <span className="text-xs text-gray-500">
-                  {new Date(selected.created_at).toLocaleString("en-PH", {
-                    year: "numeric",
-                    month: "short",
-                    day: "numeric",
-                    hour: "numeric",
-                    minute: "2-digit",
-                    hour12: true,
-                    timeZone: "Asia/Manila",
-                  })}
-                </span>
+                <span className="text-xs text-gray-500">{formatPH(selected.created_at)}</span>
               ) : null}
             </DialogDescription>
           </DialogHeader>
@@ -434,7 +546,8 @@ void channel.subscribe((status: SupabaseChannelState) => {
                     <button
                       title="Copy TXN code"
                       onClick={() =>
-                        selected?.transaction_code && navigator.clipboard.writeText(selected.transaction_code)
+                        selected?.transaction_code &&
+                        navigator.clipboard.writeText(selected.transaction_code)
                       }
                       className="p-1 rounded hover:bg-gray-200"
                     >
@@ -443,18 +556,39 @@ void channel.subscribe((status: SupabaseChannelState) => {
                   </div>
                 </div>
               )}
+
               {selected?.order_id && (
                 <div className="col-span-2 flex items-center justify-between rounded-md bg-gray-50 p-2">
                   <span className="text-gray-600">Order ID:</span>
                   <code className="text-gray-900">{selected.order_id}</code>
                 </div>
               )}
+
+              {selected?.href && (
+                <div className="col-span-2 flex items-center justify-between rounded-md bg-gray-50 p-2">
+                  <span className="text-gray-600">Link:</span>
+                  <div className="flex items-center gap-2">
+                    <code className="text-gray-900 line-clamp-1 max-w-[200px]">
+                      {selected.href}
+                    </code>
+                    <button
+                      title="Copy link"
+                      onClick={() => selected?.href && navigator.clipboard.writeText(selected.href)}
+                      className="p-1 rounded hover:bg-gray-200"
+                    >
+                      <LinkIcon className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {selected?.type && (
                 <div className="col-span-1 flex items-center justify-between rounded-md bg-gray-50 p-2">
                   <span className="text-gray-600">Type:</span>
                   <span className="text-gray-900">{selected.type}</span>
                 </div>
               )}
+
               {(selected?.recipient_name || selected?.recipient_email) && (
                 <div className="col-span-1 flex items-center justify-between rounded-md bg-gray-50 p-2">
                   <span className="text-gray-600">To:</span>
