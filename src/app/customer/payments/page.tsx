@@ -53,15 +53,16 @@ type OrderRow = {
   id: string | number;
   total_amount: number | null;
   status: string | null;
-  truck_delivery_id?: number | null;
+  truck_delivery_id?: string | null;
   grand_total_with_interest?: number | null;
   sales_tax?: number | null;
   interest_percent?: number | null;
-  per_term_amount?: number | null;
+  per_term_amount?: number | null; // base per-term (without shipping)
   shipping_fee?: number | null;
   paid_amount?: number | null;
   balance?: number | null;
   terms?: string | null;
+  payment_terms?: number | null; // total months/terms
   order_items?: ItemRow[];
 };
 
@@ -161,7 +162,7 @@ export default function CustomerPaymentsPage() {
 
   // order_id -> truck_delivery_id (so we can resubscribe to relevant deliveries)
   const [orderDeliveryMap, setOrderDeliveryMap] = useState<
-    Record<string, number | null>
+    Record<string, string | null>
   >({});
 
   // Installments
@@ -211,6 +212,7 @@ export default function CustomerPaymentsPage() {
               paid_amount,
               balance,
               terms,
+              payment_terms,
               order_items (
                 quantity,
                 price,
@@ -313,13 +315,13 @@ export default function CustomerPaymentsPage() {
   /* ---- Realtime: truck_deliveries.shipping_fee changes -> refresh fee ------ */
   useEffect(() => {
     const deliveryIds = Object.values(orderDeliveryMap).filter(
-      (v): v is number => typeof v === "number" && Number.isFinite(v)
+      (v): v is string => typeof v === "string" && v.length > 0
     );
     if (!deliveryIds.length) return;
 
-    const deliveryToOrders = new Map<number, string[]>();
+    const deliveryToOrders = new Map<string, string[]>();
     for (const [orderId, delId] of Object.entries(orderDeliveryMap)) {
-      if (typeof delId === "number" && Number.isFinite(delId)) {
+      if (delId) {
         const arr = deliveryToOrders.get(delId) ?? [];
         arr.push(orderId);
         deliveryToOrders.set(delId, arr);
@@ -398,7 +400,12 @@ export default function CustomerPaymentsPage() {
     const shippingFee = round2(Number(extraShippingFee || 0));
     const finalGrandTotal = round2(grandTotalExclFee + shippingFee);
 
-    const perTerm = round2(Number(o?.per_term_amount ?? 0));
+    // Include shipping fee into per-term (evenly across payment_terms)
+    const basePerTerm = round2(Number(o?.per_term_amount ?? 0));
+    const terms = Number(o?.payment_terms ?? 0) || 0;
+    const shippingPerTerm =
+      shippingFee > 0 && terms > 0 ? round2(shippingFee / terms) : 0;
+    const perTerm = round2(basePerTerm + shippingPerTerm);
 
     return {
       subtotal,
@@ -448,10 +455,10 @@ export default function CustomerPaymentsPage() {
 
         if (error) throw error;
 
-        const map: Record<string, number | null> = {};
+        const map: Record<string, string | null> = {};
         for (const row of (data ?? []) as Array<{
           id: string | number;
-          truck_delivery_id: number | null;
+          truck_delivery_id: string | null;
         }>) {
           map[String(row.id)] = row.truck_delivery_id ?? null;
         }
@@ -682,7 +689,10 @@ export default function CustomerPaymentsPage() {
 
   // 2) Which rows are unpaid *as stored in DB* (we won't trust their amounts).
   const unpaidInstallments = useMemo(
-    () => installments.filter((row) => (row.status || "").toLowerCase() !== "paid"),
+    () =>
+      installments.filter(
+        (row) => (row.status || "").toLowerCase() !== "paid"
+      ),
     [installments]
   );
 
@@ -698,7 +708,13 @@ export default function CustomerPaymentsPage() {
     if (!selectedPack || !isCredit) return 0;
     if (allTermsPaid) return remainingBalance > EPS ? 1 : 0;
     return Math.max(0, unpaidInstallments.length);
-  }, [selectedPack, isCredit, allTermsPaid, unpaidInstallments.length, remainingBalance]);
+  }, [
+    selectedPack,
+    isCredit,
+    allTermsPaid,
+    unpaidInstallments.length,
+    remainingBalance,
+  ]);
 
   // Per-term amount (equal split). Last term carries the rounding remainder.
   const equalizedPerTerm = useMemo(() => {
@@ -776,10 +792,7 @@ export default function CustomerPaymentsPage() {
       .filter((r) => (r.status || "").toLowerCase() !== "paid")
       .map((r) =>
         round2(
-          Math.max(
-            0,
-            Number(r.amount_due || 0) - Number(r.amount_paid || 0)
-          )
+          Math.max(0, Number(r.amount_due || 0) - Number(r.amount_paid || 0))
         )
       );
   }, [breakdownRows]);
@@ -839,12 +852,7 @@ export default function CustomerPaymentsPage() {
       setTermMultiplier(1);
     }
     // eslint-disable-next-line
-  }, [
-    selectedPack?.balance,
-    isCredit,
-    remainingTerms,
-    allTermsPaid,
-  ]);
+  }, [selectedPack?.balance, isCredit, remainingTerms, allTermsPaid]);
 
   useEffect(() => {
     if (!selectedPack || !isCredit) return;
@@ -875,7 +883,8 @@ export default function CustomerPaymentsPage() {
     setTermMultiplier(clamped);
     setAmount(sumNextKUnpaid(clamped).toFixed(2));
   };
-  const stepMultiplier = (delta: number) => applyCreditMultiplier(termMultiplier + delta);
+  const stepMultiplier = (delta: number) =>
+    applyCreditMultiplier(termMultiplier + delta);
 
   const bumpCash = (dir: "inc" | "dec") => {
     if (!selectedPack || !isCash) return;
@@ -1091,8 +1100,8 @@ export default function CustomerPaymentsPage() {
             source: "customer",
             read: false,
             metadata: {
-              payment_id: newPaymentId,     // drives "payment:*" canonical key
-              order_id: orderId,            // kept in metadata
+              payment_id: newPaymentId, // drives "payment:*" canonical key
+              order_id: orderId, // kept in metadata
               customer_id: meId,
               txn_code: selectedPack.code,
               amount: Number(finalAmount.toFixed(2)),
@@ -1238,7 +1247,7 @@ export default function CustomerPaymentsPage() {
               </select>
             </div>
 
-            {/* Selected TXN summary + installment counters */}
+            {/* Selected TXN summary + installments chip (no remaining months) */}
             {!!selectedPack && (
               <div className="mt-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                 <div className="text-sm md:text-base text-gray-700">
@@ -1253,15 +1262,15 @@ export default function CustomerPaymentsPage() {
                 {isCredit && (
                   <div className="inline-flex items-center gap-3 self-start md:self-auto rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                     <div>
-                      <span className="font-semibold">Total Monthly Paid:</span>{" "}
-                      <span className="font-bold">{paidCount}</span>
+                      <span className="font-semibold">Total Months:</span>{" "}
+                      <span className="font-bold">
+                        {selectedPack?.order?.payment_terms ?? 0}
+                      </span>
                     </div>
                     <span className="opacity-50">•</span>
                     <div>
-                      <span className="font-semibold">Remaining Months:</span>{" "}
-                      <span className="font-bold">
-                        {Math.max(0, remainingTerms)}
-                      </span>
+                      <span className="font-semibold">Total Monthly Paid:</span>{" "}
+                      <span className="font-bold">{paidCount}</span>
                     </div>
                   </div>
                 )}
@@ -1422,8 +1431,8 @@ export default function CustomerPaymentsPage() {
                           {isFullWithLeftover && (
                             <>
                               {" "}
-                              It also settles the <b>remaining shipping/adjustment</b>{" "}
-                              amount.
+                              It also settles the{" "}
+                              <b>remaining shipping/adjustment</b> amount.
                             </>
                           )}
                         </>
