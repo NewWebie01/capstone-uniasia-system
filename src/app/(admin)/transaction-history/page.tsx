@@ -1,7 +1,7 @@
 // app/transaction-history/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs";
 import * as XLSX from "xlsx";
 
@@ -10,11 +10,11 @@ type OrderStatus = "pending" | "rejected" | "completed" | string;
 
 type Transaction = {
   id: string;
-  date: string; // v_transaction_history.date_completed
-  code: string; // v_transaction_history.transaction_code
-  customer: string | null; // v_transaction_history.customer_name
-  status: OrderStatus; // v_transaction_history.status
-  total: number | null; // v_transaction_history.grand_total_with_interest
+  date: string; // v_transaction_history_full.date_completed
+  code: string; // v_transaction_history_full.transaction_code
+  customer: string | null; // v_transaction_history_full.customer_name
+  status: OrderStatus; // v_transaction_history_full.status
+  total: number | null; // v_transaction_history_full.grand_total_with_interest
 };
 
 /* ---------------------- PH Time Utilities ----------------------- */
@@ -192,55 +192,92 @@ export default function TransactionHistoryPage() {
   const needsReauth = () =>
     !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
 
+  // Debounced refetch timer for realtime
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshSoon = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      loadTransactions();
+    }, 400);
+  }, []);
+
+  // Shared loader so Realtime can reuse it
+  const loadTransactions = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("v_transaction_history_full")
+      .select(
+        `
+        id,
+        date_completed,
+        transaction_code,
+        customer_name,
+        status,
+        grand_total_with_interest
+      `
+      )
+      .order("date_completed", { ascending: false });
+
+    if (error) {
+      console.error("Error loading transactions:", error.message);
+      setTransactions([]);
+    } else {
+      const rows: Transaction[] = (data ?? []).map((o: any) => ({
+        id: String(o.id),
+        date: o.date_completed,
+        code: o.transaction_code ?? "",
+        customer: o.customer_name ?? "—",
+        status: (o.status ?? "completed") as OrderStatus,
+        total: o.grand_total_with_interest ?? null,
+      }));
+      setTransactions(rows);
+    }
+    setLoading(false);
+  }, []);
+
   useEffect(() => {
     logActivity("Visited Transaction History Page");
   }, []);
 
-  /* -------- Load from view that already filters fully-paid & completed -------- */
+  // Initial load
   useEffect(() => {
     let cancelled = false;
-    const fetchTransactions = async () => {
-      setLoading(true);
-
-      // IMPORTANT: Use your view name exactly as in Supabase (screenshot shows v_transaction_hist…)
-      const { data, error } = await supabase
-        .from("v_transaction_history")
-        .select(
-          `
-          id,
-          date_completed,
-          transaction_code,
-          customer_name,
-          status,
-          grand_total_with_interest
-        `
-        )
-        .order("date_completed", { ascending: false });
-
+    (async () => {
+      await loadTransactions();
       if (cancelled) return;
-
-      if (error) {
-        console.error("Error loading transactions:", error.message);
-        setTransactions([]);
-      } else {
-        const rows: Transaction[] = (data ?? []).map((o: any) => ({
-          id: String(o.id),
-          date: o.date_completed,
-          code: o.transaction_code ?? "",
-          customer: o.customer_name ?? "—",
-          status: (o.status ?? "completed") as OrderStatus,
-          total: o.grand_total_with_interest ?? null,
-        }));
-        setTransactions(rows);
-      }
-      setLoading(false);
-    };
-
-    fetchTransactions();
+    })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadTransactions]);
+
+  // Realtime: listen on ORDERS (source of the view) and refetch the view
+  useEffect(() => {
+    // We refetch on any INSERT/UPDATE/DELETE because status/paid_amount/total can change the view membership.
+    const channel = supabase
+      .channel("txn-history-realtime")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "orders" },
+        () => refreshSoon()
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "orders" },
+        () => refreshSoon()
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "orders" },
+        () => refreshSoon()
+      )
+      .subscribe();
+
+    return () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      supabase.removeChannel(channel);
+    };
+  }, [refreshSoon]);
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -264,12 +301,12 @@ export default function TransactionHistoryPage() {
   }, [searchQuery, transactions]);
 
   const totalPages = useMemo(
-    () => Math.max(1, Math.ceil(filtered.length / 10)),
+    () => Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE)),
     [filtered.length]
   );
-  const pageStartIndex = (currentPage - 1) * 10;
+  const pageStartIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const paginated = useMemo(
-    () => filtered.slice(pageStartIndex, pageStartIndex + 10),
+    () => filtered.slice(pageStartIndex, pageStartIndex + ITEMS_PER_PAGE),
     [filtered, pageStartIndex]
   );
 
@@ -354,7 +391,7 @@ export default function TransactionHistoryPage() {
             </span>{" "}
             to{" "}
             <span className="font-medium">
-              {Math.min(pageStartIndex + 10, filtered.length)}
+              {Math.min(pageStartIndex + ITEMS_PER_PAGE, filtered.length)}
             </span>{" "}
             of <span className="font-medium">{filtered.length}</span> entries
           </div>
@@ -512,7 +549,7 @@ export default function TransactionHistoryPage() {
 
       // Export from the SAME VIEW for consistency
       let q = supabase
-        .from("v_transaction_history")
+        .from("v_transaction_history_full")
         .select(
           `
           date_completed,

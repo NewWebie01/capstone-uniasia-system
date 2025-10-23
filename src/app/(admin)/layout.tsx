@@ -1,11 +1,11 @@
 "use client";
 
 import { Sidebar } from "@/components/Sidebar";
-import NotificationBell from "@/components/NotificationBell";
 import { DM_Sans } from "next/font/google";
 import { useState } from "react";
 import { Toaster } from "sonner";
 import GlobalRouteLoader from "@/components/GlobalRouteLoader"; // ⬅️ add this
+import NotificationBell from "@/components/NotificationBell";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
