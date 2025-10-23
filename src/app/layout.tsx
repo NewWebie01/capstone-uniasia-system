@@ -10,7 +10,6 @@ import MobileGate from "@/components/MobileGate";
 import ToasterClient from "@/components/ToasterClient";
 
 // ✅ add this
-import NotificationBell from "@/components/NotificationBell";
 
 const dmSans = DM_Sans({ subsets: ["latin"] });
 

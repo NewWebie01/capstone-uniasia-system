@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { Upload, FileImage, X, Calendar, Minus, Plus } from "lucide-react";
+import { Upload, FileImage, Minus, Plus } from "lucide-react";
 
 /* ----------------------------- Config ----------------------------- */
 const CHEQUE_BUCKET = "payments-cheques";
@@ -159,10 +159,14 @@ export default function CustomerPaymentsPage() {
   // Shipping fee per order cache
   const [shippingFees, setShippingFees] = useState<Record<string, number>>({});
 
+  // order_id -> truck_delivery_id (so we can resubscribe to relevant deliveries)
+  const [orderDeliveryMap, setOrderDeliveryMap] = useState<
+    Record<string, number | null>
+  >({});
+
   // Installments
   const [installments, setInstallments] = useState<InstallmentRow[]>([]);
   const [loadingInstallments, setLoadingInstallments] = useState(false);
-  const [showBreakdown, setShowBreakdown] = useState(false);
 
   // Multiplier for Credit (installments)
   const [termMultiplier, setTermMultiplier] = useState<number>(1);
@@ -170,6 +174,9 @@ export default function CustomerPaymentsPage() {
   // Cash stepper
   const CASH_STEP = 1000;
   const MIN_CASH = 0.01;
+
+  // Locally lock TXNs immediately after a payment submit (prevents double submit)
+  const [lockedTxn, setLockedTxn] = useState<Record<string, true>>({});
 
   /* ------------------------------- Fetch ------------------------------- */
   useEffect(() => {
@@ -303,6 +310,57 @@ export default function CustomerPaymentsPage() {
     };
   }, [txns]);
 
+  /* ---- Realtime: truck_deliveries.shipping_fee changes -> refresh fee ------ */
+  useEffect(() => {
+    const deliveryIds = Object.values(orderDeliveryMap).filter(
+      (v): v is number => typeof v === "number" && Number.isFinite(v)
+    );
+    if (!deliveryIds.length) return;
+
+    const deliveryToOrders = new Map<number, string[]>();
+    for (const [orderId, delId] of Object.entries(orderDeliveryMap)) {
+      if (typeof delId === "number" && Number.isFinite(delId)) {
+        const arr = deliveryToOrders.get(delId) ?? [];
+        arr.push(orderId);
+        deliveryToOrders.set(delId, arr);
+      }
+    }
+
+    const filter = `id=in.(${inList(deliveryIds)})`;
+    const ch = supabase.channel("realtime-delivery-fee");
+
+    const refreshFee = async (orderId: string | number) => {
+      try {
+        const fee = await fetchShippingFeeForOrder(orderId);
+        const key = String(orderId);
+        setShippingFees((prev) =>
+          prev[key] === fee ? prev : { ...prev, [key]: fee }
+        );
+      } catch (e) {
+        console.error("refreshShippingFee (deliveries) failed:", e);
+      }
+    };
+
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "truck_deliveries", filter },
+      (payload) => {
+        const delId =
+          (payload.new as any)?.id ?? (payload.old as any)?.id ?? null;
+        if (delId && deliveryToOrders.has(delId)) {
+          for (const orderId of deliveryToOrders.get(delId) ?? []) {
+            refreshFee(orderId);
+          }
+        }
+      }
+    );
+
+    ch.subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [orderDeliveryMap]);
+
   /* --------------------------- Totals --------------------------- */
   function computeFromOrder(o?: OrderRow | null, extraShippingFee = 0) {
     const items = o?.order_items ?? [];
@@ -348,8 +406,8 @@ export default function CustomerPaymentsPage() {
       salesTax,
       grandTotalExclFee,
       shippingFee,
-      finalGrandTotal, // rounded
-      perTerm, // rounded
+      finalGrandTotal,
+      perTerm,
     };
   }
 
@@ -365,6 +423,85 @@ export default function CustomerPaymentsPage() {
         out.push({ code, order: completed, customerId: String(c.id) });
     }
     return out;
+  }, [txns]);
+
+  /* ---------------- Prefetch & track order->delivery mapping ---------------- */
+  useEffect(() => {
+    const orderIds = txns
+      .flatMap((c) =>
+        (c.orders ?? [])
+          .filter((o) => (o.status || "").toLowerCase() === "completed")
+          .map((o) => String(o.id))
+      );
+
+    if (!orderIds.length) {
+      setOrderDeliveryMap({});
+      return;
+    }
+
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("id, truck_delivery_id")
+          .in("id", orderIds);
+
+        if (error) throw error;
+
+        const map: Record<string, number | null> = {};
+        for (const row of (data ?? []) as Array<{
+          id: string | number;
+          truck_delivery_id: number | null;
+        }>) {
+          map[String(row.id)] = row.truck_delivery_id ?? null;
+        }
+        setOrderDeliveryMap(map);
+      } catch (e) {
+        console.error("Failed to build orderDeliveryMap:", e);
+      }
+    })();
+  }, [txns]);
+
+  /* ---------------- Realtime: orders -> refresh fee on any update ----------- */
+  useEffect(() => {
+    const orderIds = txns
+      .flatMap((c) =>
+        (c.orders ?? [])
+          .filter((o) => (o.status || "").toLowerCase() === "completed")
+          .map((o) => String(o.id))
+      );
+
+    if (!orderIds.length) return;
+
+    const filter = `id=in.(${inList(orderIds)})`;
+    const ch = supabase.channel("realtime-orders-fee");
+
+    const refreshFee = async (orderId: string | number) => {
+      try {
+        const fee = await fetchShippingFeeForOrder(orderId);
+        const key = String(orderId);
+        setShippingFees((prev) =>
+          prev[key] === fee ? prev : { ...prev, [key]: fee }
+        );
+      } catch (e) {
+        console.error("refreshShippingFee (orders) failed:", e);
+      }
+    };
+
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "orders", filter },
+      (payload) => {
+        const orderId =
+          (payload.new as any)?.id ?? (payload.old as any)?.id ?? null;
+        if (orderId) refreshFee(orderId);
+      }
+    );
+
+    ch.subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
   }, [txns]);
 
   /* ---------- Build lookups ---------- */
@@ -414,13 +551,12 @@ export default function CustomerPaymentsPage() {
       return { code, order, customerId, balance, fee };
     });
     return rows
-      .filter((r) => r.balance > 0.01)
+      .filter((r) => r.balance > 0.01 && !lockedTxn[r.code])
       .sort((a, b) => b.balance - a.balance);
-  }, [rawTxnOptions, effectivePaidTotalByOrder, shippingFees]);
+  }, [rawTxnOptions, effectivePaidTotalByOrder, shippingFees, lockedTxn]);
 
   /* ----------------------------- Realtime installments ----------------------------- */
   useEffect(() => {
-    // Subscribe for all visible order IDs
     const orderIds = rawTxnOptions.map(({ order }) => String(order.id));
     if (!orderIds.length) return;
 
@@ -475,7 +611,6 @@ export default function CustomerPaymentsPage() {
       return;
     }
     if ((opt.fee ?? 0) <= 0) {
-      // fee removed / not set yet — clear selection
       setSelectedTxnCode("");
     }
   }, [selectedTxnCode, unpaidTxnOptions]);
@@ -518,6 +653,8 @@ export default function CustomerPaymentsPage() {
   const isCash = customerMethodLower === "cash" && !isCredit;
 
   /* ==================== INSTALLMENTS ==================== */
+
+  // 1) Load the schedule rows for the selected order (if any).
   useEffect(() => {
     async function fetchInstallmentsForSelected() {
       if (!selectedPack?.order?.id) {
@@ -543,56 +680,202 @@ export default function CustomerPaymentsPage() {
     // eslint-disable-next-line
   }, [selectedPack?.order?.id]);
 
+  // 2) Which rows are unpaid *as stored in DB* (we won't trust their amounts).
   const unpaidInstallments = useMemo(
-    () =>
-      installments.filter((row) => (row.status || "").toLowerCase() !== "paid"),
+    () => installments.filter((row) => (row.status || "").toLowerCase() !== "paid"),
     [installments]
   );
-  const termAmount =
-    unpaidInstallments.length > 0 ? unpaidInstallments[0].amount_due : 0;
 
-  // -------------------------- CREDIT LIMITS & INIT --------------------------
-  const getCreditMaxMultiplier = () => {
-    if (!selectedPack) return 1;
+  // 3) “All terms paid” according to DB.
+  const allTermsPaid =
+    installments.length > 0 && unpaidInstallments.length === 0;
 
-    const remainingTerms = unpaidInstallments.length || 0;
-    const perTerm = round2(Number(termAmount || 0));
-    if (remainingTerms <= 0 || perTerm <= 0) return 1;
+  // 4) Equalized logic: always divide the *current remaining balance* evenly
+  // across remaining unpaid terms. If DB says "all paid" but balance > 0,
+  // treat leftover as ONE catch-up term.
+  const remainingBalance = round2(Number(selectedPack?.balance || 0));
+  const remainingTerms = useMemo(() => {
+    if (!selectedPack || !isCredit) return 0;
+    if (allTermsPaid) return remainingBalance > EPS ? 1 : 0;
+    return Math.max(0, unpaidInstallments.length);
+  }, [selectedPack, isCredit, allTermsPaid, unpaidInstallments.length, remainingBalance]);
 
-    const balance = round2(Number(selectedPack.balance || 0));
-    const approxTerms = Math.round(balance / perTerm + 1e-6);
-    return Math.max(1, Math.min(remainingTerms, approxTerms));
+  // Per-term amount (equal split). Last term carries the rounding remainder.
+  const equalizedPerTerm = useMemo(() => {
+    if (!isCredit || !selectedPack) return 0;
+    if (remainingTerms <= 0) return 0;
+    return round2(remainingBalance / remainingTerms);
+  }, [isCredit, selectedPack, remainingTerms, remainingBalance]);
+
+  // 5) Build the *display* rows for the modal using equalized remaining amounts.
+  const breakdownRows = useMemo<InstallmentRow[]>(() => {
+    if (!selectedPack || !isCredit) return installments;
+
+    // If DB says all paid but we still have a balance → one catch-up row
+    if (remainingTerms === 1 && allTermsPaid && remainingBalance > EPS) {
+      const nextNo =
+        (installments[installments.length - 1]?.term_no ?? 0) + 1;
+      return [
+        ...installments,
+        {
+          id: "__equalized_catchup__",
+          order_id: String(selectedPack.order.id),
+          term_no: nextNo,
+          due_date: todayLocalISO(),
+          amount_due: remainingBalance, // whole leftover as one term
+          amount_paid: 0,
+          status: "pending",
+        },
+      ];
+    }
+
+    if (remainingTerms <= 0) return installments;
+
+    // Equalize the REMAINING across unpaid rows.
+    const unpaidRows = installments.filter(
+      (r) => (r.status || "").toLowerCase() !== "paid"
+    );
+    const unpaidCount = unpaidRows.length;
+
+    // Equal remaining per each unpaid row
+    const perRemaining = round2(remainingBalance / unpaidCount);
+
+    // Remainder goes to the last row to make the sum exact
+    const sumFirst = round2(perRemaining * (unpaidCount - 1));
+    const lastRemaining = round2(remainingBalance - sumFirst);
+
+    const targets = [
+      ...Array(Math.max(0, unpaidCount - 1)).fill(perRemaining),
+      lastRemaining,
+    ];
+
+    let i = 0;
+    return installments.map((row) => {
+      const due = round2(Number(row.amount_due || 0));
+      const paid = round2(Number(row.amount_paid || 0));
+      const isPaid = paid + EPS >= due;
+
+      if (isPaid) return row; // keep paid rows untouched
+
+      const targetRemain = targets[i++] ?? 0;
+      const newDue = round2(paid + targetRemain);
+      return { ...row, amount_due: newDue };
+    });
+  }, [
+    installments,
+    isCredit,
+    selectedPack?.order?.id,
+    allTermsPaid,
+    remainingTerms,
+    remainingBalance,
+  ]);
+
+  // 6) Easy helpers driven by the equalized rows.
+  const equalizedUnpaidAmounts = useMemo(() => {
+    return breakdownRows
+      .filter((r) => (r.status || "").toLowerCase() !== "paid")
+      .map((r) =>
+        round2(
+          Math.max(
+            0,
+            Number(r.amount_due || 0) - Number(r.amount_paid || 0)
+          )
+        )
+      );
+  }, [breakdownRows]);
+
+  const effectiveTermAmount = useMemo(() => {
+    if (!isCredit || remainingTerms <= 0) return 0;
+    return equalizedUnpaidAmounts[0] ?? 0;
+  }, [isCredit, remainingTerms, equalizedUnpaidAmounts]);
+
+  const sumNextKUnpaid = (k: number) => {
+    const slice = equalizedUnpaidAmounts.slice(0, Math.max(0, k));
+    const total = slice.reduce((s, a) => s + a, 0);
+    return round2(total);
   };
 
-  // Initialize amount whenever txn/mode/schedule changes
+  const totalOfAllUnpaid = useMemo(() => {
+    return round2(equalizedUnpaidAmounts.reduce((s, a) => s + a, 0));
+  }, [equalizedUnpaidAmounts]);
+
+  const getCreditMaxMultiplier = () => {
+    if (!selectedPack || !isCredit) return 1;
+    if (remainingTerms <= 0) return 1;
+
+    let k = 1;
+    while (k <= remainingTerms && sumNextKUnpaid(k) <= remainingBalance + EPS) {
+      k++;
+    }
+    return Math.max(1, Math.min(k - 1, remainingTerms));
+  };
+
   useEffect(() => {
     if (!selectedPack) {
       setAmount("");
       return;
     }
+
     if (isCredit) {
+      if (remainingTerms === 0) {
+        setTermMultiplier(1);
+        setAmount("");
+        return;
+      }
+
+      if (allTermsPaid) {
+        setTermMultiplier(1);
+        setAmount(remainingBalance > 0 ? remainingBalance.toFixed(2) : "");
+        return;
+      }
+
       const max = getCreditMaxMultiplier();
       const start = Math.min(1, max) || 1;
       setTermMultiplier(start);
-      if (termAmount > 0) setAmount((termAmount * start).toFixed(2));
-      else setAmount("");
+      setAmount(sumNextKUnpaid(start).toFixed(2));
     } else {
       const bal = Number(selectedPack.balance || 0);
       setAmount(bal > 0 ? bal.toFixed(2) : "");
       setTermMultiplier(1);
     }
     // eslint-disable-next-line
-  }, [selectedPack?.balance, isCredit, termAmount]);
+  }, [
+    selectedPack?.balance,
+    isCredit,
+    remainingTerms,
+    allTermsPaid,
+  ]);
 
-  /* ===== Buttons-only update helpers ===== */
+  useEffect(() => {
+    if (!selectedPack || !isCredit) return;
+
+    if (remainingTerms === 0) {
+      setTermMultiplier(1);
+      setAmount("");
+      return;
+    }
+
+    if (allTermsPaid) {
+      setTermMultiplier(1);
+      setAmount(remainingBalance > 0 ? remainingBalance.toFixed(2) : "");
+      return;
+    }
+
+    const max = getCreditMaxMultiplier();
+    const k = Math.max(1, Math.min(termMultiplier, max));
+    if (k !== termMultiplier) setTermMultiplier(k);
+    setAmount(sumNextKUnpaid(k).toFixed(2));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [termMultiplier, isCredit, selectedPack?.code, remainingTerms, allTermsPaid]);
+
+  /* ===== Buttons-only update helpers (use equalized amounts) ===== */
   const applyCreditMultiplier = (mult: number) => {
-    if (!selectedPack || !isCredit || !termAmount) return;
+    if (!selectedPack || !isCredit) return;
     const clamped = Math.max(1, Math.min(mult, getCreditMaxMultiplier()));
     setTermMultiplier(clamped);
-    setAmount((termAmount * clamped).toFixed(2));
+    setAmount(sumNextKUnpaid(clamped).toFixed(2));
   };
-  const stepMultiplier = (delta: number) =>
-    applyCreditMultiplier(termMultiplier + delta);
+  const stepMultiplier = (delta: number) => applyCreditMultiplier(termMultiplier + delta);
 
   const bumpCash = (dir: "inc" | "dec") => {
     if (!selectedPack || !isCash) return;
@@ -607,59 +890,70 @@ export default function CustomerPaymentsPage() {
 
   const payInFull = () => {
     if (!selectedPack) return;
+
     const bal = round2(Number(selectedPack.balance || 0));
-    const val = bal > 0 ? bal.toFixed(2) : "";
-    setAmount(val);
-    if (!isCash) setTermMultiplier(getCreditMaxMultiplier());
+
+    if (isCash) {
+      setAmount(bal > 0 ? bal.toFixed(2) : "");
+      return;
+    }
+
+    if (remainingTerms <= 0) {
+      setTermMultiplier(1);
+      setAmount("");
+      return;
+    }
+    setTermMultiplier(remainingTerms);
+    setAmount(bal.toFixed(2));
   };
 
   const payInHalf = () => {
     if (!selectedPack) return;
+
     if (isCash) {
       const bal = Number(selectedPack.balance || 0);
       setAmount(Math.max(bal / 2, MIN_CASH).toFixed(2));
-    } else {
-      const max = getCreditMaxMultiplier();
-      applyCreditMultiplier(Math.max(1, Math.floor(max / 2)));
+      return;
     }
+
+    if (remainingTerms <= 0) {
+      setTermMultiplier(1);
+      setAmount("");
+      return;
+    }
+
+    if (allTermsPaid) {
+      const bal = Number(selectedPack.balance || 0);
+      setTermMultiplier(1);
+      setAmount(Math.max(bal / 2, 0).toFixed(2));
+      return;
+    }
+
+    const half = Math.max(1, Math.floor(remainingTerms / 2));
+    applyCreditMultiplier(half);
   };
 
   /* --------------------------- Validation flags --------------------------- */
-  const enteredAmount = Number(amount) || 0;
-  const numTermsCovered =
-    isCredit && termAmount > 0 ? Math.floor(enteredAmount / termAmount) : 0;
-  const remainingAfterTerms =
-    isCredit && termAmount > 0
-      ? enteredAmount - numTermsCovered * termAmount
-      : 0;
 
-  const exactBalance = selectedPack
-    ? round2(Number(selectedPack.balance || 0))
-    : 0;
+  const enteredAmount = round2(toNumber(amount));
+
+  let matchedK = 0;
+  if (isCredit && remainingTerms > 0 && enteredAmount > 0) {
+    for (let k = 1; k <= remainingTerms; k++) {
+      if (Math.abs(enteredAmount - sumNextKUnpaid(k)) < EPS) {
+        matchedK = k;
+        break;
+      }
+    }
+  }
+
+  const isExactByTerms = isCredit && matchedK > 0;
   const isExactByBalance =
-    !isCash && Math.abs(enteredAmount - exactBalance) < EPS;
-
-  const isExactByTerms =
-    enteredAmount > 0 &&
-    Math.abs(remainingAfterTerms) < EPS &&
-    numTermsCovered <= unpaidInstallments.length &&
-    numTermsCovered > 0;
+    isCredit && Math.abs(enteredAmount - remainingBalance) < EPS;
 
   const isPaymentExact = isCash
-    ? enteredAmount > 0
+    ? enteredAmount > 0 && enteredAmount <= (selectedPack?.balance || 0) + EPS
     : isExactByTerms || isExactByBalance;
-
-  const showPartialWarning =
-    !isCash &&
-    enteredAmount > 0 &&
-    remainingAfterTerms !== 0 &&
-    termAmount > 0 &&
-    !isExactByBalance;
-
-  const exceedsInstallments =
-    !isCash &&
-    numTermsCovered > unpaidInstallments.length &&
-    unpaidInstallments.length > 0;
 
   const exceedsBalance =
     !!selectedPack && enteredAmount > (selectedPack.balance || 0) + EPS;
@@ -667,13 +961,12 @@ export default function CustomerPaymentsPage() {
   const isFormValid =
     !!selectedTxnCode &&
     isPaymentExact &&
+    !exceedsBalance &&
     (isCash ||
       (chequeNumber.trim().length > 0 &&
         bankName.trim().length > 0 &&
         chequeDate.trim().length > 0 &&
-        !!file &&
-        !showPartialWarning &&
-        !exceedsInstallments));
+        !!file));
 
   /* ------------------------------ Upload logic ----------------------------- */
   async function uploadChequeImage(
@@ -730,6 +1023,8 @@ export default function CustomerPaymentsPage() {
 
     setSubmitting(true);
     try {
+      const justSubmittedCode = selectedPack.code;
+
       const me = txns.find((t) => t.code === selectedTxnCode) ?? txns[0];
       if (!me?.id) throw new Error("Please sign in to continue.");
 
@@ -767,7 +1062,6 @@ export default function CustomerPaymentsPage() {
         };
       }
 
-      // Insert payment and RETURN the new id for dedupe
       const { data: paymentRow, error: insertErr } = await supabase
         .from("payments")
         .insert(insertData)
@@ -777,7 +1071,7 @@ export default function CustomerPaymentsPage() {
       if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
       const newPaymentId = String(paymentRow?.id);
 
-      // 🔔 Notify Admin Bell via system_notifications (type: 'payment', title: 'Payment Request')
+      // 🔔 Notify admin bell as a PAYMENT event
       try {
         const title = "💳 Payment Request";
         const message = `${me.name || "Customer"} • ${
@@ -786,17 +1080,21 @@ export default function CustomerPaymentsPage() {
           isCash ? "(Cash)" : `(Cheque ${chequeNumber || ""})`
         }`.trim();
 
+        // IMPORTANT: Do NOT set order_id column here, or the bell will
+        // dedupe it as "order:*". Keep order_id in metadata instead so
+        // canonicalKey becomes "payment:<payment_id>".
         await supabase.from("system_notifications").insert([
           {
             type: "payment",
             title,
             message,
-            order_id: orderId,
-            customer_id: meId,
             source: "customer",
             read: false,
             metadata: {
-              payment_id: newPaymentId,
+              payment_id: newPaymentId,     // drives "payment:*" canonical key
+              order_id: orderId,            // kept in metadata
+              customer_id: meId,
+              txn_code: selectedPack.code,
               amount: Number(finalAmount.toFixed(2)),
               method: isCash ? "cash" : "cheque",
               cheque_number: chequeNumber || null,
@@ -819,6 +1117,7 @@ export default function CustomerPaymentsPage() {
       setChequeDate("");
       setFile(null);
       setTermMultiplier(1);
+      setLockedTxn((prev) => ({ ...prev, [justSubmittedCode]: true }));
     } catch (err: any) {
       console.error("Submit failed:", err?.message || err);
       toast.error(
@@ -830,23 +1129,15 @@ export default function CustomerPaymentsPage() {
   }
 
   /* ---------------------- Installment breakdown modal ---------------------- */
-  const openBreakdown = () => setShowBreakdown(true);
-  const closeBreakdown = () => setShowBreakdown(false);
 
-  const paidCount = useMemo(
-    () =>
-      installments.filter((r) => (r.status || "").toLowerCase() === "paid")
-        .length,
-    [installments]
-  );
-
-  const termCount =
-    selectedPack?.order?.per_term_amount && selectedPack?.totals?.finalGrandTotal
-      ? Math.round(
-          selectedPack.totals.finalGrandTotal /
-            selectedPack.order.per_term_amount
-        )
-      : undefined;
+  // Count rows paid (trust backend values)
+  const paidCount = useMemo(() => {
+    return installments.filter((r) => {
+      const due = round2(Number(r.amount_due || 0));
+      const paid = round2(Number(r.amount_paid || 0));
+      return paid + EPS >= due;
+    }).length;
+  }, [installments]);
 
   /* ---------------------------------- UI ---------------------------------- */
   const allTxnsWaitingForFee =
@@ -867,7 +1158,6 @@ export default function CustomerPaymentsPage() {
           verification.
         </p>
 
-        {/* Helpful banner if all options are waiting for shipping fee */}
         {allTxnsWaitingForFee && (
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             Your orders are almost ready! Please wait for the{" "}
@@ -911,49 +1201,72 @@ export default function CustomerPaymentsPage() {
                     toast.warning(
                       "This TXN is waiting for a shipping fee. Please try again later."
                     );
-                    // keep previous selection
                     e.currentTarget.value = selectedTxnCode || "";
                     return;
                   }
+                  if (lockedTxn[val]) {
+                    toast.warning(
+                      "This TXN already has a submitted payment pending verification."
+                    );
+                    e.currentTarget.value = selectedTxnCode || "";
+                    return;
+                  }
+
                   setSelectedTxnCode(val);
                 }}
                 required
               >
                 <option value="">— Choose a TXN —</option>
-                {unpaidTxnOptions.map(({ code, fee }, i) => (
-                  <option
-                    key={`${code}-${i}`}
-                    value={code}
-                    disabled={(fee ?? 0) <= 0}
-                  >
-                    {code}
-                    {(fee ?? 0) <= 0 ? " — (Waiting for shipping fee)" : ""}
-                  </option>
-                ))}
+                {unpaidTxnOptions.map(({ code, fee }, i) => {
+                  const isLocked = !!lockedTxn[code];
+                  const waitingFee = (fee ?? 0) <= 0;
+                  return (
+                    <option
+                      key={`${code}-${i}`}
+                      value={code}
+                      disabled={waitingFee || isLocked}
+                    >
+                      {code}
+                      {waitingFee
+                        ? " — (Waiting for shipping fee)"
+                        : isLocked
+                        ? " — (Pending payment)"
+                        : ""}
+                    </option>
+                  );
+                })}
               </select>
-
-              {!!selectedPack && (
-                <div className="mt-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                  <div className="text-sm md:text-base text-gray-700">
-                    <span className="font-semibold">
-                      Remaining balance (incl. shipping):
-                    </span>{" "}
-                    <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
-                      {formatCurrency(selectedPack.balance)}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={openBreakdown}
-                    className="inline-flex items-center gap-2 self-start md:self-auto rounded-lg border border-amber-400 px-3 py-2 text-amber-700 hover:bg-amber-50"
-                    title="See your monthly payment schedule for this TXN"
-                  >
-                    <Calendar className="h-4 w-4" />
-                    View Breakdown
-                  </button>
-                </div>
-              )}
             </div>
+
+            {/* Selected TXN summary + installment counters */}
+            {!!selectedPack && (
+              <div className="mt-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                <div className="text-sm md:text-base text-gray-700">
+                  <span className="font-semibold">
+                    Remaining balance (incl. shipping):
+                  </span>{" "}
+                  <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
+                    {formatCurrency(selectedPack.balance)}
+                  </span>
+                </div>
+
+                {isCredit && (
+                  <div className="inline-flex items-center gap-3 self-start md:self-auto rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    <div>
+                      <span className="font-semibold">Total Monthly Paid:</span>{" "}
+                      <span className="font-bold">{paidCount}</span>
+                    </div>
+                    <span className="opacity-50">•</span>
+                    <div>
+                      <span className="font-semibold">Remaining Months:</span>{" "}
+                      <span className="font-bold">
+                        {Math.max(0, remainingTerms)}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Amount (LOCKED) + controls */}
             <div className="col-span-1">
@@ -977,27 +1290,29 @@ export default function CustomerPaymentsPage() {
                     onClick={() => stepMultiplier(-1)}
                     className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
                     title="Pay fewer months"
-                    disabled={termAmount <= 0 || termMultiplier <= 1}
+                    disabled={effectiveTermAmount <= 0 || termMultiplier <= 1}
                   >
                     <Minus className="h-4 w-4" />
                   </button>
+
                   <div
                     className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
                     title={
-                      termAmount > 0
+                      effectiveTermAmount > 0
                         ? "Number of months to pay"
                         : "Schedule not loaded yet"
                     }
                   >
                     × {termMultiplier}
                   </div>
+
                   <button
                     type="button"
                     onClick={() => stepMultiplier(+1)}
                     className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
                     title="Pay more months"
                     disabled={
-                      termAmount <= 0 ||
+                      effectiveTermAmount <= 0 ||
                       termMultiplier >= getCreditMaxMultiplier()
                     }
                   >
@@ -1008,18 +1323,19 @@ export default function CustomerPaymentsPage() {
                     <button
                       type="button"
                       onClick={payInFull}
-                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20] disabled:opacity-50"
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
                       style={{ backgroundColor: "#ffba20" }}
-                      disabled={termAmount <= 0}
+                      disabled={effectiveTermAmount <= 0}
                     >
                       Pay in Full
                     </button>
+
                     <button
                       type="button"
                       onClick={payInHalf}
-                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20] disabled:opacity-50"
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
                       style={{ backgroundColor: "#ffba20" }}
-                      disabled={termAmount <= 0}
+                      disabled={effectiveTermAmount <= 0}
                     >
                       Pay in Half
                     </button>
@@ -1038,12 +1354,14 @@ export default function CustomerPaymentsPage() {
                   >
                     <Minus className="h-4 w-4" />
                   </button>
+
                   <div
                     className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
                     title="Cash step"
                   >
                     ₱{CASH_STEP.toLocaleString()}
                   </div>
+
                   <button
                     type="button"
                     onClick={() => bumpCash("inc")}
@@ -1057,7 +1375,7 @@ export default function CustomerPaymentsPage() {
                     <button
                       type="button"
                       onClick={payInFull}
-                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]"
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
                       style={{ backgroundColor: "#ffba20" }}
                     >
                       Pay in Full
@@ -1066,7 +1384,7 @@ export default function CustomerPaymentsPage() {
                     <button
                       type="button"
                       onClick={payInHalf}
-                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]"
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
                       style={{ backgroundColor: "#ffba20" }}
                     >
                       Pay in Half
@@ -1075,12 +1393,44 @@ export default function CustomerPaymentsPage() {
                 </div>
               )}
 
-              {/* Optional hints */}
-              {!isCash && Number(amount) > 0 && termAmount > 0 && (
+              {/* Optional hint */}
+              {!isCash && Number(amount) > 0 && (
                 <div className="mt-1 text-xs text-green-700">
-                  This payment will pay off{" "}
-                  <b>{Math.floor(Number(amount) / termAmount)}</b> installment
-                  {Math.floor(Number(amount) / termAmount) > 1 ? "s" : ""}.
+                  {(() => {
+                    const amt = Number(amount) || 0;
+                    const per = effectiveTermAmount;
+                    if (allTermsPaid) {
+                      return (
+                        <>
+                          This payment will settle the <b>remaining balance</b>.
+                        </>
+                      );
+                    }
+                    if (per > 0) {
+                      const k = Math.min(
+                        unpaidInstallments.length,
+                        Math.floor(amt / per)
+                      );
+                      const isFullWithLeftover =
+                        Math.abs(amt - (selectedPack?.balance ?? 0)) < EPS &&
+                        totalOfAllUnpaid + EPS <
+                          (selectedPack?.balance ?? 0);
+                      return (
+                        <>
+                          This payment will pay off <b>{k}</b> installment
+                          {k > 1 ? "s" : ""}.
+                          {isFullWithLeftover && (
+                            <>
+                              {" "}
+                              It also settles the <b>remaining shipping/adjustment</b>{" "}
+                              amount.
+                            </>
+                          )}
+                        </>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               )}
             </div>
@@ -1301,7 +1651,6 @@ export default function CustomerPaymentsPage() {
                       </tr>
                     )}
 
-                    {/* Only show Shipping Fee if > 0 */}
                     {selectedPack.totals.shippingFee > 0 && (
                       <tr>
                         <td className="font-semibold py-0.5">Shipping Fee:</td>
@@ -1314,7 +1663,10 @@ export default function CustomerPaymentsPage() {
                     <tr>
                       <td className="font-bold py-1.5">
                         Grand Total
-                        {selectedPack.totals.shippingFee > 0 ? " (Incl. Shipping)" : ""}:
+                        {selectedPack.totals.shippingFee > 0
+                          ? " (Incl. Shipping)"
+                          : ""}
+                        :
                       </td>
                       <td className="pl-2 font-bold text-green-700 font-mono">
                         {formatCurrency(selectedPack.totals.finalGrandTotal)}
@@ -1350,221 +1702,6 @@ export default function CustomerPaymentsPage() {
           </div>
         )}
       </div>
-
-      {/* =================== Modal: Installment Breakdown =================== */}
-      {showBreakdown && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={closeBreakdown}
-            aria-hidden="true"
-          />
-          {/* Modal Box */}
-          <div className="absolute inset-0 flex items-center justify-center px-2 py-4">
-            <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl ring-1 ring-black/10 overflow-hidden animate-in fade-in zoom-in-90">
-              {/* Header */}
-              <div className="flex items-center justify-between px-7 py-4 border-b bg-gradient-to-r from-[#ffba20]/90 to-white/80">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Calendar className="h-5 w-5 text-amber-600 shrink-0" />
-                  <h3 className="text-lg md:text-xl font-bold tracking-tight text-neutral-900">
-                    Installment Breakdown
-                  </h3>
-                  {selectedPack?.code && (
-                    <span
-                      className="ml-3 truncate max-w-[220px] font-mono text-xs md:text-sm text-neutral-700 bg-yellow-100 rounded px-2 py-1 border border-yellow-300"
-                      title={selectedPack.code}
-                    >
-                      {selectedPack.code}
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={closeBreakdown}
-                  className="rounded-full p-2 hover:bg-amber-100 transition"
-                  aria-label="Close"
-                >
-                  <X className="h-4 w-4 text-neutral-600" />
-                </button>
-              </div>
-
-              {/* Body */}
-              <div className="px-7 py-5 bg-white">
-                {loadingInstallments ? (
-                  <div className="py-10 text-center text-sm text-gray-500 tracking-wide animate-pulse">
-                    Loading schedule…
-                  </div>
-                ) : installments.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-4">
-                    <span className="font-bold text-base text-gray-700 mb-1">
-                      No installment schedule found for this TXN.
-                    </span>
-                    {(selectedPack?.order?.per_term_amount ?? 0) > 0 && (
-                      <div className="w-full max-w-sm mt-3 text-center">
-                        <div className="flex flex-col gap-0.5 items-center mb-2">
-                          <span className="font-medium text-gray-500 text-xs">
-                            Terms:
-                          </span>
-                          <span className="font-mono text-base font-bold text-amber-700">
-                            {termCount ?? "—"} month
-                            {(termCount ?? 0) > 1 ? "s" : ""}
-                          </span>
-                        </div>
-                        <div className="flex flex-col gap-0.5 items-center mb-3">
-                          <span className="font-medium text-gray-500 text-xs">
-                            Per Month:
-                          </span>
-                          <span className="font-mono text-2xl font-extrabold text-blue-700 drop-shadow">
-                            {formatCurrency(
-                              selectedPack?.order?.per_term_amount ?? 0
-                            )}
-                          </span>
-                        </div>
-                        <div className="rounded-xl shadow ring-1 ring-gray-200 overflow-hidden mt-2">
-                          <table className="w-full bg-white">
-                            <thead>
-                              <tr style={{ background: "#ffba20" }}>
-                                <th className="py-2 px-2 text-left font-bold text-neutral-900 text-xs">
-                                  Month
-                                </th>
-                                <th className="py-2 px-2 text-right font-bold text-neutral-900 text-xs">
-                                  Amount Due
-                                </th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {Array.from({
-                                length: termCount ?? 12,
-                              }).map((_, i) => (
-                                <tr
-                                  key={i}
-                                  className={i % 2 === 0 ? "bg-white" : "bg-[#fff7e5]"}
-                                >
-                                  <td className="py-1.5 px-2 border-b border-gray-100 font-mono text-sm">
-                                    Month {i + 1}
-                                  </td>
-                                  <td className="py-1.5 px-2 border-b border-gray-100 text-right font-mono text-blue-700 font-bold text-sm">
-                                    {formatCurrency(
-                                      selectedPack?.order?.per_term_amount ?? 0
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        {/* Summary */}
-                        <div className="mt-3 w-full flex items-end justify-between text-xs">
-                          <div className="text-amber-700">
-                            ⚠️ Delayed payments may incur penalties. Please pay
-                            on or before the due date.
-                          </div>
-                          <div className="font-semibold">
-                            Total Monthly Paid:{" "}
-                            <span className="font-bold text-blue-700">
-                              {paidCount}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    <div className="rounded-xl overflow-hidden shadow ring-1 ring-gray-200 bg-white">
-                      <table className="w-full text-xs align-middle">
-                        <thead>
-                          <tr
-                            className="uppercase tracking-wider text-[11px]"
-                            style={{ background: "#ffba20" }}
-                          >
-                            <th className="py-2 px-2 text-left font-bold text-neutral-900">
-                              Term
-                            </th>
-                            <th className="py-2 px-2 text-left font-bold text-neutral-900">
-                              Due Date
-                            </th>
-                            <th className="py-2 px-2 text-right font-bold text-neutral-900">
-                              Amount Due
-                            </th>
-                            <th className="py-2 px-2 text-right font-bold text-neutral-900">
-                              Amount Paid
-                            </th>
-                            <th className="py-2 px-2 text-center font-bold text-neutral-900">
-                              Status
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {installments.map((row) => {
-                            const paid = Number(row.amount_paid || 0);
-                            const due = Number(row.amount_due || 0);
-                            const isPaid = paid >= due;
-                            return (
-                              <tr
-                                key={row.id || `${row.term_no}:${row.due_date}`}
-                                className="border-b last:border-b-0"
-                              >
-                                <td className="py-1.5 px-2 font-mono">{row.term_no}</td>
-                                <td className="py-1.5 px-2">
-                                  {new Date(row.due_date + "T00:00:00").toLocaleDateString(
-                                    "en-PH",
-                                    { year: "numeric", month: "short", day: "2-digit" }
-                                  )}
-                                </td>
-                                <td className="py-1.5 px-2 text-right font-mono">
-                                  {formatCurrency(due)}
-                                </td>
-                                <td className="py-1.5 px-2 text-right font-mono">
-                                  {formatCurrency(paid)}
-                                </td>
-                                <td className="py-1.5 px-2 text-center">
-                                  {isPaid ? (
-                                    <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 font-semibold">
-                                      Paid
-                                    </span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700 font-semibold">
-                                      Pending
-                                    </span>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                    {/* Footer note & count */}
-                    <div className="mt-3 w-full flex items-end justify-between text-xs">
-                      <div className="text-amber-700">
-                        ⚠️ Delayed payments may incur penalties. Please pay on
-                        or before the due date.
-                      </div>
-                      <div className="font-semibold">
-                        Total Monthly Paid:{" "}
-                        <span className="font-bold text-blue-700">
-                          {paidCount}
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Footer */}
-              <div className="px-7 py-3 border-t bg-gray-50 flex justify-end">
-                <button
-                  onClick={closeBreakdown}
-                  className="px-5 py-1.5 rounded-lg border border-black font-semibold bg-black text-white hover:opacity-90 transition text-base"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
