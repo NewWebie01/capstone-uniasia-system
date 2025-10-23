@@ -1,3 +1,4 @@
+// src/app/admin/payments/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -123,8 +124,6 @@ export default function AdminPaymentsPage() {
   const pageSize = 10;
 
   // image modal
-  theImageModal: {
-  }
   const [imgOpen, setImgOpen] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [imgMeta, setImgMeta] = useState<{ cheque?: string | null; bank?: string | null } | null>(
@@ -164,7 +163,7 @@ export default function AdminPaymentsPage() {
             id: String(c.id),
             code: c.code ?? null,
             name: c.name ?? null,
-            email: c.email ? String(c.email).toLowerCase() : null, // ✅
+            email: c.email ? String(c.email).toLowerCase() : null,
           }))
         );
 
@@ -464,7 +463,9 @@ export default function AdminPaymentsPage() {
 
                   return (
                     <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
-                      <td className="py-2.5 px-3 whitespace-nowrap">{formatPH(p.created_at)}</td>
+                      {/* ⬇️ Date only (no time) */}
+                      <td className="py-2.5 px-3 whitespace-nowrap">{formatPH(p.created_at, "date")}</td>
+
                       <td className="py-2.5 px-3">
                         <div className="font-mono truncate">{code}</div>
                         <div className="text-[11px] text-gray-600 truncate">
