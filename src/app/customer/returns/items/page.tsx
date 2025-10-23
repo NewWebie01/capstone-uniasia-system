@@ -214,15 +214,21 @@ export default function ReturnedItemsPage() {
                 const note = row.note || "";
                 const txn = orderIdToTxn[row.order_id] || "—";
 
+                // 🔔 Notify admin (type: return_created)
                 await supabase.from("system_notifications").insert([
                   {
-                    type: "return",
+                    type: "return_created",
                     title: "📦 Return Request Submitted",
                     message: `A customer submitted a return request for TXN ${txn}. Reason: ${reason}`,
-                    order_id: row.order_id,
                     source: "customer",
                     read: false,
-                    metadata: { reason, note },
+                    metadata: {
+                      return_id: row.id,
+                      return_code: row.code ?? null,
+                      reason,
+                      order_id: row.order_id,
+                      note,
+                    },
                   },
                 ]);
 
