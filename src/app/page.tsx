@@ -7,6 +7,8 @@ import { ContactUs } from "@/sections/ContactUs"; // Importing ContactUs section
 import { Footer } from "@/sections/Footer"; // Importing Footer section component
 import { CallToAction } from "@/sections/CallToAction";
 import { Pricing } from "@/sections/Pricing";
+import { ProductShowcase } from "@/sections/ProductShowcase";
+
 
 export default function Home() {
   return (
@@ -14,6 +16,7 @@ export default function Home() {
       <Header /> {/* Render Header component */}
       <Hero /> {/* Render Hero component */}
       <LogoTicker /> {/* Render LogoTicker component */}
+      <ProductShowcase />
       <AboutUs /> {/* Render ProductShowcase component */}
       {/* <Testimonials /> Render Testimonials component */}
       {/* <ContactUs /> Render Pricing component */}

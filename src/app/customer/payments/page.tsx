@@ -1261,32 +1261,36 @@ const isFormValid =
 
 {/* Selected TXN summary + installment counters */}
 {!!selectedPack && (
-  <div className="mt-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-    <div className="text-sm md:text-base text-gray-700">
-      <span className="font-semibold">
-        Remaining balance (incl. shipping):
-      </span>{" "}
-      <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
-        {formatCurrency(selectedPack.balance)}
-      </span>
-    </div>
-
-    {/* Inline counters (Credit only) */}
-    {isCredit && (
-      <div className="inline-flex items-center gap-3 self-start md:self-auto rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-        <div>
-          <span className="font-semibold">Total Monthly Paid:</span>{" "}
-          <span className="font-bold">{paidCount}</span>
-        </div>
-        <span className="opacity-50">•</span>
-        <div>
-          <span className="font-semibold">Remaining Months:</span>{" "}
-          <span className="font-bold">{Math.max(0, remainingTerms)}</span>
-        </div>
+  <div className="mt-2">
+    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      {/* Remaining Balance */}
+      <div className="flex flex-col">
+        <span className="font-semibold text-gray-800">
+          Remaining balance (incl. shipping):
+        </span>
+        <span className="font-bold text-green-700 text-2xl leading-tight">
+          {formatCurrency(selectedPack.balance)}
+        </span>
       </div>
-    )}
+
+      {/* Credit counters */}
+      {isCredit && (
+        <div className="flex items-center gap-3 text-sm md:text-base">
+          <div>
+            <span className="font-semibold">Total Monthly Paid:</span>{" "}
+            <span className="font-bold">{paidCount}</span>
+          </div>
+          <span className="opacity-50">•</span>
+          <div>
+            <span className="font-semibold">Remaining Months:</span>{" "}
+            <span className="font-bold">{Math.max(0, remainingTerms)}</span>
+          </div>
+        </div>
+      )}
+    </div>
   </div>
 )}
+
 
 
 {/* Amount (LOCKED) + controls */}

@@ -23,7 +23,7 @@ const logos = [
 
 export const LogoTicker = () => {
   return (
-    <div className="py-8 md:py-12 bg-white">
+    <div className="py-8 md:py-12 bg-gray-50">
       <div className="container">
         {/* Mask fades edges left/right; overflow hidden keeps a clean ticker */}
         <div className="flex overflow-hidden [mask-image:linear-gradient(to_right,transparent,black,transparent)]">
