@@ -286,68 +286,6 @@ export default function InvoicePage() {
   const [shippingFee, setShippingFee] = useState<number>(0);
   const [detailShippingFee, setDetailShippingFee] = useState<number>(0);
 
-  // --- Password re-auth (for PRINT PDF) ---
-  const [showReauth, setShowReauth] = useState(false);
-  const [reauthEmail, setReauthEmail] = useState<string>("");
-  const [reauthPassword, setReauthPassword] = useState("");
-  const [reauthing, setReauthing] = useState(false);
-  const [reauthError, setReauthError] = useState("");
-
-  const [lastReauthAt, setLastReauthAt] = useState<number | null>(null);
-  const REAUTH_TTL_MS = 5 * 60 * 1000;
-  const needsReauth = () =>
-    !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
-
-  const [pendingPrint, setPendingPrint] = useState<null | {
-    nodeId: string;
-    paper: PaperKey;
-    filenameBase: string;
-    orderId: string;
-    txn: string;
-  }>(null);
-
-  async function handlePrintClick(args: {
-    nodeId: string;
-    paper: PaperKey;
-    filenameBase: string;
-    orderId: string;
-    txn: string;
-  }) {
-    if (needsReauth()) {
-      const { data } = await supabase.auth.getUser();
-      setReauthEmail(data?.user?.email || "");
-      setPendingPrint(args);
-      setShowReauth(true);
-      return;
-    }
-    await doPrint(args);
-  }
-
-  async function confirmReauth() {
-    setReauthError("");
-    setReauthing(true);
-    try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: reauthEmail,
-        password: reauthPassword,
-      });
-      if (error) throw error;
-
-      setLastReauthAt(Date.now());
-      setShowReauth(false);
-      setReauthPassword("");
-
-      if (pendingPrint) {
-        await doPrint(pendingPrint);
-        setPendingPrint(null);
-      }
-    } catch (e: any) {
-      setReauthError(e?.message || "Authentication failed.");
-    } finally {
-      setReauthing(false);
-    }
-  }
-
   async function doPrint(args: {
     nodeId: string;
     paper: PaperKey;
@@ -370,6 +308,16 @@ export default function InvoicePage() {
       per_term_amount: perTermAmount,
       shipping_fee: openId === args.orderId ? shippingFee : detailShippingFee,
     });
+  }
+
+  async function handlePrintClick(args: {
+    nodeId: string;
+    paper: PaperKey;
+    filenameBase: string;
+    orderId: string;
+    txn: string;
+  }) {
+    await doPrint(args);
   }
 
   const GlobalPrintCSS = () => (
@@ -864,13 +812,14 @@ export default function InvoicePage() {
                     key={order.id}
                     open={openId === order.id}
                     onOpenChange={(open) => {
-                      if (!open) {
-                        if (showReauth) return;
+                      if (open) {
+                        // opening from the "View" button
+                        openInvoice(order);
+                      } else {
+                        // closing via ✕, ESC, or outside click
                         setOpenId(null);
                         setItems(null);
                         setEditMode(false);
-                      } else {
-                        openInvoice(order);
                       }
                     }}
                   >
@@ -895,18 +844,7 @@ export default function InvoicePage() {
                         </DialogTrigger>
                       </td>
                     </tr>
-                    <DialogContent
-                      className="max-w-4xl max-h-[80vh] bg-white/95 rounded-xl shadow-2xl overflow-y-auto border border-neutral-100 p-0"
-                      onInteractOutside={(e) => {
-                        if (showReauth) e.preventDefault();
-                      }}
-                      onPointerDownOutside={(e) => {
-                        if (showReauth) e.preventDefault();
-                      }}
-                      onEscapeKeyDown={(e) => {
-                        if (showReauth) e.preventDefault();
-                      }}
-                    >
+                    <DialogContent className="max-w-4xl max-h-[80vh] bg-white/95 rounded-xl shadow-2xl overflow-y-auto border border-neutral-100 p-0">
                       {!items || !customerForOrder ? (
                         <div className="p-8 text-sm">Fetching items…</div>
                       ) : (
@@ -1044,76 +982,6 @@ export default function InvoicePage() {
                               }
                             `}</style>
                           )}
-                        </div>
-                      )}
-                      {showReauth && (
-                        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-                            <h3 className="text-base font-semibold mb-2 text-center">
-                              Confirm Your Identity
-                            </h3>
-                            <p className="text-sm text-neutral-700 text-center mb-4">
-                              For security, please re-enter your password to
-                              print this invoice PDF.
-                            </p>
-
-                            <div className="space-y-3">
-                              <div>
-                                <label className="block text-xs text-neutral-600 mb-1">
-                                  Email
-                                </label>
-                                <input
-                                  type="email"
-                                  value={reauthEmail}
-                                  disabled
-                                  aria-disabled="true"
-                                  tabIndex={-1}
-                                  className="border rounded-lg px-3 py-2 w-full bg-gray-100 text-gray-500 cursor-not-allowed opacity-70"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs text-neutral-600 mb-1">
-                                  Password
-                                </label>
-                                <input
-                                  type="password"
-                                  className="border rounded-lg px-3 py-2 w-full"
-                                  value={reauthPassword}
-                                  onChange={(e) =>
-                                    setReauthPassword(e.target.value)
-                                  }
-                                  placeholder="Enter your password"
-                                  autoFocus
-                                />
-                              </div>
-                              {reauthError && (
-                                <div className="text-xs text-red-600">
-                                  {reauthError}
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="flex gap-3 justify-center mt-5">
-                              <button
-                                className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
-                                onClick={confirmReauth}
-                                disabled={reauthing || !reauthPassword}
-                              >
-                                {reauthing ? "Verifying…" : "Verify & Continue"}
-                              </button>
-                              <button
-                                className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
-                                onClick={() => {
-                                  setShowReauth(false);
-                                  setReauthPassword("");
-                                  setReauthError("");
-                                  setPendingPrint(null);
-                                }}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
                         </div>
                       )}
                     </DialogContent>

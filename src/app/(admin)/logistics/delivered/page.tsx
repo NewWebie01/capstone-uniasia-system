@@ -1,3 +1,4 @@
+// src/app/logistics/delivered/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -5,7 +6,6 @@ import { motion } from "framer-motion";
 import { CheckCircle, Clock, Truck } from "lucide-react";
 import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs";
 import { toast } from "sonner";
-import { ReceiptText } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 
 /* =========================
@@ -16,7 +16,7 @@ type Delivery = {
   destination: string;
   plate_number: string;
   driver: string;
-  status: "Scheduled" | "To Ship" | "To Receive" | string;
+  status: "Scheduled" | "To Ship" | "To Receive" | "Delivered" | string;
   schedule_date: string;
   arrival_date: string | null;
   participants?: string[] | null;
@@ -63,26 +63,17 @@ type OrderWithCustomer = {
    PAGE
 ========================= */
 export default function DeliveredPage() {
-  const [invoiceDialogOpenId, setInvoiceDialogOpenId] = useState<number | null>(
-    null
-  );
+  const [invoiceDialogOpenId, setInvoiceDialogOpenId] = useState<number | null>(null);
   const [selectedOrderForInvoice, setSelectedOrderForInvoice] =
     useState<OrderWithCustomer | null>(null);
 
-  const openInvoiceDialogForOrder = (
-    deliveryId: number,
-    order?: OrderWithCustomer
-  ) => {
+  const openInvoiceDialogForOrder = (deliveryId: number, order?: OrderWithCustomer) => {
     setInvoiceDialogOpenId(deliveryId);
     setSelectedOrderForInvoice(order ?? null);
   };
   const closeInvoiceDialog = () => {
     setInvoiceDialogOpenId(null);
     setSelectedOrderForInvoice(null);
-  };
-  const pesoOrBlank = (v?: number | string | null) => {
-    const n = Number(v ?? 0);
-    return n > 0 ? `₱${n}` : "";
   };
 
   const supabase = createPagesBrowserClient();
@@ -98,8 +89,6 @@ export default function DeliveredPage() {
   const [dateFrom, setDateFrom] = useState<string>(""); // YYYY-MM-DD
   const [dateTo, setDateTo] = useState<string>(""); // YYYY-MM-DD
   const [loading, setLoading] = useState<boolean>(false);
-
-  const isLocked = (status: string) => status === "To Receive";
 
   // group by schedule_date (for section headers)
   const groupedDeliveries = useMemo(() => {
@@ -122,11 +111,14 @@ export default function DeliveredPage() {
   const fetchDelivered = async (pageNum: number) => {
     setLoading(true);
     try {
+      // ✅ include BOTH "To Receive" and "Delivered"
+      const deliveredStatuses = ["To Receive", "Delivered"];
+
       // base query
       let q = supabase
         .from("truck_deliveries")
         .select("*", { count: "exact" })
-        .eq("status", "To Receive"); // <- only To Receive
+        .in("status", deliveredStatuses as string[]);
 
       // filters
       if (dateFrom) q = q.gte("schedule_date", dateFrom);
@@ -170,18 +162,18 @@ export default function DeliveredPage() {
           .from("orders")
           .select(
             `
-    id, total_amount, status, truck_delivery_id, salesman, terms, date_created,
-    customer:customer_id (
-      id, name, code, address, landmark, contact_person, phone, status, date, created_at
-    ),
-    order_items (
-      quantity, price,
-      inventory:inventory_id ( product_name, category, subcategory, status )
-    )
-  `
+              id, total_amount, status, truck_delivery_id, salesman, terms, date_created,
+              customer:customer_id (
+                id, name, code, address, landmark, contact_person, phone, status, date, created_at
+              ),
+              order_items (
+                quantity, price,
+                inventory:inventory_id ( product_name, category, subcategory, status )
+              )
+            `
           )
           .in("truck_delivery_id", ids)
-          .order("date_created", { ascending: false }); // <- change from accepted_at
+          .order("date_created", { ascending: false });
 
         if (oErr) {
           console.error("Fetch delivered orders error:", oErr);
@@ -203,8 +195,7 @@ export default function DeliveredPage() {
             order_items: oRaw.order_items ?? [],
           };
           if (!o.truck_delivery_id) return;
-          if (!byDelivery.has(o.truck_delivery_id))
-            byDelivery.set(o.truck_delivery_id, []);
+          if (!byDelivery.has(o.truck_delivery_id)) byDelivery.set(o.truck_delivery_id, []);
           byDelivery.get(o.truck_delivery_id)!.push(o);
         });
 
@@ -299,7 +290,10 @@ export default function DeliveredPage() {
 
       {/* Delivered Cards – grouped by schedule_date, read-only */}
       {sortedDateKeys.length === 0 && !loading && (
-        <p className="text-sm text-slate-500">No “To Receive” records found.</p>
+        <p className="text-sm text-slate-500">
+          No records found for <span className="font-semibold">To Receive</span> or{" "}
+          <span className="font-semibold">Delivered</span>.
+        </p>
       )}
 
       {sortedDateKeys.map((date) => {
@@ -325,9 +319,7 @@ export default function DeliveredPage() {
                       Delivery to{" "}
                       <span className="text-slate-900">
                         {delivery.destination || (
-                          <span className="italic text-gray-400">
-                            [No destination]
-                          </span>
+                          <span className="italic text-gray-400">[No destination]</span>
                         )}
                       </span>
                     </h2>
@@ -434,9 +426,7 @@ export default function DeliveredPage() {
                         ))}
                       </div>
                     ) : (
-                      <p className="text-sm text-slate-500">
-                        No invoices assigned.
-                      </p>
+                      <p className="text-sm text-slate-500">No invoices assigned.</p>
                     )}
                   </div>
 
@@ -474,7 +464,7 @@ export default function DeliveredPage() {
           </div>
         );
       })}
-      {/* ANG BUHAY AY WEATHER WEATHER LANG */}
+
       {/* Pagination footer */}
       <div className="flex items-center justify-between mt-8 border-t pt-4 text-sm">
         <div className="text-slate-600">

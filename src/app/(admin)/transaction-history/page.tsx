@@ -142,17 +142,15 @@ async function logActivity(action: string, details: any = {}) {
         .single();
       if (u?.role) userRole = u.role;
     }
-    await supabase
-      .from("activity_logs")
-      .insert([
-        {
-          user_email: userEmail,
-          user_role: userRole,
-          action,
-          details,
-          created_at: new Date().toISOString(),
-        },
-      ]);
+    await supabase.from("activity_logs").insert([
+      {
+        user_email: userEmail,
+        user_role: userRole,
+        action,
+        details,
+        created_at: new Date().toISOString(),
+      },
+    ]);
   } catch {}
 }
 
@@ -180,17 +178,6 @@ export default function TransactionHistoryPage() {
   const [customEnd, setCustomEnd] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
-
-  // Re-auth
-  const [showReauth, setShowReauth] = useState(false);
-  const [reauthEmail, setReauthEmail] = useState<string>("");
-  const [reauthPassword, setReauthPassword] = useState("");
-  const [reauthing, setReauthing] = useState(false);
-  const [reauthError, setReauthError] = useState("");
-  const [lastReauthAt, setLastReauthAt] = useState<number | null>(null);
-  const REAUTH_TTL_MS = 0.5 * 60 * 1000;
-  const needsReauth = () =>
-    !lastReauthAt || Date.now() - lastReauthAt > REAUTH_TTL_MS;
 
   // Debounced refetch timer for realtime
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -442,53 +429,12 @@ export default function TransactionHistoryPage() {
           }}
         />
       )}
-
-      {/* Re-auth modal */}
-      {showReauth && (
-        <ReauthModal
-          email={reauthEmail}
-          password={reauthPassword}
-          setPassword={setReauthPassword}
-          error={reauthError}
-          verifying={reauthing}
-          onVerify={async () => {
-            setReauthError("");
-            setReauthing(true);
-            try {
-              const { error } = await supabase.auth.signInWithPassword({
-                email: reauthEmail,
-                password: reauthPassword,
-              });
-              if (error) throw error;
-              setLastReauthAt(Date.now());
-              setShowReauth(false);
-              setReauthPassword("");
-              await doExportNow();
-            } catch (e: any) {
-              setReauthError(e?.message || "Authentication failed.");
-            } finally {
-              setReauthing(false);
-            }
-          }}
-          onCancel={() => {
-            setShowReauth(false);
-            setReauthPassword("");
-            setReauthError("");
-          }}
-        />
-      )}
     </div>
   );
 
   /* ---------------------- handlers ---------------------- */
   async function handleExportNow() {
     setExportError("");
-    if (needsReauth()) {
-      const { data } = await supabase.auth.getUser();
-      setReauthEmail(data?.user?.email || "");
-      setShowReauth(true);
-      return;
-    }
     await doExportNow();
   }
 
@@ -741,73 +687,6 @@ function ExportModal(props: {
             }
           >
             {exporting ? "Exporting…" : "Export Now"}
-          </button>
-          <button
-            className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ReauthModal(props: {
-  email: string;
-  password: string;
-  setPassword: (s: string) => void;
-  error: string;
-  verifying: boolean;
-  onVerify: () => void;
-  onCancel: () => void;
-}) {
-  const { email, password, setPassword, error, verifying, onVerify, onCancel } =
-    props;
-  return (
-    <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-        <h3 className="text-base font-semibold mb-2 text-center">
-          Confirm Your Identity
-        </h3>
-        <p className="text-sm text-gray-700 text-center mb-4">
-          For security, please re-enter your password to export transactions.
-        </p>
-
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs text-gray-600 mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              disabled
-              aria-disabled="true"
-              tabIndex={-1}
-              className="border rounded-lg px-3 py-2 w-full bg-gray-100 text-gray-500 cursor-not-allowed opacity-70"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-600 mb-1">Password</label>
-            <input
-              type="password"
-              className="border rounded-lg px-3 py-2 w-full"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter your password"
-              autoFocus
-            />
-          </div>
-          {error && <div className="text-xs text-red-600">{error}</div>}
-        </div>
-
-        <div className="flex gap-3 justify-center mt-5">
-          <button
-            className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
-            onClick={onVerify}
-            disabled={verifying || !password}
-          >
-            {verifying ? "Verifying…" : "Verify & Continue"}
           </button>
           <button
             className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm"

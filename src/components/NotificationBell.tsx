@@ -129,7 +129,7 @@ function kindMeta(type?: string) {
     case "order_created":
     case "order_approved":
       return {
-        icon: "🛒",
+        icon: "",
         label: "Order",
         badgeClass: "bg-blue-50 text-blue-700 ring-1 ring-blue-200",
         cardBorderClass: "border-l-4 border-blue-400",
@@ -137,28 +137,28 @@ function kindMeta(type?: string) {
     case "payment":
     case "payment_received":
       return {
-        icon: "💳",
+        icon: "",
         label: "Payment",
         badgeClass: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200",
         cardBorderClass: "border-l-4 border-emerald-400",
       };
     case "return_created":
       return {
-        icon: "🔁",
+        icon: "",
         label: "Return",
         badgeClass: "bg-pink-50 text-pink-700 ring-1 ring-pink-200",
         cardBorderClass: "border-l-4 border-pink-400",
       };
     case "account_request_submitted":
       return {
-        icon: "🧾",
+        icon: "",
         label: "Account",
         badgeClass: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200",
         cardBorderClass: "border-l-4 border-indigo-400",
       };
     case "expiration":
       return {
-        icon: "⏰",
+        icon: "",
         label: "Expiring",
         badgeClass: "bg-orange-50 text-orange-700 ring-1 ring-orange-200",
         cardBorderClass: "border-l-4 border-orange-400",
@@ -167,14 +167,14 @@ function kindMeta(type?: string) {
     case "delivery_to_receive":
     case "delivery_delivered":
       return {
-        icon: "🚚",
+        icon: "",
         label: "Delivery",
         badgeClass: "bg-purple-50 text-purple-700 ring-1 ring-purple-200",
         cardBorderClass: "border-l-4 border-purple-400",
       };
     default:
       return {
-        icon: "🔔",
+        icon: "",
         label: "System",
         badgeClass: "bg-gray-100 text-gray-700 ring-1 ring-gray-200",
         cardBorderClass: "border-l-4 border-gray-300",
@@ -756,7 +756,7 @@ export default function NotificationBell() {
               <div className="flex items-center gap-3">
                 <h3 className="text-lg font-semibold">Order Details</h3>
                 <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 ring-1 ring-blue-200">
-                  🛒 Order
+                   Order
                 </span>
               </div>
               <div className="flex gap-2">

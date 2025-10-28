@@ -2,17 +2,9 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
-import {
-  CheckCircle,
-  Clock,
-  Truck,
-  Plus,
-  Printer,
-  ReceiptText,
-} from "lucide-react";
+import { CheckCircle, Clock, Truck, Plus, ReceiptText } from "lucide-react";
 import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs";
-import { Dialog, DialogTrigger, DialogContent } from "@/components/ui/dialog";
-import { generatePDFBlob } from "@/utils/exportInvoice";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
 // --- PSGC helpers (Region / Province only) ---
@@ -101,7 +93,7 @@ type ConfirmDialogState = {
   id: number | null;
   newStatus: string;
 };
-//
+
 export default function TruckDeliveryPage() {
   const supabase = createPagesBrowserClient();
 
@@ -121,7 +113,6 @@ export default function TruckDeliveryPage() {
     newStatus: "",
   });
 
-  // Add after: const supabase = createPagesBrowserClient();
   async function logActivity(action: string, details: any = {}) {
     try {
       const { data } = await supabase.auth.getUser();
@@ -131,8 +122,8 @@ export default function TruckDeliveryPage() {
           user_email: userEmail,
           action,
           details,
-          user_role: "admin", // Always log as admin
-          created_at: new Date().toISOString(), // Always log timestamp
+          user_role: "admin",
+          created_at: new Date().toISOString(),
         },
       ]);
     } catch (e) {
@@ -161,7 +152,6 @@ export default function TruckDeliveryPage() {
     participants: [] as string[],
   });
 
-  // TODO: LOCATION HERE
   // Region / Province pickers for Destination
   const [regions, setRegions] = useState<PSGCRegion[]>([]);
   const [provinces, setProvinces] = useState<PSGCProvince[]>([]);
@@ -169,7 +159,7 @@ export default function TruckDeliveryPage() {
   const [provinceCode, setProvinceCode] = useState("");
   const [selectedRegionName, setSelectedRegionName] = useState<string>("");
   const [selectedProvinceName, setSelectedProvinceName] = useState<string>("");
-  //FOR SHIPPING CONST
+  // For Shipping fee input buffer
   const [editingShippingFees, setEditingShippingFees] = useState<
     Record<string, string>
   >({});
@@ -207,9 +197,7 @@ export default function TruckDeliveryPage() {
 
     if (!regionCode) return;
 
-    // NCR (13…) has no provinces
-    const isNCR = regionCode.startsWith("13");
-
+    const isNCR = regionCode.startsWith("13"); // NCR has no provinces
     if (isNCR) return;
 
     fetchJSON<any[]>("https://psgc.cloud/api/provinces")
@@ -231,11 +219,9 @@ export default function TruckDeliveryPage() {
   }, []);
 
   const fetchDeliveriesAndAssignments = async () => {
-    // NOTE: removed generics to avoid TS incompatibility with your Supabase install
     const { data: dData, error: dErr } = await supabase
       .from("truck_deliveries")
       .select("*")
-      //.in("status", ["Scheduled", "To Ship", "To Receive"])
       .order("schedule_date", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false });
 
@@ -249,10 +235,8 @@ export default function TruckDeliveryPage() {
     const deliveriesList = (dData as Delivery[]) ?? [];
     setDeliveries(deliveriesList);
 
-    // 🔑 Put Scheduled first, then Ongoing, Delivered last.
-    // Within the same status, newer schedule_date first.
     const statusRank = (s?: string) =>
-      s === "Scheduled" ? 0 : s === "To Ship" ? 1 : 2; // Delivered (and others) last
+      s === "Scheduled" ? 0 : s === "To Ship" ? 1 : 2;
 
     deliveriesList.sort((a, b) => {
       const r = statusRank(a.status) - statusRank(b.status);
@@ -260,7 +244,7 @@ export default function TruckDeliveryPage() {
 
       const ta = a.schedule_date ? new Date(a.schedule_date).getTime() : 0;
       const tb = b.schedule_date ? new Date(b.schedule_date).getTime() : 0;
-      return tb - ta; // latest first
+      return tb - ta;
     });
 
     setDeliveries(deliveriesList);
@@ -305,7 +289,7 @@ export default function TruckDeliveryPage() {
   `
       )
       .in("truck_delivery_id", ids)
-      .order("date_created", { ascending: false }); // ✅ valid column
+      .order("date_created", { ascending: false });
 
     if (oErr) {
       console.error("Fetch assigned orders error:", oErr.message ?? oErr);
@@ -313,7 +297,6 @@ export default function TruckDeliveryPage() {
     }
 
     const fetchedOrders = (oData as any[]) ?? [];
-
     const byDelivery = new Map<string, OrderWithCustomer[]>();
 
     for (const oRaw of fetchedOrders) {
@@ -374,22 +357,6 @@ export default function TruckDeliveryPage() {
       return;
     }
 
-    if (error) {
-      console.error("Fetch unassigned orders error:", error);
-      toast.error("Failed to load unassigned invoices");
-      setUnassignedOrders([]);
-      return;
-    }
-
-    // 🟡 Sort manually by TXN code (FIFO logic)
-    // THIS IS THE PREVIOUS BASED ON TXN NUMBER
-    // const sorted = (data as unknown as OrderWithCustomer[]).sort((a, b) => {
-    //   const codeA = a.customer?.code || "";
-    //   const codeB = b.customer?.code || "";
-    //   return codeA.localeCompare(codeB); // FIFO sort by TXN
-    // });
-
-    // 🟢 Sort by customer created_at date (newest first) time based
     if (data) {
       const sorted = (data as unknown as OrderWithCustomer[]).sort((a, b) => {
         const dateA = new Date(a.customer?.created_at || "").getTime();
@@ -399,101 +366,6 @@ export default function TruckDeliveryPage() {
 
       setUnassignedOrders(sorted);
     }
-
-    setUnassignedOrders(
-      (data as any[]).map((oRaw) => ({
-        id: oRaw.id,
-        total_amount: oRaw.total_amount,
-        status: oRaw.status,
-        truck_delivery_id: oRaw.truck_delivery_id,
-        customer: Array.isArray(oRaw.customer)
-          ? oRaw.customer[0]
-          : oRaw.customer,
-        order_items: oRaw.order_items ?? [],
-      })) || []
-    );
-
-    const assignSelected = async () => {
-      if (!assignForDeliveryId || selectedOrderIds.length === 0) {
-        setAssignOpen(false);
-        return;
-      }
-
-      // 1) Re-check the latest state of the selected orders
-      const { data: checkRows, error: checkErr } = await supabase
-        .from("orders")
-        .select("id, status, truck_delivery_id")
-        .in("id", selectedOrderIds);
-
-      if (checkErr) {
-        console.error("Check before assign error:", checkErr);
-        toast.error("Unable to verify selected invoices. Try again.");
-        return;
-      }
-
-      const invalid = (checkRows ?? []).filter(
-        (r: any) => r.status !== "completed" || r.truck_delivery_id !== null
-      );
-
-      if (invalid.length > 0) {
-        const taken = invalid
-          .filter((r: any) => r.truck_delivery_id !== null)
-          .map((r: any) => r.id);
-        const wrongStatus = invalid
-          .filter((r: any) => r.status !== "completed")
-          .map((r: any) => r.id);
-
-        if (taken.length) {
-          toast.error(
-            `Some invoices are already assigned to another truck: ${taken.join(
-              ", "
-            )}`
-          );
-        }
-        if (wrongStatus.length) {
-          toast.error(
-            `Some invoices are not completed: ${wrongStatus.join(", ")}`
-          );
-        }
-        return;
-      }
-
-      // 2) Defensive update: only assign rows that are still unassigned AND completed
-      const { data: updated, error: updErr } = await supabase
-        .from("orders")
-        .update({ truck_delivery_id: assignForDeliveryId })
-        .in("id", selectedOrderIds)
-        .is("truck_delivery_id", null)
-        .eq("status", "completed")
-        .select("id"); // return which rows were actually updated
-
-      if (updErr) {
-        console.error("Assign error:", updErr);
-        toast.error("Failed to assign invoices to truck");
-        return;
-      }
-
-      const updatedCount = (updated ?? []).length;
-      if (updatedCount === 0) {
-        toast.error(
-          "No invoices were assigned. They may have been taken or changed."
-        );
-      } else if (updatedCount < selectedOrderIds.length) {
-        const notUpdated = selectedOrderIds.filter(
-          (id) => !(updated ?? []).some((u: any) => u.id === id)
-        );
-        toast.warning(
-          `Assigned ${updatedCount} invoice(s). Some were skipped: ${notUpdated.join(
-            ", "
-          )}`
-        );
-      } else {
-        toast.success(`Assigned ${updatedCount} invoice(s) to the truck.`);
-      }
-
-      setAssignOpen(false);
-      await fetchDeliveriesAndAssignments();
-    };
 
     setUnassignedOrders(
       (data as any[]).map((oRaw) => ({
@@ -517,7 +389,6 @@ export default function TruckDeliveryPage() {
       return;
     }
 
-    // --------- PASTE UPDATED TOAST HERE ----------
     toast(`Clear all invoices from this truck?`, {
       action: {
         label: "Confirm",
@@ -538,23 +409,16 @@ export default function TruckDeliveryPage() {
 
           toast.success("All invoices cleared from this truck.");
 
-          // DEBUG LOG
-          console.log("Will log activity now!");
-
-          // LOG TO ACTIVITY
           await logActivity("Cleared all invoices from truck", {
             deliveryId,
             clearedOrderIds: orderIds,
           });
-
-          console.log("Activity should be logged now!");
 
           await fetchDeliveriesAndAssignments();
         },
       },
       duration: 12000,
     });
-    // ----------------------------------------------
   };
 
   /* =========================
@@ -587,7 +451,6 @@ export default function TruckDeliveryPage() {
   function openFormPrefilledFromOrder(order: OrderWithCustomer) {
     const addr = order?.customer?.address?.trim() || "";
 
-    // remember the order (full) + id for later linking and optimistic UI
     setPrefillOrderId(order.id);
     setPrefillOrderObj(order);
     setPrefillOrderAddress(addr);
@@ -618,7 +481,6 @@ export default function TruckDeliveryPage() {
       newDelivery.destination?.trim() ||
       [region, province].filter(Boolean).join(", ");
 
-    // 1) Create the delivery and return its core fields (so we can render immediately)
     const { error: insErr, data: insData } = await supabase
       .from("truck_deliveries")
       .insert([
@@ -643,7 +505,6 @@ export default function TruckDeliveryPage() {
       return;
     }
 
-    // 2) If we started from "Create Delivery" for a specific order, link it now
     if (prefillOrderId) {
       const { error: linkErr } = await supabase
         .from("orders")
@@ -657,8 +518,6 @@ export default function TruckDeliveryPage() {
       } else {
         toast.success("Invoice linked to the new truck.");
 
-        // 3) ✅ Optimistic UI: inject the newly created delivery with the prefilled order
-        //    so the TXN appears immediately under "Invoices on this truck".
         if (prefillOrderObj) {
           const optimisticDelivery: Delivery = {
             id: insData.id,
@@ -680,16 +539,13 @@ export default function TruckDeliveryPage() {
           };
 
           setDeliveries((prev) => {
-            // put new delivery in the list; keep your existing sort
             const next = [optimisticDelivery, ...prev];
-            // optional: keep the same status/date ordering you already apply elsewhere
             return next;
           });
         }
       }
     }
 
-    // 4) Activity log
     await logActivity("Added Delivery Schedule", {
       destination: destinationComposed,
       plate_number: newDelivery.plateNumber,
@@ -700,16 +556,11 @@ export default function TruckDeliveryPage() {
       arrival_date: newDelivery.arrivalDate || null,
     });
 
-    // 5) Reset prefill helpers
     setPrefillOrderId(null);
     setPrefillOrderObj(null);
     setPrefillOrderAddress("");
 
-    // 6) Optionally refresh from server to be 100% consistent (keeps realtime in sync)
-    //    If you want to rely purely on optimistic UI, you may comment this out.
     await fetchDeliveriesAndAssignments();
-
-    // 7) Close form
     hideForm();
   };
 
@@ -725,7 +576,6 @@ export default function TruckDeliveryPage() {
         return null;
     }
   };
-  // remember which order we used to prefill the "Create Delivery" form
   const [prefillOrderObj, setPrefillOrderObj] =
     useState<OrderWithCustomer | null>(null);
   const updateDeliveryStatusInState = (id: number, status: string) => {
@@ -734,14 +584,61 @@ export default function TruckDeliveryPage() {
     );
   };
 
+  /** Server-verified guard (kept for safety on “To Receive”) */
+  async function verifyDeliveryRequirements(
+    deliveryId: number,
+    targetStatus: "Scheduled" | "To Ship" | "To Receive"
+  ): Promise<{ ok: boolean; message?: string }> {
+    const { data: row, error } = await supabase
+      .from("truck_deliveries")
+      .select("id, status, shipping_fee, eta_date")
+      .eq("id", String(deliveryId))
+      .single();
+
+    if (error || !row) {
+      return { ok: false, message: "Could not load delivery for validation." };
+    }
+
+    const hasShipFee =
+      row.shipping_fee !== null && row.shipping_fee !== undefined;
+    const hasEta = !!row.eta_date;
+
+    if (targetStatus === "To Receive") {
+      if (!hasShipFee) {
+        return {
+          ok: false,
+          message:
+            "Please enter the Shipping Fee before changing status to “To Receive”.",
+        };
+      }
+      if (!hasEta) {
+        return {
+          ok: false,
+          message:
+            "Please set the Estimated Arrival date before changing status to “To Receive”.",
+        };
+      }
+    }
+
+    return { ok: true };
+  }
+
   const confirmStatusChange = async () => {
     const { id, newStatus } = confirmDialog;
     if (id == null) return;
 
-    // use the shared helper (handles optimistic UI, DB call, log, toasts)
+    const check = await verifyDeliveryRequirements(
+      id,
+      newStatus as "Scheduled" | "To Ship" | "To Receive"
+    );
+    if (!check.ok) {
+      toast.error(check.message || "Missing required fields for this status.");
+      setConfirmDialog({ open: false, id: null, newStatus: "" });
+      return;
+    }
+
     await changeDeliveryStatus(id, newStatus);
 
-    // if you want “To Receive” to disappear from the active list immediately:
     if (newStatus === "To Receive") {
       setDeliveries((prev) => prev.filter((d) => d.id !== id));
     }
@@ -751,7 +648,6 @@ export default function TruckDeliveryPage() {
 
   const addParticipant = () => {
     if (!newPerson.trim()) return;
-    // optional safety: max 3
     if (newDelivery.participants.length >= 2)
       return toast.error("Up to 2 participants only.");
     setNewDelivery((prev) => ({
@@ -778,7 +674,6 @@ export default function TruckDeliveryPage() {
     );
     toast.success("Date Received updated");
 
-    // ✅ ACTIVITY LOG FOR DATE RECEIVED
     await logActivity("Updated Delivery Date Received", {
       delivery_id: deliveryId,
       arrival_date: date,
@@ -805,14 +700,13 @@ export default function TruckDeliveryPage() {
     );
     toast.success("Estimated Arrival updated");
 
-    // Optional activity log
     await logActivity("Updated Estimated Arrival", {
       delivery_id: deliveryId,
       eta_date: date,
     });
   };
 
-  //SHIPPING FEE HANDLER
+  // SHIPPING FEE HANDLER
   const handleShippingFeeChange = async (deliveryId: number, value: number) => {
     const { error } = await supabase
       .from("truck_deliveries")
@@ -837,25 +731,6 @@ export default function TruckDeliveryPage() {
   };
 
   /* =========================
-     GROUP BY schedule_date
-  ========================= */
-  const groupedDeliveries = useMemo(() => {
-    return deliveries.reduce<Record<string, Delivery[]>>((acc, delivery) => {
-      const dateKey = delivery.schedule_date || "Unscheduled";
-      (acc[dateKey] ||= []).push(delivery);
-      return acc;
-    }, {});
-  }, [deliveries]);
-
-  const sortedDateKeys = useMemo(() => {
-    return Object.keys(groupedDeliveries).sort((da, db) => {
-      const ta = da ? new Date(da).getTime() : 0;
-      const tb = db ? new Date(db).getTime() : 0;
-      return tb - ta; // latest date section first
-    });
-  }, [groupedDeliveries]);
-
-  /* =========================
      ASSIGN ORDERS -> DELIVERY
   ========================= */
   const openAssignDialog = async (deliveryId: number) => {
@@ -873,11 +748,89 @@ export default function TruckDeliveryPage() {
     );
   };
 
-  // ---- STATUS UPDATE (optimistic) ----
-  // ---- STATUS UPDATE (optimistic + UUID-safe) ----
+  const assignSelected = async () => {
+    if (!assignForDeliveryId || selectedOrderIds.length === 0) {
+      setAssignOpen(false);
+      return;
+    }
+
+    // Verify latest status of selected orders
+    const { data: checkRows, error: checkErr } = await supabase
+      .from("orders")
+      .select("id, status, truck_delivery_id")
+      .in("id", selectedOrderIds);
+
+    if (checkErr) {
+      console.error("Check before assign error:", checkErr);
+      toast.error("Unable to verify selected invoices. Try again.");
+      return;
+    }
+
+    const invalid = (checkRows ?? []).filter(
+      (r: any) => r.status !== "completed" || r.truck_delivery_id !== null
+    );
+
+    if (invalid.length > 0) {
+      const taken = invalid
+        .filter((r: any) => r.truck_delivery_id !== null)
+        .map((r: any) => r.id);
+      const wrongStatus = invalid
+        .filter((r: any) => r.status !== "completed")
+        .map((r: any) => r.id);
+
+      if (taken.length) {
+        toast.error(
+          `Some invoices are already assigned to another truck: ${taken.join(", ")}`
+        );
+      }
+      if (wrongStatus.length) {
+        toast.error(
+          `Some invoices are not completed: ${wrongStatus.join(", ")}`
+        );
+      }
+      return;
+    }
+
+    // Defensive update: only unassigned & completed
+    const { data: updated, error: updErr } = await supabase
+      .from("orders")
+      .update({ truck_delivery_id: assignForDeliveryId })
+      .in("id", selectedOrderIds)
+      .is("truck_delivery_id", null)
+      .eq("status", "completed")
+      .select("id");
+
+    if (updErr) {
+      console.error("Assign error:", updErr);
+      toast.error("Failed to assign invoices to truck");
+      return;
+    }
+
+    const updatedCount = (updated ?? []).length;
+    if (updatedCount === 0) {
+      toast.error("No invoices were assigned. They may have been taken or changed.");
+    } else if (updatedCount < selectedOrderIds.length) {
+      const notUpdated = selectedOrderIds.filter(
+        (id) => !(updated ?? []).some((u: any) => u.id === id)
+      );
+      toast.warning(
+        `Assigned ${updatedCount} invoice(s). Some were skipped: ${notUpdated.join(", ")}`
+      );
+    } else {
+      toast.success(`Assigned ${updatedCount} invoice(s) to the truck.`);
+    }
+
+    await logActivity("Assigned invoices to truck", {
+      deliveryId: assignForDeliveryId,
+      assignedOrderIds: selectedOrderIds,
+    });
+
+    await fetchDeliveriesAndAssignments();
+    setAssignOpen(false);
+  };
+
   // ---- STATUS UPDATE (optimistic & safe) ----
   async function changeDeliveryStatus(deliveryId: number, newStatus: string) {
-    // Only allow the statuses you use in the UI
     const allowed = ["Scheduled", "To Ship", "To Receive"];
     if (!allowed.includes(newStatus)) {
       toast.error("Invalid delivery status");
@@ -885,24 +838,20 @@ export default function TruckDeliveryPage() {
       return;
     }
 
-    // snapshot for rollback
     const snapshot = deliveries;
 
-    // optimistic UI
     setDeliveries((prev) =>
       prev.map((d) =>
         String(d.id) === String(deliveryId) ? { ...d, status: newStatus } : d
       )
     );
 
-    // persist in DB
     const { error } = await supabase
       .from("truck_deliveries")
       .update({ status: newStatus })
-      .eq("id", String(deliveryId)); // stringify in case id is UUID/text
+      .eq("id", String(deliveryId));
 
     if (error) {
-      // rollback if DB failed
       setDeliveries(snapshot);
       toast.error("Failed to update delivery status");
       console.error("Update delivery status error:", error);
@@ -916,62 +865,18 @@ export default function TruckDeliveryPage() {
     });
   }
 
-  const assignSelected = async () => {
-    if (!assignForDeliveryId || selectedOrderIds.length === 0) {
-      setAssignOpen(false);
-      return;
-    }
-    const { error } = await supabase
-      .from("orders")
-      .update({ truck_delivery_id: assignForDeliveryId })
-      .in("id", selectedOrderIds);
-
-    if (error) {
-      console.error("Assign error:", error);
-      toast.error("Failed to assign invoices to truck");
-      return;
-    }
-    toast.success("Invoices assigned to truck");
-
-    // 🟡 ADD THIS: LOG ACTIVITY!
-    await logActivity("Assigned invoices to truck", {
-      deliveryId: assignForDeliveryId,
-      assignedOrderIds: selectedOrderIds,
-    });
-
-    await fetchDeliveriesAndAssignments();
-    setAssignOpen(false);
-  };
-
   /* =========================
-     INVOICE MODAL HELPERS
+     ACTIVE LIST / GROUPING
   ========================= */
-
-  // open the invoice dialog for the given delivery + optional specific order
-  const openInvoiceDialogForOrder = (
-    deliveryId: number,
-    order?: OrderWithCustomer
-  ) => {
-    setInvoiceDialogOpenId(deliveryId);
-    setSelectedOrderForInvoice(order ?? null);
-  };
-
-  const closeInvoiceDialog = () => {
-    setInvoiceDialogOpenId(null);
-    setSelectedOrderForInvoice(null);
-    setPdfUrl(null);
-  };
-
   const isLocked = (status: string) => status === "To Receive";
   const isActiveStatus = (s?: string) => s === "Scheduled" || s === "To Ship";
   const statusRank = (s?: string) => {
     if (s === "Scheduled") return 0;
     if (s === "To Ship") return 1;
-    return 2; // To Receive / Delivered / others
+    return 2;
   };
 
   type Groups = Record<string, Delivery[]>;
-
   const groupByDate = (arr: Delivery[]): Groups =>
     arr.reduce<Groups>((acc, d) => {
       const key = d.schedule_date || "Unscheduled";
@@ -979,12 +884,6 @@ export default function TruckDeliveryPage() {
       return acc;
     }, {});
 
-  // Split deliveries into Active vs Delivered
-  const activeDeliveries = useMemo(
-    () => deliveries.filter((d) => isActiveStatus(d.status)),
-    [deliveries]
-  );
-  //TO REMOVE THE TO RECEIVE STATUS IN LOGISTICS
   const listToShow = deliveries.filter((d) => isActiveStatus(d.status));
 
   const sortedActive = useMemo(() => {
@@ -993,16 +892,15 @@ export default function TruckDeliveryPage() {
       if (r !== 0) return r;
       const ta = a.schedule_date ? new Date(a.schedule_date).getTime() : 0;
       const tb = b.schedule_date ? new Date(b.schedule_date).getTime() : 0;
-      return tb - ta; // latest first
+      return tb - ta;
     });
   }, [listToShow]);
-  // Group each bucket by date
+
   const groupedActive = useMemo(
     () => groupByDate(sortedActive),
     [sortedActive]
   );
 
-  // Sorted date keys (latest date section first) for each bucket
   const sortedDateKeysActive = useMemo(() => {
     return Object.keys(groupedActive).sort((da, db) => {
       const ta = da ? new Date(da).getTime() : 0;
@@ -1016,17 +914,13 @@ export default function TruckDeliveryPage() {
     return n > 0 ? `₱${n}` : "";
   };
 
-  // Valicade name to avoid numbers and special characters
+  // Validate name
   const handleDriverChange = (value: string) => {
-    // Allow only letters and spaces
     const regex = /^[A-Za-z\s]*$/;
-
     if (!regex.test(value)) {
       toast.error("Driver name can only contain letters and spaces");
-      return; // block invalid input
+      return;
     }
-
-    // Auto-capitalize each word & trim spaces
     let formatted = value
       .replace(/\s+/g, " ")
       .split(" ")
@@ -1036,9 +930,8 @@ export default function TruckDeliveryPage() {
     setNewDelivery((prev) => ({ ...prev, driver: formatted }));
   };
 
-  //PLATE NUM VALIDATION
+  // Plate number validation
   const handlePlateNumberChange = (value: string) => {
-    // Remove spaces just for counting
     const withoutSpaces = value.replace(/\s/g, "");
     if (withoutSpaces.length <= 7) {
       setNewDelivery((prev) => ({ ...prev, plateNumber: value.toUpperCase() }));
@@ -1055,7 +948,6 @@ export default function TruckDeliveryPage() {
 
   return (
     <div className="px-4 pb-4 pt-1 font-sans antialiased text-slate-800">
-      {/* Header */}
       {/* Header */}
       <div className="flex items-start justify-between mb-4 -mt-1 pr-[96px] sm:pr-[120px]">
         <div>
@@ -1079,7 +971,6 @@ export default function TruckDeliveryPage() {
       </div>
 
       {/* Delivery Cards – GROUPED BY schedule_date */}
-      {/* 1) ACTIVE (Scheduled/Ongoing) — newest first */}
       {sortedDateKeysActive.map((date) => {
         const dayDeliveries = groupedActive[date];
         return (
@@ -1088,311 +979,358 @@ export default function TruckDeliveryPage() {
               Scheduled on: {date}
             </h2>
 
-            {dayDeliveries.map((delivery) => (
-              <motion.div
-                key={delivery.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4 }}
-                className={`bg-white p-6 rounded-lg shadow-md mb-6 ${
-                  isLocked(delivery.status) ? "opacity-80" : ""
-                }`}
-              >
-                <div className="grid grid-cols-12 gap-6">
-                  {/* LEFT: Delivery details */}
-                  <div className="col-span-12 lg:col-span-5">
-                    <h2 className="text-2xl font-semibold tracking-tight">
-                      Delivery to{" "}
-                      <span className="text-slate-900">
-                        {delivery.destination || (
-                          <span className="italic text-gray-400">
-                            [No destination]
-                          </span>
-                        )}
-                      </span>
-                    </h2>
-                    {/* ✅ Landmark display below destination */}
-                    {delivery._orders?.[0]?.customer?.landmark && (
-                      <p className="text-sm mt-1 text-gray-500">
-                        <strong>Landmark:</strong>{" "}
-                        {delivery._orders[0].customer.landmark}
-                      </p>
-                    )}
+            {dayDeliveries.map((delivery) => {
+              // Disable dropdown when:
+              // - Scheduled & no shipping fee
+              // - To Ship & no ETA date
+              const disableForNoFee =
+                delivery.status === "Scheduled" && delivery.shipping_fee == null;
 
-                    <div className="mt-3 text-sm leading-6">
-                      <div className="grid grid-cols-2 gap-y-2">
-                        <div className="text-slate-500 uppercase tracking-wide text-xs">
-                          SCHEDULE DATE
-                        </div>
-                        <div className="font-medium">
-                          {delivery.schedule_date}
-                        </div>
+              const disableForNoEta =
+                delivery.status === "To Ship" && !delivery.eta_date;
 
-                        <div className="text-slate-500 uppercase tracking-wide text-xs">
-                          PLATE NUMBER
-                        </div>
-                        <div className="font-medium">
-                          {delivery.plate_number}
-                        </div>
+              const disableSelect =
+                isLocked(delivery.status) || disableForNoFee || disableForNoEta;
 
-                        <div className="text-slate-500 uppercase tracking-wide text-xs">
-                          DRIVER
-                        </div>
-                        <div className="font-medium">{delivery.driver}</div>
-
-                        {delivery.arrival_date &&
-                          delivery.status !== "Delivered" && (
-                            <>
-                              <div className="text-slate-500 uppercase tracking-wide text-xs">
-                                DATE RECEIVED
-                              </div>
-                              <div className="font-medium">
-                                {delivery.arrival_date}
-                              </div>
-                            </>
+              return (
+                <motion.div
+                  key={delivery.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4 }}
+                  className={`bg-white p-6 rounded-lg shadow-md mb-6 ${
+                    isLocked(delivery.status) ? "opacity-80" : ""
+                  }`}
+                >
+                  <div className="grid grid-cols-12 gap-6">
+                    {/* LEFT: Delivery details */}
+                    <div className="col-span-12 lg:col-span-5">
+                      <h2 className="text-2xl font-semibold tracking-tight">
+                        Delivery to{" "}
+                        <span className="text-slate-900">
+                          {delivery.destination || (
+                            <span className="italic text-gray-400">
+                              [No destination]
+                            </span>
                           )}
-                      </div>
-                      {/* If Ongoing, show ETA date picker */}
-                      {/* ETA picker for Ongoing */}
-                      {delivery.status === "To Ship" && (
-                        <div className="mt-3">
-                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
-                            Estimated Arrival
-                          </label>
-                          <input
-                            type="date"
-                            value={delivery.eta_date || ""}
-                            min={todayLocal}
-                            onChange={(e) =>
-                              updateEtaDate(delivery.id, e.target.value)
-                            }
-                            className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
-                          />
-                        </div>
+                        </span>
+                      </h2>
+                      {/* Landmark */}
+                      {delivery._orders?.[0]?.customer?.landmark && (
+                        <p className="text-sm mt-1 text-gray-500">
+                          <strong>Landmark:</strong>{" "}
+                          {delivery._orders[0].customer.landmark}
+                        </p>
                       )}
 
-                      {delivery.status === "Scheduled" && (
-                        <div className="mt-3">
-                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
-                            Shipping Fee (₱)
-                          </label>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            step="0.01"
-                            min="0"
-                            max={999999.99} // 6 digits max before decimals
-                            className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
-                            value={
-                              editingShippingFees[delivery.id] ??
-                              (delivery.shipping_fee != null
-                                ? String(delivery.shipping_fee)
-                                : "")
-                            }
-                            onChange={(e) => {
-                              let v = e.target.value;
+                      <div className="mt-3 text-sm leading-6">
+                        <div className="grid grid-cols-2 gap-y-2">
+                          <div className="text-slate-500 uppercase tracking-wide text-xs">
+                            SCHEDULE DATE
+                          </div>
+                          <div className="font-medium">
+                            {delivery.schedule_date}
+                          </div>
 
-                              // allow empty while editing
-                              if (v === "") {
+                          <div className="text-slate-500 uppercase tracking-wide text-xs">
+                            PLATE NUMBER
+                          </div>
+                          <div className="font-medium">
+                            {delivery.plate_number}
+                          </div>
+
+                          <div className="text-slate-500 uppercase tracking-wide text-xs">
+                            DRIVER
+                          </div>
+                          <div className="font-medium">{delivery.driver}</div>
+
+                          {delivery.arrival_date &&
+                            delivery.status !== "Delivered" && (
+                              <>
+                                <div className="text-slate-500 uppercase tracking-wide text-xs">
+                                  DATE RECEIVED
+                                </div>
+                                <div className="font-medium">
+                                  {delivery.arrival_date}
+                                </div>
+                              </>
+                            )}
+                        </div>
+
+                        {/* ETA picker for To Ship */}
+                        {delivery.status === "To Ship" && (
+                          <div className="mt-3">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
+                              Estimated Arrival <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="date"
+                              value={delivery.eta_date || ""}
+                              min={todayLocal}
+                              required
+                              onChange={(e) =>
+                                updateEtaDate(delivery.id, e.target.value)
+                              }
+                              className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
+                            />
+                            {disableForNoEta && (
+                              <p className="text-xs text-amber-600 mt-2">
+                                Set an Estimated Arrival date to enable status changes.
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Shipping Fee input while Scheduled */}
+                        {delivery.status === "Scheduled" && (
+                          <div className="mt-3">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
+                              Shipping Fee (₱) <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              step="0.01"
+                              min="0"
+                              required
+                              max={999999.99}
+                              className="border rounded-md px-2 py-1 text-sm w-full max-w-xs"
+                              value={
+                                editingShippingFees[delivery.id] ??
+                                (delivery.shipping_fee != null
+                                  ? String(delivery.shipping_fee)
+                                  : "")
+                              }
+                              onChange={(e) => {
+                                let v = e.target.value;
+                                if (v === "") {
+                                  setEditingShippingFees((prev) => ({
+                                    ...prev,
+                                    [delivery.id]: "",
+                                  }));
+                                  return;
+                                }
+                                v = v.replace(/[^\d.]/g, "");
+                                const parts = v.split(".");
+                                const intPart = (parts[0] || "").slice(0, 6);
+                                let next = intPart;
+
+                                if (parts.length > 1) {
+                                  const decPart = (parts[1] || "").slice(0, 2);
+                                  next = decPart.length
+                                    ? `${intPart}.${decPart}`
+                                    : `${intPart}.`;
+                                }
+
                                 setEditingShippingFees((prev) => ({
                                   ...prev,
-                                  [delivery.id]: "",
+                                  [delivery.id]: next,
                                 }));
-                                return;
-                              }
+                              }}
+                              onBlur={(e) => {
+                                const raw = e.currentTarget.value.trim();
+                                if (raw === "") return;
 
-                              // keep only digits and one dot
-                              v = v.replace(/[^\d.]/g, "");
-                              const parts = v.split(".");
-                              const intPart = (parts[0] || "").slice(0, 6); // <- limit to 6 digits
-                              let next = intPart;
+                                let amount = Number(raw);
+                                if (!Number.isFinite(amount)) {
+                                  setEditingShippingFees((prev) => ({
+                                    ...prev,
+                                    [delivery.id]:
+                                      delivery.shipping_fee != null
+                                        ? String(delivery.shipping_fee)
+                                        : "",
+                                  }));
+                                  return;
+                                }
 
-                              if (parts.length > 1) {
-                                const decPart = (parts[1] || "").slice(0, 2); // <- up to 2 decimals
-                                next = decPart.length
-                                  ? `${intPart}.${decPart}`
-                                  : `${intPart}.`;
-                              }
+                                amount = Math.max(
+                                  0,
+                                  Math.min(
+                                    999999.99,
+                                    Math.round(amount * 100) / 100
+                                  )
+                                );
 
-                              setEditingShippingFees((prev) => ({
-                                ...prev,
-                                [delivery.id]: next,
-                              }));
-                            }}
-                            onBlur={(e) => {
-                              const raw = e.currentTarget.value.trim();
-                              if (raw === "") return;
+                                if (amount === (delivery.shipping_fee ?? 0)) {
+                                  setEditingShippingFees((prev) => {
+                                    const copy = { ...prev };
+                                    delete copy[delivery.id];
+                                    return copy;
+                                  });
+                                  return;
+                                }
 
-                              let amount = Number(raw);
-                              if (!Number.isFinite(amount)) {
-                                // reset to previous DB value
-                                setEditingShippingFees((prev) => ({
-                                  ...prev,
-                                  [delivery.id]:
-                                    delivery.shipping_fee != null
-                                      ? String(delivery.shipping_fee)
-                                      : "",
-                                }));
-                                // toast.error("Invalid amount", { id: `shipfee-${delivery.id}` });
-                                return;
-                              }
+                                handleShippingFeeChange(delivery.id, amount);
 
-                              // clamp to range 0 … 999999.99 and round to 2 decimals
-                              amount = Math.max(
-                                0,
-                                Math.min(
-                                  999999.99,
-                                  Math.round(amount * 100) / 100
-                                )
-                              );
-
-                              // Skip if unchanged
-                              if (amount === (delivery.shipping_fee ?? 0)) {
-                                // clear local buffer
                                 setEditingShippingFees((prev) => {
                                   const copy = { ...prev };
                                   delete copy[delivery.id];
                                   return copy;
                                 });
-                                return;
-                              }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter")
+                                  (e.currentTarget as HTMLInputElement).blur();
+                              }}
+                              placeholder="Enter shipping fee"
+                            />
 
-                              // Commit once on blur
-                              handleShippingFeeChange(delivery.id, amount);
+                            {disableForNoFee && (
+                              <p className="text-xs text-amber-600 mt-2">
+                                Set a shipping fee to enable status changes.
+                              </p>
+                            )}
+                          </div>
+                        )}
 
-                              // Clear local buffer after commit
-                              setEditingShippingFees((prev) => {
-                                const copy = { ...prev };
-                                delete copy[delivery.id];
-                                return copy;
-                              });
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter")
-                                (e.currentTarget as HTMLInputElement).blur();
-                            }}
-                            placeholder="Enter shipping fee"
-                          />
+                        {delivery.status === "Delivered" && (
+                          <div className="mt-3">
+                            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
+                              Date Received
+                            </label>
+                            <input
+                              type="date"
+                              value={delivery.arrival_date || ""}
+                              disabled={true}
+                              className="border rounded-md px-2 py-1 text-sm w-full max-w-xs opacity-60 cursor-not-allowed"
+                            />
+                          </div>
+                        )}
+
+                        {(delivery.participants?.length ?? 0) > 0 && (
+                          <p className="mt-3 text-sm">
+                            <span className="text-slate-500 uppercase tracking-wide text-xs">
+                              Assistants:
+                            </span>
+                            <br />
+                            <span className="font-medium">
+                              {(delivery.participants || []).join(", ")}
+                            </span>
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* MIDDLE: Assigned invoices list */}
+                    <div className="col-span-12 lg:col-span-5">
+                      <h3 className="text-sm font-semibold text-slate-600 mb-2">
+                        Invoices on this truck
+                      </h3>
+
+                      {delivery._orders && delivery._orders.length > 0 ? (
+                        <div className="space-y-3">
+                          {delivery._orders.map((o) => (
+                            <div
+                              key={o.id}
+                              className="grid grid-cols-12 items-center gap-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100 hover:bg-slate-100/60 transition"
+                            >
+                              <button
+                                className="col-span-12 sm:col-span-3 border rounded-lg px-3 py-1.5 font-mono text-xs bg-white hover:bg-slate-50 shadow-sm"
+                                onClick={() => {
+                                  setInvoiceDialogOpenId(delivery.id);
+                                  setSelectedOrderForInvoice(o);
+                                }}
+                                title="Open invoice"
+                              >
+                                {o.customer?.code}
+                              </button>
+
+                              <div className="col-span-12 sm:col-span-6">
+                                <div className="font-medium truncate">
+                                  {o.customer?.name}
+                                </div>
+                                <div className="text-xs text-slate-500 truncate">
+                                  {o.customer?.address ?? ""}
+                                </div>
+                                {o.customer?.landmark && (
+                                  <div className="text-xs text-slate-400 italic truncate">
+                                    Landmark: {o.customer.landmark}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="col-span-12 sm:col-span-3 text-right">
+                                <div className="mt-1 inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-700">
+                                  {o.status ?? "pending"}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      )}
-
-                      {/* If Delivered (rare here), keep read-only date */}
-                      {delivery.status === "Delivered" && (
-                        <div className="mt-3">
-                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
-                            Date Received
-                          </label>
-                          <input
-                            type="date"
-                            value={delivery.arrival_date || ""}
-                            disabled={true}
-                            className="border rounded-md px-2 py-1 text-sm w-full max-w-xs opacity-60 cursor-not-allowed"
-                          />
-                        </div>
-                      )}
-
-                      {(delivery.participants?.length ?? 0) > 0 && (
-                        <p className="mt-3 text-sm">
-                          <span className="text-slate-500 uppercase tracking-wide text-xs">
-                            Assistants:
-                          </span>
-                          <br />
-                          <span className="font-medium">
-                            {(delivery.participants || []).join(", ")}
-                          </span>
+                      ) : (
+                        <p className="text-sm text-slate-500">
+                          No invoices assigned yet.
                         </p>
                       )}
                     </div>
-                  </div>
 
-                  {/* MIDDLE: Assigned invoices list */}
-                  <div className="col-span-12 lg:col-span-5">
-                    <h3 className="text-sm font-semibold text-slate-600 mb-2">
-                      Invoices on this truck
-                    </h3>
+                    {/* RIGHT: Actions & status */}
+                    <div className="col-span-12 lg:col-span-2">
+                      <div className="flex lg:flex-col gap-2 justify-end lg:justify-start">
+                        <div className="inline-flex items-center gap-2">
+                          {delivery.status === "To Receive" && (
+                            <CheckCircle className="text-emerald-600" />
+                          )}
+                          {delivery.status === "To Ship" && (
+                            <Truck className="text-amber-600" />
+                          )}
+                          {delivery.status === "Scheduled" && (
+                            <Clock className="text-sky-600" />
+                          )}
 
-                    {delivery._orders && delivery._orders.length > 0 ? (
-                      <div className="space-y-3">
-                        {delivery._orders.map((o) => (
-                          <div
-                            key={o.id}
-                            className="grid grid-cols-12 items-center gap-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100 hover:bg-slate-100/60 transition"
-                          >
-                            <button
-                              className="col-span-12 sm:col-span-3 border rounded-lg px-3 py-1.5 font-mono text-xs bg-white hover:bg-slate-50 shadow-sm"
-                              onClick={() =>
-                                openInvoiceDialogForOrder(delivery.id, o)
+                          <select
+                            value={delivery.status}
+                            onChange={(e) => {
+                              const next = e.target.value as
+                                | "Scheduled"
+                                | "To Ship"
+                                | "To Receive";
+
+                              // final guard when going to "To Receive"
+                              if (next === "To Receive") {
+                                if (delivery.shipping_fee == null) {
+                                  toast.error(
+                                    "Please enter the Shipping Fee before changing status to “To Receive”."
+                                  );
+                                  return;
+                                }
+                                if (!delivery.eta_date) {
+                                  toast.error(
+                                    "Please set the Estimated Arrival date before changing status to “To Receive”."
+                                  );
+                                  return;
+                                }
                               }
-                              title="Open invoice"
-                            >
-                              {o.customer?.code}
-                            </button>
 
-                            <div className="col-span-12 sm:col-span-6">
-                              <div className="font-medium truncate">
-                                {o.customer?.name}
-                              </div>
-                              <div className="text-xs text-slate-500 truncate">
-                                {o.customer?.address ?? ""}
-                              </div>
-                              {o.customer?.landmark && (
-                                <div className="text-xs text-slate-400 italic truncate">
-                                  Landmark: {o.customer.landmark}
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="col-span-12 sm:col-span-3 text-right">
-                              <div className="mt-1 inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-700">
-                                {o.status ?? "pending"}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-slate-500">
-                        No invoices assigned yet.
-                      </p>
-                    )}
-                  </div>
-
-                  {/* RIGHT: Actions & status */}
-                  <div className="col-span-12 lg:col-span-2">
-                    <div className="flex lg:flex-col gap-2 justify-end lg:justify-start">
-                      <div className="inline-flex items-center gap-2">
-                        {delivery.status === "Delivered" && (
-                          <CheckCircle className="text-emerald-600" />
-                        )}
-                        {delivery.status === "Ongoing" && (
-                          <Truck className="text-amber-600" />
-                        )}
-                        {delivery.status === "Scheduled" && (
-                          <Clock className="text-sky-600" />
-                        )}
-
-                        <select
-                          value={delivery.status}
-                          onChange={(e) =>
-                            setConfirmDialog({
-                              open: true,
-                              id: delivery.id,
-                              newStatus: e.target.value,
-                            })
-                          }
-                          disabled={isLocked(delivery.status)}
-                          className="border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
-                        >
-                          <option value="Scheduled">Scheduled</option>
-                          <option value="To Ship">To Ship</option>
-                          <option value="To Receive">To Receive</option>
-                        </select>
+                              setConfirmDialog({
+                                open: true,
+                                id: delivery.id,
+                                newStatus: next,
+                              });
+                            }}
+                            disabled={disableSelect}
+                            className={`border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10 ${
+                              disableSelect ? "opacity-60 cursor-not-allowed" : ""
+                            }`}
+                            title={
+                              disableForNoFee
+                                ? "Set a shipping fee to enable status changes."
+                                : disableForNoEta
+                                ? "Set an Estimated Arrival date to enable status changes."
+                                : undefined
+                            }
+                          >
+                            <option value="Scheduled">Scheduled</option>
+                            <option value="To Ship">To Ship</option>
+                            <option value="To Receive">To Receive</option>
+                          </select>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              </motion.div>
-            ))}
+                </motion.div>
+              );
+            })}
           </div>
         );
       })}
@@ -1504,19 +1442,21 @@ export default function TruckDeliveryPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Invoice Dialog (used when invoiceDialogOpenId is set) */}
+      {/* Invoice Dialog */}
       <Dialog
         open={invoiceDialogOpenId !== null}
         onOpenChange={(open) => {
-          if (!open) closeInvoiceDialog();
+          if (!open) {
+            setInvoiceDialogOpenId(null);
+            setSelectedOrderForInvoice(null);
+            setPdfUrl(null);
+          }
         }}
       >
         <DialogContent className="max-w-5xl">
           <div className="space-y-3">
-            {/* If the dialog was opened for a specific delivery, show a dropdown of that delivery's orders */}
             {invoiceDialogOpenId !== null ? (
               <>
-                {/* Render invoice content for the selected order */}
                 {selectedOrderForInvoice ? (
                   <div
                     id={`invoice-${selectedOrderForInvoice.id}`}
@@ -1582,7 +1522,6 @@ export default function TruckDeliveryPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {/* try rendering order_items if present, otherwise fall back to transaction string */}
                           {selectedOrderForInvoice.order_items &&
                           selectedOrderForInvoice.order_items.length > 0
                             ? selectedOrderForInvoice.order_items.map(
@@ -1594,8 +1533,7 @@ export default function TruckDeliveryPage() {
                                   return (
                                     <tr key={idx}>
                                       <td className="border px-2 py-1">
-                                        {selectedOrderForInvoice.customer
-                                          .date ??
+                                        {selectedOrderForInvoice.customer.date ??
                                           selectedOrderForInvoice.customer
                                             .created_at}
                                       </td>
@@ -1648,7 +1586,6 @@ export default function TruckDeliveryPage() {
                                   <td className="border px-2 py-1">₱0</td>
                                 </tr>
                               ))}
-                          {/* total row */}
                           <tr>
                             <td
                               colSpan={4}
@@ -1694,7 +1631,11 @@ export default function TruckDeliveryPage() {
 
             <div className="flex justify-end gap-2">
               <button
-                onClick={closeInvoiceDialog}
+                onClick={() => {
+                  setInvoiceDialogOpenId(null);
+                  setSelectedOrderForInvoice(null);
+                  setPdfUrl(null);
+                }}
                 className="px-4 py-2 border rounded"
               >
                 Close

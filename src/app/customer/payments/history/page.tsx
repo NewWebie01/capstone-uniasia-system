@@ -298,7 +298,7 @@ export default function PaymentHistoryPage() {
                   return (
                     <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
                       <td className="py-2.5 px-3 whitespace-nowrap">
-                        {formatPH(p.received_at || p.created_at)}
+                        {formatPH(p.received_at || p.created_at, "date")}
                       </td>
                       <td className="py-2.5 px-3 font-mono">{code}</td>
                       <td className="py-2.5 px-3 font-mono tabular-nums whitespace-nowrap">
