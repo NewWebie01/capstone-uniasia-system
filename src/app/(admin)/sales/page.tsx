@@ -8,9 +8,6 @@ import PageLoader from "@/components/PageLoader";
 import { toast } from "sonner";
 import { on, off } from "@/utils/eventEmitter";
 
-
-
-
 import {
   formatPHDate,
   formatPHTime,
@@ -18,6 +15,9 @@ import {
   getPHISOString,
 } from "@/lib/datetimePH";
 
+/* =========================
+   TYPES
+========================= */
 type InventoryItem = {
   id: number;
   sku: string;
@@ -31,7 +31,8 @@ type InventoryItem = {
   amount: number;
   profit?: number;
 };
-type FastMovingProduct = {
+
+type MovingProduct = {
   id: number;
   sku: string;
   product_name: string;
@@ -43,6 +44,7 @@ type FastMovingProduct = {
   est_days_of_cover: number | null;
   pr_units_velocity: number;
 };
+
 type OrderWithDetails = {
   id: string;
   total_amount: number;
@@ -82,21 +84,26 @@ type OrderWithDetails = {
     };
   }[];
 };
+
 type PickingOrder = { orderId: string; status: "accepted" | "rejected" };
 
 function SalesPageContent() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [showModal, setShowModal] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
-    null
-  );
+
+  // Removed: showModal (Picking List). We only use Sales Order + Final Confirm.
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
+  const [showSalesOrderModal, setShowSalesOrderModal] = useState(false);
+  const [showFinalConfirm, setShowFinalConfirm] = useState(false);
 
   const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
+
+  // quantities are locked to ordered values; discounts are editable in Sales Order
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
+
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
@@ -105,43 +112,22 @@ function SalesPageContent() {
   const [numberOfTerms, setNumberOfTerms] = useState(1);
   const [interestPercent, setInterestPercent] = useState(0);
 
-  const [showSalesOrderModal, setShowSalesOrderModal] = useState(false);
-  const [showFinalConfirm, setShowFinalConfirm] = useState(false);
+  // Sales order meta
   const [poNumber, setPoNumber] = useState("");
   const [repName, setRepName] = useState("");
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
-  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(
-    null
-  );
+  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
-  const [salesman, setSalesman] = useState("");
   const [forwarder, setForwarder] = useState("");
 
-  const resetSalesForm = () => {
-    setPoNumber("");
-    setRepName("");
-    setForwarder("");
-    setNumberOfTerms(1);
-    setInterestPercent(0);
-    setIsSalesTaxOn(true);
-    setEditedQuantities([]);
-    setEditedDiscounts([]);
-    setFieldErrors({ poNumber: false, repName: false });
-  };
-
-  // Validation state
-  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
-    poNumber: false,
-    repName: false,
-  });
-
-  // Activity Logs Modal State
+  // Activity Logs Modal state (unchanged API – modal UI not included here)
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const [logOrderId, setLogOrderId] = useState<string | null>(null);
+
   type Processor = { name: string; email: string; role: string | null };
   const [processor, setProcessor] = useState<Processor | null>(null);
 
@@ -166,10 +152,12 @@ function SalesPageContent() {
         email: user.email ?? "unknown",
         role: userRow?.role ?? user.user_metadata?.role ?? null,
       });
+
+      setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(friendly)));
     })();
   }, []);
 
-  // Pick up target order if we came from NotificationBell navigation
+  // Pick up target order if navigated from NotificationBell
   useEffect(() => {
     try {
       const id = sessionStorage.getItem("scroll-to-order-id");
@@ -180,11 +168,8 @@ function SalesPageContent() {
     } catch {}
   }, []);
 
-  // Listen for in-page jumps when NotificationBell tells us to
   useEffect(() => {
-    const handler = (id: string) => {
-      setPendingScrollId(id); // queue even if orders not ready yet
-    };
+    const handler = (id: string) => setPendingScrollId(id);
     on("scroll-to-order", handler);
     return () => off("scroll-to-order", handler);
   }, []);
@@ -203,29 +188,32 @@ function SalesPageContent() {
     setLogsLoading(false);
   }
 
-  const [fastMovingProducts, setFastMovingProducts] = useState<
-    FastMovingProduct[]
-  >([]);
-  const [showFastMovingModal, setShowFastMovingModal] = useState(false);
-  const [slowMovingProducts, setSlowMovingProducts] = useState<
-    FastMovingProduct[]
-  >([]);
-  const [showSlowMovingModal, setShowSlowMovingModal] = useState(false);
+  /* ======= Moving Products Report (combined fast & slow) ======= */
+  const [movingProducts, setMovingProducts] = useState<MovingProduct[]>([]);
+  const [showMovingReport, setShowMovingReport] = useState(false);
+
+  const fetchMovingProducts = async () => {
+    // Use the same view, sort by units_90d desc for “fast”; we can show both ends in one table.
+    const { data, error } = await supabase
+      .from("v_fast_moving_products")
+      .select("*")
+      .order("units_90d", { ascending: false });
+    if (!error && data) setMovingProducts(data);
+  };
 
   const ordersPerPage = 10;
 
-  // ---- Helper: derive default interest from terms (if interestPercent isn't set) ----
+  // Interest mapping helper
   const interestFromTerms = (terms: number) => {
     if (!terms || terms <= 0) return 0;
-    // You can tweak this mapping as needed
-    if (terms <= 1) return 2; // 1 month → 2%
-    if (terms <= 3) return 6; // up to 3 months → 6%
-    if (terms <= 6) return 12; // up to 6 months → 12%
-    if (terms <= 12) return 24; // up to 12 months → 24%
-    return Math.min(30, Math.round((terms / 12) * 24)); // cap at 30%
+    if (terms <= 1) return 2;
+    if (terms <= 3) return 6;
+    if (terms <= 6) return 12;
+    if (terms <= 12) return 24;
+    return Math.min(30, Math.round((terms / 12) * 24));
   };
 
-  // ---- Centralized totals (single source of truth) ----
+  /* ======= Totals (uses discounts now edited in Sales Order modal) ======= */
   const totals = useMemo(() => {
     if (!selectedOrder) {
       return {
@@ -240,7 +228,6 @@ function SalesPageContent() {
       };
     }
 
-    // 1) Subtotal BEFORE discount (based on current edited qty)
     const subtotalBeforeDiscountCalc = selectedOrder.order_items.reduce(
       (sum, item, idx) => {
         if (item.inventory.quantity === 0) return sum;
@@ -250,7 +237,6 @@ function SalesPageContent() {
       0
     );
 
-    // 2) Item-level discount total
     const totalDiscountCalc = selectedOrder.order_items.reduce(
       (sum, item, idx) => {
         if (item.inventory.quantity === 0) return sum;
@@ -261,28 +247,20 @@ function SalesPageContent() {
       0
     );
 
-    // 3) Subtotal AFTER discount
     const subtotalAfterDiscount = Math.max(
       0,
       subtotalBeforeDiscountCalc - totalDiscountCalc
     );
 
-    // 4) VAT
     const tax = isSalesTaxOn ? subtotalAfterDiscount * 0.12 : 0;
-
-    // 5) Base for interest
     const baseTotal = subtotalAfterDiscount + tax;
 
-    // 6) Effective interest percent (state value if provided; else derive from terms)
     const isCredit = selectedOrder.customers.payment_type === "Credit";
     const effectiveInterestPercent = isCredit
       ? interestPercent || interestFromTerms(numberOfTerms)
       : 0;
 
-    // 7) Interest
     const interestAmount = baseTotal * (effectiveInterestPercent / 100);
-
-    // 8) Grand total and per-term
     const grandTotal = baseTotal + interestAmount;
     const perTerm =
       isCredit && numberOfTerms > 0 ? grandTotal / numberOfTerms : grandTotal;
@@ -306,14 +284,14 @@ function SalesPageContent() {
     interestPercent,
   ]);
 
-  // Keep previous names for UI compatibility
-  const computedOrderTotal = totals.subtotalAfterDiscount; // after discount
+  const computedOrderTotal = totals.subtotalAfterDiscount;
   const salesTaxValue = totals.tax;
   const getGrandTotalWithInterest = () => totals.grandTotal;
   const getPerTermAmount = () => totals.perTerm;
   const subtotalBeforeDiscount = totals.subtotalBeforeDiscount;
   const totalDiscount = totals.totalDiscount;
 
+  /* ======= Scroll helpers ======= */
   function scrollToOrder(orderId: string) {
     const el = orderRefs.current[orderId];
     if (el) {
@@ -324,7 +302,6 @@ function SalesPageContent() {
   }
   useEffect(() => {
     if (!pendingScrollId) return;
-
     const exists = orders.some((o) => o.id === pendingScrollId);
     if (exists) {
       document.getElementById("pending-orders-section")?.scrollIntoView({
@@ -338,13 +315,8 @@ function SalesPageContent() {
     }
   }, [orders, pendingScrollId]);
 
-  const totalSales = useMemo(
-    () =>
-      orders
-        .filter((o) => o.status === "completed")
-        .reduce((sum, o) => sum + (o.total_amount || 0), 0),
-    [orders]
-  );
+  /* ======= Stats cards ======= */
+  const totalOrders = orders.length;
   const completedOrders = useMemo(
     () => orders.filter((o) => o.status === "completed").length,
     [orders]
@@ -353,60 +325,69 @@ function SalesPageContent() {
     () => orders.filter((o) => o.status === "pending").length,
     [orders]
   );
-  const totalOrders = orders.length;
 
-  // Fetch all inventory items
+  // 👉 Autofill Sales Rep with the customer's name (locked/read-only)
+useEffect(() => {
+  if (!selectedOrder) return;
+  const customerName = selectedOrder.customers?.name || "";
+  if (customerName) setRepName(customerName);
+}, [selectedOrder, showSalesOrderModal]);
+
+  useEffect(() => {
+  if (showSalesOrderModal && (!repName || !repName.trim()) && processor?.name) {
+    setRepName(nameOnly(processor.name));
+  }
+}, [showSalesOrderModal, processor, repName]);
+
+  /* ======= Data fetches & realtime ======= */
   const fetchItems = async () => {
-    const { data, error } = await supabase
-      .from("inventory")
-      .select("*, profit");
-    if (!error) setItems(data || []);
+    const { data } = await supabase.from("inventory").select("*, profit");
+    if (data) setItems(data);
   };
 
-  // Fetch orders with related customer & items
   const fetchOrders = async () => {
     const { data, error } = await supabase
       .from("orders")
       .select(
         `
-    id,
-    status,
-    total_amount,
-    date_created,
-    payment_terms,
-    interest_percent,
-    customers:customer_id (
-      id,
-      name,
-      email,
-      phone,
-      address,
-      contact_person,
-      code,
-      area,
-      date,
-      transaction,
-      status,
-      payment_type,
-      customer_type,
-      order_count
-    ),
-    order_items (
-      quantity,
-      price,
-      inventory:inventory_id (
         id,
-        sku,
-        product_name,
-        category,
-        subcategory,
-        unit,
-        quantity,
-        unit_price,
-        cost_price
-      )
-    )
-  `
+        status,
+        total_amount,
+        date_created,
+        payment_terms,
+        interest_percent,
+        customers:customer_id (
+          id,
+          name,
+          email,
+          phone,
+          address,
+          contact_person,
+          code,
+          area,
+          date,
+          transaction,
+          status,
+          payment_type,
+          customer_type,
+          order_count
+        ),
+        order_items (
+          quantity,
+          price,
+          inventory:inventory_id (
+            id,
+            sku,
+            product_name,
+            category,
+            subcategory,
+            unit,
+            quantity,
+            unit_price,
+            cost_price
+          )
+        )
+      `
       )
       .order("date_created", { ascending: false });
 
@@ -416,78 +397,72 @@ function SalesPageContent() {
         customers: Array.isArray(o.customers) ? o.customers[0] : o.customers,
         order_items: o.order_items.map((item: any) => ({
           ...item,
-          inventory: Array.isArray(item.inventory)
-            ? item.inventory[0]
-            : item.inventory,
+          inventory: Array.isArray(item.inventory) ? item.inventory[0] : item.inventory,
         })),
       }));
       setOrders(formatted);
     }
   };
 
-  // Fast/Slow Moving
-  const fetchFastMovingProducts = async () => {
-    const { data, error } = await supabase
-      .from("v_fast_moving_products")
-      .select("*")
-      .order("units_90d", { ascending: false });
-    if (!error && data) setFastMovingProducts(data.slice(0, 20));
-  };
-  const fetchSlowMovingProducts = async () => {
-    const { data, error } = await supabase
-      .from("v_fast_moving_products")
-      .select("*")
-      .order("units_90d", { ascending: true });
-    if (!error && data) setSlowMovingProducts(data.slice(0, 20));
-  };
-
   useEffect(() => {
     fetchItems();
     fetchOrders();
-    fetchFastMovingProducts();
-    fetchSlowMovingProducts();
+    fetchMovingProducts();
+
     const inventoryChannel: RealtimeChannel = supabase
       .channel("inventory-channel")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "inventory" },
-        () => {
-          fetchItems();
-          fetchFastMovingProducts();
-          fetchSlowMovingProducts();
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "inventory" }, () => {
+        fetchItems();
+        fetchMovingProducts();
+      })
       .subscribe();
+
     const ordersChannel: RealtimeChannel = supabase
       .channel("orders-channel")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "orders" },
-        () => {
-          fetchOrders();
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, () => {
+        fetchOrders();
+      })
       .subscribe();
+
     return () => {
       supabase.removeChannel(inventoryChannel);
       supabase.removeChannel(ordersChannel);
     };
   }, []);
 
+  /* ======= Helpers ======= */
+  const resetSalesForm = () => {
+    setPoNumber("");
+    setRepName("");
+    setForwarder("");
+    setNumberOfTerms(1);
+    setInterestPercent(0);
+    setIsSalesTaxOn(true);
+    setEditedQuantities([]);
+    setEditedDiscounts([]);
+    setFieldErrors({ poNumber: false, repName: false });
+  };
+
   useEffect(() => {
-    if (!showModal && !showSalesOrderModal) {
-      resetSalesForm();
-    }
-  }, [showModal, showSalesOrderModal]);
+    if (!showSalesOrderModal) resetSalesForm();
+  }, [showSalesOrderModal]);
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
+  // Validation state
+  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
+    poNumber: false,
+    repName: false,
+  });
+
+  /* ======= Accept / Reject / Complete ======= */
   const handleAcceptOrder = async (order: OrderWithDetails) => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    // Log acceptance intent
     try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
       const userRole = user?.user_metadata?.role || "unknown";
       await supabase.from("activity_logs").insert([
@@ -514,55 +489,71 @@ function SalesPageContent() {
       console.error("Failed to log activity for order acceptance:", err);
     }
 
+    // Mark accepted immediately (no picking modal anymore)
+    const { error } = await supabase.from("orders").update({ status: "accepted" }).eq("id", order.id);
+    if (error) {
+      toast.error("Failed to accept order: " + error.message);
+      return;
+    }
+
     setSelectedOrder(order);
+    setRepName(order.customers?.name || "");
     setEditedQuantities(order.order_items.map((item) => item.quantity));
     setEditedDiscounts(order.order_items.map(() => 0));
-
     setNumberOfTerms(order.payment_terms || 1);
-    setInterestPercent(
-      order.interest_percent || interestFromTerms(order.payment_terms || 1)
-    );
+    setInterestPercent(order.interest_percent || interestFromTerms(order.payment_terms || 1));
 
-    // then open the modal
-    setShowModal(true);
+    setShowSalesOrderModal(true);
+    setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(processor?.name || "")));
 
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "accepted" },
-    ]);
+    setPickingStatus((prev) => [...prev, { orderId: order.id, status: "accepted" }]);
+
+    // Notify customer: order approved
+    try {
+      await fetch("/api/notify-customer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipientEmail: order.customers.email,
+          recipientName: order.customers.name,
+          type: "order_approved",
+          title: "Order Approved",
+          message: `Your order ${order.customers.code ?? order.id} has been approved.`,
+          href: `/customer?txn=${order.customers.code ?? order.id}`,
+          orderId: order.id,
+          transactionCode: order.customers.code ?? null,
+          actorEmail: processor?.email ?? "admin@system",
+        }),
+      });
+    } catch (e) {
+      console.error("notify (order_approved) failed:", e);
+    }
   };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
-    setPickingStatus((prev) => [
-      ...prev,
-      { orderId: order.id, status: "rejected" },
-    ]);
-    await supabase
-      .from("orders")
-      .update({ status: "rejected" })
-      .eq("id", order.id);
+    setPickingStatus((prev) => [...prev, { orderId: order.id, status: "rejected" }]);
+    await supabase.from("orders").update({ status: "rejected" }).eq("id", order.id);
 
-      // 🔔 Notify customer: order rejected
-try {
-  await fetch("/api/notify-customer", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipientEmail: order.customers.email,
-      recipientName: order.customers.name,
-      type: "order_rejected",
-      title: "Order Rejected",
-      message: `We're sorry — your order ${order.customers.code ?? order.id} was rejected.`,
-      href: `/customer?txn=${order.customers.code ?? order.id}`,
-      orderId: order.id,
-      transactionCode: order.customers.code ?? null,
-      actorEmail: (await supabase.auth.getUser()).data.user?.email ?? "admin@system",
-    }),
-  });
-} catch (e) {
-  console.error("notify (order_rejected) failed:", e);
-}
-
+    // notify
+    try {
+      await fetch("/api/notify-customer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipientEmail: order.customers.email,
+          recipientName: order.customers.name,
+          type: "order_rejected",
+          title: "Order Rejected",
+          message: `We're sorry — your order ${order.customers.code ?? order.id} was rejected.`,
+          href: `/customer?txn=${order.customers.code ?? order.id}`,
+          orderId: order.id,
+          transactionCode: order.customers.code ?? null,
+          actorEmail: (await supabase.auth.getUser()).data.user?.email ?? "admin@system",
+        }),
+      });
+    } catch (e) {
+      console.error("notify (order_rejected) failed:", e);
+    }
 
     try {
       const {
@@ -595,10 +586,9 @@ try {
     }
     fetchOrders();
   };
+// Keep only letters & spaces, cap to 30 chars
+const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().slice(0, 30);
 
-  // --- COMPLETE HANDLER ---
-  // --- COMPLETE HANDLER (drop-in replacement) ---
-  // --- COMPLETE HANDLER (final, single-RPC + mark completed) ---
   const handleOrderComplete = async () => {
     if (!selectedOrder || isCompletingOrder) return;
 
@@ -614,53 +604,37 @@ try {
     }
 
     setIsCompletingOrder(true);
-
     try {
-      // 1) Update fulfilled quantities on order_items
+      // Persist fulfilled quantities + per-item discounts + inventory & sales rows
       for (let i = 0; i < selectedOrder.order_items.length; i++) {
         const oi = selectedOrder.order_items[i];
-        await supabase
-          .from("order_items")
-          .update({ fulfilled_quantity: editedQuantities[i] })
-          .eq("order_id", selectedOrder.id)
-          .eq("inventory_id", oi.inventory.id);
-      }
-
-      // 2) Update inventory, discounts and insert sales rows
-      for (let i = 0; i < selectedOrder.order_items.length; i++) {
-        const oi = selectedOrder.order_items[i];
-        if (oi.inventory.quantity === 0) continue;
-
         const invId = oi.inventory.id;
-        const remaining = oi.inventory.quantity - editedQuantities[i];
+        const qty = editedQuantities[i];
 
-        if (remaining < 0) {
-          toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
-          setShowFinalConfirm(false);
-          throw new Error("Insufficient stock");
-        }
-
-        // Inventory decrement
-        await supabase
-          .from("inventory")
-          .update({ quantity: remaining })
-          .eq("id", invId);
-
-        // Store per-item discount
+        // 1) fulfilled quantity
         await supabase
           .from("order_items")
-          .update({ discount_percent: editedDiscounts[i] || 0 })
+          .update({ fulfilled_quantity: qty, discount_percent: editedDiscounts[i] || 0 })
           .eq("order_id", selectedOrder.id)
           .eq("inventory_id", invId);
 
-        // Sales row
-        const qty = editedQuantities[i];
+        // 2) inventory decrement (guard)
+        const remaining = (oi.inventory.quantity || 0) - qty;
+        if (remaining < 0) {
+          toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
+          setIsCompletingOrder(false);
+          setShowFinalConfirm(false);
+          setShowSalesOrderModal(true);
+          return;
+        }
+        await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
+
+        // 3) sales row
         const unitPrice = oi.price;
         const discountPercent = editedDiscounts[i] || 0;
         const costPrice = oi.inventory.cost_price || 0;
         const amount = qty * unitPrice * (1 - discountPercent / 100);
-        const earnings =
-          (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
+        const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
 
         await supabase.from("sales").insert([
           {
@@ -673,90 +647,68 @@ try {
         ]);
       }
 
-      // 3) Approve (schedule + stamp order meta) via ONE RPC call
-      // ---- ONE call to the RPC with full payload ----
+      // Approve/schedule via RPC then mark completed
       const isCredit = selectedOrder.customers.payment_type === "Credit";
-
       const firstDue = new Date();
       firstDue.setMonth(firstDue.getMonth() + 1);
       const p_first_due = firstDue.toISOString().slice(0, 10);
-
       const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
       const { error: rpcErr } = await supabase.rpc("approve_order", {
         p_order_id: selectedOrder.id,
         p_terms: isCredit ? numberOfTerms : 1,
-        p_per_term: round2(
-          isCredit ? getPerTermAmount() : getGrandTotalWithInterest()
-        ),
+        p_per_term: round2(isCredit ? getPerTermAmount() : getGrandTotalWithInterest()),
         p_first_due,
-
         p_grand_total_with_interest: round2(getGrandTotalWithInterest()),
-        p_interest_percent: isCredit
-          ? round2(totals.effectiveInterestPercent)
-          : 0,
-
-        // ADD THIS:
+        p_interest_percent: isCredit ? round2(totals.effectiveInterestPercent) : 0,
         p_sales_tax: round2(isSalesTaxOn ? salesTaxValue : 0),
-
         p_po_number: poNumber,
         p_salesman: repName,
-        p_forwarder: forwarder || null, // better to send null than "EMPTY"
+        p_forwarder: forwarder || null,
         p_processed_by_email: processor?.email ?? "unknown",
         p_processed_by_name: processor?.name ?? "unknown",
         p_processed_by_role: processor?.role ?? "unknown",
       });
-
       if (rpcErr) throw rpcErr;
 
-      // ---- THEN mark as completed (RPC sets 'approved') ----
       const nowPH = getPHISOString();
       const { error: doneErr } = await supabase
         .from("orders")
-        .update({
-          status: "completed",
-          date_completed: nowPH,
-          processed_at: nowPH,
-        })
+        .update({ status: "completed", date_completed: nowPH, processed_at: nowPH })
         .eq("id", selectedOrder.id);
       if (doneErr) throw doneErr;
 
-      // 🔔 Notify customer: order completed
-try {
-  await fetch("/api/notify-customer", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipientEmail: selectedOrder.customers.email,
-      recipientName: selectedOrder.customers.name,
-      type: "order_completed",
-      title: "Order Completed",
-      message: `Your order ${selectedOrder.customers.code ?? selectedOrder.id} has been completed. Thank you!`,
-      href: `/customer?txn=${selectedOrder.customers.code ?? selectedOrder.id}`,
-      orderId: selectedOrder.id,
-      transactionCode: selectedOrder.customers.code ?? null,
-      metadata: {
-        grand_total: getGrandTotalWithInterest(),
-        terms: selectedOrder.customers.payment_type === "Credit" ? numberOfTerms : 1,
-      },
-      actorEmail: processor?.email ?? "admin@system",
-    }),
-  });
-} catch (e) {
-  console.error("notify (order_completed) failed:", e);
-}
+      // notify customer: order completed
+      try {
+        await fetch("/api/notify-customer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipientEmail: selectedOrder.customers.email,
+            recipientName: selectedOrder.customers.name,
+            type: "order_completed",
+            title: "Order Completed",
+            message: `Your order ${selectedOrder.customers.code ?? selectedOrder.id} has been completed. Thank you!`,
+            href: `/customer?txn=${selectedOrder.customers.code ?? selectedOrder.id}`,
+            orderId: selectedOrder.id,
+            transactionCode: selectedOrder.customers.code ?? null,
+            metadata: {
+              grand_total: getGrandTotalWithInterest(),
+              terms: selectedOrder.customers.payment_type === "Credit" ? numberOfTerms : 1,
+            },
+            actorEmail: processor?.email ?? "admin@system",
+          }),
+        });
+      } catch (e) {
+        console.error("notify (order_completed) failed:", e);
+      }
 
-
-
-      // 7) Close modals, refresh data, toast, email
+      // Close / refresh
       setShowSalesOrderModal(false);
-      setShowModal(false);
       setShowFinalConfirm(false);
       resetSalesForm();
       setSelectedOrder(null);
-      setPickingStatus((prev) =>
-        prev.filter((p) => p.orderId !== selectedOrder.id)
-      );
+      setPickingStatus((prev) => prev.filter((p) => p.orderId !== selectedOrder.id));
       await Promise.all([fetchOrders(), fetchItems()]);
       toast.success("Order successfully completed!");
 
@@ -778,52 +730,25 @@ try {
 
       setIsCompletingOrder(false);
     } catch (err: any) {
-      if (
-        err?.message &&
-        err.message.includes('unique constraint "unique_po_number"')
-      ) {
+      if (err?.message?.includes('unique constraint "unique_po_number"')) {
         toast.error("PO Number is already used, try another.");
         setIsCompletingOrder(false);
         setShowFinalConfirm(false);
         setShowSalesOrderModal(true);
         return;
       }
-      toast.error(
-        `Failed to complete order: ${err?.message ?? "Unexpected error"}`
-      );
+      toast.error(`Failed to complete order: ${err?.message ?? "Unexpected error"}`);
       setIsCompletingOrder(false);
       setShowFinalConfirm(false);
       setShowSalesOrderModal(true);
     }
   };
 
-  // -- UI Actions --
-  const handleOrderConfirm = async () => {
-    if (!selectedOrder) return;
-    setShowFinalConfirm(true);
-  };
-  const handleBackModal = () => {
-    setShowSalesOrderModal(false);
-    setShowModal(true);
-  };
-  const handleCancelModal = () => {
-    setShowModal(false);
-    setShowSalesOrderModal(false);
-    setShowFinalConfirm(false);
-    resetSalesForm();
-    setSelectedOrder(null);
-    setPickingStatus((prev) =>
-      selectedOrder ? prev.filter((p) => p.orderId !== selectedOrder.id) : prev
-    );
-  };
-  const handleResetDiscount = (idx: number) => {
-    setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
-  };
-
-  // --- RENDER ---
+  /* ======= UI ======= */
   return (
     <div className="p-6">
       {isCompletingOrder && <PageLoader label="Completing order…" />}
+
       {/* Header */}
       <div className="mb-6 -mt-4">
         <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
@@ -844,53 +769,24 @@ try {
 
       {/* Cards Section */}
       <div className="flex flex-wrap gap-4 mb-8">
-        {/* Fast Moving Product */}
+        {/* Moving Products Report (combined) */}
         <div
           className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
-          title="Click to view Top 20 Fast Moving Products"
-          onClick={() => setShowFastMovingModal(true)}
+          title="Click to view Moving Products Report"
+          onClick={() => setShowMovingReport(true)}
         >
           <div className="text-xs text-gray-500 font-semibold mb-2">
-            Fast Moving Product
+            Moving Products Report
           </div>
-          {fastMovingProducts.length > 0 ? (
+          {movingProducts.length > 0 ? (
             <>
               <div className="text-base font-bold text-blue-700 mb-1 underline hover:text-blue-900 transition">
-                {fastMovingProducts[0].product_name}
+                {movingProducts[0].product_name}
               </div>
               <div className="text-sm text-gray-600">
-                Sold in last 90d:{" "}
-                <b>{fastMovingProducts[0].units_90d.toLocaleString()}</b> units
+                Sold in last 90d: <b>{movingProducts[0].units_90d.toLocaleString()}</b> units
                 <br />
-                Stock Left:{" "}
-                <b>{fastMovingProducts[0].current_stock.toLocaleString()}</b>
-              </div>
-            </>
-          ) : (
-            <div className="text-sm text-gray-400">No data</div>
-          )}
-        </div>
-
-        {/* Slow Moving Product */}
-        <div
-          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
-          title="Click to view Top 20 Slow Moving Products"
-          onClick={() => setShowSlowMovingModal(true)}
-        >
-          <div className="text-xs text-gray-500 font-semibold mb-2">
-            Slow Moving Product
-          </div>
-          {slowMovingProducts.length > 0 ? (
-            <>
-              <div className="text-base font-bold text-orange-600 mb-1 underline hover:text-orange-800 transition">
-                {slowMovingProducts[0].product_name}
-              </div>
-              <div className="text-sm text-gray-600">
-                Sold in last 90d:{" "}
-                <b>{slowMovingProducts[0].units_90d.toLocaleString()}</b> units
-                <br />
-                Stock Left:{" "}
-                <b>{slowMovingProducts[0].current_stock.toLocaleString()}</b>
+                Stock Left: <b>{movingProducts[0].current_stock.toLocaleString()}</b>
               </div>
             </>
           ) : (
@@ -899,110 +795,72 @@ try {
         </div>
 
         {/* Total Orders */}
-        <div
-          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
-          title="Total Orders"
-        >
-          <div className="text-xs text-gray-500 font-semibold mb-2">
-            Total Orders
-          </div>
-          <div className="text-2xl font-bold text-black mb-1">
-            {totalOrders}
-          </div>
+        <div className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs">
+          <div className="text-xs text-gray-500 font-semibold mb-2">Total Orders</div>
+          <div className="text-2xl font-bold text-black mb-1">{totalOrders}</div>
         </div>
 
         {/* Completed Orders */}
-        <div
-          className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:-translate-y-1 hover:shadow-lg transition"
-          title="Completed Orders"
-        >
-          <div className="text-xs text-gray-500 font-semibold mb-2">
-            Completed Orders
-          </div>
-          <div className="text-2xl font-bold text-blue-700 mb-1">
-            {completedOrders}
-          </div>
+        <div className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs">
+          <div className="text-xs text-gray-500 font-semibold mb-2">Completed Orders</div>
+          <div className="text-2xl font-bold text-blue-700 mb-1">{completedOrders}</div>
         </div>
 
-        {/* Pending Orders */}
+        {/* Pending Orders (jump) */}
         <div
           className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs cursor-pointer hover:shadow-lg hover:-translate-y-1 transition"
           title="Jump to Pending Orders"
           onClick={() => {
             if (pendingOrders > 0) {
-              const ordersSection = document.getElementById(
-                "pending-orders-section"
-              );
-              if (ordersSection) {
-                ordersSection.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                });
-              }
+              document.getElementById("pending-orders-section")?.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+              });
             } else {
               toast.info("No Available Orders");
             }
           }}
         >
-          <div className="text-xs text-gray-500 font-semibold mb-2">
-            Pending Orders
-          </div>
-          <div className="text-2xl font-bold text-orange-500 mb-1">
-            {pendingOrders}
-          </div>
+          <div className="text-xs text-gray-500 font-semibold mb-2">Pending Orders</div>
+          <div className="text-2xl font-bold text-orange-500 mb-1">{pendingOrders}</div>
         </div>
       </div>
 
-      {/* --- FAST MOVING MODAL --- */}
+      {/* --- MOVING PRODUCTS REPORT MODAL (combined fast/slow) --- */}
       <AnimatePresence>
-        {showFastMovingModal && (
+        {showMovingReport && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
-            style={{
-              zIndex: 9999,
-              minHeight: "100vh",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "0",
-            }}
-            onClick={() => setShowFastMovingModal(false)}
+            onClick={() => setShowMovingReport(false)}
           >
             <motion.div
-              initial={{ scale: 0.97, y: 0 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.97, y: 0 }}
+              initial={{ scale: 0.97 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.97 }}
               transition={{ type: "spring", stiffness: 400, damping: 32 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-[98vw] md:max-w-4xl p-0 md:p-8 border border-blue-200 overflow-x-auto"
-              style={{
-                margin: "0 auto",
-                position: "relative",
-                maxHeight: "90vh",
-                overflowY: "auto",
-                boxSizing: "border-box",
-              }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-[98vw] md:max-w-5xl p-0 md:p-8 border overflow-x-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex justify-between items-center mb-6">
                 <span className="text-xl font-bold text-black">
-                  Top 20 Fast Moving Products{" "}
+                  Moving Products Report{" "}
                   <span className="font-normal text-base text-gray-600">
                     (last 90 days)
                   </span>
                 </span>
                 <button
                   className="w-8 h-8 text-gray-400 hover:bg-gray-100 rounded-full flex items-center justify-center text-xl"
-                  onClick={() => setShowFastMovingModal(false)}
+                  onClick={() => setShowMovingReport(false)}
                   title="Close"
                 >
                   ×
                 </button>
               </div>
               <div className="overflow-x-auto">
-                <table className="min-w-[800px] w-full text-sm border rounded-xl shadow">
+                <table className="min-w-[900px] w-full text-sm border rounded-xl shadow">
                   <thead>
                     <tr className="bg-[#ffba20] text-black text-left font-bold text-base border-b">
                       <th className="py-2 px-3">#</th>
@@ -1012,141 +870,31 @@ try {
                       <th className="py-2 px-3 text-right">Sold (90d)</th>
                       <th className="py-2 px-3 text-right">Stock Left</th>
                       <th className="py-2 px-3 text-right">Days of Cover</th>
+                      <th className="py-2 px-3 text-right">Velocity (units/day)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {fastMovingProducts.map((prod, idx) => (
-                      <tr
-                        key={prod.id}
-                        className="border-b hover:bg-blue-50/80"
-                      >
-                        <td className="py-2 px-3 font-semibold text-center">
-                          {idx + 1}
-                        </td>
-                        <td className="py-2 px-3 font-bold">
-                          {prod.product_name}
-                        </td>
+                    {movingProducts.map((prod, idx) => (
+                      <tr key={prod.id} className="border-b hover:bg-gray-50/80">
+                        <td className="py-2 px-3 font-semibold text-center">{idx + 1}</td>
+                        <td className="py-2 px-3 font-bold">{prod.product_name}</td>
                         <td className="py-2 px-3">{prod.category}</td>
                         <td className="py-2 px-3">{prod.subcategory}</td>
+                        <td className="py-2 px-3 text-right">{prod.units_90d.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-right">{prod.current_stock.toLocaleString()}</td>
                         <td className="py-2 px-3 text-right">
-                          {prod.units_90d.toLocaleString()}
+                          {prod.est_days_of_cover ? prod.est_days_of_cover.toFixed(1) : "-"}
                         </td>
                         <td className="py-2 px-3 text-right">
-                          {prod.current_stock.toLocaleString()}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.est_days_of_cover
-                            ? prod.est_days_of_cover.toFixed(1)
-                            : "-"}
+                          {prod.pr_units_velocity?.toFixed(2)}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
                 <div className="text-xs text-gray-500 mt-4">
-                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last
-                  90 days). Shows how long the stock will last at current sales
-                  velocity.
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* --- SLOW MOVING MODAL --- */}
-      <AnimatePresence>
-        {showSlowMovingModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed z-50 inset-0 flex items-center justify-center bg-black/40"
-            style={{
-              zIndex: 9999,
-              minHeight: "100vh",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "0",
-            }}
-            onClick={() => setShowSlowMovingModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.97, y: 0 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.97, y: 0 }}
-              transition={{ type: "spring", stiffness: 400, damping: 32 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-[98vw] md:max-w-4xl p-0 md:p-8 border border-orange-200 overflow-x-auto"
-              style={{
-                margin: "0 auto",
-                position: "relative",
-                maxHeight: "90vh",
-                overflowY: "auto",
-                boxSizing: "border-box",
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex justify-between items-center mb-6">
-                <span className="text-xl font-bold text-black">
-                  Top 20 Slow Moving Products{" "}
-                  <span className="font-normal text-base text-gray-600">
-                    (last 90 days)
-                  </span>
-                </span>
-                <button
-                  className="w-8 h-8 text-gray-400 hover:bg-gray-100 rounded-full flex items-center justify-center text-xl"
-                  onClick={() => setShowSlowMovingModal(false)}
-                  title="Close"
-                >
-                  ×
-                </button>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="min-w-[800px] w-full text-sm border rounded-xl shadow">
-                  <thead>
-                    <tr className="bg-[#ffba20] text-black text-left font-bold text-base border-b">
-                      <th className="py-2 px-3">#</th>
-                      <th className="py-2 px-3">Product</th>
-                      <th className="py-2 px-3">Category</th>
-                      <th className="py-2 px-3">Subcategory</th>
-                      <th className="py-2 px-3 text-right">Sold (90d)</th>
-                      <th className="py-2 px-3 text-right">Stock Left</th>
-                      <th className="py-2 px-3 text-right">Days of Cover</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {slowMovingProducts.map((prod, idx) => (
-                      <tr
-                        key={prod.id}
-                        className="border-b hover:bg-orange-50/80"
-                      >
-                        <td className="py-2 px-3 font-semibold text-center">
-                          {idx + 1}
-                        </td>
-                        <td className="py-2 px-3 font-bold">
-                          {prod.product_name}
-                        </td>
-                        <td className="py-2 px-3">{prod.category}</td>
-                        <td className="py-2 px-3">{prod.subcategory}</td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.units_90d.toLocaleString()}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.current_stock.toLocaleString()}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          {prod.est_days_of_cover
-                            ? prod.est_days_of_cover.toFixed(1)
-                            : "-"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="text-xs text-gray-500 mt-4">
-                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last
-                  90 days). Indicates how long the current inventory will last.
+                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last 90 days).
+                  Highest rows are “fast”; lowest rows are “slow”.
                 </div>
               </div>
             </motion.div>
@@ -1173,18 +921,14 @@ try {
           <tbody>
             {items
               .filter((it) =>
-                it.product_name
-                  .toLowerCase()
-                  .includes(searchQuery.toLowerCase())
+                it.product_name.toLowerCase().includes(searchQuery.toLowerCase())
               )
               .map((it) => (
                 <tr
                   key={it.id}
                   className={
                     "border-b hover:bg-gray-100 " +
-                    (it.quantity === 0
-                      ? "bg-red-100 text-red-700 font-semibold"
-                      : "")
+                    (it.quantity === 0 ? "bg-red-100 text-red-700 font-semibold" : "")
                   }
                 >
                   <td className="py-2 px-4">{it.sku}</td>
@@ -1193,9 +937,7 @@ try {
                   <td className="py-2 px-4">{it.subcategory}</td>
                   <td className="py-2 px-4">{it.unit}</td>
                   <td className="py-2 px-4 text-right">{it.quantity}</td>
-                  <td className="py-2 px-4 text-right">
-                    ₱{it.unit_price?.toLocaleString()}
-                  </td>
+                  <td className="py-2 px-4 text-right">₱{it.unit_price?.toLocaleString()}</td>
                   <td className="py-2 px-4 text-right">
                     {it.cost_price !== undefined && it.cost_price !== null
                       ? `₱${it.cost_price.toLocaleString()}`
@@ -1211,11 +953,7 @@ try {
       </div>
 
       {/* Orders List */}
-      <div
-        className="mt-10"
-        id="pending-orders-section"
-        ref={pendingOrdersSectionRef}
-      >
+      <div className="mt-10" id="pending-orders-section" ref={pendingOrdersSectionRef}>
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
         {orders
           .filter((o) => o.status === "pending" || o.status === "accepted")
@@ -1239,9 +977,7 @@ try {
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-bold text-xl">
                     Transaction ID:{" "}
-                    <span className="text-blue-700">
-                      {order.customers.code}
-                    </span>
+                    <span className="text-blue-700">{order.customers.code}</span>
                   </span>
                   <span
                     className={`font-bold px-3 py-1 rounded text-base ml-4 ${
@@ -1286,50 +1022,47 @@ try {
                 <p className="mt-2 font-bold text-lg">
                   Total: ₱{order.total_amount.toLocaleString()}
                 </p>
-                {order.status !== "completed" &&
-                  order.status !== "rejected" && (
-                    <div className="flex gap-2 mt-2">
-                      {!isAccepted && !isRejected && (
-                        <>
-                          <button
-                            onClick={() => handleAcceptOrder(order)}
-                            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-base"
-                          >
-                            Accept Order
-                          </button>
-                          <button
-                            onClick={() => {
-                              setShowRejectConfirm(true);
-                              setOrderToReject(order);
-                            }}
-                            className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
-                          >
-                            Reject Order
-                          </button>
-                        </>
-                      )}
-                      {isAccepted && (
+                {order.status !== "completed" && order.status !== "rejected" && (
+                  <div className="flex gap-2 mt-2">
+                    {!isAccepted && !isRejected && (
+                      <>
+                        <button
+                          onClick={() => handleAcceptOrder(order)}
+                          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-base"
+                        >
+                          Accept Order
+                        </button>
                         <button
                           onClick={() => {
-                            setPickingStatus((prev) =>
-                              prev.filter((p) => p.orderId !== order.id)
-                            );
-                            setEditedQuantities([]);
-                            setEditedDiscounts([]);
-                            setSelectedOrder(null);
-                            setShowModal(false);
-                            setShowSalesOrderModal(false);
+                            setShowRejectConfirm(true);
+                            setOrderToReject(order);
                           }}
-                          className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                          className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
                         >
-                          Cancel
+                          Reject Order
                         </button>
-                      )}
-                    </div>
-                  )}
+                      </>
+                    )}
+                    {isAccepted && (
+                      <button
+                        onClick={() => {
+                          setPickingStatus((prev) => prev.filter((p) => p.orderId !== order.id));
+                          setEditedQuantities([]);
+                          setEditedDiscounts([]);
+                          setSelectedOrder(null);
+                          setShowSalesOrderModal(false);
+                        }}
+                        className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
+
         {/* Pagination */}
         <div className="flex justify-between items-center mt-6">
           <button
@@ -1346,9 +1079,8 @@ try {
           <span className="text-base font-semibold text-gray-700">
             Page {currentPage} of{" "}
             {Math.ceil(
-              orders.filter(
-                (o) => o.status === "pending" || o.status === "accepted"
-              ).length / ordersPerPage
+              orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                ordersPerPage
             )}
           </span>
           <button
@@ -1356,9 +1088,8 @@ try {
               setCurrentPage((p) =>
                 p <
                 Math.ceil(
-                  orders.filter(
-                    (o) => o.status === "pending" || o.status === "accepted"
-                  ).length / ordersPerPage
+                  orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                    ordersPerPage
                 )
                   ? p + 1
                   : p
@@ -1367,17 +1098,15 @@ try {
             disabled={
               currentPage >=
               Math.ceil(
-                orders.filter(
-                  (o) => o.status === "pending" || o.status === "accepted"
-                ).length / ordersPerPage
+                orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                  ordersPerPage
               )
             }
             className={`px-4 py-2 rounded ${
               currentPage >=
               Math.ceil(
-                orders.filter(
-                  (o) => o.status === "pending" || o.status === "accepted"
-                ).length / ordersPerPage
+                orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                  ordersPerPage
               )
                 ? "bg-gray-300 text-gray-600 cursor-not-allowed"
                 : "bg-blue-600 text-white hover:bg-blue-700"
@@ -1388,477 +1117,11 @@ try {
         </div>
       </div>
 
-      {/* --- MODALS: Picking List, Sales Order, Final Confirmation --- */}
-
-      {/* Picking List Modal */}
-      {showModal &&
-        selectedOrder &&
-        (() => {
-          const hasZeroStock = selectedOrder.order_items.some(
-            (item) => item.inventory.quantity === 0
-          );
-          const hasInsufficientStock = selectedOrder.order_items.some(
-            (item, i) => {
-              const requested = editedQuantities[i] ?? item.quantity;
-              return requested > item.inventory.quantity;
-            }
-          );
-          const hasAnyInsufficient = selectedOrder.order_items.some(
-            (item, idx) => {
-              const qty = editedQuantities[idx] ?? item.quantity;
-              const stock = item.inventory.quantity;
-              return qty > stock || stock === 0;
-            }
-          );
-
-          return (
-            <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
-              <div className="bg-white rounded-xl shadow-2xl w-[96vw] max-w-[1800px] mx-auto flex flex-col px-10 py-8 text-[15px] mt-16">
-                {/* PICKING LIST MODAL CONTENT */}
-                <h2 className="text-3xl font-bold mb-6 text-center text-gray-900 tracking-wide">
-                  Picking List
-                </h2>
-
-                {/* Customer & Payment Info */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                  <div className="bg-gray-50 border rounded-xl p-5 shadow-sm">
-                    <h3 className="text-lg font-semibold text-gray-700 mb-3">
-                      Customer Details
-                    </h3>
-                    <p>
-                      <span className="font-bold">Name:</span>{" "}
-                      {selectedOrder.customers.name}
-                    </p>
-                    <p>
-                      <span className="font-bold">Email:</span>{" "}
-                      {selectedOrder.customers.email}
-                    </p>
-                    <p>
-                      <span className="font-bold">Phone:</span>{" "}
-                      {selectedOrder.customers.phone}
-                    </p>
-                    <p>
-                      <span className="font-bold">Address:</span>{" "}
-                      {selectedOrder.customers.address}
-                    </p>
-                    {selectedOrder.customers.area && (
-                      <p>
-                        <span className="font-bold">Area:</span>{" "}
-                        {selectedOrder.customers.area}
-                      </p>
-                    )}
-                  </div>
-                  <div className="bg-gray-50 border rounded-xl p-5 shadow-sm flex flex-col gap-3">
-                    <h3 className="text-lg font-semibold text-gray-700 mb-2">
-                      Payment & Totals
-                    </h3>
-
-                    {/* TOTAL (after discount, before tax) */}
-                    <div>
-                      <span className="font-semibold">Total: </span>
-                      <span className="text-2xl font-bold text-green-700">
-                        ₱
-                        {computedOrderTotal.toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                      <div className="text-xs text-gray-500 ml-1">
-                        Sum of items after discount
-                      </div>
-                    </div>
-
-                    {/* PAYMENT TYPE */}
-                    <div>
-                      <span className="font-semibold">Payment Type:</span>{" "}
-                      <span
-                        className={
-                          selectedOrder.customers.payment_type === "Credit"
-                            ? "font-bold text-blue-600"
-                            : selectedOrder.customers.payment_type === "Cash"
-                            ? "font-bold text-green-600"
-                            : "font-bold text-orange-500"
-                        }
-                      >
-                        {selectedOrder.customers.payment_type || "N/A"}
-                      </span>
-                      <div className="text-xs text-gray-500 ml-1">
-                        Customer chosen payment method
-                      </div>
-                    </div>
-
-                    {selectedOrder.customers.payment_type === "Credit" && (
-                      <div>
-                        <label className="font-semibold mr-2">Terms:</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={48}
-                          value={numberOfTerms}
-                          disabled
-                          readOnly
-                          className="border rounded px-2 py-1 w-20 text-center bg-gray-100 cursor-not-allowed opacity-70"
-                        />
-                        <div className="text-xs text-gray-500 ml-1">
-                          Number of months to pay (max 48 months / 4 years)
-                        </div>
-                      </div>
-                    )}
-
-                    {/* INTEREST % (only for Credit) */}
-                    {selectedOrder.customers.payment_type === "Credit" && (
-                      <div>
-                        <label className="font-semibold mr-2">
-                          Interest %:
-                        </label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={30}
-                          step={1}
-                          value={totals.effectiveInterestPercent}
-                          disabled
-                          readOnly
-                          className="border rounded px-2 py-1 w-20 text-center bg-gray-100 cursor-not-allowed opacity-70"
-                        />
-                        <div className="text-xs text-gray-500 ml-1">
-                          Interest applied to subtotal + tax
-                        </div>
-                      </div>
-                    )}
-
-                    {/* SALES TAX CHECKBOX */}
-                    <div className="flex items-center">
-                      <input
-                        type="checkbox"
-                        checked={isSalesTaxOn}
-                        onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
-                        id="sales-tax-toggle"
-                        className="mr-2 accent-blue-600"
-                      />
-                      <label
-                        htmlFor="sales-tax-toggle"
-                        className="font-semibold"
-                      >
-                        Include Sales Tax (12%)
-                      </label>
-                      <div className="text-xs text-gray-500 ml-6">
-                        Check to add 12% VAT to total
-                      </div>
-                    </div>
-
-                    {/* SALES TAX VALUE */}
-                    <div>
-                      <span className="font-semibold">Sales Tax (12%): </span>
-                      <span>
-                        ₱
-                        {salesTaxValue.toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                      <div className="text-xs text-gray-500 ml-1">
-                        Tax amount added to subtotal
-                      </div>
-                    </div>
-
-                    {/* INTEREST AMOUNT */}
-                    {selectedOrder.customers.payment_type === "Credit" && (
-                      <div>
-                        <span className="font-semibold">
-                          Interest Amount ({totals.effectiveInterestPercent}%):
-                        </span>
-                        <span>
-                          {" "}
-                          ₱
-                          {totals.interestAmount.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                          })}
-                        </span>
-                        <div className="text-xs text-gray-500 ml-1">
-                          Additional cost due to credit terms
-                        </div>
-                      </div>
-                    )}
-
-                    {/* GRAND TOTAL */}
-                    <div className="border-t pt-3 text-sm">
-                      <span className="font-bold">
-                        Grand Total w/ Interest:
-                      </span>{" "}
-                      <span className="font-bold text-blue-700">
-                        ₱
-                        {getGrandTotalWithInterest().toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                      <div className="text-xs text-gray-500 ml-1">
-                        Final amount after tax & interest
-                      </div>
-                    </div>
-
-                    {/* PER TERM */}
-                    {selectedOrder.customers.payment_type === "Credit" && (
-                      <div>
-                        <span className="font-bold">
-                          Per Term ({numberOfTerms}x):
-                        </span>
-                        <span className="font-bold text-blue-700 ml-2">
-                          ₱
-                          {getPerTermAmount().toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                          })}
-                        </span>
-                        <div className="text-xs text-gray-500 ml-1">
-                          Amount due per installment/month
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Picking List Table */}
-                <div className="overflow-x-auto rounded-xl border shadow-sm">
-                  <table className="w-full text-sm">
-                    <thead className="bg-[#ffba20] text-black">
-                      <tr>
-                        <th className="py-2 px-3 text-left">Quantity</th>
-                        <th className="py-2 px-3 text-left">Unit</th>
-                        <th className="py-2 px-3 text-left">Description</th>
-                        <th className="py-2 px-3 text-left">Notes</th>
-                        <th className="py-2 px-3 text-right">Unit Price</th>
-                        <th className="py-2 px-3 text-right">Cost Price</th>
-                        <th className="py-2 px-3 text-right">Discount (%)</th>
-                        <th className="py-2 px-3 text-right">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedOrder.order_items.map((item, idx) => {
-                        const qty = editedQuantities[idx] ?? item.quantity;
-                        const price = item.price;
-                        const percent = editedDiscounts[idx] || 0;
-                        const amount = qty * price * (1 - percent / 100);
-
-                        const stock = item.inventory.quantity;
-                        const insufficient = qty > stock || stock === 0;
-
-                        return (
-                          <tr
-                            key={idx}
-                            className={
-                              "border-t hover:bg-gray-50 " +
-                              (insufficient
-                                ? "bg-red-100 text-red-700 font-semibold"
-                                : "")
-                            }
-                          >
-                            <td className="py-2 px-3">
-                              <input
-                                type="number"
-                                min={1}
-                                max={Math.min(item.inventory.quantity, 50000)}
-                                value={qty}
-                                disabled
-                                className="border rounded px-2 py-1 w-24 text-center bg-gray-100 font-medium opacity-70 cursor-not-allowed"
-                              />
-                            </td>
-                            <td className="py-2 px-3">{item.inventory.unit}</td>
-                            <td className="py-2 px-3">
-                              <div className="font-semibold">
-                                {item.inventory.product_name}
-                              </div>
-                              <div className="text-xs text-gray-500">
-                                SKU: {item.inventory.sku}
-                              </div>
-                            </td>
-                            <td className="py-2 px-3">
-                              {stock === 0 ? (
-                                <span className="text-red-600 font-semibold">
-                                  Out of Stock
-                                </span>
-                              ) : qty > stock ? (
-                                <span className="text-orange-600 font-semibold">
-                                  Insufficient (Requested {qty}, In stock{" "}
-                                  {stock})
-                                </span>
-                              ) : (
-                                <span className="text-green-600">
-                                  Available
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2 px-3 text-right">
-                              ₱{price.toLocaleString()}
-                            </td>
-                            <td className="py-2 px-3 text-right">
-                              {item.inventory.cost_price !== undefined &&
-                              item.inventory.cost_price !== null
-                                ? `₱${item.inventory.cost_price.toLocaleString()}`
-                                : "—"}
-                            </td>
-                            <td className="py-2 px-3 text-right align-middle">
-                              <div className="flex items-center justify-end gap-1">
-                                <input
-                                  type="number"
-                                  value={percent}
-                                  disabled={item.inventory.quantity === 0}
-                                  onChange={(e) => {
-                                    let p = parseFloat(
-                                      e.target.value.replace(/[^0-9]/g, "")
-                                    );
-                                    if (isNaN(p)) p = 0;
-                                    if (p > 50) p = 50;
-                                    if (p < 0) p = 0;
-                                    setEditedDiscounts((prev) =>
-                                      prev.map((d, i) => (i === idx ? p : d))
-                                    );
-                                  }}
-                                  className={`w-14 text-center border rounded px-1 py-0.5 font-bold ${
-                                    item.inventory.quantity === 0
-                                      ? "bg-gray-200 text-gray-400 cursor-not-allowed opacity-70"
-                                      : ""
-                                  }`}
-                                  min={0}
-                                  max={50}
-                                  step={1}
-                                  style={{ fontWeight: 600, color: "#222" }}
-                                  tabIndex={
-                                    item.inventory.quantity === 0 ? -1 : 0
-                                  }
-                                />
-                                <span className="ml-1">%</span>
-                                <button
-                                  className={`text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 active:bg-blue-200 transition ${
-                                    item.inventory.quantity === 0
-                                      ? "opacity-50 cursor-not-allowed"
-                                      : ""
-                                  }`}
-                                  style={{ fontSize: "11px" }}
-                                  onClick={() =>
-                                    setEditedDiscounts((prev) =>
-                                      prev.map((d, i) => (i === idx ? 0 : d))
-                                    )
-                                  }
-                                  type="button"
-                                  disabled={item.inventory.quantity === 0}
-                                  tabIndex={
-                                    item.inventory.quantity === 0 ? -1 : 0
-                                  }
-                                >
-                                  Reset
-                                </button>
-                              </div>
-                              {item.inventory.quantity === 0 && (
-                                <div className="text-xs text-red-500 mt-1">
-                                  Out of stock – cannot apply discount
-                                </div>
-                              )}
-                            </td>
-                            <td className="py-2 px-3 text-right font-semibold">
-                              ₱
-                              {(item.inventory.quantity === 0
-                                ? 0
-                                : amount
-                              ).toLocaleString(undefined, {
-                                minimumFractionDigits: 2,
-                              })}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {(hasZeroStock || hasInsufficientStock) && (
-                  <div className="mt-4 mb-2 rounded-lg border border-orange-300 bg-orange-50 px-4 py-2 text-sm text-orange-700 text-center">
-                    Cannot Proceed please review the highlighted items above.
-                  </div>
-                )}
-
-                <div className="flex justify-center gap-8 mt-6">
-                  <button
-                    className={
-                      "bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow transition " +
-                      (hasAnyInsufficient
-                        ? "opacity-60 cursor-not-allowed bg-gray-400 hover:bg-gray-400"
-                        : "hover:bg-green-700")
-                    }
-                    onClick={async () => {
-                      if (!hasAnyInsufficient) {
-                        const { error } = await supabase
-                          .from("orders")
-                          .update({ status: "accepted" })
-                          .eq("id", selectedOrder.id);
-                        if (error) {
-                          toast.error(
-                            "Failed to accept order: " + error.message
-                          );
-                          return;
-                        }
-                        setShowModal(false);
-                        setShowSalesOrderModal(true);
-
-                        // 🔔 Notify customer: order approved/accepted
-try {
-  await fetch("/api/notify-customer", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipientEmail: selectedOrder.customers.email,
-      recipientName: selectedOrder.customers.name,
-      type: "order_approved",
-      title: "Order Approved",
-      message: `Your order ${selectedOrder.customers.code ?? selectedOrder.id} has been approved.`,
-      href: `/customer?txn=${selectedOrder.customers.code ?? selectedOrder.id}`,
-      orderId: selectedOrder.id,
-      transactionCode: selectedOrder.customers.code ?? null,
-      actorEmail: processor?.email ?? "admin@system",
-    }),
-  });
-} catch (e) {
-  console.error("notify (order_approved) failed:", e);
-}
-
-
-                      }
-                    }}
-                    disabled={hasAnyInsufficient}
-                  >
-                    Proceed Order
-                  </button>
-
-                  <button
-                    className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-                    onClick={() => {
-                      setShowModal(false);
-                      setShowSalesOrderModal(false);
-                      setShowFinalConfirm(false);
-                      setSelectedOrder(null);
-                      setEditedQuantities([]);
-                      setEditedDiscounts([]);
-                      setPickingStatus([]);
-                      setPoNumber("");
-                      setRepName("");
-                      setNumberOfTerms(1);
-                      setInterestPercent(0);
-                      setIsSalesTaxOn(true);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-
-      {/* SALES ORDER MODAL */}
+      {/* SALES ORDER MODAL (now includes editable Discount inputs) */}
       {showSalesOrderModal && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-2xl w-[96vw] h-[94vh] mx-auto flex flex-col gap-6 px-10 py-8 my-4 text-[15px] max-w-none max-h-[94vh] overflow-y-auto mt-16">
-            <h2
-              className="text-3xl font-bold mb-6 tracking-wide text-center text-gray-800"
-              style={{ letterSpacing: "0.07em" }}
-            >
+            <h2 className="text-3xl font-bold mb-6 tracking-wide text-center text-gray-800">
               SALES ORDER
             </h2>
             <div className="flex flex-col md:flex-row md:justify-between mb-2 gap-2">
@@ -1875,10 +1138,6 @@ try {
                 </div>
               </div>
               <div className="text-right space-y-1">
-                <div className="text-right space-y-1">
-                  {/* Payment Terms display stays here */}
-                </div>
-
                 {/* PO Number */}
                 <div className="flex items-baseline gap-2">
                   <span className="font-medium">PO Number:</span>
@@ -1889,12 +1148,9 @@ try {
                     maxLength={6}
                     value={poNumber}
                     onChange={(e) => {
-                      const digitsOnly = e.target.value
-                        .replace(/\D/g, "")
-                        .slice(0, 6);
+                      const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 6);
                       setPoNumber(digitsOnly);
-                      if (fieldErrors.poNumber)
-                        setFieldErrors((f) => ({ ...f, poNumber: false }));
+                      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
                     }}
                     onPaste={(e) => {
                       e.preventDefault();
@@ -1902,13 +1158,10 @@ try {
                         .replace(/\D/g, "")
                         .slice(0, 6);
                       setPoNumber(text);
-                      if (fieldErrors.poNumber)
-                        setFieldErrors((f) => ({ ...f, poNumber: false }));
+                      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
                     }}
                     className={`border-b outline-none px-1 transition-all duration-150 tracking-widest tabular-nums ${
-                      fieldErrors.poNumber
-                        ? "border-red-500 bg-red-50 animate-shake"
-                        : "border-gray-300"
+                      fieldErrors.poNumber ? "border-red-500 bg-red-50 animate-shake" : "border-gray-300"
                     }`}
                     style={{ minWidth: 110 }}
                     placeholder="000000"
@@ -1916,20 +1169,13 @@ try {
                   />
                 </div>
                 {fieldErrors.poNumber && (
-                  <div className="text-xs text-red-600 mt-1">
-                    PO Number is required
-                  </div>
+                  <div className="text-xs text-red-600 mt-1">PO Number is required</div>
                 )}
 
                 <div>
                   <span className="font-medium">Processed By: </span>
-                  <span className="font-semibold">
-                    {processor?.name || "Unknown"}
-                  </span>
-                  <span className="text-gray-500">
-                    {" "}
-                    ({processor?.email || "-"})
-                  </span>
+                  <span className="font-semibold">{processor?.name || "Unknown"}</span>
+                  <span className="text-gray-500"> ({processor?.email || "-"})</span>
                   {processor?.role && (
                     <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-100">
                       {processor.role}
@@ -1937,58 +1183,29 @@ try {
                   )}
                 </div>
 
-                {/* Sales Rep Name */}
-                <div>
-                  <span className="font-medium">Sales Rep Name: </span>
-                  <input
-                    type="text"
-                    maxLength={30}
-                    value={repName}
-                    onChange={(e) => {
-                      const lettersOnly = e.target.value
-                        .replace(/[^A-Za-z\s]/g, "")
-                        .slice(0, 30);
-                      setRepName(lettersOnly);
-                      if (fieldErrors.repName)
-                        setFieldErrors((f) => ({ ...f, repName: false }));
-                    }}
-                    onPaste={(e) => {
-                      e.preventDefault();
-                      const text = (e.clipboardData.getData("text") || "")
-                        .replace(/[^A-Za-z\s]/g, "")
-                        .slice(0, 30);
-                      setRepName(text);
-                      if (fieldErrors.repName)
-                        setFieldErrors((f) => ({ ...f, repName: false }));
-                    }}
-                    className={`border-b outline-none px-1 transition-all duration-150 ${
-                      fieldErrors.repName
-                        ? "border-red-500 bg-red-50 animate-shake"
-                        : "border-gray-300"
-                    }`}
-                    style={{ minWidth: 120 }}
-                    placeholder="Input Rep (letters only)"
-                    aria-label="Sales Rep Name (letters only, max 30)"
-                  />
-                  {fieldErrors.repName && (
-                    <div className="text-xs text-red-600 mt-1">
-                      Sales Rep Name is required
-                    </div>
-                  )}
-                </div>
+                {/* Sales Rep Name (autofilled from customer, read-only) */}
+<div>
+  <span className="font-medium">Sales Rep Name: </span>
+  <input
+    type="text"
+    value={repName}
+    readOnly
+    disabled
+    className="border-b outline-none px-1 bg-gray-100 text-gray-700 cursor-not-allowed border-gray-300"
+    style={{ minWidth: 220 }}
+    aria-label="Sales Rep Name (read-only)"
+  />
+  <div className="text-xs text-gray-500 mt-1">
+    Auto-filled from customer name
+  </div>
+</div>
+
 
                 <div>
                   <span className="font-medium">Payment Terms: </span>
-                  {selectedOrder.customers.payment_type === "Credit" ? (
-                    <>
-                      Net {numberOfTerms} Monthly
-                      <span className="text-gray-500 ml-2">
-                        (Terms: {numberOfTerms})
-                      </span>
-                    </>
-                  ) : (
-                    selectedOrder.customers.payment_type
-                  )}
+                  {selectedOrder.customers.payment_type === "Credit"
+                    ? <>Net {numberOfTerms} Monthly</>
+                    : selectedOrder.customers.payment_type}
                 </div>
               </div>
             </div>
@@ -1997,41 +1214,25 @@ try {
             <div className="bg-[#f6f6f9] border rounded-lg px-4 py-3 mb-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 text-[15px]">
               <div>
                 <div className="font-bold">To:</div>
-                <div>
-                  <b>Name:</b> {selectedOrder.customers.name}
-                </div>
-                <div>
-                  <b>Email:</b> {selectedOrder.customers.email}
-                </div>
-                <div>
-                  <b>Phone:</b> {selectedOrder.customers.phone}
-                </div>
-                <div>
-                  <b>Address:</b> {selectedOrder.customers.address}
-                </div>
+                <div><b>Name:</b> {selectedOrder.customers.name}</div>
+                <div><b>Email:</b> {selectedOrder.customers.email}</div>
+                <div><b>Phone:</b> {selectedOrder.customers.phone}</div>
+                <div><b>Address:</b> {selectedOrder.customers.address}</div>
                 {selectedOrder.customers.area && (
-                  <div>
-                    <b>Area:</b> {selectedOrder.customers.area}
-                  </div>
+                  <div><b>Area:</b> {selectedOrder.customers.area}</div>
                 )}
               </div>
               <div>
                 <div className="font-bold">Ship To:</div>
-                <div>
-                  <b>Name:</b> {selectedOrder.customers.name}
-                </div>
-                <div>
-                  <b>Address:</b> {selectedOrder.customers.address}
-                </div>
+                <div><b>Name:</b> {selectedOrder.customers.name}</div>
+                <div><b>Address:</b> {selectedOrder.customers.address}</div>
                 {selectedOrder.customers.area && (
-                  <div>
-                    <b>Area:</b> {selectedOrder.customers.area}
-                  </div>
+                  <div><b>Area:</b> {selectedOrder.customers.area}</div>
                 )}
               </div>
             </div>
 
-            {/* Item Table */}
+            {/* Item Table – DISCOUNT inputs moved here */}
             <div className="rounded-xl border mt-3">
               <table className="w-full text-[15px]">
                 <thead className="bg-[#ffba20] text-black">
@@ -2042,30 +1243,35 @@ try {
                     <th className="py-1 px-2 text-left">Notes</th>
                     <th className="py-1 px-2 text-right">Unit Price</th>
                     <th className="py-1 px-2 text-right">Cost Price</th>
-                    <th className="py-1 px-2 text-right">Discount</th>
+                    <th className="py-1 px-2 text-right">Discount (%)</th>
                     <th className="py-1 px-2 text-right">Amount</th>
                   </tr>
                 </thead>
                 <tbody>
                   {selectedOrder.order_items.map((item, idx) => {
-                    const qty = editedQuantities[idx] ?? item.quantity;
+                    const qty = editedQuantities[idx] ?? item.quantity; // locked
                     const price = item.price;
                     const percent = editedDiscounts[idx] || 0;
                     const amount = qty * price * (1 - percent / 100);
                     const stock = item.inventory.quantity;
+                    const insufficient = qty > stock || stock === 0;
+
+                    // Show blank input when percent === 0
+                    const displayPercent = percent === 0 ? "" : String(percent);
 
                     return (
-                      <tr key={idx} className="border-t text-[14px]">
+                      <tr
+                        key={idx}
+                        className={
+                          "border-t " + (insufficient ? "bg-red-100 text-red-700 font-semibold" : "")
+                        }
+                      >
                         <td className="py-1 px-2">{qty}</td>
                         <td className="py-1 px-2">{item.inventory.unit}</td>
-                        <td className="py-1 px-2 font-semibold">
-                          {item.inventory.product_name}
-                        </td>
+                        <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
                         <td className="py-1 px-2">
                           {stock === 0 ? (
-                            <span className="text-red-600 font-semibold">
-                              Out of Stock
-                            </span>
+                            <span className="text-red-600 font-semibold">Out of Stock</span>
                           ) : qty > stock ? (
                             <span className="text-orange-600 font-semibold">
                               Insufficient (Requested {qty}, In stock {stock})
@@ -2074,20 +1280,48 @@ try {
                             <span className="text-green-600">Available</span>
                           )}
                         </td>
-                        <td className="py-1 px-2 text-right">
-                          ₱{price.toLocaleString()}
-                        </td>
+                        <td className="py-1 px-2 text-right">₱{price.toLocaleString()}</td>
                         <td className="py-1 px-2 text-right">
                           {item.inventory.cost_price !== undefined &&
                           item.inventory.cost_price !== null
                             ? `₱${item.inventory.cost_price.toLocaleString()}`
                             : "—"}
                         </td>
-                        <td className="py-1 px-2 text-right font-semibold">
-                          {typeof editedDiscounts[idx] === "number" &&
-                          editedDiscounts[idx] !== 0
-                            ? `${editedDiscounts[idx]}%`
-                            : ""}
+                        <td className="py-1 px-2 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              max={50}
+                              step={1}
+                              value={displayPercent as any}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw.trim() === "") {
+                                  setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
+                                  return;
+                                }
+                                let p = parseFloat(raw.replace(/[^0-9]/g, ""));
+                                if (isNaN(p)) p = 0;
+                                if (p > 50) p = 50;
+                                if (p < 0) p = 0;
+                                setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
+                              }}
+                              className="w-16 text-center border rounded px-1 py-0.5 font-bold"
+                              placeholder=""
+                              aria-label="Discount percent (0-50)"
+                            />
+                            <span>%</span>
+                            <button
+                              className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
+                              onClick={() =>
+                                setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)))
+                              }
+                              type="button"
+                            >
+                              Reset
+                            </button>
+                          </div>
                         </td>
                         <td className="py-1 px-2 text-right font-semibold">
                           ₱
@@ -2108,9 +1342,7 @@ try {
                 <div className="flex justify-between font-medium">
                   <span>
                     Subtotal:
-                    <div className="text-xs text-gray-500">
-                      Sum before tax & discount
-                    </div>
+                    <div className="text-xs text-gray-500">Sum before tax & discount</div>
                   </span>
                   <span>
                     ₱
@@ -2123,9 +1355,7 @@ try {
                 <div className="flex justify-between">
                   <span>
                     Sales Tax (12%):
-                    <div className="text-xs text-gray-500">
-                      Tax applied to subtotal
-                    </div>
+                    <div className="text-xs text-gray-500">Tax applied to subtotal</div>
                   </span>
                   <span>
                     ₱
@@ -2135,18 +1365,25 @@ try {
                   </span>
                 </div>
 
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isSalesTaxOn}
+                    onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
+                    id="sales-tax-toggle"
+                    className="mr-1 accent-blue-600"
+                  />
+                  <label htmlFor="sales-tax-toggle" className="font-semibold">
+                    Include Sales Tax (12%)
+                  </label>
+                </div>
+
                 <div className="flex justify-between">
                   <span>
                     Discount/Add:
-                    <div className="text-xs text-gray-500">
-                      Sum of per-item discounts/adds
-                    </div>
+                    <div className="text-xs text-gray-500">Sum of per-item discounts/adds</div>
                   </span>
-                  <span
-                    className={
-                      totalDiscount !== 0 ? "text-orange-600 font-semibold" : ""
-                    }
-                  >
+                  <span className={totalDiscount !== 0 ? "text-orange-600 font-semibold" : ""}>
                     {totalDiscount === 0
                       ? "—"
                       : `-₱${Math.abs(totalDiscount).toLocaleString(undefined, {
@@ -2158,37 +1395,62 @@ try {
                 <div className="flex justify-between">
                   <span>
                     Subtotal w/ Tax & Discount:
-                    <div className="text-xs text-gray-500">
-                      Subtotal after discount & tax
-                    </div>
+                    <div className="text-xs text-gray-500">Subtotal after discount & tax</div>
                   </span>
                   <span>
                     ₱
-                    {(
-                      subtotalBeforeDiscount +
-                      salesTaxValue -
-                      totalDiscount
-                    ).toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
+                    {(subtotalBeforeDiscount + salesTaxValue - totalDiscount).toLocaleString(
+                      undefined,
+                      { minimumFractionDigits: 2 }
+                    )}
                   </span>
                 </div>
 
                 {selectedOrder.customers.payment_type === "Credit" && (
-                  <div className="flex justify-between">
-                    <span>
-                      Interest Amount ({totals.effectiveInterestPercent}%):
-                      <div className="text-xs text-gray-500">
-                        For credit terms
-                      </div>
-                    </span>
-                    <span>
-                      ₱
-                      {totals.interestAmount.toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
-                  </div>
+                  <>
+                    <div className="flex justify-between">
+                      <span>
+                        Interest Amount ({totals.effectiveInterestPercent}%):
+                        <div className="text-xs text-gray-500">For credit terms</div>
+                      </span>
+                      <span>
+                        ₱
+                        {totals.interestAmount.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">Terms (months):</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={48}
+                        value={numberOfTerms}
+                        onChange={(e) => {
+                          const n = Math.max(1, Math.min(48, Number(e.target.value) || 1));
+                          setNumberOfTerms(n);
+                        }}
+                        className="border rounded px-2 py-1 w-20 text-center"
+                      />
+                      <span className="font-medium">Interest %:</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={30}
+                        step={1}
+                        value={interestPercent || totals.effectiveInterestPercent}
+                        onChange={(e) => {
+                          let p = Number(e.target.value);
+                          if (isNaN(p)) p = 0;
+                          p = Math.max(0, Math.min(30, p));
+                          setInterestPercent(p);
+                        }}
+                        className="border rounded px-2 py-1 w-20 text-center"
+                      />
+                    </div>
+                  </>
                 )}
 
                 <div className="flex justify-between text-xl font-bold border-t pt-2">
@@ -2210,9 +1472,7 @@ try {
                   <div className="flex justify-between">
                     <span>
                       Payment per Term:
-                      <div className="text-xs text-gray-500">
-                        Amount per installment/month
-                      </div>
+                      <div className="text-xs text-gray-500">Amount per installment/month</div>
                     </span>
                     <span className="font-bold text-blue-700">
                       ₱
@@ -2229,13 +1489,17 @@ try {
             <div className="flex justify-center gap-8 mt-6">
               <button
                 className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
-                onClick={handleOrderConfirm}
+                onClick={() => setShowFinalConfirm(true)}
               >
                 Confirm
               </button>
               <button
                 className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
-                onClick={handleBackModal}
+                onClick={() => {
+                  setShowSalesOrderModal(false);
+                  resetSalesForm();
+                  setSelectedOrder(null);
+                }}
               >
                 Back
               </button>
@@ -2244,17 +1508,16 @@ try {
         </div>
       )}
 
-      {/* FINAL ADMIN CONFIRMATION MODAL */}
+      {/* FINAL CONFIRMATION */}
       {showFinalConfirm && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl mx-auto p-10 text-center">
             <div className="text-xl font-bold mb-6 text-gray-800">
-              Are you sure you want to{" "}
-              <span className="text-green-700">COMPLETE</span> this order?
+              Are you sure you want to <span className="text-green-700">COMPLETE</span> this order?
             </div>
             <div className="text-base mb-6">
-              This will deduct the items from inventory, mark the order as
-              completed, and record the sales transaction.
+              This will deduct the items from inventory, mark the order as completed, and record the
+              sales transaction.
             </div>
             <div className="flex justify-center gap-10 mt-4">
               <button
@@ -2277,9 +1540,7 @@ try {
 
               <button
                 className={`bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow transition ${
-                  isCompletingOrder
-                    ? "opacity-50 cursor-not-allowed"
-                    : "hover:bg-gray-500"
+                  isCompletingOrder ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-500"
                 }`}
                 onClick={() => setShowFinalConfirm(false)}
                 disabled={isCompletingOrder}
@@ -2291,13 +1552,12 @@ try {
         </div>
       )}
 
-      {/* --- REJECT CONFIRMATION MODAL --- */}
+      {/* REJECT CONFIRM */}
       {showRejectConfirm && orderToReject && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-auto p-8 text-center">
             <div className="text-xl font-bold mb-6 text-gray-800">
-              Are you sure you want to{" "}
-              <span className="text-red-600">REJECT</span> this order?
+              Are you sure you want to <span className="text-red-600">REJECT</span> this order?
             </div>
             <div className="text-base mb-6">
               This will permanently reject the order and notify the customer.
