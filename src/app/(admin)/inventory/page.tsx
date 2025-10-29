@@ -1,3 +1,4 @@
+// src/app/inventory/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -11,6 +12,7 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 
+/* ---------------------------------- Types --------------------------------- */
 type InventoryItem = {
   id: number;
   sku: string;
@@ -19,9 +21,9 @@ type InventoryItem = {
   subcategory: string;
   unit: string;
   quantity: number;
-  unit_price: number; // Selling price (auto computed)
+  unit_price: number; // Selling price (auto)
   cost_price: number; // Capital
-  markup_percent: number; // Markup (percentage)
+  markup_percent: number; // %
   amount: number;
   profit: number | null;
   date_created: string;
@@ -31,6 +33,8 @@ type InventoryItem = {
   pieces_per_unit: number | null;
   total_weight_kg: number | null;
   expiration_date?: string | null;
+  ceiling_qty: number | null; // NEW
+  stock_level: string | null; // NEW: In Stock | Low | Critical | Out of Stock
 };
 
 const FIXED_UNIT_OPTIONS = ["Piece", "Dozen", "Box", "Pack", "Kg"] as const;
@@ -38,14 +42,31 @@ type FixedUnit = (typeof FIXED_UNIT_OPTIONS)[number];
 
 /* ---------------- Max input limits (edit these as needed) ---------------- */
 const LIMITS = {
-  MAX_WEIGHT_PER_PIECE_KG: 100, // up to 100 kg per piece
-  MAX_QUANTITY: 999_999, // max stock count
-  MAX_COST_PRICE: 1_000_000, // ₱1,000,000 per unit
-  MAX_MARKUP_PERCENT: 50, // up to 50% markup
+  MAX_WEIGHT_PER_PIECE_KG: 100,
+  MAX_QUANTITY: 999_999,
+  MAX_COST_PRICE: 1_000_000,
+  MAX_MARKUP_PERCENT: 50,
 } as const;
 
 const clamp = (n: number, min = 0, max = Number.POSITIVE_INFINITY) =>
   Math.min(Math.max(n, min), max);
+
+// ---------- Sorting types/state/helpers ----------
+type SortKey =
+  | "sku"
+  | "product_name"
+  | "category"
+  | "subcategory"
+  | "unit"
+  | "quantity"
+  | "cost_price"
+  | "markup_percent"
+  | "unit_price"
+  | "amount"
+  | "expiration_date"
+  | "total_weight_kg"
+  | "stock_level"
+  | "date_created";
 
 export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -82,9 +103,9 @@ export default function InventoryPage() {
     quantity: 0,
     subcategory: "",
     unit: "",
-    unit_price: 0, // will be auto-calculated
+    unit_price: 0,
     cost_price: 0,
-    markup_percent: 50, // default to 50%
+    markup_percent: 50,
     amount: 0,
     profit: 0,
     date_created: new Date().toISOString(),
@@ -93,6 +114,9 @@ export default function InventoryPage() {
     weight_per_piece_kg: null,
     pieces_per_unit: null,
     total_weight_kg: null,
+    expiration_date: null,
+    ceiling_qty: null, // NEW
+    stock_level: "In Stock", // NEW (DB trigger will recompute)
   });
 
   const [validationErrors, setValidationErrors] = useState({
@@ -105,7 +129,89 @@ export default function InventoryPage() {
     markup_percent: false,
     pieces_per_unit: false,
     weight_per_piece_kg: false,
+    ceiling_qty: false, // NEW
   });
+
+  // ---- Sorting state ----
+  const [sortKey, setSortKey] = useState<SortKey>("date_created");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const toggleSort = (key: SortKey) => {
+    setSortKey((prev) => {
+      if (prev === key) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return prev;
+      }
+      setSortDir("asc");
+      return key;
+    });
+  };
+
+  const getCellVal = (item: InventoryItem, key: SortKey) => {
+    switch (key) {
+      case "sku":
+        return item.sku ?? "";
+      case "product_name":
+        return item.product_name ?? "";
+      case "category":
+        return item.category ?? "";
+      case "subcategory":
+        return item.subcategory ?? "";
+      case "unit":
+        return item.unit ?? "";
+      case "stock_level":
+        return item.stock_level ?? item.status ?? "";
+      case "expiration_date":
+        return item.expiration_date ?? "";
+      case "date_created":
+        return item.date_created ?? "";
+      case "quantity":
+        return item.quantity ?? 0;
+      case "cost_price":
+        return item.cost_price ?? 0;
+      case "markup_percent":
+        return item.markup_percent ?? 0;
+      case "unit_price":
+        return item.unit_price ?? 0;
+      case "amount":
+        return item.amount ?? 0;
+      case "total_weight_kg":
+        return item.total_weight_kg ?? 0;
+    }
+  };
+
+  const compare = (a: InventoryItem, b: InventoryItem, key: SortKey) => {
+    const va = getCellVal(a, key);
+    const vb = getCellVal(b, key);
+
+    // numeric
+    const numericKeys: SortKey[] = [
+      "quantity",
+      "cost_price",
+      "markup_percent",
+      "unit_price",
+      "amount",
+      "total_weight_kg",
+    ];
+    if (numericKeys.includes(key)) {
+      return (va as number) - (vb as number);
+    }
+
+    // dates
+    if (key === "date_created" || key === "expiration_date") {
+      const da = va ? new Date(va as string).getTime() : 0;
+      const db = vb ? new Date(vb as string).getTime() : 0;
+      return da - db;
+    }
+
+    // strings
+    return String(va).localeCompare(String(vb), undefined, {
+      sensitivity: "base",
+    });
+  };
+
+  const sortArrow = (key: SortKey) =>
+    sortKey !== key ? "↕" : sortDir === "asc" ? "▲" : "▼";
 
   async function handleDeleteDropdownOption(
     type: "category" | "subcategory" | "unit",
@@ -125,20 +231,20 @@ export default function InventoryPage() {
     await fetchItems();
   }
 
-  // --- Auto-calculate Unit Price on cost/markup/qty change ---
+  /* -------------------- Auto-calc price/amount/profit -------------------- */
   useEffect(() => {
     const cost = Number(newItem.cost_price) || 0;
     const markup = Number(newItem.markup_percent) || 0;
     const selling = cost + (cost * markup) / 100;
     setNewItem((prev) => ({
       ...prev,
-      unit_price: parseFloat(selling.toFixed(2)), // round to 2 decimals
+      unit_price: parseFloat(selling.toFixed(2)),
       amount: selling * (Number(prev.quantity) || 0),
       profit: (selling - cost) * (Number(prev.quantity) || 0),
     }));
   }, [newItem.cost_price, newItem.markup_percent, newItem.quantity]);
 
-  // --- Validation (includes "over the limit" checks) ---
+  /* ----------------------------- Validation ----------------------------- */
   useEffect(() => {
     setValidationErrors((prev) => ({
       ...prev,
@@ -163,10 +269,25 @@ export default function InventoryPage() {
           ? newItem.weight_per_piece_kg < 0 ||
             newItem.weight_per_piece_kg > LIMITS.MAX_WEIGHT_PER_PIECE_KG
           : false,
+      ceiling_qty:
+        newItem.ceiling_qty !== null &&
+        newItem.ceiling_qty !== undefined &&
+        newItem.ceiling_qty < 0,
     }));
   }, [newItem]);
 
-  // Auto set defaults for some units
+  // Optional guard: quantity must not exceed ceiling if set
+  useEffect(() => {
+    const over =
+      newItem.ceiling_qty != null &&
+      newItem.ceiling_qty > 0 &&
+      newItem.quantity > newItem.ceiling_qty;
+    if (over) {
+      toast.error("Quantity cannot exceed ceiling stock.");
+    }
+  }, [newItem.quantity, newItem.ceiling_qty]);
+
+  /* --------------------- Auto defaults for some units -------------------- */
   useEffect(() => {
     const u = newItem.unit;
     if (u === "Kg") {
@@ -193,7 +314,7 @@ export default function InventoryPage() {
     }
   }, [newItem.unit]);
 
-  // Compute total weight
+  /* --------------------------- Compute weight ---------------------------- */
   useEffect(() => {
     const weightPerPiece =
       newItem.unit === "Kg" ? 1 : Number(newItem.weight_per_piece_kg) || 0;
@@ -220,11 +341,14 @@ export default function InventoryPage() {
 
   const BUCKET = "inventory-images";
 
+  /* ------------------------------ Fetching ------------------------------- */
   const fetchItems = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from("inventory")
-      .select("*")
+      .select(
+        "id, sku, product_name, category, subcategory, unit, quantity, unit_price, cost_price, markup_percent, amount, profit, date_created, status, image_url, weight_per_piece_kg, pieces_per_unit, total_weight_kg, expiration_date, ceiling_qty, stock_level"
+      )
       .order("date_created", { ascending: false });
     if (error) {
       console.error(error);
@@ -254,6 +378,26 @@ export default function InventoryPage() {
     fetchDropdownOptions();
   }, []);
 
+  /* ---------------------- Realtime subscription (NEW) --------------------- */
+  useEffect(() => {
+    const channel = supabase
+      .channel("realtime-inventory")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "inventory" },
+        () => {
+          fetchItems();
+          fetchDropdownOptions();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  /* ------------------------------ Uploads -------------------------------- */
   const handleImageSelect = (file: File | null) => {
     setImageFile(file);
     if (file) {
@@ -278,6 +422,7 @@ export default function InventoryPage() {
     return publicUrlData.publicUrl;
   };
 
+  /* ------------------------------- Save ---------------------------------- */
   const normalizeForSave = () => {
     let { unit, pieces_per_unit, weight_per_piece_kg, quantity } = newItem;
     if (unit === "Kg") {
@@ -308,8 +453,7 @@ export default function InventoryPage() {
         category: !newItem.category,
         subcategory: !newItem.subcategory,
         unit: !newItem.unit,
-        quantity:
-          newItem.quantity < 0 || newItem.quantity > LIMITS.MAX_QUANTITY,
+        quantity: newItem.quantity < 0 || newItem.quantity > LIMITS.MAX_QUANTITY,
         cost_price:
           newItem.cost_price === null ||
           newItem.cost_price < 0 ||
@@ -326,6 +470,10 @@ export default function InventoryPage() {
             ? newItem.weight_per_piece_kg < 0 ||
               newItem.weight_per_piece_kg > LIMITS.MAX_WEIGHT_PER_PIECE_KG
             : false,
+        ceiling_qty:
+          newItem.ceiling_qty !== null &&
+          newItem.ceiling_qty !== undefined &&
+          newItem.ceiling_qty < 0,
       };
       setValidationErrors(errors);
       const hasErrors = Object.values(errors).some(Boolean);
@@ -333,6 +481,16 @@ export default function InventoryPage() {
         toast.error("Please fill all required fields correctly.");
         return;
       }
+
+      if (
+        newItem.ceiling_qty != null &&
+        newItem.ceiling_qty > 0 &&
+        newItem.quantity > newItem.ceiling_qty
+      ) {
+        toast.error("Quantity cannot exceed ceiling stock.");
+        return;
+      }
+
       setSaving(true);
       let finalImageUrl = newItem.image_url || null;
       if (imageFile) {
@@ -348,6 +506,7 @@ export default function InventoryPage() {
         image_url: finalImageUrl,
         date_created: new Date().toISOString(),
       };
+
       if (editingItemId !== null) {
         const { error } = await supabase
           .from("inventory")
@@ -385,6 +544,7 @@ export default function InventoryPage() {
           },
         ]);
       }
+
       setNewItem({
         sku: "",
         product_name: "",
@@ -403,6 +563,9 @@ export default function InventoryPage() {
         weight_per_piece_kg: null,
         pieces_per_unit: null,
         total_weight_kg: null,
+        expiration_date: null,
+        ceiling_qty: null,
+        stock_level: "In Stock",
       });
       setImageFile(null);
       setImagePreview(null);
@@ -418,13 +581,25 @@ export default function InventoryPage() {
     }
   };
 
-  const filteredItems = items
-    .filter((item) =>
-      `${item.product_name}`.toLowerCase().includes(searchQuery.toLowerCase())
-    )
-    .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  /* ------------------------------ Rendering ------------------------------ */
+  // Filter → Sort → Paginate
+  const filtered = items.filter((item) =>
+    `${item.product_name}`.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+  const sorted = [...filtered].sort((a, b) => {
+    const c = compare(a, b, sortKey);
+    return sortDir === "asc" ? c : -c;
+    });
+  const totalPages = Math.ceil(sorted.length / itemsPerPage);
+  const filteredItems = sorted.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
 
-  const totalPages = Math.ceil(items.length / itemsPerPage);
+  // reset to page 1 on search/sort change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, sortKey, sortDir]);
 
   const [showImageModal, setShowImageModal] = useState(false);
   const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(
@@ -450,6 +625,7 @@ export default function InventoryPage() {
         <p className="text-neutral-500 text-sm mb-4">
           Manage and view all inventory items, categories, and stock levels.
         </p>
+
         <div className="flex gap-4 mb-4">
           <input
             className="border px-4 py-2 w-full max-w-md rounded"
@@ -480,6 +656,9 @@ export default function InventoryPage() {
                 weight_per_piece_kg: null,
                 pieces_per_unit: null,
                 total_weight_kg: null,
+                expiration_date: null,
+                ceiling_qty: null,
+                stock_level: "In Stock",
               });
               setImageFile(null);
               setImagePreview(null);
@@ -493,20 +672,258 @@ export default function InventoryPage() {
           <table className="min-w-full bg-white text-sm">
             <thead className="bg-[#ffba20] text-black text-left">
               <tr>
-                <th className={cellNowrap}>SKU</th>
-                <th className={cellNowrap}>Product</th>
-                <th className={cellNowrap}>Category</th>
-                <th className={cellNowrap}>Subcategory</th>
-                <th className={cellNowrap}>Unit</th>
-                <th className={cellNowrap}>Quantity</th>
-                <th className={cellNowrap}>Cost Price</th>
-                <th className={cellNowrap}>Markup %</th>
-                <th className={cellNowrap}>Unit Price</th>
-                <th className={cellNowrap}>Total</th>
-                <th className={cellNowrap}>Expiration Date</th>
-                <th className={cellNowrap}>Total Weight</th>
-                <th className={cellNowrap}>Status</th>
-                <th className={cellNowrap}>Date</th>
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "sku"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("sku")}
+                  >
+                    SKU {sortArrow("sku")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "product_name"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("product_name")}
+                  >
+                    Product {sortArrow("product_name")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "category"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("category")}
+                  >
+                    Category {sortArrow("category")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "subcategory"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("subcategory")}
+                  >
+                    Subcategory {sortArrow("subcategory")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "unit"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("unit")}
+                  >
+                    Unit {sortArrow("unit")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "quantity"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("quantity")}
+                  >
+                    Quantity {sortArrow("quantity")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "cost_price"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("cost_price")}
+                  >
+                    Cost Price {sortArrow("cost_price")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "markup_percent"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("markup_percent")}
+                  >
+                    Markup % {sortArrow("markup_percent")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "unit_price"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("unit_price")}
+                  >
+                    Unit Price {sortArrow("unit_price")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "amount"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("amount")}
+                  >
+                    Total {sortArrow("amount")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "expiration_date"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("expiration_date")}
+                  >
+                    Expiration Date {sortArrow("expiration_date")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "total_weight_kg"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("total_weight_kg")}
+                  >
+                    Total Weight {sortArrow("total_weight_kg")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "stock_level"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("stock_level")}
+                  >
+                    Stock Level {sortArrow("stock_level")}
+                  </button>
+                </th>
+
+                <th
+                  className={cellNowrap}
+                  aria-sort={
+                    sortKey === "date_created"
+                      ? sortDir === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("date_created")}
+                  >
+                    Date {sortArrow("date_created")}
+                  </button>
+                </th>
+
                 <th className={cellNowrap}>Actions</th>
               </tr>
             </thead>
@@ -514,6 +931,7 @@ export default function InventoryPage() {
               {filteredItems.map((item) => (
                 <tr key={item.id} className="border-b hover:bg-gray-50">
                   <td className={cellNowrap}>{item.sku}</td>
+
                   <td className="px-4 py-2 whitespace-normal break-words max-w-xs">
                     {item.image_url ? (
                       <button
@@ -529,10 +947,48 @@ export default function InventoryPage() {
                       </span>
                     )}
                   </td>
+
                   <td className={cellNowrap}>{item.category}</td>
                   <td className={cellNowrap}>{item.subcategory}</td>
                   <td className={cellNowrap}>{item.unit}</td>
-                  <td className={cellNowrap}>{item.quantity}</td>
+
+                  {/* Quantity + optional bar */}
+                  <td className={cellNowrap}>
+                    <div className="flex items-center gap-2">
+                      <span>{item.quantity}</span>
+                      {item.ceiling_qty ? (
+                        <div className="w-24 h-2 bg-gray-200 rounded overflow-hidden">
+                          <div
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                Math.round(
+                                  (item.quantity /
+                                    Math.max(1, item.ceiling_qty)) *
+                                    100
+                                )
+                              )}%`,
+                            }}
+                            className={`h-full ${
+                              item.quantity / Math.max(1, item.ceiling_qty) <=
+                              0.05
+                                ? "bg-red-500"
+                                : item.quantity /
+                                    Math.max(1, item.ceiling_qty) <=
+                                  0.15
+                                ? "bg-yellow-500"
+                                : "bg-green-500"
+                            }`}
+                            title={`${Math.round(
+                              (item.quantity / Math.max(1, item.ceiling_qty)) *
+                                100
+                            )}%`}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </td>
+
                   <td className={cellNowrap}>
                     {item.cost_price !== null && item.cost_price !== undefined
                       ? `₱${item.cost_price.toLocaleString()}`
@@ -554,11 +1010,7 @@ export default function InventoryPage() {
                     {item.expiration_date
                       ? new Date(item.expiration_date).toLocaleDateString(
                           "en-PH",
-                          {
-                            year: "numeric",
-                            month: "short",
-                            day: "2-digit",
-                          }
+                          { year: "numeric", month: "short", day: "2-digit" }
                         )
                       : "—"}
                   </td>
@@ -569,20 +1021,33 @@ export default function InventoryPage() {
                         })} kg`
                       : "—"}
                   </td>
+
+                  {/* Stock Level badge */}
                   <td className={cellNowrap}>
-                    <span
-                      className={`font-semibold px-2 py-1 rounded ${
-                        item.status === "In Stock"
-                          ? "text-green-600"
-                          : "text-red-600"
-                      }`}
-                    >
-                      {item.status}
-                    </span>
+                    {(() => {
+                      const lvl = item.stock_level || item.status || "In Stock";
+                      const cls =
+                        lvl === "Critical"
+                          ? "bg-red-100 text-red-700"
+                          : lvl === "Low"
+                          ? "bg-yellow-100 text-yellow-800"
+                          : lvl === "Out of Stock"
+                          ? "bg-gray-200 text-gray-700"
+                          : "bg-green-100 text-green-700";
+                      return (
+                        <span
+                          className={`px-2 py-1 rounded text-xs font-semibold ${cls}`}
+                        >
+                          {lvl}
+                        </span>
+                      );
+                    })()}
                   </td>
+
                   <td className={cellNowrap}>
                     {new Date(item.date_created).toLocaleString("en-PH")}
                   </td>
+
                   <td className={cellNowrap}>
                     <button
                       className="text-blue-600 hover:underline"
@@ -593,6 +1058,9 @@ export default function InventoryPage() {
                           ...item,
                           cost_price: item.cost_price ?? 0,
                           markup_percent: item.markup_percent ?? 50,
+                          expiration_date: item.expiration_date ?? null,
+                          ceiling_qty: item.ceiling_qty ?? null,
+                          stock_level: item.stock_level ?? "In Stock",
                         });
                         setImageFile(null);
                         setImagePreview(item.image_url || null);
@@ -605,10 +1073,7 @@ export default function InventoryPage() {
               ))}
               {filteredItems.length === 0 && !loading && (
                 <tr>
-                  <td
-                    className="px-4 py-6 text-center text-gray-500"
-                    colSpan={15}
-                  >
+                  <td className="px-4 py-6 text-center text-gray-500" colSpan={15}>
                     No items found.
                   </td>
                 </tr>
@@ -617,6 +1082,7 @@ export default function InventoryPage() {
           </table>
         </div>
 
+        {/* Pagination */}
         <div className="mt-4 flex justify-between items-center">
           <button
             disabled={currentPage === 1}
@@ -637,6 +1103,7 @@ export default function InventoryPage() {
           </button>
         </div>
 
+        {/* Image Modal */}
         {showImageModal && imageModalItem && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="bg-white rounded-lg max-w-md w-full overflow-hidden">
@@ -715,553 +1182,601 @@ export default function InventoryPage() {
           </div>
         )}
 
+        {/* Add / Edit Modal */}
         {showForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-            <div className="bg-white p-8 rounded-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto space-y-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-white p-8 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto space-y-4">
               <h2 className="text-lg font-semibold">
                 {editingItemId ? "Edit Item" : "Add New Item"}
               </h2>
 
-              {/* SKU */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  SKU<span className="text-red-500">*</span>
-                </label>
-                <input
-                  className="flex-1 border px-4 py-2 rounded"
-                  placeholder="PRODUCT ID"
-                  value={newItem.sku}
-                  onChange={(e) =>
-                    setNewItem((prev) => ({ ...prev, sku: e.target.value }))
-                  }
-                />
-              </div>
-
-              {/* Product Name */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Product Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  className="flex-1 border px-4 py-2 rounded"
-                  placeholder="e.g. Boysen"
-                  value={newItem.product_name}
-                  onChange={(e) =>
-                    setNewItem((prev) => ({
-                      ...prev,
-                      product_name: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              {/* Category */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Category<span className="text-red-500">*</span>
-                </label>
-                <div className="flex-1 flex gap-2">
-                  {isCustomCategory ? (
-                    <input
-                      className="flex-1 border px-4 py-2 rounded"
-                      placeholder="Enter new category"
-                      value={newItem.category}
-                      onChange={(e) =>
-                        setNewItem((prev) => ({
-                          ...prev,
-                          category: e.target.value,
-                        }))
-                      }
-                    />
-                  ) : (
-                    <Select
-                      value={newItem.category}
-                      onValueChange={(val) =>
-                        setNewItem((prev) => ({
-                          ...prev,
-                          category: val,
-                          subcategory: "", // Optionally reset subcategory
-                        }))
-                      }
-                    >
-                      <SelectTrigger className="flex-1 border px-4 py-2 rounded w-full bg-white">
-                        <SelectValue placeholder="Select Category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {categoryOptions.map((c) => (
-                          <SelectItem key={c} value={c}>
-                            {c}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-
-                  {!isCustomCategory && newItem.category && (
-                    <button
-                      type="button"
-                      className="text-xs px-2 py-1 text-blue-600 border border-blue-300 rounded hover:bg-blue-50"
-                      onClick={() => {
-                        setRenameFieldType("category");
-                        setRenameOldValue(newItem.category);
-                        setRenameNewValue(newItem.category);
-                        setShowRenameModal(true);
-                      }}
-                    >
-                      Rename option
-                    </button>
-                  )}
-
-                  <label className="text-sm flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      checked={isCustomCategory}
-                      onChange={(e) => setIsCustomCategory(e.target.checked)}
-                    />{" "}
-                    New
-                  </label>
-                </div>
-              </div>
-
-              {/* Subcategory */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Subcategory<span className="text-red-500">*</span>
-                </label>
-                <div className="flex-1 flex gap-2">
-                  {isCustomSubcategory ? (
-                    <input
-                      className="flex-1 border px-4 py-2 rounded"
-                      placeholder="Enter new subcategory"
-                      value={newItem.subcategory}
-                      onChange={(e) =>
-                        setNewItem((prev) => ({
-                          ...prev,
-                          subcategory: e.target.value,
-                        }))
-                      }
-                    />
-                  ) : (
-                    <select
-                      value={newItem.subcategory}
-                      onChange={(e) =>
-                        setNewItem((prev) => ({
-                          ...prev,
-                          subcategory: e.target.value,
-                        }))
-                      }
-                      disabled={!newItem.category}
-                      className="flex-1 border px-4 py-2 rounded"
-                    >
-                      <option value="">Select Subcategory</option>
-                      {subcategoryOptions.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-
-                  {!isCustomSubcategory && newItem.subcategory && (
-                    <button
-                      type="button"
-                      className="text-xs px-2 py-1 text-blue-600 border border-blue-300 rounded hover:bg-blue-50"
-                      onClick={() => {
-                        setRenameFieldType("subcategory");
-                        setRenameOldValue(newItem.subcategory);
-                        setRenameNewValue(newItem.subcategory);
-                        setShowRenameModal(true);
-                      }}
-                    >
-                      Rename option
-                    </button>
-                  )}
-
-                  <label className="text-sm">
-                    <input
-                      type="checkbox"
-                      checked={isCustomSubcategory}
-                      onChange={(e) => setIsCustomSubcategory(e.target.checked)}
-                    />{" "}
-                    New
-                  </label>
-                </div>
-              </div>
-
-              {/* Unit */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Unit<span className="text-red-500">*</span>
-                </label>
-                <div className="flex-1 flex gap-2">
-                  {isCustomUnit ? (
-                    <input
-                      className="flex-1 border px-4 py-2 rounded"
-                      placeholder="Enter new unit"
-                      value={newItem.unit}
-                      onChange={(e) =>
-                        setNewItem((prev) => ({
-                          ...prev,
-                          unit: e.target.value,
-                        }))
-                      }
-                    />
-                  ) : (
-                    <select
-                      value={newItem.unit}
-                      onChange={(e) =>
-                        setNewItem((prev) => ({
-                          ...prev,
-                          unit: e.target.value,
-                        }))
-                      }
-                      className="flex-1 border px-4 py-2 rounded"
-                    >
-                      <option value="">Select Unit</option>
-                      {FIXED_UNIT_OPTIONS.map((u) => (
-                        <option key={u} value={u}>
-                          {u}
-                        </option>
-                      ))}
-                      {unitOptions
-                        .filter(
-                          (u) => !FIXED_UNIT_OPTIONS.includes(u as FixedUnit)
-                        )
-                        .map((u) => (
-                          <option key={u} value={u}>
-                            {u}
-                          </option>
-                        ))}
-                    </select>
-                  )}
-
-                  {!isCustomUnit && newItem.unit && (
-                    <button
-                      type="button"
-                      className="text-xs px-2 py-1 text-blue-600 border border-blue-300 rounded hover:bg-blue-50"
-                      onClick={() => {
-                        setRenameFieldType("unit");
-                        setRenameOldValue(newItem.unit);
-                        setRenameNewValue(newItem.unit);
-                        setShowRenameModal(true);
-                      }}
-                    >
-                      Rename option
-                    </button>
-                  )}
-
-                  <label className="text-sm">
-                    <input
-                      type="checkbox"
-                      checked={isCustomUnit}
-                      onChange={(e) => setIsCustomUnit(e.target.checked)}
-                    />{" "}
-                    New
-                  </label>
-                </div>
-              </div>
-
-              {/* Pieces per Unit (conditional) */}
-              {newItem.unit &&
-                newItem.unit !== "Piece" &&
-                newItem.unit !== "Dozen" &&
-                newItem.unit !== "Kg" && (
+              {/* TWO COLUMN GRID */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* LEFT COLUMN */}
+                <div className="space-y-3">
+                  {/* SKU */}
                   <div className="flex items-center gap-2">
-                    <label className="w-36 text-sm text-gray-700">
-                      Pieces per {newItem.unit}
-                      <span className="text-red-500">*</span>
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      SKU<span className="text-red-500">*</span>
                     </label>
                     <input
-                      type="number"
-                      min={1}
-                      className={`flex-1 border px-4 py-2 rounded ${
-                        validationErrors.pieces_per_unit ? "border-red-500" : ""
-                      }`}
-                      placeholder={`e.g. 24 pieces per ${newItem.unit.toLowerCase()}`}
-                      value={newItem.pieces_per_unit ?? ""}
+                      className="flex-1 border px-4 py-2 rounded"
+                      placeholder="PRODUCT ID"
+                      value={newItem.sku}
+                      onChange={(e) =>
+                        setNewItem((prev) => ({ ...prev, sku: e.target.value }))
+                      }
+                    />
+                  </div>
+
+                  {/* Product Name */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Product Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      className="flex-1 border px-4 py-2 rounded"
+                      placeholder="e.g. Boysen"
+                      value={newItem.product_name}
                       onChange={(e) =>
                         setNewItem((prev) => ({
                           ...prev,
-                          pieces_per_unit: Math.max(
-                            1,
-                            parseInt(e.target.value) || 0
-                          ),
+                          product_name: e.target.value,
                         }))
                       }
                     />
                   </div>
-                )}
 
-              {/* Weight / piece (kg) with cap */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Weight / piece (kg)
-                </label>
+                  {/* Category */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Category<span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex-1 flex gap-2">
+                      {isCustomCategory ? (
+                        <input
+                          className="flex-1 border px-4 py-2 rounded"
+                          placeholder="Enter new category"
+                          value={newItem.category}
+                          onChange={(e) =>
+                            setNewItem((prev) => ({
+                              ...prev,
+                              category: e.target.value,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <Select
+                          value={newItem.category}
+                          onValueChange={(val) =>
+                            setNewItem((prev) => ({
+                              ...prev,
+                              category: val,
+                              subcategory: "",
+                            }))
+                          }
+                        >
+                          <SelectTrigger className="flex-1 border px-4 py-2 rounded w-full bg-white">
+                            <SelectValue placeholder="Select Category" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {categoryOptions.map((c) => (
+                              <SelectItem key={c} value={c}>
+                                {c}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+
+                      {!isCustomCategory && newItem.category && (
+                        <button
+                          type="button"
+                          className="text-xs px-2 py-1 text-blue-600 border border-blue-300 rounded hover:bg-blue-50"
+                          onClick={() => {
+                            setRenameFieldType("category");
+                            setRenameOldValue(newItem.category);
+                            setRenameNewValue(newItem.category);
+                            setShowRenameModal(true);
+                          }}
+                        >
+                          Rename option
+                        </button>
+                      )}
+
+                      <label className="text-sm flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={isCustomCategory}
+                          onChange={(e) => setIsCustomCategory(e.target.checked)}
+                        />{" "}
+                        New
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Subcategory */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Subcategory<span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex-1 flex gap-2">
+                      {isCustomSubcategory ? (
+                        <input
+                          className="flex-1 border px-4 py-2 rounded"
+                          placeholder="Enter new subcategory"
+                          value={newItem.subcategory}
+                          onChange={(e) =>
+                            setNewItem((prev) => ({
+                              ...prev,
+                              subcategory: e.target.value,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <select
+                          value={newItem.subcategory}
+                          onChange={(e) =>
+                            setNewItem((prev) => ({
+                              ...prev,
+                              subcategory: e.target.value,
+                            }))
+                          }
+                          disabled={!newItem.category}
+                          className="flex-1 border px-4 py-2 rounded"
+                        >
+                          <option value="">Select Subcategory</option>
+                          {subcategoryOptions.map((s) => (
+                            <option key={s} value={s}>
+                              {s}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      {!isCustomSubcategory && newItem.subcategory && (
+                        <button
+                          type="button"
+                          className="text-xs px-2 py-1 text-blue-600 border border-blue-300 rounded hover:bg-blue-50"
+                          onClick={() => {
+                            setRenameFieldType("subcategory");
+                            setRenameOldValue(newItem.subcategory);
+                            setRenameNewValue(newItem.subcategory);
+                            setShowRenameModal(true);
+                          }}
+                        >
+                          Rename option
+                        </button>
+                      )}
+
+                      <label className="text-sm">
+                        <input
+                          type="checkbox"
+                          checked={isCustomSubcategory}
+                          onChange={(e) =>
+                            setIsCustomSubcategory(e.target.checked)
+                          }
+                        />{" "}
+                        New
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Unit */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Unit<span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex-1 flex gap-2">
+                      {isCustomUnit ? (
+                        <input
+                          className="flex-1 border px-4 py-2 rounded"
+                          placeholder="Enter new unit"
+                          value={newItem.unit}
+                          onChange={(e) =>
+                            setNewItem((prev) => ({ ...prev, unit: e.target.value }))
+                          }
+                        />
+                      ) : (
+                        <select
+                          value={newItem.unit}
+                          onChange={(e) =>
+                            setNewItem((prev) => ({
+                              ...prev,
+                              unit: e.target.value,
+                            }))
+                          }
+                          className="flex-1 border px-4 py-2 rounded"
+                        >
+                          <option value="">Select Unit</option>
+                          {FIXED_UNIT_OPTIONS.map((u) => (
+                            <option key={u} value={u}>
+                              {u}
+                            </option>
+                          ))}
+                          {unitOptions
+                            .filter(
+                              (u) => !FIXED_UNIT_OPTIONS.includes(u as FixedUnit)
+                            )
+                            .map((u) => (
+                              <option key={u} value={u}>
+                                {u}
+                              </option>
+                            ))}
+                        </select>
+                      )}
+
+                      {!isCustomUnit && newItem.unit && (
+                        <button
+                          type="button"
+                          className="text-xs px-2 py-1 text-blue-600 border border-blue-300 rounded hover:bg-blue-50"
+                          onClick={() => {
+                            setRenameFieldType("unit");
+                            setRenameOldValue(newItem.unit);
+                            setRenameNewValue(newItem.unit);
+                            setShowRenameModal(true);
+                          }}
+                        >
+                          Rename option
+                        </button>
+                      )}
+
+                      <label className="text-sm">
+                        <input
+                          type="checkbox"
+                          checked={isCustomUnit}
+                          onChange={(e) => setIsCustomUnit(e.target.checked)}
+                        />{" "}
+                        New
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Pieces per Unit (conditional) */}
+                  {newItem.unit &&
+                    newItem.unit !== "Piece" &&
+                    newItem.unit !== "Dozen" &&
+                    newItem.unit !== "Kg" && (
+                      <div className="flex items-center gap-2">
+                        <label className="w-40 md:w-44 text-sm text-gray-700">
+                          Pieces per {newItem.unit}
+                          <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          className={`flex-1 border px-4 py-2 rounded ${
+                            validationErrors.pieces_per_unit
+                              ? "border-red-500"
+                              : ""
+                          }`}
+                          placeholder={`e.g. 24 pieces per ${newItem.unit.toLowerCase()}`}
+                          value={newItem.pieces_per_unit ?? ""}
+                          onChange={(e) =>
+                            setNewItem((prev) => ({
+                              ...prev,
+                              pieces_per_unit: Math.max(
+                                1,
+                                parseInt(e.target.value) || 0
+                              ),
+                            }))
+                          }
+                        />
+                      </div>
+                    )}
+                </div>
+
+                {/* RIGHT COLUMN */}
+                <div className="space-y-3">
+                  {/* Weight / piece (kg) */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Weight / piece (kg)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={LIMITS.MAX_WEIGHT_PER_PIECE_KG}
+                      step="0.001"
+                      inputMode="decimal"
+                      title={`Max ${LIMITS.MAX_WEIGHT_PER_PIECE_KG} kg per piece`}
+                      className={`flex-1 border px-4 py-2 rounded ${
+                        validationErrors.weight_per_piece_kg
+                          ? "border-red-500"
+                          : ""
+                      }`}
+                      placeholder={
+                        newItem.unit === "Kg" ? "1 (auto for Kg items)" : "e.g. 0.45"
+                      }
+                      value={
+                        newItem.unit === "Kg" ? 1 : newItem.weight_per_piece_kg ?? ""
+                      }
+                      disabled={newItem.unit === "Kg"}
+                      onChange={(e) => {
+                        const raw = parseFloat(e.target.value) || 0;
+                        const val = clamp(raw, 0, LIMITS.MAX_WEIGHT_PER_PIECE_KG);
+                        if (raw !== val)
+                          toast.info(
+                            `Capped at ${LIMITS.MAX_WEIGHT_PER_PIECE_KG} kg`
+                          );
+                        setNewItem((prev) => ({
+                          ...prev,
+                          weight_per_piece_kg: newItem.unit === "Kg" ? 1 : val,
+                        }));
+                      }}
+                    />
+                  </div>
+
+                  {/* Quantity */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Quantity<span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={LIMITS.MAX_QUANTITY}
+                      step="1"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      title={`Max ${LIMITS.MAX_QUANTITY.toLocaleString()} units`}
+                      className={`flex-1 border px-4 py-2 rounded ${
+                        validationErrors.quantity ? "border-red-500" : ""
+                      }`}
+                      placeholder={
+                        newItem.unit === "Kg"
+                          ? "Enter kilograms"
+                          : `Enter quantity (${newItem.unit || "unit"})`
+                      }
+                      value={newItem.quantity}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => {
+                        const raw = parseInt(e.target.value || "0", 10) || 0;
+                        const val = clamp(raw, 0, LIMITS.MAX_QUANTITY);
+                        if (raw !== val)
+                          toast.info(
+                            `Capped at ${LIMITS.MAX_QUANTITY.toLocaleString()}`
+                          );
+                        setNewItem((prev) => ({ ...prev, quantity: val }));
+                      }}
+                    />
+                  </div>
+
+                  {/* Ceiling (Max Stock) */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Ceiling (Max Stock)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step="1"
+                      inputMode="numeric"
+                      className={`flex-1 border px-4 py-2 rounded ${
+                        validationErrors.ceiling_qty ? "border-red-500" : ""
+                      }`}
+                      placeholder="Optional max stock (for Low/Critical)"
+                      value={newItem.ceiling_qty ?? ""}
+                      onChange={(e) =>
+                        setNewItem((prev) => ({
+                          ...prev,
+                          ceiling_qty:
+                            e.target.value === ""
+                              ? null
+                              : Math.max(0, parseInt(e.target.value || "0", 10)),
+                        }))
+                      }
+                    />
+                  </div>
+
+                  {/* Cost Price */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Cost Price<span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={LIMITS.MAX_COST_PRICE}
+                      step="0.01"
+                      inputMode="decimal"
+                      title={`Max ₱${LIMITS.MAX_COST_PRICE.toLocaleString()} per unit`}
+                      className={`flex-1 border px-4 py-2 rounded ${
+                        validationErrors.cost_price ? "border-red-500" : ""
+                      }`}
+                      placeholder="₱ capital per unit"
+                      value={newItem.cost_price}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => {
+                        const raw = parseFloat(e.target.value) || 0;
+                        const val = clamp(raw, 0, LIMITS.MAX_COST_PRICE);
+                        if (raw !== val)
+                          toast.info(
+                            `Capped at ₱${LIMITS.MAX_COST_PRICE.toLocaleString()}`
+                          );
+                        setNewItem((prev) => ({ ...prev, cost_price: val }));
+                      }}
+                    />
+                  </div>
+
+                  {/* Markup (%) */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Markup (%)<span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={LIMITS.MAX_MARKUP_PERCENT}
+                      step="0.01"
+                      inputMode="decimal"
+                      title={`Max ${LIMITS.MAX_MARKUP_PERCENT}%`}
+                      className={`flex-1 border px-4 py-2 rounded ${
+                        validationErrors.markup_percent ? "border-red-500" : ""
+                      }`}
+                      placeholder="e.g. 50"
+                      value={newItem.markup_percent}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => {
+                        const raw = parseFloat(e.target.value) || 0;
+                        const val = clamp(raw, 0, LIMITS.MAX_MARKUP_PERCENT);
+                        if (raw !== val)
+                          toast.info(`Capped at ${LIMITS.MAX_MARKUP_PERCENT}%`);
+                        setNewItem((prev) => ({ ...prev, markup_percent: val }));
+                      }}
+                    />
+                  </div>
+
+                  {/* Expiration Date */}
+                  <div className="flex items-center gap-2">
+                    <label className="w-40 md:w-44 text-sm text-gray-700">
+                      Expiration Date
+                    </label>
+                    <div className="flex-1 flex items-center gap-2">
+                      <input
+                        type="date"
+                        className="flex-1 border px-4 py-2 rounded"
+                        value={
+                          newItem.expiration_date
+                            ? newItem.expiration_date.slice(0, 10)
+                            : ""
+                        }
+                        onChange={(e) =>
+                          setNewItem((prev) => ({
+                            ...prev,
+                            expiration_date: e.target.value
+                              ? e.target.value
+                              : null,
+                          }))
+                        }
+                      />
+                      {newItem.expiration_date && (
+                        <button
+                          className="text-xs text-red-500 underline"
+                          type="button"
+                          onClick={() =>
+                            setNewItem((prev) => ({
+                              ...prev,
+                              expiration_date: null,
+                            }))
+                          }
+                          title="Clear date"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* CENTERED AUTO-COMPUTED SUMMARY */}
+              <div className="border-t pt-4 mt-2">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {/* Unit Price (auto) */}
+                  <div className="flex items-center gap-2 justify-center">
+                    <label className="w-40 text-sm text-gray-700 text-right">
+                      Unit Price (auto)
+                    </label>
+                    <input
+                      type="text"
+                      className="border px-4 py-2 rounded bg-gray-100 text-gray-600 w-48"
+                      value={`₱${(newItem.unit_price || 0).toLocaleString()}`}
+                      readOnly
+                      disabled
+                    />
+                  </div>
+
+                  {/* Total Price */}
+                  <div className="flex items-center gap-2 justify-center">
+                    <label className="w-40 text-sm text-gray-700 text-right">
+                      Total Price
+                    </label>
+                    <input
+                      type="text"
+                      className="border px-4 py-2 rounded bg-gray-100 text-gray-600 w-48"
+                      value={`₱${newItem.amount.toLocaleString()}`}
+                      readOnly
+                      disabled
+                    />
+                  </div>
+
+                  {/* Total Weight */}
+                  <div className="flex items-center gap-2 justify-center">
+                    <label className="w-40 text-sm text-gray-700 text-right">
+                      Total Weight
+                    </label>
+                    <input
+                      type="text"
+                      className="border px-4 py-2 rounded bg-gray-100 text-gray-600 w-48"
+                      value={
+                        newItem.total_weight_kg
+                          ? `${newItem.total_weight_kg.toLocaleString(
+                              undefined,
+                              { maximumFractionDigits: 3 }
+                            )} kg`
+                          : "—"
+                      }
+                      readOnly
+                      disabled
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Image upload */}
+              <div>
                 <input
-                  type="number"
-                  min={0}
-                  max={LIMITS.MAX_WEIGHT_PER_PIECE_KG}
-                  step="0.001"
-                  inputMode="decimal"
-                  title={`Max ${LIMITS.MAX_WEIGHT_PER_PIECE_KG} kg per piece`}
-                  className={`flex-1 border px-4 py-2 rounded ${
-                    validationErrors.weight_per_piece_kg ? "border-red-500" : ""
-                  }`}
-                  placeholder={
-                    newItem.unit === "Kg"
-                      ? "1 (auto for Kg items)"
-                      : "e.g. 0.45"
-                  }
-                  value={
-                    newItem.unit === "Kg"
-                      ? 1
-                      : newItem.weight_per_piece_kg ?? ""
-                  }
-                  disabled={newItem.unit === "Kg"}
+                  type="file"
+                  accept="image/png, image/jpeg, image/webp, image/gif"
                   onChange={(e) => {
-                    const raw = parseFloat(e.target.value) || 0;
-                    const val = clamp(raw, 0, LIMITS.MAX_WEIGHT_PER_PIECE_KG);
-                    if (raw !== val)
-                      toast.info(
-                        `Capped at ${LIMITS.MAX_WEIGHT_PER_PIECE_KG} kg`
-                      );
-                    setNewItem((prev) => ({
-                      ...prev,
-                      weight_per_piece_kg: newItem.unit === "Kg" ? 1 : val,
-                    }));
-                  }}
-                />
-              </div>
-
-              {/* Quantity with cap */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Quantity<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  max={LIMITS.MAX_QUANTITY}
-                  step="1"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  title={`Max ${LIMITS.MAX_QUANTITY.toLocaleString()} units`}
-                  className={`flex-1 border px-4 py-2 rounded ${
-                    validationErrors.quantity ? "border-red-500" : ""
-                  }`}
-                  placeholder={
-                    newItem.unit === "Kg"
-                      ? "Enter kilograms"
-                      : `Enter quantity (${newItem.unit || "unit"})`
-                  }
-                  value={newItem.quantity}
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => {
-                    const raw = parseInt(e.target.value || "0", 10) || 0;
-                    const val = clamp(raw, 0, LIMITS.MAX_QUANTITY);
-                    if (raw !== val)
-                      toast.info(
-                        `Capped at ${LIMITS.MAX_QUANTITY.toLocaleString()}`
-                      );
-                    setNewItem((prev) => ({ ...prev, quantity: val }));
-                  }}
-                />
-              </div>
-
-              {/* Cost Price with cap */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Cost Price<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  max={LIMITS.MAX_COST_PRICE}
-                  step="0.01"
-                  inputMode="decimal"
-                  title={`Max ₱${LIMITS.MAX_COST_PRICE.toLocaleString()} per unit`}
-                  className={`flex-1 border px-4 py-2 rounded ${
-                    validationErrors.cost_price ? "border-red-500" : ""
-                  }`}
-                  placeholder="₱ capital per unit"
-                  value={newItem.cost_price}
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => {
-                    const raw = parseFloat(e.target.value) || 0;
-                    const val = clamp(raw, 0, LIMITS.MAX_COST_PRICE);
-                    if (raw !== val)
-                      toast.info(
-                        `Capped at ₱${LIMITS.MAX_COST_PRICE.toLocaleString()}`
-                      );
-                    setNewItem((prev) => ({ ...prev, cost_price: val }));
-                  }}
-                />
-              </div>
-
-              {/* Markup (%) with cap */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Markup (%)<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  max={LIMITS.MAX_MARKUP_PERCENT}
-                  step="0.01"
-                  inputMode="decimal"
-                  title={`Max ${LIMITS.MAX_MARKUP_PERCENT}%`}
-                  className={`flex-1 border px-4 py-2 rounded ${
-                    validationErrors.markup_percent ? "border-red-500" : ""
-                  }`}
-                  placeholder="e.g. 50"
-                  value={newItem.markup_percent}
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => {
-                    const raw = parseFloat(e.target.value) || 0;
-                    const val = clamp(raw, 0, LIMITS.MAX_MARKUP_PERCENT);
-                    if (raw !== val)
-                      toast.info(`Capped at ${LIMITS.MAX_MARKUP_PERCENT}%`);
-                    setNewItem((prev) => ({ ...prev, markup_percent: val }));
-                  }}
-                />
-              </div>
-
-              {/* Unit Price (readonly) */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Unit Price (auto)
-                </label>
-                <input
-                  type="text"
-                  className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
-                  value={`₱${(newItem.unit_price || 0).toLocaleString()}`}
-                  readOnly
-                  disabled
-                />
-              </div>
-
-              {/* Total Price (readonly) */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Total Price
-                </label>
-                <input
-                  type="text"
-                  className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
-                  value={`₱${newItem.amount.toLocaleString()}`}
-                  readOnly
-                  disabled
-                />
-              </div>
-
-              {/* Expiration Date */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Expiration Date
-                </label>
-                <input
-                  type="date"
-                  className="flex-1 border px-4 py-2 rounded"
-                  value={
-                    newItem.expiration_date
-                      ? newItem.expiration_date.slice(0, 10)
-                      : ""
-                  }
-                  onChange={(e) =>
-                    setNewItem((prev) => ({
-                      ...prev,
-                      expiration_date: e.target.value ? e.target.value : null,
-                    }))
-                  }
-                />
-                {newItem.expiration_date && (
-                  <button
-                    className="ml-2 text-xs text-red-500 underline"
-                    type="button"
-                    onClick={() =>
-                      setNewItem((prev) => ({
-                        ...prev,
-                        expiration_date: null,
-                      }))
+                    const f = e.target.files?.[0] || null;
+                    if (!f) {
+                      handleImageSelect(null);
+                      return;
                     }
-                    title="Clear date"
+                    const ALLOWED = new Set([
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp",
+                      "image/gif",
+                    ]);
+                    if (!ALLOWED.has(f.type)) {
+                      toast.error(
+                        "Please upload an image file (JPG, PNG, WEBP, or GIF)."
+                      );
+                      e.currentTarget.value = "";
+                      handleImageSelect(null);
+                      return;
+                    }
+                    const MAX_BYTES = 5 * 1024 * 1024; // 5MB
+                    if (f.size > MAX_BYTES) {
+                      toast.error("Image too large. Max size is 5 MB.");
+                      e.currentTarget.value = "";
+                      handleImageSelect(null);
+                      return;
+                    }
+                    handleImageSelect(f);
+                  }}
+                  className="block w-full text-sm text-gray-700"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
+                </p>
+
+                {imagePreview && (
+                  <button
+                    type="button"
+                    onClick={() => handleImageSelect(null)}
+                    className="mt-2 text-xs text-red-600 underline"
                   >
-                    Clear
+                    Remove selected image
                   </button>
                 )}
               </div>
 
-              {/* Total Weight (readonly) */}
-              <div className="flex items-center gap-2">
-                <label className="w-36 text-sm text-gray-700">
-                  Total Weight
-                </label>
-                <input
-                  type="text"
-                  className="flex-1 border px-4 py-2 rounded bg-gray-100 text-gray-600"
-                  value={
-                    newItem.total_weight_kg
-                      ? `${newItem.total_weight_kg.toLocaleString(undefined, {
-                          maximumFractionDigits: 3,
-                        })} kg`
-                      : "—"
-                  }
-                  readOnly
-                  disabled
-                />
-              </div>
-
-              {/* Image upload */}
-              <input
-                type="file"
-                accept="image/png, image/jpeg, image/webp, image/gif"
-                onChange={(e) => {
-                  const f = e.target.files?.[0] || null;
-                  if (!f) {
-                    handleImageSelect(null);
-                    return;
-                  }
-                  const ALLOWED = new Set([
-                    "image/png",
-                    "image/jpeg",
-                    "image/webp",
-                    "image/gif",
-                  ]);
-                  if (!ALLOWED.has(f.type)) {
-                    toast.error(
-                      "Please upload an image file (JPG, PNG, WEBP, or GIF)."
-                    );
-                    e.currentTarget.value = "";
-                    handleImageSelect(null);
-                    return;
-                  }
-                  const MAX_BYTES = 5 * 1024 * 1024; // 5MB
-                  if (f.size > MAX_BYTES) {
-                    toast.error("Image too large. Max size is 5 MB.");
-                    e.currentTarget.value = "";
-                    handleImageSelect(null);
-                    return;
-                  }
-                  handleImageSelect(f);
-                }}
-                className="block w-full text-sm text-gray-700"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
-              </p>
-
-              {imagePreview && (
-                <button
-                  type="button"
-                  onClick={() => handleImageSelect(null)}
-                  className="mt-2 text-xs text-red-600 underline"
-                >
-                  Remove selected image
-                </button>
-              )}
-
               {/* Actions */}
-              <div className="flex justify-end gap-2 pt-4">
+              <div className="flex justify-end gap-2 pt-2">
                 <button
                   onClick={() => {
                     setShowForm(false);
@@ -1305,7 +1820,7 @@ export default function InventoryPage() {
                       {editingItemId ? "Updating..." : "Adding..."}
                     </span>
                   ) : (
-                    <>{editingItemId ? "Update Item" : "Add Item"}</>
+                    <> {editingItemId ? "Update Item" : "Add Item"} </>
                   )}
                 </button>
               </div>
