@@ -1259,6 +1259,181 @@ export default function CustomerPaymentsPage() {
                   </span>
                 </div>
 
+<<<<<<< HEAD
+{/* Selected TXN summary + installment counters */}
+{!!selectedPack && (
+  <div className="mt-2">
+    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      {/* Remaining Balance */}
+      <div className="flex flex-col">
+        <span className="font-semibold text-gray-800">
+          Remaining balance (incl. shipping):
+        </span>
+        <span className="font-bold text-green-700 text-2xl leading-tight">
+          {formatCurrency(selectedPack.balance)}
+        </span>
+      </div>
+
+      {/* Credit counters */}
+      {isCredit && (
+        <div className="flex items-center gap-3 text-sm md:text-base">
+          <div>
+            <span className="font-semibold">Total Monthly Paid:</span>{" "}
+            <span className="font-bold">{paidCount}</span>
+          </div>
+          <span className="opacity-50">•</span>
+          <div>
+            <span className="font-semibold">Remaining Months:</span>{" "}
+            <span className="font-bold">{Math.max(0, remainingTerms)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  </div>
+)}
+
+
+
+{/* Amount (LOCKED) + controls */}
+<div className="col-span-1">
+  <label className="text-xs text-gray-600">Amount *</label>
+  <div className="mt-1">
+    <input
+      type="text"
+      value={amount}
+      readOnly
+      onKeyDown={(e) => e.preventDefault()}
+      onWheel={(e) => e.preventDefault()}
+      className="w-full rounded-lg border px-3 py-2 border-gray-300 bg-gray-50 cursor-not-allowed focus:outline-none"
+    />
+  </div>
+
+  {/* CREDIT controls */}
+  {isCredit && (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => stepMultiplier(-1)}
+        className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+        title="Pay fewer months"
+        disabled={effectiveTermAmount <= 0 || termMultiplier <= 1}
+      >
+        <Minus className="h-4 w-4" />
+      </button>
+
+      <div
+        className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
+        title={effectiveTermAmount > 0 ? "Number of months to pay" : "Schedule not loaded yet"}
+      >
+        × {termMultiplier}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => stepMultiplier(+1)}
+        className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+        title="Pay more months"
+        disabled={effectiveTermAmount <= 0 || termMultiplier >= getCreditMaxMultiplier()}
+      >
+        <Plus className="h-4 w-4" />
+      </button>
+
+      <div className="flex gap-2 ml-1">
+        <button
+          type="button"
+          onClick={payInFull}
+          className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
+          style={{ backgroundColor: "#ffba20" }}
+          disabled={effectiveTermAmount <= 0}
+        >
+          Pay in Full
+        </button>
+
+        <button
+          type="button"
+          onClick={payInHalf}
+          className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
+          style={{ backgroundColor: "#ffba20" }}
+          disabled={effectiveTermAmount <= 0}
+
+        >
+          Pay in Half
+        </button>
+      </div>
+    </div>
+  )}
+
+  {/* CASH controls */}
+  {isCash && (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => bumpCash("dec")}
+        className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
+        title={`Decrease ₱${CASH_STEP.toLocaleString()}`}
+      >
+        <Minus className="h-4 w-4" />
+      </button>
+
+      <div
+        className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
+        title="Cash step"
+      >
+        ₱{CASH_STEP.toLocaleString()}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => bumpCash("inc")}
+        className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
+        title={`Increase ₱${CASH_STEP.toLocaleString()}`}
+      >
+        <Plus className="h-4 w-4" />
+      </button>
+
+      <div className="flex gap-2 ml-1">
+        <button
+          type="button"
+          onClick={payInFull}
+          className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
+          style={{ backgroundColor: "#ffba20" }}
+        >
+          Pay in Full
+        </button>
+
+        <button
+          type="button"
+          onClick={payInHalf}
+          className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
+          style={{ backgroundColor: "#ffba20" }}
+        >
+          Pay in Half
+        </button>
+      </div>
+    </div>
+  )}
+
+{/* Optional hint */}
+{!isCash && Number(amount) > 0 && (
+  <div className="mt-1 text-xs text-green-700">
+    {(() => {
+      const amt = Number(amount) || 0;
+      const per = effectiveTermAmount;
+      if (allTermsPaid) {
+        return <>This payment will settle the <b>remaining balance</b>.</>;
+      }
+      if (per > 0) {
+        const k = Math.min(unpaidInstallments.length, Math.floor(amt / per));
+        // const scheduleTotal = totalOfAllUnpaid();
+        const isFullWithLeftover =
+          Math.abs(amt - (selectedPack?.balance ?? 0)) < EPS &&
+          totalOfAllUnpaid  + EPS < (selectedPack?.balance ?? 0);
+        return (
+          <>
+            This payment will pay off <b>{k}</b> installment{k > 1 ? "s" : ""}.
+            {isFullWithLeftover && (
+              <> It also settles the <b>remaining shipping/adjustment</b> amount.</>
+=======
                 {isCredit && (
                   <div className="inline-flex items-center gap-3 self-start md:self-auto rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                     <div>
@@ -1275,6 +1450,7 @@ export default function CustomerPaymentsPage() {
                   </div>
                 )}
               </div>
+>>>>>>> 28f161102cbc440c06024688bc2e39aea475c78e
             )}
 
             {/* Amount (LOCKED) + controls */}

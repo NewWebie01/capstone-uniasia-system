@@ -11,7 +11,6 @@ import ToasterClient from "@/components/ToasterClient";
 
 // ✅ add this
 
-
 const dmSans = DM_Sans({ subsets: ["latin"] });
 
 export const metadata: Metadata = {

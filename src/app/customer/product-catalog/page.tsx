@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
@@ -14,13 +14,10 @@ const clampQty = (n: number) =>
   Math.max(1, Math.min(MAX_QTY, Math.floor(n) || 1));
 
 /* ---------------------- Cart-wide limits (silent) ---------------------- */
-// Do NOT show these numbers in the UI/toasts.
 const TRUCK_LIMITS = {
-  maxTotalWeightKg: 10_000, // internal weight cap
-  maxDistinctItems: 60, // how many different SKUs per order
+  maxTotalWeightKg: 10_000,
+  maxDistinctItems: 60,
 };
-
-// One generic message for all cart-limit failures.
 const LIMIT_TOAST =
   "Exceeds items per transaction. Please split into another transaction.";
 
@@ -72,7 +69,6 @@ type PSGCCity = {
 };
 type PSGCBarangay = { id: number; name: string; code: string };
 
-/** ⬇️ include unit + weight fields from inventory for weight calc */
 type InventoryItem = {
   id: number;
   product_name: string;
@@ -83,11 +79,9 @@ type InventoryItem = {
   status: string;
   image_url?: string | null;
   date_added?: string | null;
-
-  // OPTIONAL: used for weight-based limits
-  unit?: string | null; // "Piece" | "Dozen" | "Box" | "Pack" | "Kg" | etc.
-  pieces_per_unit?: number | null; // e.g., Piece=1, Dozen=12, Box=24...
-  weight_per_piece_kg?: number | null; // weight of ONE piece in kg (if unit !== "Kg")
+  unit?: string | null;
+  pieces_per_unit?: number | null;
+  weight_per_piece_kg?: number | null;
 };
 
 type CartItem = { item: InventoryItem; quantity: number };
@@ -114,41 +108,29 @@ const isOutOfStock = (i: InventoryItem) =>
   (i.status || "").toLowerCase().includes("out") || (i.quantity ?? 0) <= 0;
 
 /* ------------------------------ Weight helpers ------------------------------ */
-/** Weight in kg for ONE inventory "unit" (e.g., 1 piece, 1 dozen, 1 box, or 1 kg). */
 function unitWeightKg(i: InventoryItem): number {
   const unit = (i.unit || "").trim();
-  // If sold directly by kg, 1 unit = 1 kg
   if (unit === "Kg") return 1;
 
   const piecesPerUnit =
     Number(
-      i.pieces_per_unit ??
-        (unit === "Piece" ? 1 : unit === "Dozen" ? 12 : undefined)
+      i.pieces_per_unit ?? (unit === "Piece" ? 1 : unit === "Dozen" ? 12 : 0)
     ) || 0;
-
   const weightPerPiece = Number(i.weight_per_piece_kg ?? 0);
-
   const w =
-    piecesPerUnit > 0 && weightPerPiece > 0
-      ? piecesPerUnit * weightPerPiece
-      : 0;
+    piecesPerUnit > 0 && weightPerPiece > 0 ? piecesPerUnit * weightPerPiece : 0;
   return isFinite(w) ? w : 0;
 }
 
-/** Sum of all cart items' total weight (kg). */
-function cartTotalWeightKg(
-  list: { item: InventoryItem; quantity: number }[]
-): number {
+function cartTotalWeightKg(list: { item: InventoryItem; quantity: number }[]) {
   return list.reduce((sum, ci) => sum + unitWeightKg(ci.item) * ci.quantity, 0);
 }
 
-/** Pre-add check: distinct items + weight cap. */
 function canAddItemWithQty(
   current: { item: InventoryItem; quantity: number }[],
   item: InventoryItem,
   qty: number
 ) {
-  // distinct items rule
   const nextDistinct = current.some((ci) => ci.item.id === item.id)
     ? current.length
     : current.length + 1;
@@ -156,15 +138,9 @@ function canAddItemWithQty(
     return { ok: false as const, reason: "distinct", message: LIMIT_TOAST };
   }
 
-  // weight rule
   const perUnitKg = unitWeightKg(item);
   if (perUnitKg <= 0) {
-    // cannot compute weight -> block with generic message
-    return {
-      ok: false as const,
-      reason: "weight-missing",
-      message: LIMIT_TOAST,
-    };
+    return { ok: false as const, reason: "weight-missing", message: LIMIT_TOAST };
   }
   const nextWeight = cartTotalWeightKg(current) + perUnitKg * qty;
   if (nextWeight > TRUCK_LIMITS.maxTotalWeightKg) {
@@ -185,26 +161,22 @@ function isValidPhone(phone: string) {
   return /^\d{11}$/.test(phone); // 09xxxxxxxxx
 }
 
-// NEW: accept +63 or 63 and convert to 09xxxxxxxxx
 function normalizePhone(input: string | null | undefined): string {
-  const digits = String(input || "").replace(/\D/g, ""); // keep numbers only
+  const digits = String(input || "").replace(/\D/g, "");
   if (digits.startsWith("63") && digits.length === 12) {
-    // +63xxxxxxxxxx or 63xxxxxxxxxx  ->  0xxxxxxxxxx
     return "0" + digits.slice(2);
   }
   if (digits.length === 11 && digits.startsWith("0")) {
     return digits;
   }
-  return ""; // unknown format
+  return "";
 }
 
 function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
   const nameFromMeta =
     meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
-  if (nameFromMeta && typeof nameFromMeta === "string")
-    return nameFromMeta.trim();
-  if (fallbackEmail && fallbackEmail.includes("@"))
-    return fallbackEmail.split("@")[0];
+  if (nameFromMeta && typeof nameFromMeta === "string") return nameFromMeta.trim();
+  if (fallbackEmail && fallbackEmail.includes("@")) return fallbackEmail.split("@")[0];
   return "";
 }
 
@@ -228,7 +200,7 @@ function cartSum(list: CartItem[]) {
 /* ------------------------ Credit terms mapping (NEW) ------------------------ */
 const TERM_TO_INTEREST: Record<number, number> = { 1: 2, 3: 6, 6: 12, 12: 24 };
 
-/* ------------------------ Identity + Phone helpers ------------------------ */
+/* ------------------------ Identity helpers ------------------------ */
 const getAuthIdentity = async () => {
   const {
     data: { user },
@@ -240,12 +212,10 @@ const getAuthIdentity = async () => {
   return { email, name, phone };
 };
 
-/** Try multiple sources to get a phone for this email (case-insensitive). */
 const loadPhoneForEmail = async (email: string): Promise<string> => {
   const clean = (email || "").trim();
   if (!clean) return "";
 
-  // 1) Latest account_requests row
   const { data: ar } = await supabase
     .from("account_requests")
     .select("contact_number")
@@ -257,7 +227,6 @@ const loadPhoneForEmail = async (email: string): Promise<string> => {
   const fromAR = normalizePhone(ar?.contact_number);
   if (fromAR) return fromAR;
 
-  // 2) Latest customers row
   const { data: cust } = await supabase
     .from("customers")
     .select("phone")
@@ -293,12 +262,9 @@ export default function CustomerInventoryPage() {
     items: CartItem[];
   } | null>(null);
 
-  // Payment terms (Credit only)
   const [termsMonths, setTermsMonths] = useState<number | null>(null);
-  /** Interest for the whole term (%) – computed from TERM_TO_INTEREST. */
   const [interestPercent, setInterestPercent] = useState<number>(0);
 
-  // NEW: post-submit choice modal state
   const [showAfterSubmitModal, setShowAfterSubmitModal] = useState(false);
   const [lastOrderId, setLastOrderId] = useState<string | null>(null);
   const [lastTxnCode, setLastTxnCode] = useState<string | null>(null);
@@ -309,23 +275,16 @@ export default function CustomerInventoryPage() {
   const [trackError, setTrackError] = useState<string | null>(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
 
-  // identity defaults from auth (persist name, email, AND phone)
-  const [authDefaults, setAuthDefaults] = useState<{
-    name: string;
-    email: string;
-    phone: string;
-  }>({
+  const [authDefaults, setAuthDefaults] = useState({
     name: "",
     email: "",
     phone: "",
   });
 
-  // order history counter (for display)
   const [orderHistoryCount, setOrderHistoryCount] = useState<number | null>(
     null
   );
 
-  // loader while placing the final order
   const [placingOrder, setPlacingOrder] = useState(false);
 
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
@@ -352,7 +311,6 @@ export default function CustomerInventoryPage() {
   const [barangayCode, setBarangayCode] = useState("");
   const [houseStreet, setHouseStreet] = useState("");
 
-  // Derived selected objects
   const selectedRegion = useMemo(
     () => regions.find((r) => r.code === regionCode) || null,
     [regions, regionCode]
@@ -369,19 +327,14 @@ export default function CustomerInventoryPage() {
     () => barangays.find((b) => b.code === barangayCode) || null,
     [barangays, barangayCode]
   );
-
-  // NCR (Region 13) has no provinces
   const isNCR = useMemo(
     () =>
       !!regionCode &&
       (regionCode.startsWith("13") ||
-        (selectedRegion?.name || "")
-          .toLowerCase()
-          .includes("national capital")),
+        (selectedRegion?.name || "").toLowerCase().includes("national capital")),
     [regionCode, selectedRegion]
   );
 
-  // Full address string
   const computedAddress = useMemo(() => {
     const parts = [
       houseStreet.trim(),
@@ -429,12 +382,8 @@ export default function CustomerInventoryPage() {
 
     if (isNCR) {
       Promise.all([
-        fetchJSON<PSGCCity[]>(
-          `https://psgc.cloud/api/regions/${regionCode}/cities`
-        ),
-        fetchJSON<PSGCCity[]>(
-          `https://psgc.cloud/api/regions/${regionCode}/municipalities`
-        ),
+        fetchJSON<PSGCCity[]>(`https://psgc.cloud/api/regions/${regionCode}/cities`),
+        fetchJSON<PSGCCity[]>(`https://psgc.cloud/api/regions/${regionCode}/municipalities`),
       ])
         .then(([c, m]) => {
           const list = [...c, ...m]
@@ -451,7 +400,6 @@ export default function CustomerInventoryPage() {
         const provs = all
           .filter((p) => p.code.startsWith(regionCode.slice(0, 2)))
           .map((p) => ({ ...p, name: fixEncoding(p.name) }))
-
           .sort((a, b) => a.name.localeCompare(b.name));
         setProvinces(provs);
       })
@@ -472,11 +420,9 @@ export default function CustomerInventoryPage() {
       fetchJSON<PSGCCity[]>("https://psgc.cloud/api/municipalities"),
     ])
       .then(([c, m]) => {
-        const byProv = (x: PSGCCity) =>
-          x.code.startsWith(provinceCode.slice(0, 4));
+        const byProv = (x: PSGCCity) => x.code.startsWith(provinceCode.slice(0, 4));
         const list = [...c.filter(byProv), ...m.filter(byProv)]
           .map((x) => ({ ...x, name: fixEncoding(x.name) }))
-
           .sort((a, b) => a.name.localeCompare(b.name));
         setCities(list);
       })
@@ -518,9 +464,7 @@ export default function CustomerInventoryPage() {
       } catch {}
 
       try {
-        const all = await fetchJSON<PSGCBarangay[]>(
-          "https://psgc.cloud/api/barangays"
-        );
+        const all = await fetchJSON<PSGCBarangay[]>("https://psgc.cloud/api/barangays");
         const filtered = all.filter(
           (b) => b.code.startsWith(prefix9) || b.code.startsWith(prefix6)
         );
@@ -536,12 +480,12 @@ export default function CustomerInventoryPage() {
   /* --------------------- Inventory load + realtime --------------------- */
   const fetchInventory = useCallback(async () => {
     setLoading(true);
-    // ⬇️ pull the weight-related fields too (unit_price already present)
     const { data, error } = await supabase
       .from("inventory")
       .select(
         "id, product_name, category, subcategory, quantity, unit_price, status, image_url, unit, pieces_per_unit, weight_per_piece_kg"
-      );
+      )
+      .limit(1000);
 
     if (error) {
       console.error("Error fetching inventory:", error);
@@ -585,7 +529,6 @@ export default function CustomerInventoryPage() {
     const cleanEmail = (email || "").trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes("@")) return;
 
-    // Only count orders that are COMPLETED (approved/fulfilled by admin)
     const { count, error } = await supabase
       .from("orders")
       .select("id, status, customers!inner(email)", {
@@ -593,7 +536,7 @@ export default function CustomerInventoryPage() {
         head: true,
       })
       .ilike("customers.email", cleanEmail)
-      .in("status", ["completed"]); // <-- ✅ only completed
+      .in("status", ["completed"]);
 
     if (error) {
       console.warn("Could not compute order history:", error.message);
@@ -613,7 +556,6 @@ export default function CustomerInventoryPage() {
     }));
   }, []);
 
-  // Pre-fill name/email/phone if logged in and compute type once
   useEffect(() => {
     (async () => {
       const { email, name, phone: phoneFromAuth } = await getAuthIdentity();
@@ -623,7 +565,7 @@ export default function CustomerInventoryPage() {
 
         setAuthDefaults({
           name: name || "",
-          email,
+          email: email || "",
           phone: phoneFromSources || "",
         });
 
@@ -639,7 +581,6 @@ export default function CustomerInventoryPage() {
     })();
   }, [setTypeFromHistory]);
 
-  // Debounce re-check if email ever changes elsewhere (kept for safety)
   useEffect(() => {
     const t = setTimeout(() => {
       if (customerInfo.email) setTypeFromHistory(customerInfo.email);
@@ -689,7 +630,6 @@ export default function CustomerInventoryPage() {
     await refetchTrackingByCode(txn);
   };
 
-  // Realtime tracking subscription (customers by code + orders by customer_id)
   useEffect(() => {
     const code = txn.trim().toUpperCase();
     if (!code) return;
@@ -736,7 +676,6 @@ export default function CustomerInventoryPage() {
     }
   }, [customerInfo.customer_type]);
 
-  // When payment type switches to Credit, set default term & reset interest
   useEffect(() => {
     if (customerInfo.payment_type === "Credit") {
       setTermsMonths((prev) => (prev == null ? 1 : prev));
@@ -746,7 +685,6 @@ export default function CustomerInventoryPage() {
     }
   }, [customerInfo.payment_type]);
 
-  // Compute interest from fixed mapping
   useEffect(() => {
     if (customerInfo.payment_type === "Credit" && termsMonths != null) {
       setInterestPercent(TERM_TO_INTEREST[termsMonths] ?? 0);
@@ -779,7 +717,7 @@ export default function CustomerInventoryPage() {
 
     const check = canAddItemWithQty(cart, selectedItem, qty);
     if (!check.ok) {
-      toast.error(LIMIT_TOAST); // always generic
+      toast.error(LIMIT_TOAST);
       return;
     }
 
@@ -792,13 +730,10 @@ export default function CustomerInventoryPage() {
     const current = cart.find((ci) => ci.item.id === itemId);
     if (!current) return;
 
-    // clamp per-item rule first
     const requested = clampQty(Number.isFinite(nextQtyRaw) ? nextQtyRaw : 1);
 
-    // compute how many units we can still fit by WEIGHT
     const perUnitKg = unitWeightKg(current.item);
     if (perUnitKg <= 0) {
-      // if weight unknown, keep current and show generic limit
       toast.error(LIMIT_TOAST);
       return;
     }
@@ -807,16 +742,12 @@ export default function CustomerInventoryPage() {
     const remainingKg = TRUCK_LIMITS.maxTotalWeightKg - weightWithoutThis;
     const maxQtyByWeight = Math.max(0, Math.floor(remainingKg / perUnitKg));
 
-    // approved quantity is min of requested, weight-cap, and not below 1
     const approved = Math.max(1, Math.min(requested, maxQtyByWeight));
 
     setCart((prev) =>
-      prev.map((ci) =>
-        ci.item.id === itemId ? { ...ci, quantity: approved } : ci
-      )
+      prev.map((ci) => (ci.item.id === itemId ? { ...ci, quantity: approved } : ci))
     );
 
-    // toasts
     if (requested > MAX_QTY) {
       toast.error(
         `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
@@ -835,14 +766,12 @@ export default function CustomerInventoryPage() {
       setCustomerInfo((prev) => ({ ...prev, code: generateTransactionCode() }));
     }
 
-    // Always determine an email we can use right now
     const { email: authEmail, name: authName } = await getAuthIdentity();
     const emailToUse =
       (customerInfo.email && customerInfo.email.trim()) ||
       (authDefaults.email && authDefaults.email.trim()) ||
       authEmail;
 
-    // Try every place to get a phone, normalize it
     let ensuredPhone =
       normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
 
@@ -850,7 +779,6 @@ export default function CustomerInventoryPage() {
       ensuredPhone = await loadPhoneForEmail(emailToUse);
     }
 
-    // Persist identity & phone into both defaults and the form
     setAuthDefaults((prev) => ({
       ...prev,
       name: prev.name || authName,
@@ -890,11 +818,9 @@ export default function CustomerInventoryPage() {
     if (!customerInfo.email || !customerInfo.email.includes("@")) {
       missing.push("Email");
     }
-    // REQUIRED: Contact Person
     if (!customerInfo.contact_person || !customerInfo.contact_person.trim()) {
       missing.push("Contact Person");
     }
-    // Phone stays read-only but DB requires it — if empty, block submit.
     if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) {
       missing.push("Phone");
     }
@@ -904,7 +830,6 @@ export default function CustomerInventoryPage() {
     if (!regionCode) {
       missing.push("Region");
     }
-    // Province required only when not NCR
     if (!isNCR && !provinceCode) {
       missing.push("Province");
     }
@@ -918,7 +843,6 @@ export default function CustomerInventoryPage() {
       missing.push("Cart (add at least one item)");
     }
 
-    // --- Credit-only validation ---
     if (customerInfo.payment_type === "Credit") {
       if (!termsMonths) {
         missing.push("Payment Terms (months)");
@@ -934,7 +858,7 @@ export default function CustomerInventoryPage() {
     customerInfo.email,
     customerInfo.contact_person,
     customerInfo.phone,
-    customerInfo.payment_type, // ✅ add this
+    customerInfo.payment_type,
     houseStreet,
     regionCode,
     provinceCode,
@@ -942,18 +866,13 @@ export default function CustomerInventoryPage() {
     barangayCode,
     cart,
     isNCR,
-    // ensure recompute when terms or interest change
     termsMonths,
     interestPercent,
   ]);
 
-  /* ------------------ end validation ------------------ */
-
-  // Allow Submit when nothing is missing
   const isConfirmOrderEnabled = missingFields.length === 0;
 
   const handleOpenFinalModal = () => {
-    // enforce validation client-side as well
     if (!isConfirmOrderEnabled) {
       toast.error(
         `Please complete required fields before submitting: ${missingFields
@@ -963,12 +882,10 @@ export default function CustomerInventoryPage() {
       return;
     }
 
-    // distinct items
     if (cart.length > TRUCK_LIMITS.maxDistinctItems) {
       toast.error(LIMIT_TOAST);
       return;
     }
-    // weight
     if (cartTotalWeightKg(cart) > TRUCK_LIMITS.maxTotalWeightKg) {
       toast.error(LIMIT_TOAST);
       return;
@@ -981,7 +898,6 @@ export default function CustomerInventoryPage() {
 
   const handleConfirmOrder = async () => {
     if (!finalOrderDetails || placingOrder) return;
-    // last-line guard
     if (!isConfirmOrderEnabled) {
       toast.error("Please complete all required details before confirming.");
       return;
@@ -1014,7 +930,7 @@ export default function CustomerInventoryPage() {
     const normalizedPhone = normalizePhone(finalOrderDetails.customer.phone);
     const customerPayload: Partial<CustomerInfo> = {
       ...finalOrderDetails.customer,
-      phone: normalizedPhone || finalOrderDetails.customer.phone, // keep normalized
+      phone: normalizedPhone || finalOrderDetails.customer.phone,
       landmark: finalOrderDetails.customer.landmark || "",
       date: phTime,
       status: "pending",
@@ -1044,8 +960,8 @@ export default function CustomerInventoryPage() {
       if (customer.payment_type === "Credit") {
         const months = termsMonths ?? 1;
         orderPayload.terms = `Net ${months} Monthly`;
-        orderPayload.payment_terms = months; // ✅ store months
-        orderPayload.interest_percent = TERM_TO_INTEREST[months]; // ✅ mapped %
+        orderPayload.payment_terms = months;
+        orderPayload.interest_percent = TERM_TO_INTEREST[months];
       }
 
       const { data: ord, error: ordErr } = await supabase
@@ -1063,12 +979,10 @@ export default function CustomerInventoryPage() {
         quantity: ci.quantity,
         price: ci.item.unit_price || 0,
       }));
-      const { error: itemsErr } = await supabase
-        .from("order_items")
-        .insert(rows);
+      const { error: itemsErr } = await supabase.from("order_items").insert(rows);
       if (itemsErr) throw itemsErr;
 
-      /*  NEW: add a notification for admin */
+      /* Notify admin */
       try {
         const preview = items
           .slice(0, 3)
@@ -1106,17 +1020,14 @@ export default function CustomerInventoryPage() {
         console.warn("Failed to create order notification:", notifErr);
       }
 
-      // ✅ Success UI
       toast.success("Your order has been submitted successfully!");
 
-      // Keep data for Payments routing
       const codeForPayments =
         (customerPayload.code as string) || (cust.code as string) || "";
       setLastOrderId(orderId);
       setLastTxnCode(codeForPayments || null);
       setLastOrderTotal(totalAmount);
 
-      // Reset UI but KEEP identity defaults (incl. phone)
       setShowFinalPopup(false);
       setFinalOrderDetails(null);
       setCart([]);
@@ -1124,7 +1035,7 @@ export default function CustomerInventoryPage() {
       setCustomerInfo({
         name: authDefaults.name,
         email: authDefaults.email,
-        phone: authDefaults.phone, // <-- keep
+        phone: authDefaults.phone,
         address: "",
         contact_person: "",
         code: "",
@@ -1146,7 +1057,6 @@ export default function CustomerInventoryPage() {
       const emailUsed = customer.email || authDefaults.email;
       if (emailUsed) await setTypeFromHistory(emailUsed);
 
-      // 🔔 Show the next-step modal
       setShowAfterSubmitModal(true);
     } catch (e: any) {
       console.error("Order submission error:", e.message);
@@ -1170,8 +1080,7 @@ export default function CustomerInventoryPage() {
         i.product_name.toLowerCase().includes(q) ||
         i.category.toLowerCase().includes(q) ||
         i.subcategory.toLowerCase().includes(q);
-      const matchesCategory =
-        categoryFilter === "" || i.category === categoryFilter;
+      const matchesCategory = categoryFilter === "" || i.category === categoryFilter;
       return matchesSearch && matchesCategory;
     });
   }, [inventory, searchTerm, categoryFilter]);
@@ -1184,10 +1093,7 @@ export default function CustomerInventoryPage() {
     setCurrentPage(1);
   }, [searchTerm, categoryFilter, inventory.length]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredInventory.length / itemsPerPage)
-  );
+  const totalPages = Math.max(1, Math.ceil(filteredInventory.length / itemsPerPage));
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
@@ -1195,19 +1101,17 @@ export default function CustomerInventoryPage() {
 
   const pageStart = (currentPage - 1) * itemsPerPage;
   const pageEnd = pageStart + itemsPerPage;
-  const pageItems = useMemo(
-    () => filteredInventory.slice(pageStart, pageEnd),
-    [filteredInventory, pageStart, pageEnd]
-  );
+  const pageItems = useMemo(() => filteredInventory.slice(pageStart, pageEnd), [
+    filteredInventory,
+    pageStart,
+    pageEnd,
+  ]);
 
-  const goToPage = (p: number) =>
-    setCurrentPage(Math.max(1, Math.min(totalPages, p)));
+  const goToPage = (p: number) => setCurrentPage(Math.max(1, Math.min(totalPages, p)));
 
   /* ---------------------- Image modal (view-only) ---------------------- */
   const [showImageModal, setShowImageModal] = useState(false);
-  const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(
-    null
-  );
+  const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(null);
   const openImageModal = (item: InventoryItem) => {
     setImageModalItem(item);
     setShowImageModal(true);
@@ -1217,7 +1121,6 @@ export default function CustomerInventoryPage() {
     setImageModalItem(null);
   };
 
-  /* ---------------------- Safety backfill while modal open --------------- */
   useEffect(() => {
     (async () => {
       if (showCartPopup && !customerInfo.phone) {
@@ -1234,14 +1137,11 @@ export default function CustomerInventoryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCartPopup]);
 
-  /* ---------------------- Navigation helpers ---------------------- */
   const goToPayments = () => {
     const qp = new URLSearchParams();
     if (lastOrderId) qp.set("orderId", lastOrderId);
     if (lastTxnCode) qp.set("code", lastTxnCode);
-    router.push(
-      `/customer/payments${qp.toString() ? `?${qp.toString()}` : ""}`
-    );
+    router.push(`/customer/payments${qp.toString() ? `?${qp.toString()}` : ""}`);
   };
 
   /* --------------------------------- UI --------------------------------- */
@@ -1260,11 +1160,10 @@ export default function CustomerInventoryPage() {
       </header>
 
       <p className="text-neutral-500 mb-4 text-sm">
-        Browse available products, check categories, and add items to your cart
-        for ordering.
+        Browse available products, check categories, and add items to your cart for ordering.
       </p>
 
-      {/* Controls: Search + Category Filter */}
+      {/* Controls */}
       <div className="mb-4 flex flex-col sm:flex-row gap-3 sm:items-center">
         <input
           type="text"
@@ -1287,165 +1186,126 @@ export default function CustomerInventoryPage() {
         </select>
       </div>
 
-      {loading ? (
-        <p>Loading inventory...</p>
-      ) : (
-        <>
-          <div className="overflow-x-auto rounded-lg shadow mb-3">
-            <table className="w-full table-fixed bg-white text-sm">
-              <thead className="bg-[#ffba20] text-black text-left">
-                <tr>
-                  <th className="py-2 px-4 w-2/6">Product Name</th>
-                  <th className="py-2 px-4 w-1/6">Category</th>
-                  <th className="py-2 px-4 w-1/6">Subcategory</th>
-                  <th className="py-2 px-4 w-1/6">Unit</th>
-                  <th className="py-2 px-4 w-1/6">Unit Price</th>
-                  <th className="py-2 px-4 w-1/6">Status</th>
-                  <th className="py-2 px-4 w-1/6">Action</th>
-                </tr>
-              </thead>
+      {/* Product showcase grid */}
+      <section className="py-2">
+        <div className="max-w-7xl mx-auto">
+          {loading ? (
+            <p>Loading products...</p>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+              {pageItems.map((item, index) => {
+                const isOut = item.status?.toLowerCase().includes("out");
+                return (
+                  <motion.div
+                    key={item.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.04 }}
+                    whileHover={{ y: -4 }}
+                    className="group bg-white rounded-lg shadow hover:shadow-lg overflow-hidden border border-gray-100 flex flex-col justify-between cursor-pointer"
+                  >
+                    <div onClick={() => openImageModal(item)}>
+                      <div className="relative w-full h-40 bg-gray-100 overflow-hidden">
+                        {item.image_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={item.image_url}
+                            alt={item.product_name}
+                            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm">
+                            No Image
+                          </div>
+                        )}
+                        <div className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/10 to-transparent" />
+                      </div>
 
-              <tbody>
-                {pageItems.map((item) => (
-                  <tr key={item.id} className="border-b hover:bg-gray-100">
-                    <td className="py-2 px-4 pl-6 text-left">
-                      <button
-                        className="text-[#2f63b7] hover:underline font-normal text-left"
-                        onClick={() => openImageModal(item)}
-                        title={
-                          item.image_url
-                            ? "View product image"
-                            : "No image available"
-                        }
-                        style={{ wordBreak: "break-word" }}
-                      >
-                        {item.product_name}
-                      </button>
-                    </td>
-                    <td className="py-2 px-4 text-left">{item.category}</td>
-                    <td className="py-2 px-4 text-left">{item.subcategory}</td>
-                    <td className="py-2 px-4 text-left">{item.unit || "—"}</td>
-                    <td className="py-2 px-4 text-left">
-                      {formatPeso(item.unit_price)}
-                    </td>
-                    <td
-                      className={`py-2 px-4 text-left ${
-                        isOutOfStock(item) ? "text-red-600" : "text-green-700"
-                      }`}
+                      <div className="p-3">
+                        <h3
+                          className="text-sm font-medium text-gray-800 line-clamp-2 mb-1"
+                          title={item.product_name}
+                        >
+                          {item.product_name}
+                        </h3>
+
+                        <p className="text-xs text-gray-500 mb-1">
+                          {item.category} • {item.subcategory || "General"}
+                        </p>
+
+                        <p className="font-semibold text-[#ffba20]">
+                          ₱{Number(item.unit_price || 0).toLocaleString("en-PH", {
+                            minimumFractionDigits: 2,
+                          })}
+                        </p>
+
+                        <p className={`text-xs mt-1 ${isOut ? "text-red-500" : "text-green-600"}`}>
+                          {item.status}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div
+                      className="p-3 pt-0"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      {item.status}
-                    </td>
-
-                    <td className="py-2 px-4">
                       <button
-                        className={`bg-[#ffba20] text-white px-3 py-1 text-sm rounded hover:bg-yellow-600
-      ${
-        isOutOfStock(item)
-          ? "opacity-50 cursor-not-allowed hover:bg-[#ffba20]"
-          : ""
-      }`}
-                        onClick={() =>
-                          !isOutOfStock(item) && handleAddToCartClick(item)
-                        }
-                        disabled={isOutOfStock(item)}
-                        title={
-                          isOutOfStock(item) ? "Out of Stock" : "Add to Cart"
-                        }
+                        onClick={() => handleAddToCartClick(item)}
+                        className={`w-full text-sm font-medium py-2 rounded-md ${
+                          isOut ? "bg-gray-300 text-gray-600 cursor-not-allowed" : "bg-[#181918] text-white hover:text-[#ffba20]"
+                        } transition`}
+                        disabled={isOut}
                       >
                         Add to Cart
                       </button>
-                    </td>
-                  </tr>
-                ))}
-                {pageItems.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="text-center py-6 text-gray-500">
-                      No products found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pagination controls*/}
-          <div className="mt-4">
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-              {/* Prev */}
-              <button
-                onClick={() => goToPage(currentPage - 1)}
-                disabled={currentPage === 1}
-                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
-                  bg-white/70 backdrop-blur-sm ring-1 ring-black/10
-                  hover:bg-white active:translate-y-px transition
-                  text-gray-800
-                  disabled:opacity-50 disabled:cursor-not-allowed`}
-                aria-label="Previous page"
-                title="Previous page"
-              >
-                <span className="text-lg">←</span>
-                <span className="font-medium">Prev</span>
-              </button>
-
-              {/* Center status */}
-              <div className="text-sm sm:text-base font-medium text-gray-900/90 text-center">
-                Page <span className="font-bold">{currentPage}</span> of{" "}
-                <span className="font-bold">{totalPages}</span>
-                <span className="hidden sm:inline text-gray-700/80">
-                  {" "}
-                  • Showing{" "}
-                  {filteredInventory.length > 0 ? (
-                    <>
-                      <span className="font-semibold">{pageStart + 1}</span>–
-                      <span className="font-semibold">
-                        {Math.min(pageEnd, filteredInventory.length)}
-                      </span>{" "}
-                      of{" "}
-                      <span className="font-semibold">
-                        {filteredInventory.length}
-                      </span>
-                    </>
-                  ) : (
-                    "0"
-                  )}
-                </span>
-              </div>
-
-              {/* Next */}
-              <button
-                onClick={() => goToPage(currentPage + 1)}
-                disabled={currentPage >= totalPages}
-                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg 
-                  bg-white/70 backdrop-blur-sm ring-1 ring-black/10
-                  hover:bg-white active:translate-y-px transition
-                  text-gray-800
-                  disabled:opacity-50 disabled:cursor-not-allowed`}
-                aria-label="Next page"
-                title="Next page"
-              >
-                <span className="font-medium">Next</span>
-                <span className="text-lg">→</span>
-              </button>
+                    </div>
+                  </motion.div>
+                );
+              })}
             </div>
-          </div>
-        </>
-      )}
+          )}
 
-      {/* Image Modal */}
+          {/* Pagination controls */}
+          {!loading && (
+            <div className="mt-6 flex items-center justify-between">
+              <div>
+                <button
+                  onClick={() => goToPage(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 rounded border mr-2 disabled:opacity-50"
+                >
+                  Prev
+                </button>
+                <button
+                  onClick={() => goToPage(currentPage + 1)}
+                  disabled={currentPage >= totalPages}
+                  className="px-3 py-1 rounded border disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+              <div className="text-sm text-gray-700">
+                Page {currentPage} of {totalPages}
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Image Modal (full) */}
       {showImageModal && imageModalItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl ring-1 ring-black/5">
+          <div className="bg-white rounded-2xl max-w-xl w-full overflow-hidden shadow-2xl ring-1 ring-black/5">
             <div className="flex items-center justify-between px-4 py-3 border-b">
               <h3 className="font-semibold">{imageModalItem.product_name}</h3>
-              <button
-                className="text-gray-500 hover:text-black"
-                onClick={closeImageModal}
-              >
+              <button className="text-gray-500 hover:text-black" onClick={closeImageModal}>
                 ✕
               </button>
             </div>
             <div className="pl-0 pr-4 pt-0">
               {imageModalItem.image_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={imageModalItem.image_url}
                   alt={imageModalItem.product_name}
@@ -1456,30 +1316,23 @@ export default function CustomerInventoryPage() {
                   No image uploaded for this item.
                 </div>
               )}
-              <div className="mt-3 text-sm text-gray-600">
+              <div className="mt-3 text-sm text-gray-600 px-4 pb-4">
                 <div>
-                  <span className="font-medium">Category:</span>{" "}
-                  {imageModalItem.category || "—"}
+                  <span className="font-medium">Category:</span> {imageModalItem.category || "—"}
                 </div>
                 <div>
-                  <span className="font-medium">Subcategory:</span>{" "}
-                  {imageModalItem.subcategory || "—"}
+                  <span className="font-medium">Subcategory:</span> {imageModalItem.subcategory || "—"}
                 </div>
                 <div>
-                  <span className="font-medium">Status:</span>{" "}
-                  {imageModalItem.status || "—"}
+                  <span className="font-medium">Status:</span> {imageModalItem.status || "—"}
                 </div>
                 <div>
-                  <span className="font-medium">Unit Price:</span>{" "}
-                  {formatPeso(imageModalItem.unit_price)}
+                  <span className="font-medium">Unit Price:</span> {formatPeso(imageModalItem.unit_price)}
                 </div>
               </div>
             </div>
             <div className="px-4 py-3 border-t text-right">
-              <button
-                onClick={closeImageModal}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
-              >
+              <button onClick={closeImageModal} className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm">
                 Close
               </button>
             </div>
@@ -1487,13 +1340,11 @@ export default function CustomerInventoryPage() {
         </div>
       )}
 
-      {/* Add to Cart Modal */}
+      {/* Add to Cart Modal (full) */}
       {selectedItem && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex justify-center items-center z-50 p-4">
           <div className="bg-white p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 max-w-md w-full">
-            <h2 className="text-xl font-bold mb-4">
-              {selectedItem.product_name}
-            </h2>
+            <h2 className="text-xl font-bold mb-4">{selectedItem.product_name}</h2>
             <p>Category: {selectedItem.category}</p>
             <p>Subcategory: {selectedItem.subcategory}</p>
             <p>Status: {selectedItem.status}</p>
@@ -1521,20 +1372,18 @@ export default function CustomerInventoryPage() {
                   setOrderQuantity(clampQty(isNaN(raw) ? 1 : raw));
                 }}
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Max {MAX_QTY} per item.
-              </div>
+              <div className="text-xs text-gray-500 mt-1">Max {MAX_QTY} per item.</div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={() => setSelectedItem(null)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
               >
                 Cancel
               </button>
               <button
                 onClick={addToCart}
-                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition"
+                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95"
               >
                 Add to Cart
               </button>
@@ -1565,17 +1414,12 @@ export default function CustomerInventoryPage() {
                   <td className="py-2 px-4">{ci.item.product_name}</td>
                   <td className="py-2 px-4">{ci.item.category}</td>
                   <td className="py-2 px-4">{ci.item.subcategory}</td>
-                  <td className="py-2 px-4">
-                    {formatPeso(ci.item.unit_price)}
-                  </td>
+                  <td className="py-2 px-4">{formatPeso(ci.item.unit_price)}</td>
                   <td className="py-2 px-4">
                     <div className="flex items-center gap-2">
                       <button
                         className="px-2 py-1 rounded border hover:bg-gray-100"
-                        onClick={() =>
-                          updateCartQuantity(ci.item.id, ci.quantity - 1)
-                        }
-                        title="Decrease"
+                        onClick={() => updateCartQuantity(ci.item.id, ci.quantity - 1)}
                       >
                         −
                       </button>
@@ -1592,19 +1436,14 @@ export default function CustomerInventoryPage() {
                         onBlur={(e) => {
                           const v = Number(e.target.value);
                           if (v > MAX_QTY) {
-                            toast.error(
-                              `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
-                            );
+                            toast.error(`Maximum ${MAX_QTY} per item. For more, please submit another transaction.`);
                           }
                           updateCartQuantity(ci.item.id, isNaN(v) ? 1 : v);
                         }}
                       />
                       <button
                         className="px-2 py-1 rounded border hover:bg-gray-100"
-                        onClick={() =>
-                          updateCartQuantity(ci.item.id, ci.quantity + 1)
-                        }
-                        title="Increase"
+                        onClick={() => updateCartQuantity(ci.item.id, ci.quantity + 1)}
                       >
                         +
                       </button>
@@ -1612,10 +1451,7 @@ export default function CustomerInventoryPage() {
                   </td>
                   <td className="py-2 px-4">{ci.item.status}</td>
                   <td className="py-2 px-4">
-                    <button
-                      onClick={() => removeFromCart(ci.item.id)}
-                      className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
-                    >
+                    <button onClick={() => removeFromCart(ci.item.id)} className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">
                       Remove
                     </button>
                   </td>
@@ -1626,17 +1462,14 @@ export default function CustomerInventoryPage() {
 
           <div className="flex justify-between items-center">
             <div>Total Items: {totalItems}</div>
-            <button
-              className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
-              onClick={handleShowCart}
-            >
+            <button className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600" onClick={handleShowCart}>
               Order Item
             </button>
           </div>
         </div>
       )}
 
-      {/* First Confirm Order Modal (name/email are READ-ONLY) */}
+      {/* First Confirm Order Modal (full) */}
       {showCartPopup && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <motion.div
@@ -1645,70 +1478,33 @@ export default function CustomerInventoryPage() {
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
             className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
-            <h2 className="text-2xl font-semibold tracking-tight shrink-0">
-              Confirm Order
-            </h2>
+            <h2 className="text-2xl font-semibold tracking-tight shrink-0">Confirm Order</h2>
 
             <div className="flex-1 overflow-auto mt-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* READ-ONLY name & email */}
-                <input
-                  placeholder="Customer Name"
-                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-                  value={customerInfo.name}
-                  readOnly
-                />
-                <input
-                  type="email"
-                  placeholder="Email"
-                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-                  value={customerInfo.email}
-                  readOnly
-                />
-                {/* Phone (read-only) */}
-                <input
-                  type="tel"
-                  placeholder="Phone (11 digits)"
-                  className={`border px-3 py-2 rounded bg-gray-100 cursor-not-allowed ${
-                    !customerInfo.phone ? "border-red-400" : ""
-                  }`}
-                  value={customerInfo.phone}
-                  readOnly
-                />
+                <input placeholder="Customer Name" className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed" value={customerInfo.name} readOnly />
+                <input type="email" placeholder="Email" className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed" value={customerInfo.email} readOnly />
+                <input type="tel" placeholder="Phone (11 digits)" className={`border px-3 py-2 rounded bg-gray-100 cursor-not-allowed ${!customerInfo.phone ? "border-red-400" : ""}`} value={customerInfo.phone} readOnly />
 
-                {/* Contact Person (editable, REQUIRED) */}
                 <input
                   placeholder="Contact Person (required)"
                   maxLength={30}
                   pattern="[A-Za-z\s]*"
                   title="Letters only, maximum 30 characters"
-                  className={`border px-3 py-2 rounded ${
-                    !customerInfo.contact_person?.trim()
-                      ? "border-red-400 focus:ring-red-500"
-                      : ""
-                  }`}
+                  className={`border px-3 py-2 rounded ${!customerInfo.contact_person?.trim() ? "border-red-400 focus:ring-red-500" : ""}`}
                   value={customerInfo.contact_person}
                   onChange={(e) => {
-                    // allow letters and spaces only, enforce 30 chars
                     const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
                     if (value.length <= 30) {
-                      setCustomerInfo({
-                        ...customerInfo,
-                        contact_person: value,
-                      });
+                      setCustomerInfo({ ...customerInfo, contact_person: value });
                     }
                   }}
                 />
 
-                {/* Address pickers */}
                 <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
                   <div>
                     <label className="block text-sm mb-1">Region</label>
-                    <select
-                      className="border px-3 py-2 rounded w-full"
-                      value={regionCode}
-                      onChange={(e) => setRegionCode(e.target.value)}
-                    >
+                    <select className="border px-3 py-2 rounded w-full" value={regionCode} onChange={(e) => setRegionCode(e.target.value)}>
                       <option value="">Select region</option>
                       {regions.map((r) => (
                         <option key={r.code} value={r.code}>
@@ -1717,188 +1513,72 @@ export default function CustomerInventoryPage() {
                       ))}
                     </select>
                   </div>
+
                   <div>
                     <label className="block text-sm mb-1">Province</label>
-                    <select
-                      className="border px-3 py-2 rounded w-full"
-                      value={provinceCode}
-                      onChange={(e) => setProvinceCode(e.target.value)}
-                      disabled={!regionCode || isNCR}
-                    >
-                      <option value="">
-                        {!regionCode
-                          ? "Select region first"
-                          : isNCR
-                          ? "NCR has no provinces"
-                          : "Select province"}
-                      </option>
-                      {!isNCR &&
-                        provinces.map((p) => (
-                          <option key={p.code} value={p.code}>
-                            {p.name}
-                          </option>
-                        ))}
+                    <select className="border px-3 py-2 rounded w-full" value={provinceCode} onChange={(e) => setProvinceCode(e.target.value)} disabled={!regionCode || isNCR}>
+                      <option value="">{!regionCode ? "Select region first" : isNCR ? "NCR has no provinces" : "Select province"}</option>
+                      {!isNCR && provinces.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}
                     </select>
                   </div>
+
                   <div>
-                    <label className="block text-sm mb-1">
-                      City / Municipality
-                    </label>
-                    <select
-                      className="border px-3 py-2 rounded w-full"
-                      value={cityCode}
-                      onChange={(e) => setCityCode(e.target.value)}
-                      disabled={isNCR ? !regionCode : !provinceCode}
-                    >
-                      <option value="">
-                        {isNCR
-                          ? regionCode
-                            ? "Select city/municipality"
-                            : "Select region first"
-                          : provinceCode
-                          ? "Select city/municipality"
-                          : "Select province first"}
-                      </option>
-                      {cities.map((c) => (
-                        <option key={c.code} value={c.code}>
-                          {c.name}
-                        </option>
-                      ))}
+                    <label className="block text-sm mb-1">City / Municipality</label>
+                    <select className="border px-3 py-2 rounded w-full" value={cityCode} onChange={(e) => setCityCode(e.target.value)} disabled={isNCR ? !regionCode : !provinceCode}>
+                      <option value="">{isNCR ? (regionCode ? "Select city/municipality" : "Select region first") : provinceCode ? "Select city/municipality" : "Select province first"}</option>
+                      {cities.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
                     </select>
                   </div>
+
                   <div>
                     <label className="block text-sm mb-1">Barangay</label>
-                    <select
-                      className="border px-3 py-2 rounded w-full"
-                      value={barangayCode}
-                      onChange={(e) => setBarangayCode(e.target.value)}
-                      disabled={!cityCode}
-                    >
-                      <option value="">
-                        {cityCode ? "Select barangay" : "Select city first"}
-                      </option>
-                      {barangays.map((b) => (
-                        <option key={b.code} value={b.code}>
-                          {b.name}
-                        </option>
-                      ))}
+                    <select className="border px-3 py-2 rounded w-full" value={barangayCode} onChange={(e) => setBarangayCode(e.target.value)} disabled={!cityCode}>
+                      <option value="">{cityCode ? "Select barangay" : "Select city first"}</option>
+                      {barangays.map((b) => <option key={b.code} value={b.code}>{b.name}</option>)}
                     </select>
                   </div>
                 </div>
 
-                <input
-                  placeholder="House Number & Street Name"
-                  maxLength={30}
-                  title="Maximum 30 characters only"
-                  className="border px-3 py-2 rounded col-span-2"
-                  value={houseStreet}
-                  onChange={(e) => {
-                    if (e.target.value.length <= 30) {
-                      setHouseStreet(e.target.value);
-                    }
-                  }}
-                />
-                <input
-                  placeholder="Landmark"
-                  maxLength={30}
-                  title="Maximum 30 characters only"
-                  className="border px-3 py-2 rounded col-span-2"
-                  value={customerInfo.landmark || ""}
-                  onChange={(e) =>
-                    e.target.value.length <= 30 &&
-                    setCustomerInfo({
-                      ...customerInfo,
-                      landmark: e.target.value,
-                    })
-                  }
-                />
-                <input
-                  className="border px-3 py-2 rounded col-span-2 bg-gray-50"
-                  value={customerInfo.address || ""}
-                  placeholder="Address will be set from House/St. + Barangay/City/Province/Region"
-                  readOnly
-                />
+                <input placeholder="House Number & Street Name" maxLength={30} title="Maximum 30 characters only" className="border px-3 py-2 rounded col-span-2" value={houseStreet} onChange={(e) => { if (e.target.value.length <= 30) setHouseStreet(e.target.value); }} />
+                <input placeholder="Landmark" maxLength={30} title="Maximum 30 characters only" className="border px-3 py-2 rounded col-span-2" value={customerInfo.landmark || ""} onChange={(e) => e.target.value.length <= 30 && setCustomerInfo({ ...customerInfo, landmark: e.target.value })} />
+                <input className="border px-3 py-2 rounded col-span-2 bg-gray-50" value={customerInfo.address || ""} placeholder="Address will be set from House/St. + Barangay/City/Province/Region" readOnly />
 
-                {/* Customer Type (derived) */}
                 <div className="col-span-2">
                   <label className="block mb-1">Customer Type</label>
-                  <input
-                    className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
-                    value={customerInfo.customer_type || ""}
-                    readOnly
-                  />
-                  {orderHistoryCount !== null && (
-                    <div className="text-xs text-gray-500 mt-1">
-                      Past orders under this email: {orderHistoryCount}
-                    </div>
-                  )}
+                  <input className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed" value={customerInfo.customer_type || ""} readOnly />
+                  {orderHistoryCount !== null && <div className="text-xs text-gray-500 mt-1">Past orders under this email: {orderHistoryCount}</div>}
                 </div>
 
-                {/* Payment Type */}
                 <div className="col-span-2">
                   <label className="block mb-1">Payment Type</label>
                   <div className="flex gap-4">
-                    {(customerInfo.customer_type === "Existing Customer"
-                      ? ["Credit"]
-                      : ["Cash"]
-                    ).map((type) => (
+                    {(customerInfo.customer_type === "Existing Customer" ? ["Credit"] : ["Cash"]).map((type) => (
                       <label key={type} className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="payment_type"
-                          value={type}
-                          checked={customerInfo.payment_type === type}
-                          onChange={(e) =>
-                            setCustomerInfo({
-                              ...customerInfo,
-                              payment_type: e.target.value as "Cash" | "Credit",
-                            })
-                          }
-                        />
+                        <input type="radio" name="payment_type" value={type} checked={customerInfo.payment_type === type} onChange={(e) => setCustomerInfo({ ...customerInfo, payment_type: e.target.value as "Cash" | "Credit" })} />
                         {type}
                       </label>
                     ))}
                   </div>
                 </div>
 
-                {/* Payment Terms (Credit only) */}
                 {customerInfo.payment_type === "Credit" && (
                   <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
                       <label className="block mb-1">Payment Terms</label>
-                      <select
-                        className={`border px-3 py-2 rounded w-full ${
-                          !termsMonths ? "border-red-400" : ""
-                        }`}
-                        value={termsMonths ?? ""}
-                        onChange={(e) =>
-                          setTermsMonths(Number(e.target.value) || null)
-                        }
-                      >
+                      <select className={`border px-3 py-2 rounded w-full ${!termsMonths ? "border-red-400" : ""}`} value={termsMonths ?? ""} onChange={(e) => setTermsMonths(Number(e.target.value) || null)}>
                         <option value="">Select term</option>
                         <option value={1}>1 month (Net 1)</option>
                         <option value={3}>3 months (Net 3)</option>
                         <option value={6}>6 months (Net 6)</option>
                         <option value={12}>12 months (Net 12)</option>
                       </select>
-                      <div className="text-xs text-gray-500 mt-1">
-                        Only available for Existing Customers with Credit.
-                      </div>
+                      <div className="text-xs text-gray-500 mt-1">Only available for Existing Customers with Credit.</div>
                     </div>
 
                     <div>
                       <label className="block mb-1">Interest %</label>
-                      <input
-                        type="number"
-                        className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
-                        value={interestPercent}
-                        readOnly
-                        disabled
-                        title="Interest is fixed per selected term"
-                      />
-                      <div className="text-xs text-gray-500 mt-1">
-                        1m→2%, 3m→6%, 6m→12%, 12m→24%.
-                      </div>
+                      <input type="number" className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed" value={interestPercent} readOnly disabled title="Interest is fixed per selected term" />
+                      <div className="text-xs text-gray-500 mt-1">1m→2%, 3m→6%, 6m→12%, 12m→24%.</div>
                     </div>
                   </div>
                 )}
@@ -1924,45 +1604,26 @@ export default function CustomerInventoryPage() {
                         <td className="py-2 px-3">{ci.item.product_name}</td>
                         <td className="py-2 px-3">{ci.item.category}</td>
                         <td className="py-2 px-3">{ci.item.subcategory}</td>
-                        <td className="py-2 px-3">
-                          {formatPeso(ci.item.unit_price)}
-                        </td>
+                        <td className="py-2 px-3">{formatPeso(ci.item.unit_price)}</td>
                         <td className="py-2 px-3">{ci.quantity}</td>
                         <td className="py-2 px-3">{ci.item.status}</td>
-                        <td className="py-2 px-3 font-medium">
-                          {formatPeso(lineTotal(ci))}
-                        </td>
+                        <td className="py-2 px-3 font-medium">{formatPeso(lineTotal(ci))}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
 
-                {/* Estimated total + note */}
                 <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
-                  <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount
-                    during order processing.
-                  </div>
+                  <div className="text-xs text-gray-500">* Final price may change if an admin applies a discount during order processing.</div>
                   <div className="text-right text-sm">
                     <div>
-                      <span className="mr-2 text-gray-600">
-                        Estimated Total:
-                      </span>
-                      <span className="font-semibold">
-                        {formatPeso(cartSum(cart))}
-                      </span>
+                      <span className="mr-2 text-gray-600">Estimated Total:</span>
+                      <span className="font-semibold">{formatPeso(cartSum(cart))}</span>
                     </div>
                     {customerInfo.payment_type === "Credit" && (
                       <div className="mt-1">
-                        <span className="mr-2 text-gray-600">
-                          Est. w/ Interest:
-                        </span>
-                        <span className="font-semibold">
-                          {formatPeso(
-                            cartSum(cart) *
-                              (1 + Math.max(0, interestPercent) / 100)
-                          )}
-                        </span>
+                        <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
+                        <span className="font-semibold">{formatPeso(cartSum(cart) * (1 + Math.max(0, interestPercent) / 100))}</span>
                       </div>
                     )}
                   </div>
@@ -1970,32 +1631,15 @@ export default function CustomerInventoryPage() {
               </div>
             </div>
 
-            {/* Show missing fields (if any) */}
             {missingFields.length > 0 && (
               <div className="mt-3 text-sm text-red-600">
-                <strong>Required:</strong>{" "}
-                {missingFields.slice(0, 5).join(", ")}
-                {missingFields.length > 5 ? "..." : ""}
+                <strong>Required:</strong> {missingFields.slice(0, 5).join(", ")}{missingFields.length > 5 ? "..." : ""}
               </div>
             )}
 
             <div className="shrink-0 flex justify-end gap-2 mt-4">
-              <button
-                onClick={() => setShowCartPopup(false)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleOpenFinalModal}
-                className="px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 active:translate-y-px transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
-                disabled={!isConfirmOrderEnabled}
-                title={
-                  !isConfirmOrderEnabled
-                    ? "Please complete required fields before submitting"
-                    : "Submit order"
-                }
-              >
+              <button onClick={() => setShowCartPopup(false)} className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm">Cancel</button>
+              <button onClick={handleOpenFinalModal} className="px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2" disabled={!isConfirmOrderEnabled} title={!isConfirmOrderEnabled ? "Please complete required fields before submitting" : "Submit order"}>
                 Submit Order
               </button>
             </div>
@@ -2006,29 +1650,18 @@ export default function CustomerInventoryPage() {
       {/* Final Confirmation Modal */}
       {showFinalPopup && finalOrderDetails && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
-          >
-            <h2 className="text-2xl font-semibold tracking-tight shrink-0">
-              Order Confirmation
-            </h2>
+          <motion.div initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: "spring", stiffness: 260, damping: 22 }} className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden">
+            <h2 className="text-2xl font-semibold tracking-tight shrink-0">Order Confirmation</h2>
 
             <div className="flex-1 overflow-auto mt-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                   <div className="text-xs text-gray-500">Customer</div>
-                  <div className="font-medium">
-                    {finalOrderDetails.customer.name}
-                  </div>
+                  <div className="font-medium">{finalOrderDetails.customer.name}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Transaction Code</div>
-                  <div className="font-medium">
-                    {finalOrderDetails.customer.code}
-                  </div>
+                  <div className="font-medium">{finalOrderDetails.customer.code}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Date</div>
@@ -2044,14 +1677,10 @@ export default function CustomerInventoryPage() {
                   </div>
                   <div>
                     <div className="text-xs text-gray-500">Terms</div>
-                    <div className="font-medium">
-                      {termsMonths ?? "-"} month(s)
-                    </div>
+                    <div className="font-medium">{termsMonths ?? "-"} month(s)</div>
                   </div>
                   <div>
-                    <div className="text-xs text-gray-500">
-                      Interest (Whole Term)
-                    </div>
+                    <div className="text-xs text-gray-500">Interest (Whole Term)</div>
                     <div className="font-medium">{interestPercent}%</div>
                   </div>
                 </div>
@@ -2060,15 +1689,11 @@ export default function CustomerInventoryPage() {
               <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                 <div>
                   <div className="text-xs text-gray-500">Region</div>
-                  <div className="font-medium">
-                    {selectedRegion?.name ?? "-"}
-                  </div>
+                  <div className="font-medium">{selectedRegion?.name ?? "-"}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Province</div>
-                  <div className="font-medium">
-                    {selectedProvince?.name ?? (isNCR ? "—" : "-")}
-                  </div>
+                  <div className="font-medium">{selectedProvince?.name ?? (isNCR ? "—" : "-")}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">City/Municipality</div>
@@ -2076,9 +1701,7 @@ export default function CustomerInventoryPage() {
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Barangay</div>
-                  <div className="font-medium">
-                    {selectedBarangay?.name ?? "-"}
-                  </div>
+                  <div className="font-medium">{selectedBarangay?.name ?? "-"}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">House & Street</div>
@@ -2105,45 +1728,26 @@ export default function CustomerInventoryPage() {
                         <td className="py-2 px-3">{ci.item.product_name}</td>
                         <td className="py-2 px-3">{ci.item.category}</td>
                         <td className="py-2 px-3">{ci.item.subcategory}</td>
-                        <td className="py-2 px-3">
-                          {formatPeso(ci.item.unit_price)}
-                        </td>
+                        <td className="py-2 px-3">{formatPeso(ci.item.unit_price)}</td>
                         <td className="py-2 px-3">{ci.quantity}</td>
                         <td className="py-2 px-3">{ci.item.status}</td>
-                        <td className="py-2 px-3 font-medium">
-                          {formatPeso(lineTotal(ci))}
-                        </td>
+                        <td className="py-2 px-3 font-medium">{formatPeso(lineTotal(ci))}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
 
-                {/* Estimated total + note */}
                 <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
-                  <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount
-                    during order processing.
-                  </div>
+                  <div className="text-xs text-gray-500">* Final price may change if an admin applies a discount during order processing.</div>
                   <div className="text-right text-sm">
                     <div>
-                      <span className="mr-2 text-gray-600">
-                        Estimated Total:
-                      </span>
-                      <span className="font-semibold">
-                        {formatPeso(cartSum(finalOrderDetails.items))}
-                      </span>
+                      <span className="mr-2 text-gray-600">Estimated Total:</span>
+                      <span className="font-semibold">{formatPeso(cartSum(finalOrderDetails.items))}</span>
                     </div>
                     {finalOrderDetails.customer.payment_type === "Credit" && (
                       <div className="mt-1">
-                        <span className="mr-2 text-gray-600">
-                          Est. w/ Interest:
-                        </span>
-                        <span className="font-semibold">
-                          {formatPeso(
-                            cartSum(finalOrderDetails.items) *
-                              (1 + Math.max(0, interestPercent) / 100)
-                          )}
-                        </span>
+                        <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
+                        <span className="font-semibold">{formatPeso(cartSum(finalOrderDetails.items) * (1 + Math.max(0, interestPercent) / 100))}</span>
                       </div>
                     )}
                   </div>
@@ -2151,105 +1755,44 @@ export default function CustomerInventoryPage() {
               </div>
             </div>
 
-            {/* show missing fields here too (shouldn't happen if flow enforced) */}
             {missingFields.length > 0 && (
               <div className="mt-3 text-sm text-red-600">
-                <strong>Missing required fields:</strong>{" "}
-                {missingFields.slice(0, 5).join(", ")}
-                {missingFields.length > 5 ? "..." : ""}
+                <strong>Missing required fields:</strong> {missingFields.slice(0, 5).join(", ")}{missingFields.length > 5 ? "..." : ""}
               </div>
             )}
 
             <div className="shrink-0 flex justify-end gap-2 mt-4">
-              <button
-                onClick={() => !placingOrder && setShowFinalPopup(false)}
-                disabled={placingOrder || !isConfirmOrderEnabled}
-                className={`px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition ${
-                  placingOrder || !isConfirmOrderEnabled
-                    ? "opacity-60 cursor-not-allowed"
-                    : ""
-                }`}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmOrder}
-                disabled={placingOrder || !isConfirmOrderEnabled}
-                className={`px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition inline-flex items-center gap-2 ${
-                  placingOrder || !isConfirmOrderEnabled
-                    ? "opacity-70 cursor-not-allowed"
-                    : ""
-                }`}
-              >
-                {placingOrder ? (
-                  <>
-                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-black/40 border-t-black" />
-                    Submitting…
-                  </>
-                ) : (
-                  "Confirm Order"
-                )}
+              <button onClick={() => !placingOrder && setShowFinalPopup(false)} disabled={placingOrder || !isConfirmOrderEnabled} className={`px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm ${placingOrder || !isConfirmOrderEnabled ? "opacity-60 cursor-not-allowed" : ""}`}>Cancel</button>
+              <button onClick={handleConfirmOrder} disabled={placingOrder || !isConfirmOrderEnabled} className={`px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg inline-flex items-center gap-2 ${placingOrder || !isConfirmOrderEnabled ? "opacity-70 cursor-not-allowed" : ""}`}>
+                {placingOrder ? <><span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-black/40 border-t-black" />Submitting…</> : "Confirm Order"}
               </button>
             </div>
           </motion.div>
         </div>
       )}
 
-      {/* ✅ After-Submit Choice Modal */}
+      {/* After-Submit Choice Modal */}
       {showAfterSubmitModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-md p-6 rounded-2xl shadow-2xl ring-1 ring-black/5"
-          >
+          <motion.div initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: "spring", stiffness: 260, damping: 22 }} className="bg-white w-full max-w-md p-6 rounded-2xl shadow-2xl ring-1 ring-black/5">
             <div className="flex items-start justify-between">
               <h3 className="text-xl font-semibold">Order Submitted</h3>
-              <button
-                className="text-gray-500 hover:text-black"
-                onClick={() => setShowAfterSubmitModal(false)}
-                aria-label="Close"
-                title="Close"
-              >
-                ✕
-              </button>
+              <button className="text-gray-500 hover:text-black" onClick={() => setShowAfterSubmitModal(false)} aria-label="Close" title="Close">✕</button>
             </div>
 
             <div className="mt-3 text-sm text-gray-700 space-y-2">
               <p>Your order was placed successfully.</p>
               <div className="rounded-lg bg-gray-50 p-3 ring-1 ring-black/5">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Transaction Code:</span>
-                  <span className="font-medium">{lastTxnCode || "—"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Estimated Total:</span>
-                  <span className="font-semibold">
-                    {formatPeso(lastOrderTotal)}
-                  </span>
-                </div>
+                <div className="flex justify-between"><span className="text-gray-500">Transaction Code:</span><span className="font-medium">{lastTxnCode || "—"}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Estimated Total:</span><span className="font-semibold">{formatPeso(lastOrderTotal)}</span></div>
               </div>
 
-              <p className="mt-2">
-                Would you like to proceed to the <strong>Payments</strong> page
-                now, or stay here to place another order?
-              </p>
+              <p className="mt-2">Would you like to proceed to the <strong>Payments</strong> page now, or stay here to place another order?</p>
             </div>
 
             <div className="mt-5 flex gap-2 justify-end">
-              <button
-                onClick={() => setShowAfterSubmitModal(false)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm active:translate-y-px transition"
-              >
-                Stay & Order More
-              </button>
-              <button
-                onClick={goToPayments}
-                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95 active:translate-y-px transition"
-              >
-                Proceed to Payments
-              </button>
+              <button onClick={() => setShowAfterSubmitModal(false)} className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50">Stay & Order More</button>
+              <button onClick={goToPayments} className="px-4 py-2 rounded-xl bg-[#ffba20] text-black">Proceed to Payments</button>
             </div>
           </motion.div>
         </div>

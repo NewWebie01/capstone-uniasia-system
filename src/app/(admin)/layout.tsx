@@ -35,7 +35,7 @@ export default function DashboardLayout({
       </header>
 
       {/* Floating Notification Bell */}
-      <NotificationBell /> 
+      <NotificationBell />
 
       {/* Layout */}
       <div className="flex h-[calc(100vh-3rem)] overflow-hidden">
