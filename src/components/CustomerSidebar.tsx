@@ -15,12 +15,13 @@ import LogoutIcon from "@/assets/power-button.png";
 // icons for customer nav
 import {
   ShoppingBag,
+  ShoppingCart,
   ClipboardList,
   RotateCcw,
   BadgeCheck,
   PackageCheck,
   ReceiptText,
-  History, // ← NEW
+  History,
 } from "lucide-react";
 
 // shared link wrapper (same as admin)
@@ -44,11 +45,17 @@ const Menus: MenuItem[] = [
     href: "/customer/product-catalog",
     icon: ShoppingBag,
   },
+
+  // Cart / Checkout (moved next to Product Catalog)
+  { title: "Cart (Checkout)", href: "/customer/checkout", icon: ShoppingCart },
+
+  // My orders
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
 
   // Payments
   { title: "Payments", href: "/customer/payments", icon: ReceiptText },
-  // ← NEW: Payment History
+
+  // Payment History
   {
     title: "Payment History",
     href: "/customer/payments/history",
@@ -62,11 +69,6 @@ const Menus: MenuItem[] = [
     href: "/customer/returns/status",
     icon: BadgeCheck,
   },
-  // {
-  //   title: "Returned Items",
-  //   href: "/customer/returns/items",
-  //   icon: PackageCheck,
-  // },
 ];
 
 export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
@@ -74,25 +76,24 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
   const router = useRouter();
   const supabase = createClientComponentClient();
 
-const handleLogout = async () => {
-  try {
-    // Clear OTP/other storage if needed
-    localStorage.removeItem("otpVerified");
-    localStorage.removeItem("otpVerifiedEmail");
-    localStorage.removeItem("otpVerifiedExpiry");
-    localStorage.removeItem("otpCode");
-    localStorage.removeItem("otpExpiry");
-    localStorage.removeItem("otpEmail");
-    // Optionally: localStorage.clear();
+  const handleLogout = async () => {
+    try {
+      // Clear OTP/other storage if needed
+      localStorage.removeItem("otpVerified");
+      localStorage.removeItem("otpVerifiedEmail");
+      localStorage.removeItem("otpVerifiedExpiry");
+      localStorage.removeItem("otpCode");
+      localStorage.removeItem("otpExpiry");
+      localStorage.removeItem("otpEmail");
+      // Optionally: localStorage.clear();
 
-    await supabase.auth.signOut();
-  } catch (err) {
-    console.error("Logout failed:", err);
-  } finally {
-    window.location.href = "/login";
-  }
-};
-
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error("Logout failed:", err);
+    } finally {
+      window.location.href = "/login";
+    }
+  };
 
   return (
     <motion.div
@@ -153,12 +154,12 @@ const handleLogout = async () => {
 
             const highlightTitles = new Set([
               "Product catalog",
+              "Cart (Checkout)",
               "My orders",
               "Payments",
               "Payment History",
               "Returns / Issues",
               "Return Status",
-              "Returned Items",
             ]);
 
             const IconOrImage = menu.src ? (
@@ -166,9 +167,7 @@ const handleLogout = async () => {
             ) : menu.icon ? (
               <menu.icon
                 className={`h-5 w-5 ${
-                  highlightTitles.has(menu.title)
-                    ? "text-[#ffba20]"
-                    : "text-black"
+                  highlightTitles.has(menu.title) ? "text-[#ffba20]" : "text-black"
                 }`}
               />
             ) : null;

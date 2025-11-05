@@ -2,27 +2,18 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import supabase from "@/config/supabaseClient";
+import { useCart, InventoryItem as SharedInventoryItem, CartItem as SharedCartItem } from "@/context/CartContext";
+
+
 
 /* ----------------------------- Limits ----------------------------- */
 const MAX_QTY = 1000;
-const clampQty = (n: number) =>
-  Math.max(1, Math.min(MAX_QTY, Math.floor(n) || 1));
-
-/* ---------------------- Cart-wide limits (silent) ---------------------- */
-const TRUCK_LIMITS = {
-  maxTotalWeightKg: 10_000,
-  maxDistinctItems: 60,
-};
-const LIMIT_TOAST =
-  "Exceeds items per transaction. Please split into another transaction.";
-
-const totalUnits = (list: CartItem[]) =>
-  list.reduce((sum, ci) => sum + ci.quantity, 0);
+const clampQty = (n: number) => Math.max(1, Math.min(MAX_QTY, Math.floor(n) || 1));
 
 /* ----------------------------- Date formatter ----------------------------- */
 const formatPH = (d?: string | number | Date) =>
@@ -36,448 +27,59 @@ const formatPH = (d?: string | number | Date) =>
     timeZone: "Asia/Manila",
   }).format(d ? new Date(d) : new Date());
 
-/* ---------------------- Encoding & PSGC fetch helpers --------------------- */
-const fixEncoding = (s: string) => {
-  try {
-    return decodeURIComponent(escape(s));
-  } catch {
-    return s;
-  }
-};
+/* ----------------------------- Helpers ----------------------------- */
+const isOutOfStock = (i: SharedInventoryItem) =>
+  (i.status || "").toLowerCase().includes("out") || (Number(i.quantity ?? 0) <= 0);
 
-async function fetchJSON<T>(url: string): Promise<T> {
-  const response = await fetch(url);
-  const buffer = await response.arrayBuffer();
-  const text = new TextDecoder("utf-8").decode(buffer);
-  return JSON.parse(text);
+function lineTotal(ci: SharedCartItem) {
+  return (Number(ci.item.unit_price ?? 0) || 0) * ci.quantity;
 }
-
-/* ---------------------------------- Types --------------------------------- */
-type PSGCRegion = { id: number; name: string; code: string };
-type PSGCProvince = {
-  id: number;
-  name: string;
-  code: string;
-  region_id: number;
-};
-type PSGCCity = {
-  id: number;
-  name: string;
-  code: string;
-  province_id?: number;
-  type: string;
-};
-type PSGCBarangay = { id: number; name: string; code: string };
-
-type InventoryItem = {
-  id: number;
-  product_name: string;
-  category: string;
-  subcategory: string;
-  quantity: number;
-  unit_price: number;
-  status: string;
-  image_url?: string | null;
-  date_added?: string | null;
-  unit?: string | null;
-  pieces_per_unit?: number | null;
-  weight_per_piece_kg?: number | null;
-};
-
-type CartItem = { item: InventoryItem; quantity: number };
-
-type CustomerInfo = {
-  id?: string;
-  name: string;
-  email: string;
-  phone: string;
-  address: string;
-  contact_person?: string;
-  code?: string;
-  area?: string;
-  landmark?: string;
-  date?: string;
-  transaction?: string;
-  status?: "pending" | "completed" | "rejected";
-  payment_type?: "Credit" | "Cash";
-  customer_type?: "New Customer" | "Existing Customer";
-};
-
-/* ----------------------------- Stock helper ----------------------------- */
-const isOutOfStock = (i: InventoryItem) =>
-  (i.status || "").toLowerCase().includes("out") || (i.quantity ?? 0) <= 0;
-
-/* ------------------------------ Weight helpers ------------------------------ */
-function unitWeightKg(i: InventoryItem): number {
-  const unit = (i.unit || "").trim();
-  if (unit === "Kg") return 1;
-
-  const piecesPerUnit =
-    Number(
-      i.pieces_per_unit ?? (unit === "Piece" ? 1 : unit === "Dozen" ? 12 : 0)
-    ) || 0;
-  const weightPerPiece = Number(i.weight_per_piece_kg ?? 0);
-  const w =
-    piecesPerUnit > 0 && weightPerPiece > 0 ? piecesPerUnit * weightPerPiece : 0;
-  return isFinite(w) ? w : 0;
-}
-
-function cartTotalWeightKg(list: { item: InventoryItem; quantity: number }[]) {
-  return list.reduce((sum, ci) => sum + unitWeightKg(ci.item) * ci.quantity, 0);
-}
-
-function canAddItemWithQty(
-  current: { item: InventoryItem; quantity: number }[],
-  item: InventoryItem,
-  qty: number
-) {
-  const nextDistinct = current.some((ci) => ci.item.id === item.id)
-    ? current.length
-    : current.length + 1;
-  if (nextDistinct > TRUCK_LIMITS.maxDistinctItems) {
-    return { ok: false as const, reason: "distinct", message: LIMIT_TOAST };
-  }
-
-  const perUnitKg = unitWeightKg(item);
-  if (perUnitKg <= 0) {
-    return { ok: false as const, reason: "weight-missing", message: LIMIT_TOAST };
-  }
-  const nextWeight = cartTotalWeightKg(current) + perUnitKg * qty;
-  if (nextWeight > TRUCK_LIMITS.maxTotalWeightKg) {
-    return { ok: false as const, reason: "weight", message: LIMIT_TOAST };
-  }
-
-  return { ok: true as const };
-}
-
-/* ------------------------------ Util helpers ------------------------------ */
-function generateTransactionCode(): string {
-  const date = new Date();
-  const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, "");
-  const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-  return `TXN-${yyyymmdd}-${random}`;
-}
-function isValidPhone(phone: string) {
-  return /^\d{11}$/.test(phone); // 09xxxxxxxxx
-}
-
-function normalizePhone(input: string | null | undefined): string {
-  const digits = String(input || "").replace(/\D/g, "");
-  if (digits.startsWith("63") && digits.length === 12) {
-    return "0" + digits.slice(2);
-  }
-  if (digits.length === 11 && digits.startsWith("0")) {
-    return digits;
-  }
-  return "";
-}
-
-function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
-  const nameFromMeta =
-    meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
-  if (nameFromMeta && typeof nameFromMeta === "string") return nameFromMeta.trim();
-  if (fallbackEmail && fallbackEmail.includes("@")) return fallbackEmail.split("@")[0];
-  return "";
-}
-
-function formatPeso(n: number | undefined | null) {
-  const v = Number(n ?? 0);
-  return new Intl.NumberFormat("en-PH", {
-    style: "currency",
-    currency: "PHP",
-    maximumFractionDigits: 2,
-  }).format(v);
-}
-
-/* ------------------------ Pricing helpers (NEW) ------------------------ */
-function lineTotal(ci: CartItem) {
-  return (ci.item.unit_price || 0) * ci.quantity;
-}
-function cartSum(list: CartItem[]) {
+function cartSum(list: SharedCartItem[]) {
   return list.reduce((s, ci) => s + lineTotal(ci), 0);
 }
 
-/* ------------------------ Credit terms mapping (NEW) ------------------------ */
-const TERM_TO_INTEREST: Record<number, number> = { 1: 2, 3: 6, 6: 12, 12: 24 };
-
-/* ------------------------ Identity helpers ------------------------ */
-const getAuthIdentity = async () => {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const email = user?.email ?? "";
-  const name = getDisplayNameFromMetadata(user?.user_metadata, email);
-  const phone = normalizePhone((user?.user_metadata as any)?.phone || "");
-  return { email, name, phone };
-};
-
-const loadPhoneForEmail = async (email: string): Promise<string> => {
-  const clean = (email || "").trim();
-  if (!clean) return "";
-
-  const { data: ar } = await supabase
-    .from("account_requests")
-    .select("contact_number")
-    .ilike("email", clean)
-    .order("id", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const fromAR = normalizePhone(ar?.contact_number);
-  if (fromAR) return fromAR;
-
-  const { data: cust } = await supabase
-    .from("customers")
-    .select("phone")
-    .ilike("email", clean)
-    .order("date", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const fromCustomers = normalizePhone(cust?.phone);
-  if (fromCustomers) return fromCustomers;
-
-  return "";
-};
+/* ---------------------------- localStorage helpers ---------------------------- */
+const CART_STORAGE_KEY = "uniasia_cart_v1";
+function saveCartToStorage(cart: SharedCartItem[]) {
+  try {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+  } catch {}
+}
+function loadCartFromStorage(): SharedCartItem[] {
+  try {
+    const raw = localStorage.getItem(CART_STORAGE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as SharedCartItem[];
+  } catch {
+    return [];
+  }
+}
 
 /* -------------------------------- Component ------------------------------- */
 export default function CustomerInventoryPage() {
+ const { cart: sharedCart, addItem, updateQty, removeItem, cartTotal: sharedCartTotal } = useCart();
   const router = useRouter();
 
-  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+
+  const [inventory, setInventory] = useState<SharedInventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("");
 
-  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
-  const [orderQuantity, setOrderQuantity] = useState(1);
-  const [cart, setCart] = useState<CartItem[]>([]);
+// modal state for Add to Cart inline
+const [showAddModal, setShowAddModal] = useState(false);
+const [selected, setSelected] = useState<SharedInventoryItem | null>(null);
+const [modalQty, setModalQty] = useState<number>(1);
 
-  const [showCartPopup, setShowCartPopup] = useState(false);
-  const [showFinalPopup, setShowFinalPopup] = useState(false);
-  const [finalOrderDetails, setFinalOrderDetails] = useState<{
-    customer: CustomerInfo;
-    items: CartItem[];
-  } | null>(null);
+// floating cart modal state
+const [showCartModal, setShowCartModal] = useState(false);
 
-  const [termsMonths, setTermsMonths] = useState<number | null>(null);
-  const [interestPercent, setInterestPercent] = useState<number>(0);
 
-  const [showAfterSubmitModal, setShowAfterSubmitModal] = useState(false);
-  const [lastOrderId, setLastOrderId] = useState<string | null>(null);
-  const [lastTxnCode, setLastTxnCode] = useState<string | null>(null);
-  const [lastOrderTotal, setLastOrderTotal] = useState<number>(0);
+  // pagination
+  const itemsPerPage = 10;
+  const [currentPage, setCurrentPage] = useState(1);
 
-  const [txn, setTxn] = useState("");
-  const [trackingResult, setTrackingResult] = useState<any | null>(null);
-  const [trackError, setTrackError] = useState<string | null>(null);
-  const [trackingLoading, setTrackingLoading] = useState(false);
-
-  const [authDefaults, setAuthDefaults] = useState({
-    name: "",
-    email: "",
-    phone: "",
-  });
-
-  const [orderHistoryCount, setOrderHistoryCount] = useState<number | null>(
-    null
-  );
-
-  const [placingOrder, setPlacingOrder] = useState(false);
-
-  const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
-    name: "",
-    email: "",
-    phone: "",
-    address: "",
-    contact_person: "",
-    code: "",
-    area: "",
-    payment_type: "Cash",
-    customer_type: undefined,
-    landmark: "",
-  });
-
-  /* ----------------------------- PSGC state ----------------------------- */
-  const [regions, setRegions] = useState<PSGCRegion[]>([]);
-  const [provinces, setProvinces] = useState<PSGCProvince[]>([]);
-  const [cities, setCities] = useState<PSGCCity[]>([]);
-  const [barangays, setBarangays] = useState<PSGCBarangay[]>([]);
-  const [regionCode, setRegionCode] = useState("");
-  const [provinceCode, setProvinceCode] = useState("");
-  const [cityCode, setCityCode] = useState("");
-  const [barangayCode, setBarangayCode] = useState("");
-  const [houseStreet, setHouseStreet] = useState("");
-
-  const selectedRegion = useMemo(
-    () => regions.find((r) => r.code === regionCode) || null,
-    [regions, regionCode]
-  );
-  const selectedProvince = useMemo(
-    () => provinces.find((p) => p.code === provinceCode) || null,
-    [provinces, provinceCode]
-  );
-  const selectedCity = useMemo(
-    () => cities.find((c) => c.code === cityCode) || null,
-    [cities, cityCode]
-  );
-  const selectedBarangay = useMemo(
-    () => barangays.find((b) => b.code === barangayCode) || null,
-    [barangays, barangayCode]
-  );
-  const isNCR = useMemo(
-    () =>
-      !!regionCode &&
-      (regionCode.startsWith("13") ||
-        (selectedRegion?.name || "").toLowerCase().includes("national capital")),
-    [regionCode, selectedRegion]
-  );
-
-  const computedAddress = useMemo(() => {
-    const parts = [
-      houseStreet.trim(),
-      selectedBarangay?.name ?? "",
-      selectedCity?.name ?? "",
-      selectedProvince?.name ?? "",
-      selectedRegion?.name ?? "",
-    ]
-      .filter(Boolean)
-      .map(fixEncoding);
-    return parts.join(", ");
-  }, [
-    houseStreet,
-    selectedBarangay,
-    selectedCity,
-    selectedProvince,
-    selectedRegion,
-  ]);
-
-  useEffect(() => {
-    setCustomerInfo((prev) => ({ ...prev, address: computedAddress }));
-  }, [computedAddress]);
-
-  /* ---------------------------- Load PSGC lists --------------------------- */
-  useEffect(() => {
-    fetchJSON<PSGCRegion[]>("https://psgc.cloud/api/regions")
-      .then((data) =>
-        setRegions(
-          data
-            .map((r) => ({ ...r, name: fixEncoding(r.name) }))
-            .sort((a, b) => a.name.localeCompare(b.name))
-        )
-      )
-      .catch(() => toast.error("Failed to load regions"));
-  }, []);
-
-  useEffect(() => {
-    setProvinces([]);
-    setProvinceCode("");
-    setCities([]);
-    setCityCode("");
-    setBarangays([]);
-    setBarangayCode("");
-    if (!regionCode) return;
-
-    if (isNCR) {
-      Promise.all([
-        fetchJSON<PSGCCity[]>(`https://psgc.cloud/api/regions/${regionCode}/cities`),
-        fetchJSON<PSGCCity[]>(`https://psgc.cloud/api/regions/${regionCode}/municipalities`),
-      ])
-        .then(([c, m]) => {
-          const list = [...c, ...m]
-            .map((x) => ({ ...x, name: fixEncoding(x.name) }))
-            .sort((a, b) => a.name.localeCompare(b.name));
-          setCities(list);
-        })
-        .catch(() => toast.error("Failed to load cities for NCR"));
-      return;
-    }
-
-    fetchJSON<PSGCProvince[]>("https://psgc.cloud/api/provinces")
-      .then((all) => {
-        const provs = all
-          .filter((p) => p.code.startsWith(regionCode.slice(0, 2)))
-          .map((p) => ({ ...p, name: fixEncoding(p.name) }))
-          .sort((a, b) => a.name.localeCompare(b.name));
-        setProvinces(provs);
-      })
-      .catch(() => toast.error("Failed to load provinces"));
-  }, [regionCode, isNCR]);
-
-  useEffect(() => {
-    if (isNCR) return;
-
-    setCities([]);
-    setCityCode("");
-    setBarangays([]);
-    setBarangayCode("");
-    if (!provinceCode) return;
-
-    Promise.all([
-      fetchJSON<PSGCCity[]>("https://psgc.cloud/api/cities"),
-      fetchJSON<PSGCCity[]>("https://psgc.cloud/api/municipalities"),
-    ])
-      .then(([c, m]) => {
-        const byProv = (x: PSGCCity) => x.code.startsWith(provinceCode.slice(0, 4));
-        const list = [...c.filter(byProv), ...m.filter(byProv)]
-          .map((x) => ({ ...x, name: fixEncoding(x.name) }))
-          .sort((a, b) => a.name.localeCompare(b.name));
-        setCities(list);
-      })
-      .catch(() => toast.error("Failed to load cities/municipalities"));
-  }, [provinceCode, isNCR]);
-
-  useEffect(() => {
-    setBarangays([]);
-    setBarangayCode("");
-    if (!cityCode) return;
-
-    const loadBarangays = async () => {
-      const prefix9 = cityCode.slice(0, 9);
-      const prefix6 = cityCode.slice(0, 6);
-      const fixSort = (list: PSGCBarangay[]) => {
-        const collator = new Intl.Collator(undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
-        return list
-          .map((b) => ({ ...b, name: fixEncoding(b.name) }))
-          .sort((a, b) => collator.compare(a.name, b.name));
-      };
-
-      try {
-        const fromCity = await fetchJSON<PSGCBarangay[]>(
-          `https://psgc.cloud/api/cities/${cityCode}/barangays`
-        );
-        const cleaned = fixSort(fromCity);
-        if (cleaned.length > 0) return setBarangays(cleaned);
-      } catch {}
-
-      try {
-        const fromMunicipality = await fetchJSON<PSGCBarangay[]>(
-          `https://psgc.cloud/api/municipalities/${cityCode}/barangays`
-        );
-        const cleaned = fixSort(fromMunicipality);
-        if (cleaned.length > 0) return setBarangays(cleaned);
-      } catch {}
-
-      try {
-        const all = await fetchJSON<PSGCBarangay[]>("https://psgc.cloud/api/barangays");
-        const filtered = all.filter(
-          (b) => b.code.startsWith(prefix9) || b.code.startsWith(prefix6)
-        );
-        setBarangays(fixSort(filtered));
-      } catch {
-        toast.error("Failed to load barangays");
-      }
-    };
-
-    loadBarangays();
-  }, [cityCode]);
-
-  /* --------------------- Inventory load + realtime --------------------- */
   const fetchInventory = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -524,552 +126,8 @@ export default function CustomerInventoryPage() {
     return () => void supabase.removeChannel(invChannel);
   }, [fetchInventory]);
 
-  /* -------- Compute type from order history (by email, completed only) ---------- */
-  const setTypeFromHistory = useCallback(async (email: string) => {
-    const cleanEmail = (email || "").trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes("@")) return;
-
-    const { count, error } = await supabase
-      .from("orders")
-      .select("id, status, customers!inner(email)", {
-        count: "exact",
-        head: true,
-      })
-      .ilike("customers.email", cleanEmail)
-      .in("status", ["completed"]);
-
-    if (error) {
-      console.warn("Could not compute order history:", error.message);
-      return;
-    }
-
-    const completedCount = count ?? 0;
-    setOrderHistoryCount(completedCount);
-
-    const type: CustomerInfo["customer_type"] =
-      completedCount > 0 ? "Existing Customer" : "New Customer";
-
-    setCustomerInfo((prev) => ({
-      ...prev,
-      customer_type: type,
-      payment_type: type === "Existing Customer" ? "Credit" : "Cash",
-    }));
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      const { email, name, phone: phoneFromAuth } = await getAuthIdentity();
-      if (email) {
-        const phoneFromSources =
-          phoneFromAuth || (await loadPhoneForEmail(email));
-
-        setAuthDefaults({
-          name: name || "",
-          email: email || "",
-          phone: phoneFromSources || "",
-        });
-
-        setCustomerInfo((prev) => ({
-          ...prev,
-          name: prev.name || name || "",
-          email: prev.email || email,
-          phone: prev.phone || phoneFromSources || "",
-        }));
-
-        await setTypeFromHistory(email);
-      }
-    })();
-  }, [setTypeFromHistory]);
-
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (customerInfo.email) setTypeFromHistory(customerInfo.email);
-    }, 500);
-    return () => clearTimeout(t);
-  }, [customerInfo.email, setTypeFromHistory]);
-
-  /* ------------------------------ Tracking ------------------------------ */
-  const refetchTrackingByCode = useCallback(async (code: string) => {
-    try {
-      const { data, error } = await supabase
-        .from("customers")
-        .select(
-          `
-            id, name, code, contact_person, email, phone, address, status, date,
-            orders (
-              id, total_amount, status, date_created, date_completed, salesman, terms, po_number,
-              order_items (
-                quantity, price,
-                inventory:inventory_id (product_name, category, subcategory, status)
-              )
-            )
-          `
-        )
-        .eq("code", code.trim().toUpperCase())
-        .maybeSingle();
-
-      if (error || !data) {
-        setTrackError("Transaction code not found.");
-        setTrackingResult(null);
-      } else {
-        setTrackError(null);
-        setTrackingResult(data);
-      }
-    } catch {
-      setTrackError("Error while fetching. Please try again.");
-    } finally {
-      setTrackingLoading(false);
-    }
-  }, []);
-
-  const handleTrack = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setTrackError(null);
-    setTrackingResult(null);
-    setTrackingLoading(true);
-    await refetchTrackingByCode(txn);
-  };
-
-  useEffect(() => {
-    const code = txn.trim().toUpperCase();
-    if (!code) return;
-
-    const channel = supabase.channel(`realtime:tracking:${code}`);
-
-    channel.on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "customers",
-        filter: `code=eq.${code}`,
-      },
-      () => refetchTrackingByCode(code)
-    );
-
-    if (trackingResult?.id) {
-      channel.on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "orders",
-          filter: `customer_id=eq.${trackingResult.id}`,
-        },
-        () => refetchTrackingByCode(code)
-      );
-    }
-
-    channel.subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [txn, trackingResult?.id, refetchTrackingByCode]);
-
-  /* --------------------------- Payment type logic --------------------------- */
-  useEffect(() => {
-    if (customerInfo.customer_type === "New Customer") {
-      setCustomerInfo((prev) => ({ ...prev, payment_type: "Cash" }));
-    } else if (customerInfo.customer_type === "Existing Customer") {
-      setCustomerInfo((prev) => ({ ...prev, payment_type: "Credit" }));
-    }
-  }, [customerInfo.customer_type]);
-
-  useEffect(() => {
-    if (customerInfo.payment_type === "Credit") {
-      setTermsMonths((prev) => (prev == null ? 1 : prev));
-    } else {
-      setTermsMonths(null);
-      setInterestPercent(0);
-    }
-  }, [customerInfo.payment_type]);
-
-  useEffect(() => {
-    if (customerInfo.payment_type === "Credit" && termsMonths != null) {
-      setInterestPercent(TERM_TO_INTEREST[termsMonths] ?? 0);
-    }
-  }, [termsMonths, customerInfo.payment_type]);
-
-  /* ------------------------------- Cart flow ------------------------------- */
-  const handleAddToCartClick = (item: InventoryItem) => {
-    if (isOutOfStock(item)) {
-      toast.error("This item is out of stock.");
-      return;
-    }
-    setSelectedItem(item);
-    setOrderQuantity(1);
-  };
-
-  const addToCart = () => {
-    if (!selectedItem) return;
-
-    let qty = clampQty(orderQuantity);
-    if (orderQuantity > MAX_QTY) {
-      toast.error(
-        `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
-      );
-    }
-    if (cart.some((ci) => ci.item.id === selectedItem.id)) {
-      toast.error("Item already in cart.");
-      return;
-    }
-
-    const check = canAddItemWithQty(cart, selectedItem, qty);
-    if (!check.ok) {
-      toast.error(LIMIT_TOAST);
-      return;
-    }
-
-    setCart((prev) => [...prev, { item: selectedItem!, quantity: qty }]);
-    setSelectedItem(null);
-    setOrderQuantity(1);
-  };
-
-  const updateCartQuantity = (itemId: number, nextQtyRaw: number) => {
-    const current = cart.find((ci) => ci.item.id === itemId);
-    if (!current) return;
-
-    const requested = clampQty(Number.isFinite(nextQtyRaw) ? nextQtyRaw : 1);
-
-    const perUnitKg = unitWeightKg(current.item);
-    if (perUnitKg <= 0) {
-      toast.error(LIMIT_TOAST);
-      return;
-    }
-    const weightWithoutThis =
-      cartTotalWeightKg(cart) - perUnitKg * current.quantity;
-    const remainingKg = TRUCK_LIMITS.maxTotalWeightKg - weightWithoutThis;
-    const maxQtyByWeight = Math.max(0, Math.floor(remainingKg / perUnitKg));
-
-    const approved = Math.max(1, Math.min(requested, maxQtyByWeight));
-
-    setCart((prev) =>
-      prev.map((ci) => (ci.item.id === itemId ? { ...ci, quantity: approved } : ci))
-    );
-
-    if (requested > MAX_QTY) {
-      toast.error(
-        `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
-      );
-    } else if (requested > approved) {
-      toast.error(LIMIT_TOAST);
-    }
-  };
-
-  const removeFromCart = (itemId: number) => {
-    setCart((prev) => prev.filter((ci) => ci.item.id !== itemId));
-  };
-
-  const handleShowCart = async () => {
-    if (!customerInfo.code) {
-      setCustomerInfo((prev) => ({ ...prev, code: generateTransactionCode() }));
-    }
-
-    const { email: authEmail, name: authName } = await getAuthIdentity();
-    const emailToUse =
-      (customerInfo.email && customerInfo.email.trim()) ||
-      (authDefaults.email && authDefaults.email.trim()) ||
-      authEmail;
-
-    let ensuredPhone =
-      normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
-
-    if (!ensuredPhone && emailToUse) {
-      ensuredPhone = await loadPhoneForEmail(emailToUse);
-    }
-
-    setAuthDefaults((prev) => ({
-      ...prev,
-      name: prev.name || authName,
-      email: prev.email || authEmail,
-      phone: ensuredPhone || prev.phone,
-    }));
-
-    setCustomerInfo((prev) => ({
-      ...prev,
-      name: prev.name || authDefaults.name || authName,
-      email: prev.email || authDefaults.email || authEmail,
-      phone: ensuredPhone || prev.phone,
-    }));
-
-    const checkEmail =
-      (customerInfo.email && customerInfo.email.trim()) ||
-      authDefaults.email ||
-      authEmail;
-    if (checkEmail) await setTypeFromHistory(checkEmail);
-
-    if (!ensuredPhone) {
-      toast.error(
-        "We couldn't auto-fill your phone number. Please update your profile."
-      );
-    }
-
-    setShowCartPopup(true);
-  };
-
-  /* ------------------ VALIDATION: required fields for Submit Order ------------------ */
-  const missingFields = useMemo(() => {
-    const missing: string[] = [];
-
-    if (!customerInfo.name || !customerInfo.name.trim()) {
-      missing.push("Customer Name");
-    }
-    if (!customerInfo.email || !customerInfo.email.includes("@")) {
-      missing.push("Email");
-    }
-    if (!customerInfo.contact_person || !customerInfo.contact_person.trim()) {
-      missing.push("Contact Person");
-    }
-    if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) {
-      missing.push("Phone");
-    }
-    if (!houseStreet || !houseStreet.trim()) {
-      missing.push("House & Street");
-    }
-    if (!regionCode) {
-      missing.push("Region");
-    }
-    if (!isNCR && !provinceCode) {
-      missing.push("Province");
-    }
-    if (!cityCode) {
-      missing.push("City / Municipality");
-    }
-    if (!barangayCode) {
-      missing.push("Barangay");
-    }
-    if (!cart || cart.length === 0) {
-      missing.push("Cart (add at least one item)");
-    }
-
-    if (customerInfo.payment_type === "Credit") {
-      if (!termsMonths) {
-        missing.push("Payment Terms (months)");
-      }
-      if (interestPercent < 0) {
-        missing.push("Interest % must be 0 or higher");
-      }
-    }
-
-    return missing;
-  }, [
-    customerInfo.name,
-    customerInfo.email,
-    customerInfo.contact_person,
-    customerInfo.phone,
-    customerInfo.payment_type,
-    houseStreet,
-    regionCode,
-    provinceCode,
-    cityCode,
-    barangayCode,
-    cart,
-    isNCR,
-    termsMonths,
-    interestPercent,
-  ]);
-
-  const isConfirmOrderEnabled = missingFields.length === 0;
-
-  const handleOpenFinalModal = () => {
-    if (!isConfirmOrderEnabled) {
-      toast.error(
-        `Please complete required fields before submitting: ${missingFields
-          .slice(0, 3)
-          .join(", ")}${missingFields.length > 3 ? "…" : ""}`
-      );
-      return;
-    }
-
-    if (cart.length > TRUCK_LIMITS.maxDistinctItems) {
-      toast.error(LIMIT_TOAST);
-      return;
-    }
-    if (cartTotalWeightKg(cart) > TRUCK_LIMITS.maxTotalWeightKg) {
-      toast.error(LIMIT_TOAST);
-      return;
-    }
-
-    setFinalOrderDetails({ customer: customerInfo, items: cart });
-    setShowCartPopup(false);
-    setShowFinalPopup(true);
-  };
-
-  const handleConfirmOrder = async () => {
-    if (!finalOrderDetails || placingOrder) return;
-    if (!isConfirmOrderEnabled) {
-      toast.error("Please complete all required details before confirming.");
-      return;
-    }
-
-    setPlacingOrder(true);
-
-    const { customer, items } = finalOrderDetails;
-    if (items.some((ci) => ci.quantity > MAX_QTY)) {
-      toast.error(
-        `Each item can be ordered up to ${MAX_QTY} units only. For larger needs, please submit another transaction.`
-      );
-      setPlacingOrder(false);
-      return;
-    }
-    if (items.length > TRUCK_LIMITS.maxDistinctItems) {
-      toast.error(LIMIT_TOAST);
-      setPlacingOrder(false);
-      return;
-    }
-    if (cartTotalWeightKg(items) > TRUCK_LIMITS.maxTotalWeightKg) {
-      toast.error(LIMIT_TOAST);
-      setPlacingOrder(false);
-      return;
-    }
-
-    const now = new Date();
-    const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
-
-    const normalizedPhone = normalizePhone(finalOrderDetails.customer.phone);
-    const customerPayload: Partial<CustomerInfo> = {
-      ...finalOrderDetails.customer,
-      phone: normalizedPhone || finalOrderDetails.customer.phone,
-      landmark: finalOrderDetails.customer.landmark || "",
-      date: phTime,
-      status: "pending",
-      transaction: items
-        .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
-        .join(", "),
-    };
-
-    try {
-      const { data: cust, error: custErr } = await supabase
-        .from("customers")
-        .insert([customerPayload])
-        .select()
-        .single();
-      if (custErr) throw custErr;
-
-      const customerId = cust.id as string;
-      const totalAmount = cartSum(items);
-
-      const orderPayload: any = {
-        customer_id: customerId,
-        total_amount: totalAmount,
-        status: "pending",
-        date_created: phTime,
-      };
-
-      if (customer.payment_type === "Credit") {
-        const months = termsMonths ?? 1;
-        orderPayload.terms = `Net ${months} Monthly`;
-        orderPayload.payment_terms = months;
-        orderPayload.interest_percent = TERM_TO_INTEREST[months];
-      }
-
-      const { data: ord, error: ordErr } = await supabase
-        .from("orders")
-        .insert([orderPayload])
-        .select()
-        .single();
-
-      if (ordErr) throw ordErr;
-
-      const orderId = ord.id as string;
-      const rows = items.map((ci) => ({
-        order_id: orderId,
-        inventory_id: ci.item.id,
-        quantity: ci.quantity,
-        price: ci.item.unit_price || 0,
-      }));
-      const { error: itemsErr } = await supabase.from("order_items").insert(rows);
-      if (itemsErr) throw itemsErr;
-
-      /* Notify admin */
-      try {
-        const preview = items
-          .slice(0, 3)
-          .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
-          .join(", ");
-        const more = items.length > 3 ? `, +${items.length - 3} more` : "";
-
-        await supabase.from("system_notifications").insert([
-          {
-            type: "order",
-            title: "🛒 Order Request",
-            message: `${customer.name} • TXN ${
-              finalOrderDetails.customer.code || "—"
-            } • ${preview}${more} • Total: ${formatPeso(totalAmount)}`,
-            order_id: orderId,
-            customer_id: customerId,
-            source: "customer",
-            read: false,
-            metadata: {
-              order_id: orderId,
-              txn_code: finalOrderDetails.customer.code || null,
-              total_amount: Number(totalAmount || 0),
-              item_count: items.length,
-              payment_type: customer.payment_type || "Cash",
-              terms_months:
-                customer.payment_type === "Credit" ? termsMonths ?? null : null,
-              interest_percent:
-                customer.payment_type === "Credit"
-                  ? interestPercent ?? null
-                  : null,
-            },
-          },
-        ]);
-      } catch (notifErr) {
-        console.warn("Failed to create order notification:", notifErr);
-      }
-
-      toast.success("Your order has been submitted successfully!");
-
-      const codeForPayments =
-        (customerPayload.code as string) || (cust.code as string) || "";
-      setLastOrderId(orderId);
-      setLastTxnCode(codeForPayments || null);
-      setLastOrderTotal(totalAmount);
-
-      setShowFinalPopup(false);
-      setFinalOrderDetails(null);
-      setCart([]);
-
-      setCustomerInfo({
-        name: authDefaults.name,
-        email: authDefaults.email,
-        phone: authDefaults.phone,
-        address: "",
-        contact_person: "",
-        code: "",
-        area: "",
-        payment_type: "Cash",
-        customer_type: undefined,
-      });
-      setRegionCode("");
-      setProvinceCode("");
-      setCityCode("");
-      setBarangayCode("");
-      setProvinces([]);
-      setCities([]);
-      setBarangays([]);
-      setHouseStreet("");
-
-      await fetchInventory();
-
-      const emailUsed = customer.email || authDefaults.email;
-      if (emailUsed) await setTypeFromHistory(emailUsed);
-
-      setShowAfterSubmitModal(true);
-    } catch (e: any) {
-      console.error("Order submission error:", e.message);
-      toast.error("Something went wrong. Please try again.");
-    } finally {
-      setPlacingOrder(false);
-    }
-  };
-
-  /* ------------------------------ Derived ------------------------------ */
-  const totalItems = cart.reduce((sum, ci) => sum + ci.quantity, 0);
   const categoriesList = useMemo(
-    () => Array.from(new Set(inventory.map((i) => i.category))).sort(),
+    () => Array.from(new Set(inventory.map((i) => i.category || ""))).sort(),
     [inventory]
   );
 
@@ -1078,76 +136,61 @@ export default function CustomerInventoryPage() {
     return inventory.filter((i) => {
       const matchesSearch =
         i.product_name.toLowerCase().includes(q) ||
-        i.category.toLowerCase().includes(q) ||
-        i.subcategory.toLowerCase().includes(q);
-      const matchesCategory = categoryFilter === "" || i.category === categoryFilter;
+        (i.category || "").toLowerCase().includes(q) ||
+        (i.subcategory || "").toLowerCase().includes(q);
+      const matchesCategory = categoryFilter === "" || (i.category || "") === categoryFilter;
       return matchesSearch && matchesCategory;
     });
   }, [inventory, searchTerm, categoryFilter]);
 
-  /* ----------------------- Pagination: 10 per page ----------------------- */
-  const itemsPerPage = 10;
-  const [currentPage, setCurrentPage] = useState(1);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, categoryFilter, inventory.length]);
-
   const totalPages = Math.max(1, Math.ceil(filteredInventory.length / itemsPerPage));
-
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
   const pageStart = (currentPage - 1) * itemsPerPage;
   const pageEnd = pageStart + itemsPerPage;
-  const pageItems = useMemo(() => filteredInventory.slice(pageStart, pageEnd), [
-    filteredInventory,
-    pageStart,
-    pageEnd,
-  ]);
+  const pageItems = useMemo(() => filteredInventory.slice(pageStart, pageEnd), [filteredInventory, pageStart, pageEnd]);
 
   const goToPage = (p: number) => setCurrentPage(Math.max(1, Math.min(totalPages, p)));
 
-  /* ---------------------- Image modal (view-only) ---------------------- */
-  const [showImageModal, setShowImageModal] = useState(false);
-  const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(null);
-  const openImageModal = (item: InventoryItem) => {
-    setImageModalItem(item);
-    setShowImageModal(true);
-  };
-  const closeImageModal = () => {
-    setShowImageModal(false);
-    setImageModalItem(null);
-  };
 
-  useEffect(() => {
-    (async () => {
-      if (showCartPopup && !customerInfo.phone) {
-        const emailToUse = customerInfo.email || authDefaults.email;
-        if (emailToUse) {
-          const p = await loadPhoneForEmail(emailToUse);
-          if (p) {
-            setAuthDefaults((prev) => ({ ...prev, phone: p }));
-            setCustomerInfo((prev) => ({ ...prev, phone: p }));
-          }
-        }
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showCartPopup]);
 
-  const goToPayments = () => {
-    const qp = new URLSearchParams();
-    if (lastOrderId) qp.set("orderId", lastOrderId);
-    if (lastTxnCode) qp.set("code", lastTxnCode);
-    router.push(`/customer/payments${qp.toString() ? `?${qp.toString()}` : ""}`);
+  /* ------------------ Modal behaviors ------------------ */
+  const openAddModal = (item: SharedInventoryItem) => {
+    if (isOutOfStock(item)) {
+      toast.error("This item is out of stock.");
+      return;
+    }
+    setSelected(item);
+    setModalQty(1);
+    setShowAddModal(true);
+    document.body.style.overflow = "hidden";
   };
 
-  /* --------------------------------- UI --------------------------------- */
+  const closeAddModal = () => {
+    setShowAddModal(false);
+    setSelected(null);
+    document.body.style.overflow = "";
+  };
+
+  const confirmAddToCart = () => {
+    if (!selected) {
+      toast.error("No item selected.");
+      return;
+    }
+    const qty = clampQty(modalQty);
+    addItem(selected, qty);
+    toast.success("Item added to cart.");
+    closeAddModal();
+  };
+
+  /* ------------------ Floating cart derived ------------------ */
+  const totalItems = sharedCart.reduce((s, ci) => s + ci.quantity, 0);
+  const cartTotal = Number(sharedCartTotal ?? 0) || cartSum(sharedCart);
+
   return (
     <div className="p-4">
-      {/* Page Title */}
       <header className="h-14 flex items-center gap-3">
         <motion.h1
           className="text-3xl font-bold tracking-tight text-neutral-800"
@@ -1163,7 +206,6 @@ export default function CustomerInventoryPage() {
         Browse available products, check categories, and add items to your cart for ordering.
       </p>
 
-      {/* Controls */}
       <div className="mb-4 flex flex-col sm:flex-row gap-3 sm:items-center">
         <input
           type="text"
@@ -1186,7 +228,6 @@ export default function CustomerInventoryPage() {
         </select>
       </div>
 
-      {/* Product showcase grid */}
       <section className="py-2">
         <div className="max-w-7xl mx-auto">
           {loading ? (
@@ -1194,7 +235,7 @@ export default function CustomerInventoryPage() {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
               {pageItems.map((item, index) => {
-                const isOut = item.status?.toLowerCase().includes("out");
+                const isOut = isOutOfStock(item);
                 return (
                   <motion.div
                     key={item.id}
@@ -1204,7 +245,8 @@ export default function CustomerInventoryPage() {
                     whileHover={{ y: -4 }}
                     className="group bg-white rounded-lg shadow hover:shadow-lg overflow-hidden border border-gray-100 flex flex-col justify-between cursor-pointer"
                   >
-                    <div onClick={() => openImageModal(item)}>
+                    <div onClick={() => openAddModal(item)}>
+
                       <div className="relative w-full h-40 bg-gray-100 overflow-hidden">
                         {item.image_url ? (
                           // eslint-disable-next-line @next/next/no-img-element
@@ -1251,10 +293,8 @@ export default function CustomerInventoryPage() {
                       onClick={(e) => e.stopPropagation()}
                     >
                       <button
-                        onClick={() => handleAddToCartClick(item)}
-                        className={`w-full text-sm font-medium py-2 rounded-md ${
-                          isOut ? "bg-gray-300 text-gray-600 cursor-not-allowed" : "bg-[#181918] text-white hover:text-[#ffba20]"
-                        } transition`}
+                        onClick={() => openAddModal(item)}
+                        className={`w-full text-sm font-medium py-2 rounded-md ${isOut ? "bg-gray-300 text-gray-600 cursor-not-allowed" : "bg-[#181918] text-white hover:text-[#ffba20]"} transition`}
                         disabled={isOut}
                       >
                         Add to Cart
@@ -1293,510 +333,229 @@ export default function CustomerInventoryPage() {
         </div>
       </section>
 
-      {/* Image Modal (full) */}
-      {showImageModal && imageModalItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl max-w-xl w-full overflow-hidden shadow-2xl ring-1 ring-black/5">
-            <div className="flex items-center justify-between px-4 py-3 border-b">
-              <h3 className="font-semibold">{imageModalItem.product_name}</h3>
-              <button className="text-gray-500 hover:text-black" onClick={closeImageModal}>
-                ✕
-              </button>
+      {/* Floating cart (bottom-right) */}
+      <div className="fixed right-4 bottom-4 z-50">
+        <div className="relative">
+<button
+  onClick={() => setShowCartModal(true)}
+  className="flex items-center gap-3 px-4 py-3 rounded-full shadow-xl bg-[#181918] text-white hover:bg-black focus:outline-none"
+  title="Open cart"
+>
+
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path d="M3 3h2l.4 2M7 13h10l4-8H5.4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <circle cx="10" cy="20" r="1" fill="white"/>
+              <circle cx="19" cy="20" r="1" fill="white"/>
+            </svg>
+            <div className="text-sm text-left">
+              <div className="font-medium leading-none">{totalItems} items</div>
+              <div className="text-xs">{formatPH()}</div>
             </div>
-            <div className="pl-0 pr-4 pt-0">
-              {imageModalItem.image_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={imageModalItem.image_url}
-                  alt={imageModalItem.product_name}
-                  className="w-full h-auto rounded"
-                />
-              ) : (
-                <div className="text-center text-gray-500 border rounded p-6">
-                  No image uploaded for this item.
-                </div>
-              )}
-              <div className="mt-3 text-sm text-gray-600 px-4 pb-4">
-                <div>
-                  <span className="font-medium">Category:</span> {imageModalItem.category || "—"}
-                </div>
-                <div>
-                  <span className="font-medium">Subcategory:</span> {imageModalItem.subcategory || "—"}
-                </div>
-                <div>
-                  <span className="font-medium">Status:</span> {imageModalItem.status || "—"}
-                </div>
-                <div>
-                  <span className="font-medium">Unit Price:</span> {formatPeso(imageModalItem.unit_price)}
-                </div>
+            <div className="ml-2 px-3 py-1 rounded bg-[#ffba20] text-black font-semibold">
+              {cartTotal.toLocaleString("en-PH", { style: "currency", currency: "PHP", minimumFractionDigits: 2 })}
+            </div>
+          </button>
+        </div>
+      </div>
+
+{/* Inline Add to Cart Modal (larger image, cleaner layout) */}
+{showAddModal && selected && (
+  <div className="fixed inset-0 z-60 bg-black/40 flex items-center justify-center p-4">
+    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden">
+      <div className="grid md:grid-cols-2 grid-cols-1">
+        {/* Left: Product Image */}
+        <div className="bg-gray-50 flex items-center justify-center p-6">
+          {selected.image_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={selected.image_url}
+              alt={selected.product_name}
+              className="w-full h-full object-contain max-h-[400px]"
+            />
+          ) : (
+            <div className="w-full h-[300px] flex items-center justify-center text-gray-400 text-sm">
+              No Image Available
+            </div>
+          )}
+        </div>
+
+        {/* Right: Details */}
+        <div className="flex flex-col justify-between p-6">
+          <div>
+            {/* Header */}
+            <div className="flex justify-between items-start mb-4">
+              <h3 className="text-xl font-semibold text-gray-900 leading-tight">
+                {selected.product_name}
+              </h3>
+              <button onClick={closeAddModal} className="text-gray-500 hover:text-gray-700">✕</button>
+            </div>
+
+            <div className="text-sm text-gray-500 mb-2">
+              {selected.category ?? "Uncategorized"}{selected.subcategory ? ` • ${selected.subcategory}` : ""}
+            </div>
+
+            {/* Price + Status */}
+            <div className="flex items-center gap-3 mb-4">
+              <div className="text-2xl font-bold text-[#ffba20]">
+                ₱{Number(selected.unit_price ?? 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+              </div>
+              <div className={`text-sm ${isOutOfStock(selected) ? "text-red-500" : "text-green-600"}`}>
+                {selected.status ?? ""}
               </div>
             </div>
-            <div className="px-4 py-3 border-t text-right">
-              <button onClick={closeImageModal} className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm">
-                Close
-              </button>
+
+            {/* Unit Info */}
+            <div className="text-sm text-gray-600 space-y-1 mb-6">
+              {selected.unit && <div><span className="font-medium text-gray-800">Unit:</span> {selected.unit}</div>}
+              {selected.pieces_per_unit != null && (
+                <div><span className="font-medium text-gray-800">Pieces / Unit:</span> {selected.pieces_per_unit}</div>
+              )}
+              {selected.weight_per_piece_kg != null && (
+                <div><span className="font-medium text-gray-800">Weight / Piece:</span> {String(selected.weight_per_piece_kg)} kg</div>
+              )}
+            </div>
+
+
+
+            {/* Quantity Controls */}
+            <div>
+              <label className="text-sm text-gray-600">Quantity</label>
+              <div className="mt-2 flex items-center gap-3">
+                <button
+                  onClick={() => setModalQty((q) => clampQty(q - 1))}
+                  className="px-3 py-1 rounded border"
+                >
+                  −
+                </button>
+                <input
+                  type="number"
+                  value={modalQty}
+                  min={1}
+                  onChange={(e) => setModalQty(clampQty(Number(e.target.value) || 1))}
+                  className="w-20 text-center border rounded px-2 py-1"
+                />
+                <button
+                  onClick={() => setModalQty((q) => clampQty(q + 1))}
+                  className="px-3 py-1 rounded border"
+                >
+                  +
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
 
-      {/* Add to Cart Modal (full) */}
-      {selectedItem && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex justify-center items-center z-50 p-4">
-          <div className="bg-white p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 max-w-md w-full">
-            <h2 className="text-xl font-bold mb-4">{selectedItem.product_name}</h2>
-            <p>Category: {selectedItem.category}</p>
-            <p>Subcategory: {selectedItem.subcategory}</p>
-            <p>Status: {selectedItem.status}</p>
-            <p>Unit Price: {formatPeso(selectedItem.unit_price)}</p>
-            <div className="mt-4">
-              <label className="block mb-1">Quantity to Order</label>
-              <input
-                type="number"
-                className="w-full border px-3 py-2 rounded"
-                min={1}
-                max={MAX_QTY}
-                value={orderQuantity}
-                onChange={(e) => {
-                  const raw = Number(e.target.value);
-                  const clamped = clampQty(isNaN(raw) ? 1 : raw);
-                  setOrderQuantity(clamped);
-                }}
-                onBlur={(e) => {
-                  const raw = Number(e.target.value);
-                  if (raw > MAX_QTY) {
-                    toast.error(
-                      `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
-                    );
-                  }
-                  setOrderQuantity(clampQty(isNaN(raw) ? 1 : raw));
-                }}
-              />
-              <div className="text-xs text-gray-500 mt-1">Max {MAX_QTY} per item.</div>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                onClick={() => setSelectedItem(null)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={addToCart}
-                className="px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg hover:brightness-95"
-              >
-                Add to Cart
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Cart (editable qty) */}
-      {cart.length > 0 && (
-        <div className="mt-10 bg-gray-100 p-4 rounded shadow">
-          <h2 className="text-xl font-bold mb-4">Cart</h2>
-          <table className="w-full bg-white text-sm mb-4">
-            <thead className="bg-[#ffba20] text-black text-left">
-              <tr>
-                <th className="py-2 px-4 pl-6 text-left">Product Name</th>
-                <th className="py-2 px-4">Category</th>
-                <th className="py-2 px-4">Subcategory</th>
-                <th className="py-2 px-4">Unit Price</th>
-                <th className="py-2 px-4">Qty</th>
-                <th className="py-2 px-4">Status</th>
-                <th className="py-2 px-4">Remove</th>
-              </tr>
-            </thead>
-            <tbody>
-              {cart.map((ci) => (
-                <tr key={ci.item.id} className="border-b">
-                  <td className="py-2 px-4">{ci.item.product_name}</td>
-                  <td className="py-2 px-4">{ci.item.category}</td>
-                  <td className="py-2 px-4">{ci.item.subcategory}</td>
-                  <td className="py-2 px-4">{formatPeso(ci.item.unit_price)}</td>
-                  <td className="py-2 px-4">
-                    <div className="flex items-center gap-2">
-                      <button
-                        className="px-2 py-1 rounded border hover:bg-gray-100"
-                        onClick={() => updateCartQuantity(ci.item.id, ci.quantity - 1)}
-                      >
-                        −
-                      </button>
-                      <input
-                        type="number"
-                        className="w-20 border rounded px-2 py-1 text-center"
-                        min={1}
-                        max={MAX_QTY}
-                        value={ci.quantity}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          updateCartQuantity(ci.item.id, isNaN(v) ? 1 : v);
-                        }}
-                        onBlur={(e) => {
-                          const v = Number(e.target.value);
-                          if (v > MAX_QTY) {
-                            toast.error(`Maximum ${MAX_QTY} per item. For more, please submit another transaction.`);
-                          }
-                          updateCartQuantity(ci.item.id, isNaN(v) ? 1 : v);
-                        }}
-                      />
-                      <button
-                        className="px-2 py-1 rounded border hover:bg-gray-100"
-                        onClick={() => updateCartQuantity(ci.item.id, ci.quantity + 1)}
-                      >
-                        +
-                      </button>
-                    </div>
-                  </td>
-                  <td className="py-2 px-4">{ci.item.status}</td>
-                  <td className="py-2 px-4">
-                    <button onClick={() => removeFromCart(ci.item.id)} className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <div className="flex justify-between items-center">
-            <div>Total Items: {totalItems}</div>
-            <button className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600" onClick={handleShowCart}>
-              Order Item
+          {/* Buttons */}
+          <div className="mt-6 flex gap-3">
+            <button
+              onClick={confirmAddToCart}
+              className="flex-1 px-4 py-2 rounded bg-[#ffba20] font-semibold"
+            >
+              Add to Cart
+            </button>
+            <button
+              onClick={closeAddModal}
+              className="flex-1 px-4 py-2 rounded border"
+            >
+              Cancel
             </button>
           </div>
         </div>
-      )}
+      </div>
+    </div>
+  </div>
+)}
 
-      {/* First Confirm Order Modal (full) */}
-      {showCartPopup && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
-          >
-            <h2 className="text-2xl font-semibold tracking-tight shrink-0">Confirm Order</h2>
 
-            <div className="flex-1 overflow-auto mt-4 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input placeholder="Customer Name" className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed" value={customerInfo.name} readOnly />
-                <input type="email" placeholder="Email" className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed" value={customerInfo.email} readOnly />
-                <input type="tel" placeholder="Phone (11 digits)" className={`border px-3 py-2 rounded bg-gray-100 cursor-not-allowed ${!customerInfo.phone ? "border-red-400" : ""}`} value={customerInfo.phone} readOnly />
+      {/* 🛒 Floating Cart Modal */}
+{showCartModal && (
+  <div className="fixed inset-0 z-60 bg-black/40 flex items-center justify-center p-4">
+    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-auto max-h-[90vh]">
+      <div className="px-6 py-4 border-b flex justify-between items-center">
+        <h2 className="text-lg font-semibold">Your Cart</h2>
+        <button onClick={() => setShowCartModal(false)} className="text-gray-600 text-lg">✕</button>
+      </div>
 
-                <input
-                  placeholder="Contact Person (required)"
-                  maxLength={30}
-                  pattern="[A-Za-z\s]*"
-                  title="Letters only, maximum 30 characters"
-                  className={`border px-3 py-2 rounded ${!customerInfo.contact_person?.trim() ? "border-red-400 focus:ring-red-500" : ""}`}
-                  value={customerInfo.contact_person}
-                  onChange={(e) => {
-                    const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
-                    if (value.length <= 30) {
-                      setCustomerInfo({ ...customerInfo, contact_person: value });
-                    }
-                  }}
-                />
+      <div className="p-6">
+        {sharedCart.length === 0 ? (
+          <p className="text-gray-500 text-center py-10">Your cart is empty.</p>
+        ) : (
+          <>
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b text-left">
+                  <th className="py-2">Product</th>
+                  <th className="py-2">Qty</th>
+                  <th className="py-2">Unit Price</th>
+                  <th className="py-2 text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sharedCart.map((ci, i) => (
+<tr key={i} className="border-b">
+  <td className="py-2">
+    <div className="flex items-center gap-3">
+      <div className="text-sm font-medium">{ci.item.product_name}</div>
+      {/* optional small meta */}
+      <div className="text-xs text-gray-500">{ci.item.category ?? ""}</div>
+    </div>
+  </td>
 
-                <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-sm mb-1">Region</label>
-                    <select className="border px-3 py-2 rounded w-full" value={regionCode} onChange={(e) => setRegionCode(e.target.value)}>
-                      <option value="">Select region</option>
-                      {regions.map((r) => (
-                        <option key={r.code} value={r.code}>
-                          {r.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+  <td className="py-2 text-center">{ci.quantity}</td>
 
-                  <div>
-                    <label className="block text-sm mb-1">Province</label>
-                    <select className="border px-3 py-2 rounded w-full" value={provinceCode} onChange={(e) => setProvinceCode(e.target.value)} disabled={!regionCode || isNCR}>
-                      <option value="">{!regionCode ? "Select region first" : isNCR ? "NCR has no provinces" : "Select province"}</option>
-                      {!isNCR && provinces.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}
-                    </select>
-                  </div>
+  <td className="py-2">
+    ₱{Number(ci.item.unit_price || 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+  </td>
 
-                  <div>
-                    <label className="block text-sm mb-1">City / Municipality</label>
-                    <select className="border px-3 py-2 rounded w-full" value={cityCode} onChange={(e) => setCityCode(e.target.value)} disabled={isNCR ? !regionCode : !provinceCode}>
-                      <option value="">{isNCR ? (regionCode ? "Select city/municipality" : "Select region first") : provinceCode ? "Select city/municipality" : "Select province first"}</option>
-                      {cities.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
-                    </select>
-                  </div>
+  <td className="py-2 text-right">
+    <div>₱{lineTotal(ci).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</div>
 
-                  <div>
-                    <label className="block text-sm mb-1">Barangay</label>
-                    <select className="border px-3 py-2 rounded w-full" value={barangayCode} onChange={(e) => setBarangayCode(e.target.value)} disabled={!cityCode}>
-                      <option value="">{cityCode ? "Select barangay" : "Select city first"}</option>
-                      {barangays.map((b) => <option key={b.code} value={b.code}>{b.name}</option>)}
-                    </select>
-                  </div>
-                </div>
+    {/* Remove button */}
+    <button
+      onClick={() => {
+        removeItem(ci.item.id);
+        toast.success("Item removed from cart.");
+      }}
+      className="mt-2 px-3 py-1 text-xs rounded bg-red-500 text-white"
+      title="Remove item"
+    >
+      Remove
+    </button>
+  </td>
+</tr>
 
-                <input placeholder="House Number & Street Name" maxLength={30} title="Maximum 30 characters only" className="border px-3 py-2 rounded col-span-2" value={houseStreet} onChange={(e) => { if (e.target.value.length <= 30) setHouseStreet(e.target.value); }} />
-                <input placeholder="Landmark" maxLength={30} title="Maximum 30 characters only" className="border px-3 py-2 rounded col-span-2" value={customerInfo.landmark || ""} onChange={(e) => e.target.value.length <= 30 && setCustomerInfo({ ...customerInfo, landmark: e.target.value })} />
-                <input className="border px-3 py-2 rounded col-span-2 bg-gray-50" value={customerInfo.address || ""} placeholder="Address will be set from House/St. + Barangay/City/Province/Region" readOnly />
+                ))}
+              </tbody>
+            </table>
 
-                <div className="col-span-2">
-                  <label className="block mb-1">Customer Type</label>
-                  <input className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed" value={customerInfo.customer_type || ""} readOnly />
-                  {orderHistoryCount !== null && <div className="text-xs text-gray-500 mt-1">Past orders under this email: {orderHistoryCount}</div>}
-                </div>
-
-                <div className="col-span-2">
-                  <label className="block mb-1">Payment Type</label>
-                  <div className="flex gap-4">
-                    {(customerInfo.customer_type === "Existing Customer" ? ["Credit"] : ["Cash"]).map((type) => (
-                      <label key={type} className="flex items-center gap-2">
-                        <input type="radio" name="payment_type" value={type} checked={customerInfo.payment_type === type} onChange={(e) => setCustomerInfo({ ...customerInfo, payment_type: e.target.value as "Cash" | "Credit" })} />
-                        {type}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                {customerInfo.payment_type === "Credit" && (
-                  <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block mb-1">Payment Terms</label>
-                      <select className={`border px-3 py-2 rounded w-full ${!termsMonths ? "border-red-400" : ""}`} value={termsMonths ?? ""} onChange={(e) => setTermsMonths(Number(e.target.value) || null)}>
-                        <option value="">Select term</option>
-                        <option value={1}>1 month (Net 1)</option>
-                        <option value={3}>3 months (Net 3)</option>
-                        <option value={6}>6 months (Net 6)</option>
-                        <option value={12}>12 months (Net 12)</option>
-                      </select>
-                      <div className="text-xs text-gray-500 mt-1">Only available for Existing Customers with Credit.</div>
-                    </div>
-
-                    <div>
-                      <label className="block mb-1">Interest %</label>
-                      <input type="number" className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed" value={interestPercent} readOnly disabled title="Interest is fixed per selected term" />
-                      <div className="text-xs text-gray-500 mt-1">1m→2%, 3m→6%, 6m→12%, 12m→24%.</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Items table */}
-              <div className="border rounded-xl bg-gray-100 overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-200 sticky top-0 z-10">
-                    <tr>
-                      <th className="py-2 px-3 text-left">Product</th>
-                      <th className="py-2 px-3 text-left">Category</th>
-                      <th className="py-2 px-3 text-left">Subcategory</th>
-                      <th className="py-2 px-3 text-left">Unit Price</th>
-                      <th className="py-2 px-3 text-left">Qty</th>
-                      <th className="py-2 px-3 text-left">Status</th>
-                      <th className="py-2 px-3 text-left">Line Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cart.map((ci) => (
-                      <tr key={ci.item.id} className="border-b">
-                        <td className="py-2 px-3">{ci.item.product_name}</td>
-                        <td className="py-2 px-3">{ci.item.category}</td>
-                        <td className="py-2 px-3">{ci.item.subcategory}</td>
-                        <td className="py-2 px-3">{formatPeso(ci.item.unit_price)}</td>
-                        <td className="py-2 px-3">{ci.quantity}</td>
-                        <td className="py-2 px-3">{ci.item.status}</td>
-                        <td className="py-2 px-3 font-medium">{formatPeso(lineTotal(ci))}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
-                  <div className="text-xs text-gray-500">* Final price may change if an admin applies a discount during order processing.</div>
-                  <div className="text-right text-sm">
-                    <div>
-                      <span className="mr-2 text-gray-600">Estimated Total:</span>
-                      <span className="font-semibold">{formatPeso(cartSum(cart))}</span>
-                    </div>
-                    {customerInfo.payment_type === "Credit" && (
-                      <div className="mt-1">
-                        <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
-                        <span className="font-semibold">{formatPeso(cartSum(cart) * (1 + Math.max(0, interestPercent) / 100))}</span>
-                      </div>
-                    )}
-                  </div>
+            <div className="flex justify-end mt-6">
+              <div className="text-right">
+                <div className="font-medium">Total:</div>
+                <div className="text-2xl font-bold text-[#ffba20]">
+                  ₱{cartTotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}
                 </div>
               </div>
             </div>
 
-            {missingFields.length > 0 && (
-              <div className="mt-3 text-sm text-red-600">
-                <strong>Required:</strong> {missingFields.slice(0, 5).join(", ")}{missingFields.length > 5 ? "..." : ""}
-              </div>
-            )}
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setShowCartModal(false)} className="px-4 py-2 rounded border">Close</button>
+<button
+  onClick={() => {
+    setShowCartModal(false);
+    router.push("/customer/checkout");
+  }}
+  className="px-4 py-2 rounded bg-[#181918] text-white hover:text-[#ffba20]"
+>
+  Checkout
+</button>
 
-            <div className="shrink-0 flex justify-end gap-2 mt-4">
-              <button onClick={() => setShowCartPopup(false)} className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm">Cancel</button>
-              <button onClick={handleOpenFinalModal} className="px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2" disabled={!isConfirmOrderEnabled} title={!isConfirmOrderEnabled ? "Please complete required fields before submitting" : "Submit order"}>
-                Submit Order
-              </button>
             </div>
-          </motion.div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
+    </div>
+  </div>
+)}
 
-      {/* Final Confirmation Modal */}
-      {showFinalPopup && finalOrderDetails && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: "spring", stiffness: 260, damping: 22 }} className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden">
-            <h2 className="text-2xl font-semibold tracking-tight shrink-0">Order Confirmation</h2>
-
-            <div className="flex-1 overflow-auto mt-4 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <div className="text-xs text-gray-500">Customer</div>
-                  <div className="font-medium">{finalOrderDetails.customer.name}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500">Transaction Code</div>
-                  <div className="font-medium">{finalOrderDetails.customer.code}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500">Date</div>
-                  <div className="font-medium">{formatPH()}</div>
-                </div>
-              </div>
-
-              {finalOrderDetails.customer.payment_type === "Credit" && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div>
-                    <div className="text-xs text-gray-500">Payment Type</div>
-                    <div className="font-medium">Credit</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Terms</div>
-                    <div className="font-medium">{termsMonths ?? "-"} month(s)</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Interest (Whole Term)</div>
-                    <div className="font-medium">{interestPercent}%</div>
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                <div>
-                  <div className="text-xs text-gray-500">Region</div>
-                  <div className="font-medium">{selectedRegion?.name ?? "-"}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500">Province</div>
-                  <div className="font-medium">{selectedProvince?.name ?? (isNCR ? "—" : "-")}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500">City/Municipality</div>
-                  <div className="font-medium">{selectedCity?.name ?? "-"}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500">Barangay</div>
-                  <div className="font-medium">{selectedBarangay?.name ?? "-"}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500">House & Street</div>
-                  <div className="font-medium">{houseStreet || "-"}</div>
-                </div>
-              </div>
-
-              <div className="border rounded-xl bg-gray-100 overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-200 sticky top-0 z-10">
-                    <tr>
-                      <th className="py-2 px-3 text-left">Product</th>
-                      <th className="py-2 px-3 text-left">Category</th>
-                      <th className="py-2 px-3 text-left">Subcategory</th>
-                      <th className="py-2 px-3 text-left">Unit Price</th>
-                      <th className="py-2 px-3 text-left">Qty</th>
-                      <th className="py-2 px-3 text-left">Status</th>
-                      <th className="py-2 px-3 text-left">Line Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {finalOrderDetails.items.map((ci) => (
-                      <tr key={ci.item.id} className="border-b">
-                        <td className="py-2 px-3">{ci.item.product_name}</td>
-                        <td className="py-2 px-3">{ci.item.category}</td>
-                        <td className="py-2 px-3">{ci.item.subcategory}</td>
-                        <td className="py-2 px-3">{formatPeso(ci.item.unit_price)}</td>
-                        <td className="py-2 px-3">{ci.quantity}</td>
-                        <td className="py-2 px-3">{ci.item.status}</td>
-                        <td className="py-2 px-3 font-medium">{formatPeso(lineTotal(ci))}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
-                  <div className="text-xs text-gray-500">* Final price may change if an admin applies a discount during order processing.</div>
-                  <div className="text-right text-sm">
-                    <div>
-                      <span className="mr-2 text-gray-600">Estimated Total:</span>
-                      <span className="font-semibold">{formatPeso(cartSum(finalOrderDetails.items))}</span>
-                    </div>
-                    {finalOrderDetails.customer.payment_type === "Credit" && (
-                      <div className="mt-1">
-                        <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
-                        <span className="font-semibold">{formatPeso(cartSum(finalOrderDetails.items) * (1 + Math.max(0, interestPercent) / 100))}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {missingFields.length > 0 && (
-              <div className="mt-3 text-sm text-red-600">
-                <strong>Missing required fields:</strong> {missingFields.slice(0, 5).join(", ")}{missingFields.length > 5 ? "..." : ""}
-              </div>
-            )}
-
-            <div className="shrink-0 flex justify-end gap-2 mt-4">
-              <button onClick={() => !placingOrder && setShowFinalPopup(false)} disabled={placingOrder || !isConfirmOrderEnabled} className={`px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm ${placingOrder || !isConfirmOrderEnabled ? "opacity-60 cursor-not-allowed" : ""}`}>Cancel</button>
-              <button onClick={handleConfirmOrder} disabled={placingOrder || !isConfirmOrderEnabled} className={`px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg inline-flex items-center gap-2 ${placingOrder || !isConfirmOrderEnabled ? "opacity-70 cursor-not-allowed" : ""}`}>
-                {placingOrder ? <><span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-black/40 border-t-black" />Submitting…</> : "Confirm Order"}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
-
-      {/* After-Submit Choice Modal */}
-      {showAfterSubmitModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: "spring", stiffness: 260, damping: 22 }} className="bg-white w-full max-w-md p-6 rounded-2xl shadow-2xl ring-1 ring-black/5">
-            <div className="flex items-start justify-between">
-              <h3 className="text-xl font-semibold">Order Submitted</h3>
-              <button className="text-gray-500 hover:text-black" onClick={() => setShowAfterSubmitModal(false)} aria-label="Close" title="Close">✕</button>
-            </div>
-
-            <div className="mt-3 text-sm text-gray-700 space-y-2">
-              <p>Your order was placed successfully.</p>
-              <div className="rounded-lg bg-gray-50 p-3 ring-1 ring-black/5">
-                <div className="flex justify-between"><span className="text-gray-500">Transaction Code:</span><span className="font-medium">{lastTxnCode || "—"}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Estimated Total:</span><span className="font-semibold">{formatPeso(lastOrderTotal)}</span></div>
-              </div>
-
-              <p className="mt-2">Would you like to proceed to the <strong>Payments</strong> page now, or stay here to place another order?</p>
-            </div>
-
-            <div className="mt-5 flex gap-2 justify-end">
-              <button onClick={() => setShowAfterSubmitModal(false)} className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50">Stay & Order More</button>
-              <button onClick={goToPayments} className="px-4 py-2 rounded-xl bg-[#ffba20] text-black">Proceed to Payments</button>
-            </div>
-          </motion.div>
-        </div>
-      )}
     </div>
   );
 }
