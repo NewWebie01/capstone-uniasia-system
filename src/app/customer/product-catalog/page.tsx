@@ -373,13 +373,7 @@ export default function CustomerInventoryPage() {
                           })}
                         </p>
 
-                        <p
-                          className={`text-xs mt-1 ${
-                            isOut ? "text-red-500" : "text-green-600"
-                          }`}
-                        >
-                          {item.status}
-                        </p>
+
                       </div>
                     </div>
 
@@ -509,24 +503,12 @@ export default function CustomerInventoryPage() {
                   </div>
 
                   {/* Price + Status */}
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="text-2xl font-bold text-[#ffba20]">
-                      ₱
-                      {Number(selected.unit_price ?? 0).toLocaleString(
-                        "en-PH",
-                        { minimumFractionDigits: 2 }
-                      )}
-                    </div>
-                    <div
-                      className={`text-sm ${
-                        isOutOfStock(selected)
-                          ? "text-red-500"
-                          : "text-green-600"
-                      }`}
-                    >
-                      {selected.status ?? ""}
-                    </div>
-                  </div>
+<div className="mb-4">
+  <div className="text-2xl font-bold text-[#ffba20]">
+    ₱{Number(selected.unit_price ?? 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+  </div>
+</div>
+
 
                   {/* Unit Info */}
                   <div className="text-sm text-gray-600 space-y-1 mb-6">
