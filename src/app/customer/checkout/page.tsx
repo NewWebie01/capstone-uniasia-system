@@ -1,14 +1,65 @@
 // src/app/customer/checkout/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import supabase from "@/config/supabaseClient";
-import { toast } from "sonner";
-import { useCart, CartItem } from "@/context/CartContext";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
+import supabase from "@/config/supabaseClient";
+import { useCart, CartItem as CtxCartItem } from "@/context/CartContext";
 
-/* ----------------------------- Helpers ----------------------------- */
+/* -------------------------------- Types -------------------------------- */
+type InventoryItem = {
+  id: number;
+  product_name: string;
+  category: string;
+  subcategory: string;
+  quantity: number;
+  unit_price: number;
+  status: string;
+  image_url?: string | null;
+  unit?: string | null;
+  pieces_per_unit?: number | null;
+  weight_per_piece_kg?: number | null;
+};
+
+type CartItem = { item: InventoryItem; quantity: number };
+
+type CustomerInfo = {
+  id?: string;
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  contact_person?: string;
+  code?: string;
+  area?: string;
+  landmark?: string;
+  date?: string;
+  transaction?: string;
+  status?: "pending" | "completed" | "rejected";
+  payment_type?: "Credit" | "Cash";
+  customer_type?: "New Customer" | "Existing Customer";
+};
+
+type PSGCRegion = { id: number; name: string; code: string };
+type PSGCProvince = { id: number; name: string; code: string; region_id: number };
+type PSGCCity = { id: number; name: string; code: string; province_id?: number; type: string };
+type PSGCBarangay = { id: number; name: string; code: string };
+
+/* ----------------------------- Constants ----------------------------- */
+const MAX_QTY = 1000;
+const clampQty = (n: number) => Math.max(1, Math.min(MAX_QTY, Math.floor(n) || 1));
+
+const TRUCK_LIMITS = {
+  maxTotalWeightKg: 10_000,
+  maxDistinctItems: 60,
+};
+const LIMIT_TOAST = "Exceeds items per transaction. Please split into another transaction.";
+
+const TERM_TO_INTEREST: Record<number, number> = { 1: 2, 3: 6, 6: 12, 12: 24 };
+
+/* ------------------------------ Helpers ------------------------------ */
 const formatCurrency = (n: number) =>
   (Number(n) || 0).toLocaleString("en-PH", {
     style: "currency",
@@ -16,364 +67,771 @@ const formatCurrency = (n: number) =>
     minimumFractionDigits: 2,
   });
 
-const formatPHDate = (d?: string | Date | number) =>
-  d ? new Intl.DateTimeFormat("en-PH", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Manila" }).format(new Date(d)) : "";
+const formatPH = (d?: string | number | Date) =>
+  new Intl.DateTimeFormat("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Manila",
+  }).format(d ? new Date(d) : new Date());
 
-function clampQty(n: number) {
-  return Math.max(1, Math.floor(n) || 1);
+const fixEncoding = (s: string) => {
+  try {
+    return decodeURIComponent(escape(s));
+  } catch {
+    return s;
+  }
+};
+
+async function fetchJSON<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+  const text = new TextDecoder("utf-8").decode(buffer);
+  return JSON.parse(text);
+}
+
+function generateTransactionCode(): string {
+  const date = new Date();
+  const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, "");
+  const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `TXN-${yyyymmdd}-${random}`;
+}
+
+function normalizePhone(input: string | null | undefined): string {
+  const digits = String(input || "").replace(/\D/g, "");
+  if (digits.startsWith("63") && digits.length === 12) return "0" + digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) return digits;
+  return "";
+}
+
+function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
+  const nameFromMeta =
+    meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
+  if (nameFromMeta && typeof nameFromMeta === "string") return nameFromMeta.trim();
+  if (fallbackEmail && fallbackEmail.includes("@")) return fallbackEmail.split("@")[0];
+  return "";
+}
+
+function isValidPhone(phone: string) {
+  return /^\d{11}$/.test(phone); // 09xxxxxxxxx
+}
+
+const getAuthIdentity = async () => {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const email = user?.email ?? "";
+  const name = getDisplayNameFromMetadata(user?.user_metadata, email);
+  const phone = normalizePhone((user?.user_metadata as any)?.phone || "");
+  return { email, name, phone };
+};
+
+const loadPhoneForEmail = async (email: string): Promise<string> => {
+  const clean = (email || "").trim();
+  if (!clean) return "";
+  const { data: ar } = await supabase
+    .from("account_requests")
+    .select("contact_number")
+    .ilike("email", clean)
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const fromAR = normalizePhone(ar?.contact_number);
+  if (fromAR) return fromAR;
+
+  const { data: cust } = await supabase
+    .from("customers")
+    .select("phone")
+    .ilike("email", clean)
+    .order("date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const fromCustomers = normalizePhone(cust?.phone);
+  if (fromCustomers) return fromCustomers;
+
+  return "";
+};
+
+/* ------------------------------ Weight rules ------------------------------ */
+const isOutOfStock = (i: InventoryItem) =>
+  (i.status || "").toLowerCase().includes("out") || (i.quantity ?? 0) <= 0;
+
+function unitWeightKg(i: InventoryItem): number {
+  const unit = (i.unit || "").trim();
+  if (unit === "Kg") return 1;
+  const piecesPerUnit =
+    Number(
+      i.pieces_per_unit ?? (unit === "Piece" ? 1 : unit === "Dozen" ? 12 : 0)
+    ) || 0;
+  const weightPerPiece = Number(i.weight_per_piece_kg ?? 0);
+  const w =
+    piecesPerUnit > 0 && weightPerPiece > 0 ? piecesPerUnit * weightPerPiece : 0;
+  return isFinite(w) ? w : 0;
+}
+function cartTotalWeightKg(list: CartItem[]) {
+  return list.reduce((sum, ci) => sum + unitWeightKg(ci.item) * ci.quantity, 0);
+}
+function canAddItemWithQty(current: CartItem[], item: InventoryItem, qty: number) {
+  const nextDistinct = current.some((ci) => ci.item.id === item.id)
+    ? current.length
+    : current.length + 1;
+  if (nextDistinct > TRUCK_LIMITS.maxDistinctItems)
+    return { ok: false as const, reason: "distinct", message: LIMIT_TOAST };
+  const perUnitKg = unitWeightKg(item);
+  if (perUnitKg <= 0)
+    return { ok: false as const, reason: "weight-missing", message: LIMIT_TOAST };
+  const nextWeight = cartTotalWeightKg(current) + perUnitKg * qty;
+  if (nextWeight > TRUCK_LIMITS.maxTotalWeightKg)
+    return { ok: false as const, reason: "weight", message: LIMIT_TOAST };
+  return { ok: true as const };
 }
 
 /* ----------------------------- Component ----------------------------- */
 export default function CheckoutPage() {
   const router = useRouter();
+  const { cart, updateQty, removeItem, clearCart } = useCart();
 
-  // shared cart/context
-  const { cart, updateQty, removeItem, clearCart, cartCount, cartTotal, addItem } = useCart();
+  // auth defaults
+  const [authDefaults, setAuthDefaults] = useState({ name: "", email: "", phone: "" });
+  const [orderHistoryCount, setOrderHistoryCount] = useState<number | null>(null);
 
-  // customer info (prefill from Supabase user metadata if available)
-  const [loadingUser, setLoadingUser] = useState(true);
+  // customer info
+  const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
+    name: "",
+    email: "",
+    phone: "",
+    address: "",
+    contact_person: "",
+    code: "",
+    area: "",
+    payment_type: "Cash",
+    customer_type: undefined,
+    landmark: "",
+  });
+
+  // credit terms
+  const [termsMonths, setTermsMonths] = useState<number | null>(null);
+  const [interestPercent, setInterestPercent] = useState<number>(0);
+
+  // confirm + final modals
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showFinalModal, setShowFinalModal] = useState(false);
+  const [placingOrder, setPlacingOrder] = useState(false);
+
+  // after-submit modal
+  const [showAfterSubmitModal, setShowAfterSubmitModal] = useState(false);
+  const [lastOrderId, setLastOrderId] = useState<string | null>(null);
+  const [lastTxnCode, setLastTxnCode] = useState<string | null>(null);
+  const [lastOrderTotal, setLastOrderTotal] = useState<number>(0);
+
+  // orders sidebar
   const [userId, setUserId] = useState<string | null>(null);
-  const [customerName, setCustomerName] = useState("");
-  const [customerEmail, setCustomerEmail] = useState("");
-  const [customerPhone, setCustomerPhone] = useState("");
-  const [customerAddress, setCustomerAddress] = useState("");
-
-  // page state
-  const [submitting, setSubmitting] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
   const [fetchingOrders, setFetchingOrders] = useState(false);
 
-useEffect(() => {
-  let mounted = true;
-  const loadOrdersForUser = async () => {
-    if (!userId) {
-      setOrders([]);
+  // PSGC state
+  const [regions, setRegions] = useState<PSGCRegion[]>([]);
+  const [provinces, setProvinces] = useState<PSGCProvince[]>([]);
+  const [cities, setCities] = useState<PSGCCity[]>([]);
+  const [barangays, setBarangays] = useState<PSGCBarangay[]>([]);
+  const [regionCode, setRegionCode] = useState("");
+  const [provinceCode, setProvinceCode] = useState("");
+  const [cityCode, setCityCode] = useState("");
+  const [barangayCode, setBarangayCode] = useState("");
+  const [houseStreet, setHouseStreet] = useState("");
+
+  const selectedRegion = useMemo(
+    () => regions.find((r) => r.code === regionCode) || null,
+    [regions, regionCode]
+  );
+  const selectedProvince = useMemo(
+    () => provinces.find((p) => p.code === provinceCode) || null,
+    [provinces, provinceCode]
+  );
+  const selectedCity = useMemo(
+    () => cities.find((c) => c.code === cityCode) || null,
+    [cities, cityCode]
+  );
+  const selectedBarangay = useMemo(
+    () => barangays.find((b) => b.code === barangayCode) || null,
+    [barangays, barangayCode]
+  );
+
+  const isNCR = useMemo(
+    () =>
+      !!regionCode &&
+      (regionCode.startsWith("13") ||
+        (selectedRegion?.name || "").toLowerCase().includes("national capital")),
+    [regionCode, selectedRegion]
+  );
+
+  const computedAddress = useMemo(() => {
+    const parts = [
+      houseStreet.trim(),
+      selectedBarangay?.name ?? "",
+      selectedCity?.name ?? "",
+      selectedProvince?.name ?? "",
+      selectedRegion?.name ?? "",
+    ]
+      .filter(Boolean)
+      .map(fixEncoding);
+    return parts.join(", ");
+  }, [houseStreet, selectedBarangay, selectedCity, selectedProvince, selectedRegion]);
+
+  useEffect(() => {
+    setCustomerInfo((prev) => ({ ...prev, address: computedAddress }));
+  }, [computedAddress]);
+
+  /* ------------------------ Prefill from auth ------------------------ */
+  useEffect(() => {
+    (async () => {
+      const { email, name, phone: phoneFromAuth } = await getAuthIdentity();
+      if (email) {
+        const phoneFromSources = phoneFromAuth || (await loadPhoneForEmail(email));
+        setAuthDefaults({ name: name || "", email: email || "", phone: phoneFromSources || "" });
+        setCustomerInfo((prev) => ({
+          ...prev,
+          name: prev.name || name || "",
+          email: prev.email || email,
+          phone: prev.phone || phoneFromSources || "",
+        }));
+        await setTypeFromHistory(email);
+      }
+      // store auth id (if you also bind user_id in customers)
+      const { data: session } = await supabase.auth.getUser();
+      setUserId(session?.user?.id ?? null);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* -------- Compute customer type from completed orders by email -------- */
+  const setTypeFromHistory = useCallback(async (email: string) => {
+    const cleanEmail = (email || "").trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) return;
+    const { count, error } = await supabase
+      .from("orders")
+      .select("id, status, customers!inner(email)", {
+        count: "exact",
+        head: true,
+      })
+      .ilike("customers.email", cleanEmail)
+      .in("status", ["completed"]);
+    if (error) return;
+    const completedCount = count ?? 0;
+    setOrderHistoryCount(completedCount);
+    const type: CustomerInfo["customer_type"] = completedCount > 0 ? "Existing Customer" : "New Customer";
+    setCustomerInfo((prev) => ({
+      ...prev,
+      customer_type: type,
+      payment_type: type === "Existing Customer" ? "Credit" : "Cash",
+    }));
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (customerInfo.email) setTypeFromHistory(customerInfo.email);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [customerInfo.email, setTypeFromHistory]);
+
+  /* ------------------------- PSGC loading flows ------------------------- */
+  useEffect(() => {
+    fetchJSON<PSGCRegion[]>("https://psgc.cloud/api/regions")
+      .then((data) =>
+        setRegions(
+          data
+            .map((r) => ({ ...r, name: fixEncoding(r.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+        )
+      )
+      .catch(() => toast.error("Failed to load regions"));
+  }, []);
+
+  useEffect(() => {
+    setProvinces([]);
+    setProvinceCode("");
+    setCities([]);
+    setCityCode("");
+    setBarangays([]);
+    setBarangayCode("");
+    if (!regionCode) return;
+
+    if (isNCR) {
+      Promise.all([
+        fetchJSON<PSGCCity[]>(`https://psgc.cloud/api/regions/${regionCode}/cities`),
+        fetchJSON<PSGCCity[]>(`https://psgc.cloud/api/regions/${regionCode}/municipalities`),
+      ])
+        .then(([c, m]) => {
+          const list = [...c, ...m]
+            .map((x) => ({ ...x, name: fixEncoding(x.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+          setCities(list);
+        })
+        .catch(() => toast.error("Failed to load cities for NCR"));
       return;
     }
 
-    setFetchingOrders(true);
+    fetchJSON<PSGCProvince[]>("https://psgc.cloud/api/provinces")
+      .then((all) => {
+        const provs = all
+          .filter((p) => p.code.startsWith(regionCode.slice(0, 2)))
+          .map((p) => ({ ...p, name: fixEncoding(p.name) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setProvinces(provs);
+      })
+      .catch(() => toast.error("Failed to load provinces"));
+  }, [regionCode, isNCR]);
 
-    try {
-      // 1) Try direct orders lookup by customer_id == auth user id (fast path)
-      try {
-        const { data: ordersByAuth, error: errOrdersByAuth } = await supabase
-          .from("orders")
-          .select("id, status, grand_total_with_interest, created_at, transaction_code")
-          .eq("customer_id", userId)
-          .order("created_at", { ascending: false })
-          .limit(50);
+  useEffect(() => {
+    if (isNCR) return;
+    setCities([]);
+    setCityCode("");
+    setBarangays([]);
+    setBarangayCode("");
+    if (!provinceCode) return;
 
-        if (!errOrdersByAuth && ordersByAuth && ordersByAuth.length > 0) {
-          if (mounted) setOrders(ordersByAuth);
-          setFetchingOrders(false);
-          return; // done
-        }
-      } catch (err) {
-        console.warn("[checkout] orders by authId lookup failed:", err);
-        // continue to fallback attempts
-      }
+    Promise.all([
+      fetchJSON<PSGCCity[]>("https://psgc.cloud/api/cities"),
+      fetchJSON<PSGCCity[]>("https://psgc.cloud/api/municipalities"),
+    ])
+      .then(([c, m]) => {
+        const byProv = (x: PSGCCity) => x.code.startsWith(provinceCode.slice(0, 4));
+        const list = [...c.filter(byProv), ...m.filter(byProv)]
+          .map((x) => ({ ...x, name: fixEncoding(x.name) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setCities(list);
+      })
+      .catch(() => toast.error("Failed to load cities/municipalities"));
+  }, [provinceCode, isNCR]);
 
-      // 2) Fallback: try to find a customers row (by user_id or by email) and use that id
-      let customerRow: any = null;
-      try {
-        // first try user_id column (if you store auth.user.id in customers.user_id)
-        const { data: c1, error: errC1 } = await supabase
-          .from("customers")
-          .select("id, name, email, user_id")
-          .eq("user_id", userId)
-          .maybeSingle();
+  useEffect(() => {
+    setBarangays([]);
+    setBarangayCode("");
+    if (!cityCode) return;
 
-        if (!errC1 && c1) {
-          customerRow = c1;
-        }
-      } catch (err) {
-        console.warn("[checkout] customers user_id lookup error", err);
-      }
-
-      if (!customerRow) {
-        // second try: lookup by email (safe fallback)
-        try {
-          // robust handling for supabase.auth.getUser() which may return { data: { user } } or { user }
-const _getUserResult: any = await supabase.auth.getUser();
-const authUser = _getUserResult?.data?.user ?? _getUserResult?.user ?? null;
-const userEmail = authUser?.email ?? null;
-
-          if (userEmail) {
-            const { data: c2, error: errC2 } = await supabase
-              .from("customers")
-              .select("id, name, email")
-              .eq("email", userEmail)
-              .maybeSingle();
-
-            if (!errC2 && c2) {
-              customerRow = c2;
-            }
-          }
-        } catch (err) {
-          console.warn("[checkout] customers email lookup error", err);
-        }
-      }
-
-      // 3) If we found a customers row use that id to fetch orders
-      if (customerRow && customerRow.id) {
-        try {
-          const { data: ordersByCustomer, error: errOrdersByCustomer } = await supabase
-            .from("orders")
-            .select("id, status, grand_total_with_interest, created_at, transaction_code")
-            .eq("customer_id", customerRow.id)
-            .order("created_at", { ascending: false })
-            .limit(50);
-
-          if (!errOrdersByCustomer) {
-            if (mounted) setOrders(ordersByCustomer ?? []);
-            setFetchingOrders(false);
-            return;
-          } else {
-            console.warn("[checkout] orders by customers.id query error", errOrdersByCustomer);
-          }
-        } catch (err) {
-          console.warn("[checkout] orders by customers.id error", err);
-        }
-      }
-
-      // 4) No customer row found -> friendly information, not an error
-      if (mounted) {
-        setOrders([]);
-        // show an info toast once (not an error) so user understands why "no orders"
-        toast.info("No customer profile found yet. Orders will appear after you place one.");
-      }
-    } catch (err) {
-      // unexpected global error: report to console and show generic message
-      console.error("[checkout] Error while loading orders (unexpected):", err);
-      // avoid spamming error toasts on every dev reload; show a subtle message
-      toast.error("Unable to load past orders. See console for details.");
-    } finally {
-      if (mounted) setFetchingOrders(false);
-    }
-  };
-
-  loadOrdersForUser();
-
-  return () => {
-    mounted = false;
-  };
-}, [userId]); // run when userId changes
-
-
-
-
-
-  // fetch existing orders for this user (if logged in)
-// replace your current "fetch existing orders for this user" useEffect with this block
-useEffect(() => {
-  if (!userId) {
-    setOrders([]);
-    return;
-  }
-
-  let mounted = true;
-  (async () => {
-    setFetchingOrders(true);
-    try {
-      // fetch latest auth user (get email + id)
-      const { data: userData, error: getUserErr } = await supabase.auth.getUser();
-      if (getUserErr) {
-        console.error("supabase.auth.getUser error:", getUserErr);
-        // Show friendly toast only for real errors (not for empty results)
-        toast.error("Unable to fetch your past orders.");
-        if (mounted) setOrders([]);
-        return;
-      }
-      const authUser = userData?.user;
-      const authUserId = authUser?.id ?? userId; // fallback to userId state
-      const authEmail = authUser?.email ?? "";
-
-      // 1) Try direct query assuming orders.customer_id === auth.user.id
-      let { data: ordersData, error: ordersErr } = await supabase
-        .from("orders")
-        .select("id, status, grand_total, created_at, transaction_code")
-        .eq("customer_id", authUserId)
-        .order("created_at", { ascending: false })
-        .limit(50);
-
-      // 2) If the direct query failed or returned an auth/permission error, try to resolve via customers table
-      if (ordersErr) {
-        console.warn("orders fetch by auth id failed, will attempt via customers table:", ordersErr);
-        // Try to find the customers row either by user_id or by email
-        const orClauseParts: string[] = [];
-        if (authUserId) orClauseParts.push(`user_id.eq.${authUserId}`);
-        if (authEmail) orClauseParts.push(`email.eq.${authEmail}`);
-        if (orClauseParts.length === 0) {
-          // no way to find customers row
-          console.warn("No auth user id or email available to lookup customers row.");
-          throw ordersErr;
-        }
-        const orClause = orClauseParts.join(",");
-
-        const { data: customerRow, error: custErr } = await supabase
-          .from("customers")
-          .select("id")
-          .or(orClause)
-          .maybeSingle();
-
-        if (custErr) {
-          console.error("Failed to query customers table:", custErr);
-          throw custErr;
-        }
-
-        if (!customerRow || !customerRow.id) {
-          // No customers row found — not an exception, just no orders to fetch
-          console.info("No customers row found for user; skipping orders fetch.");
-          if (mounted) setOrders([]);
-          return;
-        }
-
-        // Now try fetching orders by the customers.id
-        const custId = customerRow.id;
-        const { data: ordersByCust, error: ordersByCustErr } = await supabase
-          .from("orders")
-          .select("id, status, grand_total, created_at, transaction_code")
-          .eq("customer_id", custId)
-          .order("created_at", { ascending: false })
-          .limit(50);
-
-        if (ordersByCustErr) {
-          console.error("Failed to fetch orders by customers.id:", ordersByCustErr);
-          throw ordersByCustErr;
-        }
-        ordersData = ordersByCust;
-      }
-
-      // success: ordersData may be [] or an array
-      if (mounted) setOrders((ordersData as any[]) ?? []);
-    } catch (err: any) {
-      // Log full error to console for debugging
-      console.error("Error while loading orders (checkout):", err);
-      // show friendly toast (only for errors)
-      toast.error("Unable to fetch your past orders.");
-      if (mounted) setOrders([]);
-    } finally {
-      if (mounted) setFetchingOrders(false);
-    }
-  })();
-
-  return () => {
-    mounted = false;
-  };
-}, [userId]);
-
-
-  const handleUpdateQty = (ci: CartItem, nextRaw: number) => {
-    const next = clampQty(Number.isFinite(nextRaw) ? nextRaw : 1);
-    updateQty(ci.item.id, next);
-  };
-
-  const handlePlaceOrder = async () => {
-    if (cart.length === 0) {
-      toast.error("Your cart is empty.");
-      return;
-    }
-
-    // simple validation for customer info
-    if (!customerName || !customerEmail) {
-      toast.error("Please enter your name and email.");
-      return;
-    }
-
-    setSubmitting(true);
-
-    try {
-      // 1) insert into orders
-      // adjust column names to match your DB if needed
-      const grand_total = Number(cartTotal || 0);
-
-      const orderPayload: any = {
-        customer_id: userId, // may be null if guest; adjust if your schema requires customers table
-        status: "pending",
-        grand_total,
-        shipping_fee: 0,
+    const loadBarangays = async () => {
+      const prefix9 = cityCode.slice(0, 9);
+      const prefix6 = cityCode.slice(0, 6);
+      const fixSort = (list: PSGCBarangay[]) => {
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+        return list
+          .map((b) => ({ ...b, name: fixEncoding(b.name) }))
+          .sort((a, b) => collator.compare(a.name, b.name));
       };
 
-      // optional transaction_code generator
-      orderPayload.transaction_code = `TXN-${new Date().toISOString().slice(0,10).replace(/-/g,"")}-${Math.random().toString(36).slice(2,8).toUpperCase()}`;
+      try {
+        const fromCity = await fetchJSON<PSGCBarangay[]>(
+          `https://psgc.cloud/api/cities/${cityCode}/barangays`
+        );
+        const cleaned = fixSort(fromCity);
+        if (cleaned.length > 0) return setBarangays(cleaned);
+      } catch {}
 
-      const { data: createdOrders, error: orderError } = await supabase
-        .from("orders")
-        .insert([orderPayload])
-        .select()
-        .limit(1);
+      try {
+        const fromMunicipality = await fetchJSON<PSGCBarangay[]>(
+          `https://psgc.cloud/api/municipalities/${cityCode}/barangays`
+        );
+        const cleaned = fixSort(fromMunicipality);
+        if (cleaned.length > 0) return setBarangays(cleaned);
+      } catch {}
 
-      if (orderError) {
-        console.error("Order insert failed:", orderError);
-        toast.error("Failed to create order. Try again.");
-        setSubmitting(false);
+      try {
+        const all = await fetchJSON<PSGCBarangay[]>("https://psgc.cloud/api/barangays");
+        const filtered = all.filter(
+          (b) => b.code.startsWith(prefix9) || b.code.startsWith(prefix6)
+        );
+        setBarangays(fixSort(filtered));
+      } catch {
+        toast.error("Failed to load barangays");
+      }
+    };
+    loadBarangays();
+  }, [cityCode]);
+
+  /* ----------------------------- Sidebar orders ----------------------------- */
+  useEffect(() => {
+    let mounted = true;
+    const run = async () => {
+      if (!userId) {
+        setOrders([]);
         return;
       }
+      setFetchingOrders(true);
+      try {
+        const { data: userData } = await supabase.auth.getUser();
+        const authUser = userData?.user;
+        const authUserId = authUser?.id ?? userId;
+        const authEmail = authUser?.email ?? "";
 
-      const createdOrder = Array.isArray(createdOrders) ? createdOrders[0] : createdOrders;
-      const orderId = createdOrder?.id;
+        let { data: ordersData, error: ordersErr } = await supabase
+          .from("orders")
+          .select("id, status, grand_total, created_at, transaction_code")
+          .eq("customer_id", authUserId)
+          .order("created_at", { ascending: false })
+          .limit(50);
 
-      if (!orderId) {
-        toast.error("Could not determine created order id.");
-        setSubmitting(false);
-        return;
-      }
-
-      // 2) insert order_items
-      const itemsPayload = cart.map((ci) => ({
-        order_id: orderId,
-        inventory_id: ci.item.id, // adjust column name if necessary
-        product_name: ci.item.product_name ?? null,
-        quantity: ci.quantity,
-        unit_price: ci.item.unit_price ?? 0,
-        subtotal: (ci.item.unit_price ?? 0) * ci.quantity,
-      }));
-
-      const { error: itemsError } = await supabase.from("order_items").insert(itemsPayload);
-
-      if (itemsError) {
-        console.error("order_items insert failed:", itemsError);
-        toast.error("Order created but failed to save items. Contact support.");
-        // still consider clearing cart? usually no
-        setSubmitting(false);
-        return;
-      }
-
-      // 3) optionally: decrement inventory stock (careful, do this with RPC or server-side logic in real app)
-      // Here we'll attempt a best-effort update but keep it simple: loop updates (not transactional).
-      for (const ci of cart) {
-        try {
-          await supabase
-            .from("inventory")
-            .update({ quantity: Math.max(0, (ci.item.quantity ?? 0) - ci.quantity) })
-            .eq("id", ci.item.id);
-        } catch (e) {
-          // ignore per-item update errors for now
-          console.warn("Inventory update failed for item", ci.item.id, e);
+        if (ordersErr) {
+          const orParts: string[] = [];
+          if (authUserId) orParts.push(`user_id.eq.${authUserId}`);
+          if (authEmail) orParts.push(`email.eq.${authEmail}`);
+          if (orParts.length) {
+            const { data: customerRow } = await supabase
+              .from("customers")
+              .select("id")
+              .or(orParts.join(","))
+              .maybeSingle();
+            if (customerRow?.id) {
+              const { data: byCust } = await supabase
+                .from("orders")
+                .select("id, status, grand_total, created_at, transaction_code")
+                .eq("customer_id", customerRow.id)
+                .order("created_at", { ascending: false })
+                .limit(50);
+              ordersData = byCust ?? [];
+            } else {
+              ordersData = [];
+            }
+          } else {
+            ordersData = [];
+          }
         }
+        if (mounted) setOrders(ordersData ?? []);
+      } catch (err) {
+        console.error("[checkout] load orders error:", err);
+        toast.error("Unable to load past orders.");
+        if (mounted) setOrders([]);
+      } finally {
+        if (mounted) setFetchingOrders(false);
       }
+    };
+    run();
+    return () => {
+      mounted = false;
+    };
+  }, [userId]);
 
-      // 4) clear cart and navigate to orders (or order details)
-      clearCart();
-      toast.success("Order placed successfully.");
-      router.push("/customer/orders");
-    } catch (err) {
-      console.error("Place order error:", err);
-      toast.error("Unexpected error creating order.");
-    } finally {
-      setSubmitting(false);
+  /* --------------------------- Payment type logic --------------------------- */
+  useEffect(() => {
+    if (customerInfo.customer_type === "New Customer") {
+      setCustomerInfo((p) => ({ ...p, payment_type: "Cash" }));
+    } else if (customerInfo.customer_type === "Existing Customer") {
+      setCustomerInfo((p) => ({ ...p, payment_type: "Credit" }));
     }
+  }, [customerInfo.customer_type]);
+
+  useEffect(() => {
+    if (customerInfo.payment_type === "Credit") {
+      setTermsMonths((prev) => (prev == null ? 1 : prev));
+    } else {
+      setTermsMonths(null);
+      setInterestPercent(0);
+    }
+  }, [customerInfo.payment_type]);
+
+  useEffect(() => {
+    if (customerInfo.payment_type === "Credit" && termsMonths != null) {
+      setInterestPercent(TERM_TO_INTEREST[termsMonths] ?? 0);
+    }
+  }, [termsMonths, customerInfo.payment_type]);
+
+  /* ---------------------------- Cart quantity ops --------------------------- */
+  const handleUpdateQty = (ci: CtxCartItem, nextRaw: number) => {
+    const next = clampQty(Number.isFinite(nextRaw) ? nextRaw : 1);
+
+    // Enforce truck limits by weight while editing
+    const tempCart: CartItem[] = cart.map((x) => ({ item: x.item as any, quantity: x.quantity }));
+    const target = tempCart.find((x) => x.item.id === ci.item.id);
+    if (!target) return;
+
+    const perUnitKg = unitWeightKg(target.item as any);
+    if (perUnitKg <= 0) {
+      toast.error(LIMIT_TOAST);
+      return;
+    }
+
+    const weightWithoutThis = cartTotalWeightKg(tempCart) - perUnitKg * target.quantity;
+    const remainingKg = TRUCK_LIMITS.maxTotalWeightKg - weightWithoutThis;
+    const maxQtyByWeight = Math.max(0, Math.floor(remainingKg / perUnitKg));
+    const approved = Math.max(1, Math.min(next, maxQtyByWeight));
+
+    if (next > MAX_QTY) {
+      toast.error(`Maximum ${MAX_QTY} per item. For more, please submit another transaction.`);
+    } else if (next > approved) {
+      toast.error(LIMIT_TOAST);
+    }
+    updateQty(ci.item.id, approved);
   };
 
-  const subtotal = useMemo(() => cart.reduce((s, ci) => s + (Number(ci.item.unit_price || 0) * ci.quantity), 0), [cart]);
-  const tax = 0; // add tax logic if needed
+  /* ------------------------------ Derived totals ----------------------------- */
+  const subtotal = useMemo(
+    () => cart.reduce((s, ci) => s + (Number(ci.item.unit_price || 0) * ci.quantity), 0),
+    [cart]
+  );
+  const tax = 0;
   const shipping = 0;
   const grandTotal = subtotal + tax + shipping;
 
+  /* ------------------------------ Validation ------------------------------ */
+  const missingFields = useMemo(() => {
+    const missing: string[] = [];
+    if (!customerInfo.name?.trim()) missing.push("Customer Name");
+    if (!customerInfo.email?.includes("@")) missing.push("Email");
+    if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
+    if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) missing.push("Phone (11 digits)");
+    if (!houseStreet?.trim()) missing.push("House & Street");
+    if (!regionCode) missing.push("Region");
+    if (!isNCR && !provinceCode) missing.push("Province");
+    if (!cityCode) missing.push("City / Municipality");
+    if (!barangayCode) missing.push("Barangay");
+    if (cart.length === 0) missing.push("Cart");
+    if (customerInfo.payment_type === "Credit") {
+      if (!termsMonths) missing.push("Payment Terms (months)");
+      if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
+    }
+    return missing;
+  }, [
+    customerInfo.name,
+    customerInfo.email,
+    customerInfo.contact_person,
+    customerInfo.phone,
+    customerInfo.payment_type,
+    houseStreet,
+    regionCode,
+    provinceCode,
+    cityCode,
+    barangayCode,
+    cart,
+    isNCR,
+    termsMonths,
+    interestPercent,
+  ]);
+
+  const isConfirmEnabled = missingFields.length === 0;
+
+  /* ------------------------------- Handlers ------------------------------- */
+  const openConfirmModal = async () => {
+    // ensure we have a code and best-effort phone autofill
+    if (!customerInfo.code) {
+      setCustomerInfo((p) => ({ ...p, code: generateTransactionCode() }));
+    }
+
+    const { email: authEmail, name: authName } = await getAuthIdentity();
+    const emailToUse =
+      (customerInfo.email && customerInfo.email.trim()) || authDefaults.email || authEmail;
+
+    let ensuredPhone = normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
+    if (!ensuredPhone && emailToUse) ensuredPhone = await loadPhoneForEmail(emailToUse);
+
+    setAuthDefaults((prev) => ({
+      ...prev,
+      name: prev.name || authName,
+      email: prev.email || authEmail,
+      phone: ensuredPhone || prev.phone,
+    }));
+
+    setCustomerInfo((prev) => ({
+      ...prev,
+      name: prev.name || authDefaults.name || authName,
+      email: prev.email || authDefaults.email || authEmail,
+      phone: ensuredPhone || prev.phone,
+    }));
+
+    if (!ensuredPhone) {
+      toast.error("We couldn't auto-fill your phone number. Please update your profile.");
+    }
+
+    setShowConfirmModal(true);
+  };
+
+  const proceedToFinal = () => {
+    if (!isConfirmEnabled) {
+      toast.error(
+        `Please complete required fields: ${missingFields.slice(0, 3).join(", ")}${
+          missingFields.length > 3 ? "…" : ""
+        }`
+      );
+      return;
+    }
+    if (cart.length > TRUCK_LIMITS.maxDistinctItems) {
+      toast.error(LIMIT_TOAST);
+      return;
+    }
+    if (cartTotalWeightKg(cart as any) > TRUCK_LIMITS.maxTotalWeightKg) {
+      toast.error(LIMIT_TOAST);
+      return;
+    }
+    setShowConfirmModal(false);
+    setShowFinalModal(true);
+  };
+
+  const handleConfirmOrder = async () => {
+    if (placingOrder) return;
+    if (!isConfirmEnabled) {
+      toast.error("Please complete all required details before confirming.");
+      return;
+    }
+
+    setPlacingOrder(true);
+
+    // prepare payloads
+    const now = new Date();
+    const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
+    const normalizedPhone = normalizePhone(customerInfo.phone);
+
+    const customerPayload: Partial<CustomerInfo> = {
+      ...customerInfo,
+      phone: normalizedPhone || customerInfo.phone,
+      landmark: customerInfo.landmark || "",
+      date: phTime,
+      status: "pending",
+      transaction: cart
+        .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
+        .join(", "),
+    };
+
+    try {
+      // 1) customers
+      const { data: cust, error: custErr } = await supabase
+        .from("customers")
+        .insert([customerPayload])
+        .select()
+        .single();
+      if (custErr) throw custErr;
+      const customerId = cust.id as string;
+
+      // 2) orders
+      const totalAmount = subtotal;
+      const orderPayload: any = {
+        customer_id: customerId,
+        total_amount: totalAmount,
+        status: "pending",
+        date_created: phTime,
+      };
+      if (customerInfo.payment_type === "Credit") {
+        const months = termsMonths ?? 1;
+        orderPayload.terms = `Net ${months} Monthly`;
+        orderPayload.payment_terms = months;
+        orderPayload.interest_percent = TERM_TO_INTEREST[months];
+      }
+
+      const { data: ord, error: ordErr } = await supabase
+        .from("orders")
+        .insert([orderPayload])
+        .select()
+        .single();
+      if (ordErr) throw ordErr;
+      const orderId = ord.id as string;
+
+      // 3) order_items
+      const rows = cart.map((ci) => ({
+        order_id: orderId,
+        inventory_id: ci.item.id,
+        quantity: ci.quantity,
+        price: ci.item.unit_price || 0,
+      }));
+      const { error: itemsErr } = await supabase.from("order_items").insert(rows);
+      if (itemsErr) throw itemsErr;
+
+      // 4) admin notification
+      try {
+        const preview = cart
+          .slice(0, 3)
+          .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
+          .join(", ");
+        const more = cart.length > 3 ? `, +${cart.length - 3} more` : "";
+        await supabase.from("system_notifications").insert([
+          {
+            type: "order",
+            title: "🛒 Order Request",
+            message: `${customerPayload.name} • TXN ${
+              customerPayload.code || "—"
+            } • ${preview}${more} • Total: ${formatCurrency(totalAmount)}`,
+            order_id: orderId,
+            customer_id: customerId,
+            source: "customer",
+            read: false,
+            metadata: {
+              order_id: orderId,
+              txn_code: customerPayload.code || null,
+              total_amount: Number(totalAmount || 0),
+              item_count: cart.length,
+              payment_type: customerInfo.payment_type || "Cash",
+              terms_months:
+                customerInfo.payment_type === "Credit" ? termsMonths ?? null : null,
+              interest_percent:
+                customerInfo.payment_type === "Credit" ? interestPercent ?? null : null,
+            },
+          },
+        ]);
+      } catch (notifErr) {
+        console.warn("Failed to create order notification:", notifErr);
+      }
+
+      toast.success("Your order has been submitted successfully!");
+
+      const codeForPayments = (customerPayload.code as string) || (cust.code as string) || "";
+      setLastOrderId(orderId);
+      setLastTxnCode(codeForPayments || null);
+      setLastOrderTotal(totalAmount);
+
+      // reset UI
+      setShowFinalModal(false);
+      clearCart();
+
+      setCustomerInfo({
+        name: authDefaults.name,
+        email: authDefaults.email,
+        phone: authDefaults.phone,
+        address: "",
+        contact_person: "",
+        code: "",
+        area: "",
+        payment_type: "Cash",
+        customer_type: undefined,
+      });
+      setRegionCode("");
+      setProvinceCode("");
+      setCityCode("");
+      setBarangayCode("");
+      setProvinces([]);
+      setCities([]);
+      setBarangays([]);
+      setHouseStreet("");
+
+      // refresh past orders
+      try {
+        const emailUsed = customerInfo.email || authDefaults.email;
+        if (emailUsed) await setTypeFromHistory(emailUsed);
+      } catch {}
+
+      setShowAfterSubmitModal(true);
+    } catch (e: any) {
+      console.error("Order submission error:", e.message);
+      toast.error("Something went wrong. Please try again.");
+    } finally {
+      setPlacingOrder(false);
+    }
+  };
+
+  const goToPayments = () => {
+    const qp = new URLSearchParams();
+    if (lastOrderId) qp.set("orderId", lastOrderId);
+    if (lastTxnCode) qp.set("code", lastTxnCode);
+    router.push(`/customer/payments${qp.toString() ? `?${qp.toString()}` : ""}`);
+  };
+
+  /* --------------------------------- UI --------------------------------- */
   return (
     <div className="p-4">
       <header className="h-14 flex items-center gap-3">
-        <motion.h1 className="text-3xl font-bold tracking-tight text-neutral-800" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+        <motion.h1
+          className="text-3xl font-bold tracking-tight text-neutral-800"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+        >
           Cart / Checkout
         </motion.h1>
       </header>
@@ -388,7 +846,13 @@ useEffect(() => {
               <div className="text-center py-8">
                 <div className="text-gray-600 mb-3">Your cart is empty.</div>
                 <div className="flex justify-center gap-3">
-                  <button onClick={() => router.push("/customer/product-catalog")} className="px-4 py-2 rounded bg-[#181918] text-white">Shop Products</button>
+                  <button
+                    onClick={() => router.push("/customer/product-catalog")}
+
+                    className="px-4 py-2 rounded bg-[#181918] text-white"
+                  >
+                    Shop Products
+                  </button>
                 </div>
               </div>
             ) : (
@@ -412,31 +876,62 @@ useEffect(() => {
                               <div className="w-14 h-14 bg-gray-100 overflow-hidden rounded">
                                 {ci.item.image_url ? (
                                   // eslint-disable-next-line @next/next/no-img-element
-                                  <img src={ci.item.image_url} alt={ci.item.product_name} className="w-full h-full object-cover" />
+                                  <img
+                                    src={ci.item.image_url}
+                                    alt={ci.item.product_name}
+                                    className="w-full h-full object-cover"
+                                  />
                                 ) : (
-                                  <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">No Image</div>
+                                  <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">
+                                    No Image
+                                  </div>
                                 )}
                               </div>
                               <div>
                                 <div className="font-medium">{ci.item.product_name}</div>
-                                <div className="text-xs text-gray-500">{ci.item.category ?? ""} • {ci.item.subcategory ?? ""}</div>
+                                <div className="text-xs text-gray-500">
+                                  {ci.item.category ?? ""} • {ci.item.subcategory ?? ""}
+                                </div>
                               </div>
                             </div>
                           </td>
 
                           <td className="py-3">
                             <div className="flex items-center gap-2">
-                              <button onClick={() => updateQty(ci.item.id, clampQty(ci.quantity - 1))} className="px-2 py-1 border rounded">−</button>
-                              <input type="number" value={ci.quantity} onChange={(e) => handleUpdateQty(ci, Number(e.target.value) || 1)} className="w-16 text-center border rounded px-1 py-1" min={1} />
-                              <button onClick={() => updateQty(ci.item.id, clampQty(ci.quantity + 1))} className="px-2 py-1 border rounded">+</button>
+                              <button
+                                onClick={() => handleUpdateQty(ci, clampQty(ci.quantity - 1))}
+                                className="px-2 py-1 border rounded"
+                              >
+                                −
+                              </button>
+                              <input
+                                type="number"
+                                value={ci.quantity}
+                                onChange={(e) => handleUpdateQty(ci, Number(e.target.value) || 1)}
+                                className="w-16 text-center border rounded px-1 py-1"
+                                min={1}
+                              />
+                              <button
+                                onClick={() => handleUpdateQty(ci, clampQty(ci.quantity + 1))}
+                                className="px-2 py-1 border rounded"
+                              >
+                                +
+                              </button>
                             </div>
                           </td>
 
                           <td className="py-3">{formatCurrency(Number(ci.item.unit_price || 0))}</td>
-                          <td className="py-3">{formatCurrency((Number(ci.item.unit_price || 0) * ci.quantity))}</td>
+                          <td className="py-3">
+                            {formatCurrency(Number(ci.item.unit_price || 0) * ci.quantity)}
+                          </td>
 
                           <td className="py-3">
-                            <button onClick={() => removeItem(ci.item.id)} className="px-3 py-1 rounded bg-red-500 text-white">Remove</button>
+                            <button
+                              onClick={() => removeItem(ci.item.id)}
+                              className="px-3 py-1 rounded bg-red-500 text-white"
+                            >
+                              Remove
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -444,14 +939,45 @@ useEffect(() => {
                   </table>
                 </div>
 
-                {/* totals */}
-                <div className="mt-4 flex justify-end">
-                  <div className="w-full max-w-md bg-gray-50 p-4 rounded">
-                    <div className="flex justify-between text-sm text-gray-600 mb-1"><div>Subtotal</div><div>{formatCurrency(subtotal)}</div></div>
-                    <div className="flex justify-between text-sm text-gray-600 mb-1"><div>Shipping</div><div>{formatCurrency(shipping)}</div></div>
-                    <div className="flex justify-between text-sm text-gray-600 mb-1"><div>Tax</div><div>{formatCurrency(tax)}</div></div>
+                {/* totals + proceed */}
+                <div className="mt-4 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+                  <div className="w-full sm:w-auto bg-gray-50 p-4 rounded">
+                    <div className="flex justify-between text-sm text-gray-600 mb-1">
+                      <div>Subtotal</div>
+                      <div>{formatCurrency(subtotal)}</div>
+                    </div>
+                    <div className="flex justify-between text-sm text-gray-600 mb-1">
+                      <div>Shipping</div>
+                      <div>{formatCurrency(0)}</div>
+                    </div>
+                    <div className="flex justify-between text-sm text-gray-600 mb-1">
+                      <div>Tax</div>
+                      <div>{formatCurrency(0)}</div>
+                    </div>
                     <div className="h-px bg-gray-200 my-2" />
-                    <div className="flex justify-between font-semibold text-lg"><div>Grand Total</div><div>{formatCurrency(grandTotal)}</div></div>
+                    <div className="flex justify-between font-semibold text-lg">
+                      <div>Grand Total</div>
+                      <div>{formatCurrency(subtotal)}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        clearCart();
+                        toast("Cart cleared.");
+                      }}
+                      className="px-4 py-2 rounded border"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      onClick={openConfirmModal}
+                      className="px-4 py-2 rounded bg-[#ffba20] text-black font-semibold"
+                      disabled={cart.length === 0}
+                    >
+                      Proceed to Checkout
+                    </button>
                   </div>
                 </div>
               </>
@@ -459,39 +985,44 @@ useEffect(() => {
           </div>
         </div>
 
-        {/* RIGHT: Customer details & actions */}
+        {/* RIGHT: Snapshot of customer status */}
         <aside>
-          <div className="bg-white rounded-lg shadow p-4 mb-4">
-            <h3 className="font-semibold mb-2">Customer Details</h3>
-
-            <label className="text-xs text-gray-600">Name</label>
-            <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full border rounded px-3 py-2 mb-3" />
-
-            <label className="text-xs text-gray-600">Email</label>
-            <input value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} className="w-full border rounded px-3 py-2 mb-3" />
-
-            <label className="text-xs text-gray-600">Phone</label>
-            <input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} className="w-full border rounded px-3 py-2 mb-3" />
-
-            <label className="text-xs text-gray-600">Address</label>
-            <textarea value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} className="w-full border rounded px-3 py-2 mb-3" rows={3} />
-
-            <div className="flex gap-2 mt-2">
-              <button onClick={handlePlaceOrder} className="flex-1 px-3 py-2 rounded bg-[#ffba20] text-black font-semibold" disabled={submitting || cart.length === 0}>
-                {submitting ? "Placing order..." : `Place Order (${formatCurrency(grandTotal)})`}
-              </button>
-
-              <button onClick={() => { clearCart(); toast("Cart cleared."); }} className="px-3 py-2 rounded border">Clear</button>
+          <div className="bg-white rounded-lg shadow p-4">
+            <h3 className="font-semibold mb-2">Customer Snapshot</h3>
+            <div className="text-sm text-gray-700 space-y-1">
+              <div>
+                <span className="text-gray-500">Name: </span>
+                <span className="font-medium">{customerInfo.name || authDefaults.name || "—"}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">Email: </span>
+                <span className="font-medium">{customerInfo.email || authDefaults.email || "—"}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">Phone: </span>
+                <span className="font-medium">{customerInfo.phone || authDefaults.phone || "—"}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">Customer Type: </span>
+                <span className="font-medium">{customerInfo.customer_type || "—"}</span>
+              </div>
+              {orderHistoryCount !== null && (
+                <div className="text-xs text-gray-500">
+                  Past orders under this email: {orderHistoryCount}
+                </div>
+              )}
             </div>
           </div>
 
           {/* Past orders for this customer */}
-          <div className="bg-white rounded-lg shadow p-4">
+          <div className="bg-white rounded-lg shadow p-4 mt-4">
             <h3 className="font-semibold mb-3">Your Orders</h3>
             {fetchingOrders ? (
               <div className="text-sm text-gray-500">Loading orders...</div>
             ) : orders.length === 0 ? (
-              <div className="text-sm text-gray-500">No orders yet. Place your first order!</div>
+              <div className="text-sm text-gray-500">
+                No orders yet. Place your first order!
+              </div>
             ) : (
               <ul className="space-y-2">
                 {orders.map((o) => (
@@ -499,10 +1030,12 @@ useEffect(() => {
                     <div className="flex justify-between items-center">
                       <div>
                         <div className="font-medium">#{o.transaction_code ?? o.id}</div>
-                        <div className="text-xs text-gray-500">{formatPHDate(o.created_at)}</div>
+                        <div className="text-xs text-gray-500">{formatPH(o.created_at)}</div>
                       </div>
                       <div className="text-right">
-                        <div className="font-semibold">{formatCurrency(Number(o.grand_total ?? 0))}</div>
+                        <div className="font-semibold">
+                          {formatCurrency(Number(o.grand_total ?? 0))}
+                        </div>
                         <div className="text-xs text-gray-500">{o.status}</div>
                       </div>
                     </div>
@@ -513,6 +1046,555 @@ useEffect(() => {
           </div>
         </aside>
       </div>
+
+      {/* ------------------------ Confirm Order Modal ------------------------ */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 260, damping: 22 }}
+            className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
+          >
+            <h2 className="text-2xl font-semibold tracking-tight shrink-0">Confirm Order</h2>
+
+            <div className="flex-1 overflow-auto mt-4 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <input
+                  placeholder="Customer Name"
+                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+                  value={customerInfo.name}
+                  readOnly
+                />
+                <input
+                  type="email"
+                  placeholder="Email"
+                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+                  value={customerInfo.email}
+                  readOnly
+                />
+                <input
+                  type="tel"
+                  placeholder="Phone (11 digits)"
+                  className={`border px-3 py-2 rounded bg-gray-100 cursor-not-allowed ${
+                    !customerInfo.phone ? "border-red-400" : ""
+                  }`}
+                  value={customerInfo.phone}
+                  readOnly
+                />
+
+                <input
+                  placeholder="Contact Person (required)"
+                  maxLength={30}
+                  pattern="[A-Za-z\\s]*"
+                  title="Letters only, maximum 30 characters"
+                  className={`border px-3 py-2 rounded ${
+                    !customerInfo.contact_person?.trim()
+                      ? "border-red-400 focus:ring-red-500"
+                      : ""
+                  }`}
+                  value={customerInfo.contact_person || ""}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/[^A-Za-z\\s]/g, "");
+                    if (value.length <= 30) {
+                      setCustomerInfo({ ...customerInfo, contact_person: value });
+                    }
+                  }}
+                />
+
+                <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-sm mb-1">Region</label>
+                    <select
+                      className="border px-3 py-2 rounded w-full"
+                      value={regionCode}
+                      onChange={(e) => setRegionCode(e.target.value)}
+                    >
+                      <option value="">Select region</option>
+                      {regions.map((r) => (
+                        <option key={r.code} value={r.code}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm mb-1">Province</label>
+                    <select
+                      className="border px-3 py-2 rounded w-full"
+                      value={provinceCode}
+                      onChange={(e) => setProvinceCode(e.target.value)}
+                      disabled={!regionCode || isNCR}
+                    >
+                      <option value="">
+                        {!regionCode
+                          ? "Select region first"
+                          : isNCR
+                          ? "NCR has no provinces"
+                          : "Select province"}
+                      </option>
+                      {!isNCR &&
+                        provinces.map((p) => (
+                          <option key={p.code} value={p.code}>
+                            {p.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm mb-1">City / Municipality</label>
+                    <select
+                      className="border px-3 py-2 rounded w-full"
+                      value={cityCode}
+                      onChange={(e) => setCityCode(e.target.value)}
+                      disabled={isNCR ? !regionCode : !provinceCode}
+                    >
+                      <option value="">
+                        {isNCR
+                          ? regionCode
+                            ? "Select city/municipality"
+                            : "Select region first"
+                          : provinceCode
+                          ? "Select city/municipality"
+                          : "Select province first"}
+                      </option>
+                      {cities.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm mb-1">Barangay</label>
+                    <select
+                      className="border px-3 py-2 rounded w-full"
+                      value={barangayCode}
+                      onChange={(e) => setBarangayCode(e.target.value)}
+                      disabled={!cityCode}
+                    >
+                      <option value="">
+                        {cityCode ? "Select barangay" : "Select city first"}
+                      </option>
+                      {barangays.map((b) => (
+                        <option key={b.code} value={b.code}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <input
+                  placeholder="House Number & Street Name"
+                  maxLength={30}
+                  title="Maximum 30 characters only"
+                  className="border px-3 py-2 rounded col-span-2"
+                  value={houseStreet}
+                  onChange={(e) => {
+                    if (e.target.value.length <= 30) setHouseStreet(e.target.value);
+                  }}
+                />
+                <input
+                  placeholder="Landmark"
+                  maxLength={30}
+                  title="Maximum 30 characters only"
+                  className="border px-3 py-2 rounded col-span-2"
+                  value={customerInfo.landmark || ""}
+                  onChange={(e) =>
+                    e.target.value.length <= 30 &&
+                    setCustomerInfo({ ...customerInfo, landmark: e.target.value })
+                  }
+                />
+                <input
+                  className="border px-3 py-2 rounded col-span-2 bg-gray-50"
+                  value={customerInfo.address || ""}
+                  placeholder="Address will be set from House/St. + Barangay/City/Province/Region"
+                  readOnly
+                />
+
+                <div className="col-span-2">
+                  <label className="block mb-1">Customer Type</label>
+                  <input
+                    className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
+                    value={customerInfo.customer_type || ""}
+                    readOnly
+                  />
+                  {orderHistoryCount !== null && (
+                    <div className="text-xs text-gray-500 mt-1">
+                      Past orders under this email: {orderHistoryCount}
+                    </div>
+                  )}
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block mb-1">Payment Type</label>
+                  <div className="flex gap-4">
+                    {(customerInfo.customer_type === "Existing Customer"
+                      ? ["Credit"]
+                      : ["Cash"]
+                    ).map((type) => (
+                      <label key={type} className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="payment_type"
+                          value={type}
+                          checked={customerInfo.payment_type === type}
+                          onChange={(e) =>
+                            setCustomerInfo({
+                              ...customerInfo,
+                              payment_type: e.target.value as "Cash" | "Credit",
+                            })
+                          }
+                        />
+                        {type}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {customerInfo.payment_type === "Credit" && (
+                  <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block mb-1">Payment Terms</label>
+                      <select
+                        className={`border px-3 py-2 rounded w-full ${
+                          !termsMonths ? "border-red-400" : ""
+                        }`}
+                        value={termsMonths ?? ""}
+                        onChange={(e) => setTermsMonths(Number(e.target.value) || null)}
+                      >
+                        <option value="">Select term</option>
+                        <option value={1}>1 month (Net 1)</option>
+                        <option value={3}>3 months (Net 3)</option>
+                        <option value={6}>6 months (Net 6)</option>
+                        <option value={12}>12 months (Net 12)</option>
+                      </select>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Only available for Existing Customers with Credit.
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block mb-1">Interest %</label>
+                      <input
+                        type="number"
+                        className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
+                        value={interestPercent}
+                        readOnly
+                        disabled
+                        title="Interest is fixed per selected term"
+                      />
+                      <div className="text-xs text-gray-500 mt-1">
+                        1m→2%, 3m→6%, 6m→12%, 12m→24%.
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Items table */}
+              <div className="border rounded-xl bg-gray-100 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-200 sticky top-0 z-10">
+                    <tr>
+                      <th className="py-2 px-3 text-left">Product</th>
+                      <th className="py-2 px-3 text-left">Category</th>
+                      <th className="py-2 px-3 text-left">Subcategory</th>
+                      <th className="py-2 px-3 text-left">Unit Price</th>
+                      <th className="py-2 px-3 text-left">Qty</th>
+                      <th className="py-2 px-3 text-left">Status</th>
+                      <th className="py-2 px-3 text-left">Line Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cart.map((ci) => (
+                      <tr key={ci.item.id} className="border-b">
+                        <td className="py-2 px-3">{ci.item.product_name}</td>
+                        <td className="py-2 px-3">{ci.item.category}</td>
+                        <td className="py-2 px-3">{ci.item.subcategory}</td>
+                        <td className="py-2 px-3">
+                          {formatCurrency(Number(ci.item.unit_price || 0))}
+                        </td>
+                        <td className="py-2 px-3">{ci.quantity}</td>
+                        <td className="py-2 px-3">{ci.item.status}</td>
+                        <td className="py-2 px-3 font-medium">
+                          {formatCurrency(Number(ci.item.unit_price || 0) * ci.quantity)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
+                  <div className="text-xs text-gray-500">
+                    * Final price may change if an admin applies a discount during order
+                    processing.
+                  </div>
+                  <div className="text-right text-sm">
+                    <div>
+                      <span className="mr-2 text-gray-600">Estimated Total:</span>
+                      <span className="font-semibold">{formatCurrency(subtotal)}</span>
+                    </div>
+                    {customerInfo.payment_type === "Credit" && (
+                      <div className="mt-1">
+                        <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
+                        <span className="font-semibold">
+                          {formatCurrency(subtotal * (1 + Math.max(0, interestPercent) / 100))}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {missingFields.length > 0 && (
+              <div className="mt-3 text-sm text-red-600">
+                <strong>Required:</strong>{" "}
+                {missingFields.slice(0, 5).join(", ")}
+                {missingFields.length > 5 ? "..." : ""}
+              </div>
+            )}
+
+            <div className="shrink-0 flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setShowConfirmModal(false)}
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={proceedToFinal}
+                className="px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                disabled={!isConfirmEnabled}
+                title={!isConfirmEnabled ? "Please complete required fields" : "Submit order"}
+              >
+                Submit Order
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* ------------------------ Final Confirmation Modal ------------------------ */}
+      {showFinalModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 260, damping: 22 }}
+            className="bg-white w-full max-w-4xl max-height-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
+          >
+            <h2 className="text-2xl font-semibold tracking-tight shrink-0">Order Confirmation</h2>
+
+            <div className="mt-4 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <div className="text-xs text-gray-500">Customer</div>
+                  <div className="font-medium">{customerInfo.name}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Transaction Code</div>
+                  <div className="font-medium">{customerInfo.code}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Date</div>
+                  <div className="font-medium">{formatPH()}</div>
+                </div>
+              </div>
+
+              {customerInfo.payment_type === "Credit" && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <div className="text-xs text-gray-500">Payment Type</div>
+                    <div className="font-medium">Credit</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Terms</div>
+                    <div className="font-medium">{termsMonths ?? "-"} month(s)</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Interest (Whole Term)</div>
+                    <div className="font-medium">{interestPercent}%</div>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                <div>
+                  <div className="text-xs text-gray-500">Region</div>
+                  <div className="font-medium">{selectedRegion?.name ?? "-"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Province</div>
+                  <div className="font-medium">{selectedProvince?.name ?? (isNCR ? "—" : "-")}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">City/Municipality</div>
+                  <div className="font-medium">{selectedCity?.name ?? "-"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Barangay</div>
+                  <div className="font-medium">{selectedBarangay?.name ?? "-"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">House & Street</div>
+                  <div className="font-medium">{houseStreet || "-"}</div>
+                </div>
+              </div>
+
+              <div className="border rounded-xl bg-gray-100 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-200 sticky top-0 z-10">
+                    <tr>
+                      <th className="py-2 px-3 text-left">Product</th>
+                      <th className="py-2 px-3 text-left">Category</th>
+                      <th className="py-2 px-3 text-left">Subcategory</th>
+                      <th className="py-2 px-3 text-left">Unit Price</th>
+                      <th className="py-2 px-3 text-left">Qty</th>
+                      <th className="py-2 px-3 text-left">Status</th>
+                      <th className="py-2 px-3 text-left">Line Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cart.map((ci) => (
+                      <tr key={ci.item.id} className="border-b">
+                        <td className="py-2 px-3">{ci.item.product_name}</td>
+                        <td className="py-2 px-3">{ci.item.category}</td>
+                        <td className="py-2 px-3">{ci.item.subcategory}</td>
+                        <td className="py-2 px-3">
+                          {formatCurrency(Number(ci.item.unit_price || 0))}
+                        </td>
+                        <td className="py-2 px-3">{ci.quantity}</td>
+                        <td className="py-2 px-3">{ci.item.status}</td>
+                        <td className="py-2 px-3 font-medium">
+                          {formatCurrency(Number(ci.item.unit_price || 0) * ci.quantity)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
+                  <div className="text-xs text-gray-500">
+                    * Final price may change if an admin applies a discount during order
+                    processing.
+                  </div>
+                  <div className="text-right text-sm">
+                    <div>
+                      <span className="mr-2 text-gray-600">Estimated Total:</span>
+                      <span className="font-semibold">{formatCurrency(subtotal)}</span>
+                    </div>
+                    {customerInfo.payment_type === "Credit" && (
+                      <div className="mt-1">
+                        <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
+                        <span className="font-semibold">
+                          {formatCurrency(subtotal * (1 + Math.max(0, interestPercent) / 100))}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {missingFields.length > 0 && (
+              <div className="mt-3 text-sm text-red-600">
+                <strong>Missing required fields:</strong>{" "}
+                {missingFields.slice(0, 5).join(", ")}
+                {missingFields.length > 5 ? "..." : ""}
+              </div>
+            )}
+
+            <div className="shrink-0 flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => !placingOrder && setShowFinalModal(false)}
+                disabled={placingOrder || !isConfirmEnabled}
+                className={`px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm ${
+                  placingOrder || !isConfirmEnabled ? "opacity-60 cursor-not-allowed" : ""
+                }`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmOrder}
+                disabled={placingOrder || !isConfirmEnabled}
+                className={`px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg inline-flex items-center gap-2 ${
+                  placingOrder || !isConfirmEnabled ? "opacity-70 cursor-not-allowed" : ""
+                }`}
+              >
+                {placingOrder ? (
+                  <>
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-black/40 border-t-black" />
+                    Submitting…
+                  </>
+                ) : (
+                  "Confirm Order"
+                )}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* ------------------------ After-Submit Choice Modal ------------------------ */}
+      {showAfterSubmitModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 260, damping: 22 }}
+            className="bg-white w-full max-w-md p-6 rounded-2xl shadow-2xl ring-1 ring-black/5"
+          >
+            <div className="flex items-start justify-between">
+              <h3 className="text-xl font-semibold">Order Submitted</h3>
+              <button
+                className="text-gray-500 hover:text-black"
+                onClick={() => setShowAfterSubmitModal(false)}
+                aria-label="Close"
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-3 text-sm text-gray-700 space-y-2">
+              <p>Your order was placed successfully.</p>
+              <div className="rounded-lg bg-gray-50 p-3 ring-1 ring-black/5">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Transaction Code:</span>
+                  <span className="font-medium">{lastTxnCode || "—"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Estimated Total:</span>
+                  <span className="font-semibold">{formatCurrency(lastOrderTotal)}</span>
+                </div>
+              </div>
+
+              <p className="mt-2">
+                Would you like to proceed to the <strong>Payments</strong> page now, or stay
+                here to place another order?
+              </p>
+            </div>
+
+            <div className="mt-5 flex gap-2 justify-end">
+              <button
+                onClick={() => setShowAfterSubmitModal(false)}
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50"
+              >
+                Stay & Order More
+              </button>
+              <button onClick={goToPayments} className="px-4 py-2 rounded-xl bg-[#ffba20] text-black">
+                Proceed to Payments
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
