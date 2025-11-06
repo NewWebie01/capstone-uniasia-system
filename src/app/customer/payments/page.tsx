@@ -194,7 +194,7 @@ export default function CustomerPaymentsPage() {
           return;
         }
 
-        const { data: customers } = await supabase
+        const { data: customers, error } = await supabase
           .from("customers")
           .select(
             `
@@ -233,19 +233,21 @@ export default function CustomerPaymentsPage() {
           .eq("email", email)
           .order("date", { ascending: false });
 
+        if (error) throw error;
         const txList = (customers as CustomerTx[]) || [];
         setTxns(txList);
 
         // Load payments for these customers
         const customerIds = txList.map((c) => String(c.id));
         if (customerIds.length) {
-          const { data: pays } = await supabase
+          const { data: pays, error: pErr } = await supabase
             .from("payments")
             .select(
               "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, status, created_at"
             )
             .in("customer_id", customerIds)
             .order("created_at", { ascending: false });
+          if (pErr) throw pErr;
           setPayments((pays as PaymentRow[]) || []);
         } else {
           setPayments([]);
@@ -700,9 +702,7 @@ export default function CustomerPaymentsPage() {
   const allTermsPaid =
     installments.length > 0 && unpaidInstallments.length === 0;
 
-  // 4) Equalized logic: always divide the *current remaining balance* evenly
-  // across remaining unpaid terms. If DB says "all paid" but balance > 0,
-  // treat leftover as ONE catch-up term.
+  // 4) Equalized logic
   const remainingBalance = round2(Number(selectedPack?.balance || 0));
   const remainingTerms = useMemo(() => {
     if (!selectedPack || !isCredit) return 0;
@@ -723,7 +723,7 @@ export default function CustomerPaymentsPage() {
     return round2(remainingBalance / remainingTerms);
   }, [isCredit, selectedPack, remainingTerms, remainingBalance]);
 
-  // 5) Build the *display* rows for the modal using equalized remaining amounts.
+  // 5) Display rows for the modal using equalized remaining amounts.
   const breakdownRows = useMemo<InstallmentRow[]>(() => {
     if (!selectedPack || !isCredit) return installments;
 
@@ -1089,9 +1089,7 @@ export default function CustomerPaymentsPage() {
           isCash ? "(Cash)" : `(Cheque ${chequeNumber || ""})`
         }`.trim();
 
-        // IMPORTANT: Do NOT set order_id column here, or the bell will
-        // dedupe it as "order:*". Keep order_id in metadata instead so
-        // canonicalKey becomes "payment:<payment_id>".
+        // Keep order_id in metadata to avoid dedupe with order events.
         await supabase.from("system_notifications").insert([
           {
             type: "payment",
@@ -1100,8 +1098,8 @@ export default function CustomerPaymentsPage() {
             source: "customer",
             read: false,
             metadata: {
-              payment_id: newPaymentId, // drives "payment:*" canonical key
-              order_id: orderId, // kept in metadata
+              payment_id: newPaymentId,
+              order_id: orderId,
               customer_id: meId,
               txn_code: selectedPack.code,
               amount: Number(finalAmount.toFixed(2)),
@@ -1137,7 +1135,7 @@ export default function CustomerPaymentsPage() {
     }
   }
 
-  /* ---------------------- Installment breakdown modal ---------------------- */
+  /* ---------------------- Installment breakdown helpers ---------------------- */
 
   // Count rows paid (trust backend values)
   const paidCount = useMemo(() => {
@@ -1188,6 +1186,7 @@ export default function CustomerPaymentsPage() {
             onSubmit={handleSubmit}
             className="grid grid-cols-1 md:grid-cols-2 gap-4"
           >
+            {/* TXN selector */}
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
                 Select Transaction (TXN) *
@@ -1247,210 +1246,38 @@ export default function CustomerPaymentsPage() {
               </select>
             </div>
 
-            {/* Selected TXN summary + installments chip (no remaining months) */}
+            {/* Selected TXN summary + installment counters */}
             {!!selectedPack && (
-              <div className="mt-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                <div className="text-sm md:text-base text-gray-700">
-                  <span className="font-semibold">
-                    Remaining balance (incl. shipping):
-                  </span>{" "}
-                  <span className="block md:inline font-bold text-green-700 leading-tight text-xl md:text-2xl">
-                    {formatCurrency(selectedPack.balance)}
-                  </span>
-                </div>
-
-<<<<<<< HEAD
-{/* Selected TXN summary + installment counters */}
-{!!selectedPack && (
-  <div className="mt-2">
-    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-      {/* Remaining Balance */}
-      <div className="flex flex-col">
-        <span className="font-semibold text-gray-800">
-          Remaining balance (incl. shipping):
-        </span>
-        <span className="font-bold text-green-700 text-2xl leading-tight">
-          {formatCurrency(selectedPack.balance)}
-        </span>
-      </div>
-
-      {/* Credit counters */}
-      {isCredit && (
-        <div className="flex items-center gap-3 text-sm md:text-base">
-          <div>
-            <span className="font-semibold">Total Monthly Paid:</span>{" "}
-            <span className="font-bold">{paidCount}</span>
-          </div>
-          <span className="opacity-50">•</span>
-          <div>
-            <span className="font-semibold">Remaining Months:</span>{" "}
-            <span className="font-bold">{Math.max(0, remainingTerms)}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  </div>
-)}
-
-
-
-{/* Amount (LOCKED) + controls */}
-<div className="col-span-1">
-  <label className="text-xs text-gray-600">Amount *</label>
-  <div className="mt-1">
-    <input
-      type="text"
-      value={amount}
-      readOnly
-      onKeyDown={(e) => e.preventDefault()}
-      onWheel={(e) => e.preventDefault()}
-      className="w-full rounded-lg border px-3 py-2 border-gray-300 bg-gray-50 cursor-not-allowed focus:outline-none"
-    />
-  </div>
-
-  {/* CREDIT controls */}
-  {isCredit && (
-    <div className="mt-2 flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        onClick={() => stepMultiplier(-1)}
-        className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
-        title="Pay fewer months"
-        disabled={effectiveTermAmount <= 0 || termMultiplier <= 1}
-      >
-        <Minus className="h-4 w-4" />
-      </button>
-
-      <div
-        className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
-        title={effectiveTermAmount > 0 ? "Number of months to pay" : "Schedule not loaded yet"}
-      >
-        × {termMultiplier}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => stepMultiplier(+1)}
-        className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
-        title="Pay more months"
-        disabled={effectiveTermAmount <= 0 || termMultiplier >= getCreditMaxMultiplier()}
-      >
-        <Plus className="h-4 w-4" />
-      </button>
-
-      <div className="flex gap-2 ml-1">
-        <button
-          type="button"
-          onClick={payInFull}
-          className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
-          style={{ backgroundColor: "#ffba20" }}
-          disabled={effectiveTermAmount <= 0}
-        >
-          Pay in Full
-        </button>
-
-        <button
-          type="button"
-          onClick={payInHalf}
-          className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
-          style={{ backgroundColor: "#ffba20" }}
-          disabled={effectiveTermAmount <= 0}
-
-        >
-          Pay in Half
-        </button>
-      </div>
-    </div>
-  )}
-
-  {/* CASH controls */}
-  {isCash && (
-    <div className="mt-2 flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        onClick={() => bumpCash("dec")}
-        className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
-        title={`Decrease ₱${CASH_STEP.toLocaleString()}`}
-      >
-        <Minus className="h-4 w-4" />
-      </button>
-
-      <div
-        className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
-        title="Cash step"
-      >
-        ₱{CASH_STEP.toLocaleString()}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => bumpCash("inc")}
-        className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
-        title={`Increase ₱${CASH_STEP.toLocaleString()}`}
-      >
-        <Plus className="h-4 w-4" />
-      </button>
-
-      <div className="flex gap-2 ml-1">
-        <button
-          type="button"
-          onClick={payInFull}
-          className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
-          style={{ backgroundColor: "#ffba20" }}
-        >
-          Pay in Full
-        </button>
-
-        <button
-          type="button"
-          onClick={payInHalf}
-          className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
-          style={{ backgroundColor: "#ffba20" }}
-        >
-          Pay in Half
-        </button>
-      </div>
-    </div>
-  )}
-
-{/* Optional hint */}
-{!isCash && Number(amount) > 0 && (
-  <div className="mt-1 text-xs text-green-700">
-    {(() => {
-      const amt = Number(amount) || 0;
-      const per = effectiveTermAmount;
-      if (allTermsPaid) {
-        return <>This payment will settle the <b>remaining balance</b>.</>;
-      }
-      if (per > 0) {
-        const k = Math.min(unpaidInstallments.length, Math.floor(amt / per));
-        // const scheduleTotal = totalOfAllUnpaid();
-        const isFullWithLeftover =
-          Math.abs(amt - (selectedPack?.balance ?? 0)) < EPS &&
-          totalOfAllUnpaid  + EPS < (selectedPack?.balance ?? 0);
-        return (
-          <>
-            This payment will pay off <b>{k}</b> installment{k > 1 ? "s" : ""}.
-            {isFullWithLeftover && (
-              <> It also settles the <b>remaining shipping/adjustment</b> amount.</>
-=======
-                {isCredit && (
-                  <div className="inline-flex items-center gap-3 self-start md:self-auto rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    <div>
-                      <span className="font-semibold">Total Months:</span>{" "}
-                      <span className="font-bold">
-                        {selectedPack?.order?.payment_terms ?? 0}
-                      </span>
-                    </div>
-                    <span className="opacity-50">•</span>
-                    <div>
-                      <span className="font-semibold">Total Monthly Paid:</span>{" "}
-                      <span className="font-bold">{paidCount}</span>
-                    </div>
+              <div className="mt-2">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  {/* Remaining Balance */}
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-gray-800">
+                      Remaining balance (incl. shipping):
+                    </span>
+                    <span className="font-bold text-green-700 text-2xl leading-tight">
+                      {formatCurrency(selectedPack.balance)}
+                    </span>
                   </div>
-                )}
+
+                  {/* Credit counters */}
+                  {isCredit && (
+                    <div className="flex items-center gap-3 text-sm md:text-base">
+                      <div>
+                        <span className="font-semibold">Total Monthly Paid:</span>{" "}
+                        <span className="font-bold">{paidCount}</span>
+                      </div>
+                      <span className="opacity-50">•</span>
+                      <div>
+                        <span className="font-semibold">Remaining Months:</span>{" "}
+                        <span className="font-bold">
+                          {Math.max(0, remainingTerms)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
->>>>>>> 28f161102cbc440c06024688bc2e39aea475c78e
             )}
 
             {/* Amount (LOCKED) + controls */}
@@ -1510,7 +1337,7 @@ export default function CustomerPaymentsPage() {
                       onClick={payInFull}
                       className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
                       style={{ backgroundColor: "#ffba20" }}
-                      disabled={effectiveTermAmount <= 0}
+                      disabled={effectiveTermAmount <= 0 && remainingTerms <= 0}
                     >
                       Pay in Full
                     </button>
@@ -1520,7 +1347,7 @@ export default function CustomerPaymentsPage() {
                       onClick={payInHalf}
                       className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
                       style={{ backgroundColor: "#ffba20" }}
-                      disabled={effectiveTermAmount <= 0}
+                      disabled={effectiveTermAmount <= 0 && remainingTerms <= 0}
                     >
                       Pay in Half
                     </button>
@@ -1643,6 +1470,7 @@ export default function CustomerPaymentsPage() {
                 Up to 20 digits. Letters or symbols are not allowed.
               </div>
             </div>
+
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
                 Bank Name {isCash ? "(optional)" : "*"}
@@ -1656,6 +1484,7 @@ export default function CustomerPaymentsPage() {
                 required={!isCash}
               />
             </div>
+
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
                 Cheque Date {isCash ? "(optional)" : "*"}
@@ -1669,6 +1498,7 @@ export default function CustomerPaymentsPage() {
                 required={!isCash}
               />
             </div>
+
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
                 Cheque Image {isCash ? "(optional)" : "*"}
@@ -1690,6 +1520,7 @@ export default function CustomerPaymentsPage() {
                 </span>
               </div>
             </div>
+
             <div className="col-span-1 md:col-span-2 flex justify-end gap-2">
               <button
                 type="button"
@@ -1884,6 +1715,7 @@ export default function CustomerPaymentsPage() {
                 </table>
               </div>
             </div>
+
           </div>
         )}
       </div>

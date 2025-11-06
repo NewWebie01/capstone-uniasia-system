@@ -126,7 +126,7 @@ const getAuthIdentity = async () => {
   const email = user?.email ?? "";
   const name = getDisplayNameFromMetadata(user?.user_metadata, email);
   const phone = normalizePhone((user?.user_metadata as any)?.phone || "");
-  return { email, name, phone };
+  return { email, name, phone, authUserId: user?.id ?? null };
 };
 
 const loadPhoneForEmail = async (email: string): Promise<string> => {
@@ -228,7 +228,7 @@ export default function CheckoutPage() {
   const [lastOrderTotal, setLastOrderTotal] = useState<number>(0);
 
   // orders sidebar
-  const [userId, setUserId] = useState<string | null>(null);
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [fetchingOrders, setFetchingOrders] = useState(false);
 
@@ -288,7 +288,7 @@ export default function CheckoutPage() {
   /* ------------------------ Prefill from auth ------------------------ */
   useEffect(() => {
     (async () => {
-      const { email, name, phone: phoneFromAuth } = await getAuthIdentity();
+      const { email, name, phone: phoneFromAuth, authUserId } = await getAuthIdentity();
       if (email) {
         const phoneFromSources = phoneFromAuth || (await loadPhoneForEmail(email));
         setAuthDefaults({ name: name || "", email: email || "", phone: phoneFromSources || "" });
@@ -300,9 +300,7 @@ export default function CheckoutPage() {
         }));
         await setTypeFromHistory(email);
       }
-      // store auth id (if you also bind user_id in customers)
-      const { data: session } = await supabase.auth.getUser();
-      setUserId(session?.user?.id ?? null);
+      setAuthUserId(authUserId);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -455,7 +453,7 @@ export default function CheckoutPage() {
   useEffect(() => {
     let mounted = true;
     const run = async () => {
-      if (!userId) {
+      if (!authUserId) {
         setOrders([]);
         return;
       }
@@ -463,19 +461,19 @@ export default function CheckoutPage() {
       try {
         const { data: userData } = await supabase.auth.getUser();
         const authUser = userData?.user;
-        const authUserId = authUser?.id ?? userId;
+        const authUserIdInner = authUser?.id ?? authUserId;
         const authEmail = authUser?.email ?? "";
 
         let { data: ordersData, error: ordersErr } = await supabase
           .from("orders")
-          .select("id, status, grand_total, created_at, transaction_code")
-          .eq("customer_id", authUserId)
+          .select("id, status, grand_total_with_interest, created_at")
+          .eq("customer_id", authUserIdInner || "__no_such_id__")
           .order("created_at", { ascending: false })
           .limit(50);
 
         if (ordersErr) {
           const orParts: string[] = [];
-          if (authUserId) orParts.push(`user_id.eq.${authUserId}`);
+          if (authUserIdInner) orParts.push(`id.eq.${authUserIdInner}`); // customers.id
           if (authEmail) orParts.push(`email.eq.${authEmail}`);
           if (orParts.length) {
             const { data: customerRow } = await supabase
@@ -486,7 +484,7 @@ export default function CheckoutPage() {
             if (customerRow?.id) {
               const { data: byCust } = await supabase
                 .from("orders")
-                .select("id, status, grand_total, created_at, transaction_code")
+                .select("id, status, grand_total_with_interest, created_at")
                 .eq("customer_id", customerRow.id)
                 .order("created_at", { ascending: false })
                 .limit(50);
@@ -511,7 +509,7 @@ export default function CheckoutPage() {
     return () => {
       mounted = false;
     };
-  }, [userId]);
+  }, [authUserId]);
 
   /* --------------------------- Payment type logic --------------------------- */
   useEffect(() => {
@@ -541,7 +539,6 @@ export default function CheckoutPage() {
   const handleUpdateQty = (ci: CtxCartItem, nextRaw: number) => {
     const next = clampQty(Number.isFinite(nextRaw) ? nextRaw : 1);
 
-    // Enforce truck limits by weight while editing
     const tempCart: CartItem[] = cart.map((x) => ({ item: x.item as any, quantity: x.quantity }));
     const target = tempCart.find((x) => x.item.id === ci.item.id);
     if (!target) return;
@@ -611,13 +608,119 @@ export default function CheckoutPage() {
 
   const isConfirmEnabled = missingFields.length === 0;
 
-  /* ------------------------------- Handlers ------------------------------- */
-  const openConfirmModal = async () => {
-    // ensure we have a code and best-effort phone autofill
-    if (!customerInfo.code) {
-      setCustomerInfo((p) => ({ ...p, code: generateTransactionCode() }));
+  /* ------------------------- Customer upsert helpers ------------------------- */
+  async function ensureUniqueCustomerCode(): Promise<string> {
+    // generate until we hit a free code (very low probability of >1 tries)
+    for (let i = 0; i < 5; i++) {
+      const candidate = generateTransactionCode();
+      const { data: exists } = await supabase
+        .from("customers")
+        .select("id")
+        .eq("code", candidate)
+        .limit(1)
+        .maybeSingle();
+      if (!exists?.id) return candidate;
+    }
+    // fallback with timestamp suffix
+    return `${generateTransactionCode()}-${Date.now().toString().slice(-5)}`;
+  }
+
+  /**
+   * Finds an existing customer (by auth uid or email). If none, creates one.
+   * Updates address/contact fields on existing row.
+   * Returns the customer id and the canonical code.
+   */
+  async function getOrCreateCustomer(): Promise<{ id: string; code: string }> {
+    // 1) Try find existing by auth user id or email
+    const { data: userWrap } = await supabase.auth.getUser();
+    const auth = userWrap?.user;
+    const email = (customerInfo.email || authDefaults.email || auth?.email || "").trim();
+
+    let existing: { id: string; code: string | null } | null = null;
+
+    if (auth?.id) {
+      const { data: byUid } = await supabase
+        .from("customers")
+        .select("id, code")
+        .eq("id", auth.id) // only if you use auth uid as customers.id; if not, this returns null and we fall back to email
+        .maybeSingle();
+      if (byUid?.id) existing = { id: byUid.id, code: byUid.code ?? null };
     }
 
+    if (!existing && email) {
+      const { data: byEmail } = await supabase
+        .from("customers")
+        .select("id, code")
+        .ilike("email", email)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (byEmail?.id) existing = { id: byEmail.id, code: byEmail.code ?? null };
+    }
+
+    const nowPH = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
+
+    const baseFields = {
+      name: customerInfo.name,
+      email,
+      phone: normalizePhone(customerInfo.phone) || customerInfo.phone,
+      address: computedAddress,
+      contact_person: customerInfo.contact_person || null,
+      area: customerInfo.area || null,
+      status: "pending",
+      payment_type: customerInfo.payment_type === "Credit" ? "Credit" : "Cash",
+      customer_type: customerInfo.customer_type || null,
+      landmark: customerInfo.landmark || null,
+      region_code: regionCode || null,
+      province_code: isNCR ? null : (provinceCode || null),
+      city_code: cityCode || null,
+      barangay_code: barangayCode || null,
+      house_street: houseStreet || null,
+      date: nowPH as any,
+      transaction: cart.map((ci) => `${ci.item.product_name} x${ci.quantity}`).join(", "),
+    };
+
+    if (existing) {
+      // 2) Update existing with latest contact/address
+      await supabase.from("customers").update(baseFields).eq("id", existing.id);
+      return { id: existing.id, code: existing.code || "" };
+    }
+
+    // 3) Create a new customer once with a unique code
+    const freshCode = await ensureUniqueCustomerCode();
+    const insertPayload = { ...baseFields, code: freshCode };
+
+    // Try insert; if we somehow collided on code, regenerate once and retry.
+    let created: { id: string; code: string } | null = null;
+    {
+      const { data, error } = await supabase
+        .from("customers")
+        .insert([insertPayload])
+        .select("id, code")
+        .single();
+      if (!error && data) {
+        created = { id: data.id, code: data.code };
+      } else if (error && String(error.message).includes("customers_code_key")) {
+        const retryCode = await ensureUniqueCustomerCode();
+        const { data: data2, error: err2 } = await supabase
+          .from("customers")
+          .insert([{ ...insertPayload, code: retryCode }])
+          .select("id, code")
+          .single();
+        if (err2) throw err2;
+        created = { id: data2!.id, code: data2!.code };
+      } else if (error) {
+        throw error;
+      }
+    }
+    // safety
+    if (!created) throw new Error("Failed to create customer");
+    return created;
+  }
+
+  /* ------------------------------- Handlers ------------------------------- */
+  const openConfirmModal = async () => {
+    // Best-effort phone autofill
     const { email: authEmail, name: authName } = await getAuthIdentity();
     const emailToUse =
       (customerInfo.email && customerInfo.email.trim()) || authDefaults.email || authEmail;
@@ -637,6 +740,7 @@ export default function CheckoutPage() {
       name: prev.name || authDefaults.name || authName,
       email: prev.email || authDefaults.email || authEmail,
       phone: ensuredPhone || prev.phone,
+      // keep code blank here — will be set only on first customer creation
     }));
 
     if (!ensuredPhone) {
@@ -676,39 +780,20 @@ export default function CheckoutPage() {
 
     setPlacingOrder(true);
 
-    // prepare payloads
-    const now = new Date();
-    const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
-    const normalizedPhone = normalizePhone(customerInfo.phone);
-
-    const customerPayload: Partial<CustomerInfo> = {
-      ...customerInfo,
-      phone: normalizedPhone || customerInfo.phone,
-      landmark: customerInfo.landmark || "",
-      date: phTime,
-      status: "pending",
-      transaction: cart
-        .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
-        .join(", "),
-    };
-
     try {
-      // 1) customers
-      const { data: cust, error: custErr } = await supabase
-        .from("customers")
-        .insert([customerPayload])
-        .select()
-        .single();
-      if (custErr) throw custErr;
-      const customerId = cust.id as string;
+      // (1) Ensure customer exists once (no duplicate code inserts)
+      const { id: customerId, code: customerCode } = await getOrCreateCustomer();
 
-      // 2) orders
-      const totalAmount = subtotal;
+      // (2) Create order
+      const now = new Date();
+      const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
+
       const orderPayload: any = {
         customer_id: customerId,
-        total_amount: totalAmount,
+        total_amount: subtotal,
         status: "pending",
         date_created: phTime,
+        // optional credit fields
       };
       if (customerInfo.payment_type === "Credit") {
         const months = termsMonths ?? 1;
@@ -720,22 +805,22 @@ export default function CheckoutPage() {
       const { data: ord, error: ordErr } = await supabase
         .from("orders")
         .insert([orderPayload])
-        .select()
+        .select("id")
         .single();
       if (ordErr) throw ordErr;
       const orderId = ord.id as string;
 
-      // 3) order_items
-      const rows = cart.map((ci) => ({
+      // (3) Create order_items
+      const items = cart.map((ci) => ({
         order_id: orderId,
         inventory_id: ci.item.id,
         quantity: ci.quantity,
         price: ci.item.unit_price || 0,
       }));
-      const { error: itemsErr } = await supabase.from("order_items").insert(rows);
+      const { error: itemsErr } = await supabase.from("order_items").insert(items);
       if (itemsErr) throw itemsErr;
 
-      // 4) admin notification
+      // (4) Admin notification (best effort)
       try {
         const preview = cart
           .slice(0, 3)
@@ -746,21 +831,20 @@ export default function CheckoutPage() {
           {
             type: "order",
             title: "🛒 Order Request",
-            message: `${customerPayload.name} • TXN ${
-              customerPayload.code || "—"
-            } • ${preview}${more} • Total: ${formatCurrency(totalAmount)}`,
+            message: `${customerInfo.name || authDefaults.name} • TXN ${customerCode || "—"} • ${preview}${more} • Total: ${formatCurrency(
+              subtotal
+            )}`,
             order_id: orderId,
             customer_id: customerId,
             source: "customer",
             read: false,
             metadata: {
               order_id: orderId,
-              txn_code: customerPayload.code || null,
-              total_amount: Number(totalAmount || 0),
+              txn_code: customerCode || null,
+              total_amount: Number(subtotal || 0),
               item_count: cart.length,
               payment_type: customerInfo.payment_type || "Cash",
-              terms_months:
-                customerInfo.payment_type === "Credit" ? termsMonths ?? null : null,
+              terms_months: customerInfo.payment_type === "Credit" ? termsMonths ?? null : null,
               interest_percent:
                 customerInfo.payment_type === "Credit" ? interestPercent ?? null : null,
             },
@@ -772,12 +856,11 @@ export default function CheckoutPage() {
 
       toast.success("Your order has been submitted successfully!");
 
-      const codeForPayments = (customerPayload.code as string) || (cust.code as string) || "";
       setLastOrderId(orderId);
-      setLastTxnCode(codeForPayments || null);
-      setLastOrderTotal(totalAmount);
+      setLastTxnCode(customerCode || null);
+      setLastOrderTotal(subtotal);
 
-      // reset UI
+      // reset cart + keep auth defaults
       setShowFinalModal(false);
       clearCart();
 
@@ -801,7 +884,7 @@ export default function CheckoutPage() {
       setBarangays([]);
       setHouseStreet("");
 
-      // refresh past orders
+      // Refresh customer type after order
       try {
         const emailUsed = customerInfo.email || authDefaults.email;
         if (emailUsed) await setTypeFromHistory(emailUsed);
@@ -809,8 +892,10 @@ export default function CheckoutPage() {
 
       setShowAfterSubmitModal(true);
     } catch (e: any) {
-      console.error("Order submission error:", e.message);
-      toast.error("Something went wrong. Please try again.");
+      console.error("Order submission error:", e?.message || e);
+      toast.error(e?.message?.includes("customers_code_key")
+        ? "We hit a duplicate customer code once. Please try again."
+        : "Something went wrong. Please try again.");
     } finally {
       setPlacingOrder(false);
     }
@@ -848,7 +933,6 @@ export default function CheckoutPage() {
                 <div className="flex justify-center gap-3">
                   <button
                     onClick={() => router.push("/customer/product-catalog")}
-
                     className="px-4 py-2 rounded bg-[#181918] text-white"
                   >
                     Shop Products
@@ -1029,12 +1113,12 @@ export default function CheckoutPage() {
                   <li key={o.id} className="border rounded p-2">
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="font-medium">#{o.transaction_code ?? o.id}</div>
+                        <div className="font-medium">#{String(o.id).slice(0, 8)}</div>
                         <div className="text-xs text-gray-500">{formatPH(o.created_at)}</div>
                       </div>
                       <div className="text-right">
                         <div className="font-semibold">
-                          {formatCurrency(Number(o.grand_total ?? 0))}
+                          {formatCurrency(Number(o.grand_total_with_interest ?? 0))}
                         </div>
                         <div className="text-xs text-gray-500">{o.status}</div>
                       </div>
@@ -1399,7 +1483,7 @@ export default function CheckoutPage() {
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Transaction Code</div>
-                  <div className="font-medium">{customerInfo.code}</div>
+                  <div className="font-medium">{/* shown after submit */}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Date</div>
