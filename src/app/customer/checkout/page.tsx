@@ -129,30 +129,57 @@ const getAuthIdentity = async () => {
   return { email, name, phone, authUserId: user?.id ?? null };
 };
 
+// Replace the old loadPhoneForEmail with this:
 const loadPhoneForEmail = async (email: string): Promise<string> => {
   const clean = (email || "").trim();
-  if (!clean) return "";
-  const { data: ar } = await supabase
-    .from("account_requests")
-    .select("contact_number")
-    .ilike("email", clean)
-    .order("id", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const fromAR = normalizePhone(ar?.contact_number);
-  if (fromAR) return fromAR;
+  try {
+    // 1) Try profiles by auth uid first (common Supabase pattern: profiles.id === auth.uid)
+    const { data: userWrap } = await supabase.auth.getUser();
+    const uid = userWrap?.user?.id || null;
 
-  const { data: cust } = await supabase
-    .from("customers")
-    .select("phone")
-    .ilike("email", clean)
-    .order("date", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const fromCustomers = normalizePhone(cust?.phone);
-  if (fromCustomers) return fromCustomers;
+    if (uid) {
+      const { data: byUid } = await supabase
+        .from("profiles")
+        .select("contact_number")
+        .eq("id", uid)
+        .maybeSingle();
 
-  return "";
+      const phoneFromProfilesByUid = normalizePhone(byUid?.contact_number);
+      if (phoneFromProfilesByUid) return phoneFromProfilesByUid;
+    }
+
+    // 2) Fallback: profiles by email (if your profiles table stores email)
+    if (clean) {
+      const { data: byEmail } = await supabase
+        .from("profiles")
+        .select("contact_number")
+        .ilike("email", clean)
+        .order("updated_at", { ascending: false }) // adjust if you use a different timestamp
+        .limit(1)
+        .maybeSingle();
+
+      const phoneFromProfilesByEmail = normalizePhone(byEmail?.contact_number);
+      if (phoneFromProfilesByEmail) return phoneFromProfilesByEmail;
+    }
+
+    // 3) Last fallback: customers.phone (kept, since you already use it elsewhere)
+    if (clean) {
+      const { data: cust } = await supabase
+        .from("customers")
+        .select("phone")
+        .ilike("email", clean)
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const fromCustomers = normalizePhone(cust?.phone);
+      if (fromCustomers) return fromCustomers;
+    }
+
+    return "";
+  } catch {
+    return "";
+  }
 };
 
 /* ------------------------------ Weight rules ------------------------------ */

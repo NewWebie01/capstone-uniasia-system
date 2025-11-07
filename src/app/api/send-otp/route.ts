@@ -13,7 +13,7 @@ export async function POST(req: Request) {
 
   try {
     const { error } = await resend.emails.send({
-     from: "UniAsia <onboarding@resend.dev>",
+     from: `UniAsia Hardware <${process.env.RESEND_FROM!}>`,
       to: email,
       subject: "Your UniAsia OTP Code",
       html: `

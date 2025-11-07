@@ -70,7 +70,7 @@ export async function notifyAdminsLowStock(productName: string, quantity: number
   // 3) Send email via Resend
   try {
     const { data, error: sendErr } = await resend.emails.send({
-      from: `UniAsia <${RESEND_FROM}>`,
+      from: `UniAsia Hardware <${process.env.RESEND_FROM!}>`,
       to: recipients,
       subject: `Low Stock: ${productName}`,
       html: `

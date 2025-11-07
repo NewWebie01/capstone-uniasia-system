@@ -155,7 +155,6 @@ function SalesPageContent() {
 
       setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(friendly)));
     })();
-    
   }, []);
 
   // Pick up target order if navigated from NotificationBell
@@ -322,11 +321,10 @@ function SalesPageContent() {
     () => orders.filter((o) => o.status === "completed").length,
     [orders]
   );
-const pendingOrders = useMemo(
-  () => orders.filter((o) => (o.status || "").toLowerCase() === "pending").length,
-  [orders]
-);
-
+  const pendingOrders = useMemo(
+    () => orders.filter((o) => o.status === "pending").length,
+    [orders]
+  );
 
   // 👉 Autofill Sales Rep with the customer's name (locked/read-only)
 useEffect(() => {
@@ -347,54 +345,64 @@ useEffect(() => {
     if (data) setItems(data);
   };
 
-const fetchOrders = async () => {
-  const { data, error } = await supabase
-    .from("orders")
-    .select(`
-      id,
-      status,
-      total_amount,
-      date_created,
-      payment_terms,
-      interest_percent,
-      customers:customer_id (
-        id, name, email, phone, address, contact_person, code, area, date,
-        transaction, status, payment_type, customer_type, order_count
-      ),
-      order_items (
-        quantity,
-        price,
-        inventory:inventory_id (
-          id, sku, product_name, category, subcategory, unit, quantity, unit_price, cost_price
+  const fetchOrders = async () => {
+    const { data, error } = await supabase
+      .from("orders")
+      .select(
+        `
+        id,
+        status,
+        total_amount,
+        date_created,
+        payment_terms,
+        interest_percent,
+        customers:customer_id (
+          id,
+          name,
+          email,
+          phone,
+          address,
+          contact_person,
+          code,
+          area,
+          date,
+          transaction,
+          status,
+          payment_type,
+          customer_type,
+          order_count
+        ),
+        order_items (
+          quantity,
+          price,
+          inventory:inventory_id (
+            id,
+            sku,
+            product_name,
+            category,
+            subcategory,
+            unit,
+            quantity,
+            unit_price,
+            cost_price
+          )
         )
+      `
       )
-    `)
-    .order("date_created", { ascending: false })
-    .throwOnError();
+      .order("date_created", { ascending: false });
 
-  if (error) {
-    console.error("fetchOrders error:", error);
-    const errMsg =
-      typeof error === "string" ? error : (error as any)?.message ?? JSON.stringify(error);
-    toast.error("Orders fetch failed: " + errMsg);
-    return;
-  }
-
-  if (data) {
-    const formatted = data.map((o: any) => ({
-      ...o,
-      customers: Array.isArray(o.customers) ? o.customers[0] : o.customers,
-      order_items: o.order_items.map((item: any) => ({
-        ...item,
-        inventory: Array.isArray(item.inventory) ? item.inventory[0] : item.inventory,
-      })),
-    }));
-    setOrders(formatted);
-  }
-};
-
-
-
+    if (!error && data) {
+      const formatted = data.map((o: any) => ({
+        ...o,
+        customers: Array.isArray(o.customers) ? o.customers[0] : o.customers,
+        order_items: o.order_items.map((item: any) => ({
+          ...item,
+          inventory: Array.isArray(item.inventory) ? item.inventory[0] : item.inventory,
+        })),
+      }));
+      setOrders(formatted);
+    }
+  };
 
   useEffect(() => {
     fetchItems();
@@ -948,10 +956,9 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
       <div className="mt-10" id="pending-orders-section" ref={pendingOrdersSectionRef}>
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
         {orders
-  .filter((o) => ["pending", "accepted"].includes((o.status || "").toLowerCase()))
-  .slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage)
-  .map((order) => {
-
+          .filter((o) => o.status === "pending" || o.status === "accepted")
+          .slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage)
+          .map((order) => {
             const isAccepted = isOrderAccepted(order.id);
             const isRejected = pickingStatus.some(
               (p) => p.orderId === order.id && p.status === "rejected"
@@ -1071,31 +1078,29 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
           </button>
           <span className="text-base font-semibold text-gray-700">
             Page {currentPage} of{" "}
-           {Math.ceil(
-  orders.filter((o) => ["pending", "accepted"].includes((o.status || "").toLowerCase())).length /
-    ordersPerPage
-)}
-
+            {Math.ceil(
+              orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                ordersPerPage
+            )}
           </span>
           <button
             onClick={() =>
               setCurrentPage((p) =>
-p <
-Math.ceil(
-  orders.filter((o) => ["pending", "accepted"].includes((o.status || "").toLowerCase())).length /
-    ordersPerPage
-)
-  ? p + 1
-  : p
-
+                p <
+                Math.ceil(
+                  orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                    ordersPerPage
+                )
+                  ? p + 1
+                  : p
               )
             }
             disabled={
-currentPage >=
-Math.ceil(
-  orders.filter((o) => ["pending", "accepted"].includes((o.status || "").toLowerCase())).length /
-    ordersPerPage
-)
+              currentPage >=
+              Math.ceil(
+                orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
+                  ordersPerPage
+              )
             }
             className={`px-4 py-2 rounded ${
               currentPage >=
