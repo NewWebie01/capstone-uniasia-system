@@ -397,6 +397,57 @@ export default function InventoryPage() {
     };
   }, []);
 
+  /* ---------------------- Low stock notifier (client-side) ----------------------
+     Sends to /api/alerts/low-stock for items with stock_level Low/Critical/Out of Stock.
+     De-dupe per (sku + level) for 24h using localStorage.
+  ----------------------------------------------------------------------------- */
+  useEffect(() => {
+    if (!items || items.length === 0) return;
+    const SHOULD_ALERT = new Set(["Low", "Critical", "Out of Stock"]);
+    const KEY = "lowStockSentMap";
+    const DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    const sentMap: Record<string, number> = JSON.parse(
+      typeof window !== "undefined" ? localStorage.getItem(KEY) || "{}" : "{}"
+    );
+
+    (async () => {
+      for (const it of items) {
+        const lvl = it.stock_level || it.status || "In Stock";
+        if (!SHOULD_ALERT.has(lvl)) continue;
+
+        const uniq = `${it.sku || it.id}|${lvl}`;
+        const last = sentMap[uniq] || 0;
+        if (now - last < DAY) continue; // already notified in the last 24h
+
+        try {
+          const res = await fetch("/api/alerts/low-stock", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sku: it.sku,
+              productName: it.product_name,
+              quantity: it.quantity,
+              level: lvl,
+            }),
+          });
+          const json = await res.json();
+          if (json?.ok) {
+            sentMap[uniq] = now;
+            localStorage.setItem(KEY, JSON.stringify(sentMap));
+            // Optional toast so you know it's working:
+            // toast.success(`Low-stock alert sent: ${it.product_name} (${lvl})`);
+          } else {
+            console.warn("Low-stock alert error:", json?.error);
+          }
+        } catch (e) {
+          console.error("Low-stock alert request failed:", e);
+        }
+      }
+    })();
+  }, [items]);
+
   /* ------------------------------ Uploads -------------------------------- */
   const handleImageSelect = (file: File | null) => {
     setImageFile(file);
@@ -589,7 +640,7 @@ export default function InventoryPage() {
   const sorted = [...filtered].sort((a, b) => {
     const c = compare(a, b, sortKey);
     return sortDir === "asc" ? c : -c;
-    });
+  });
   const totalPages = Math.ceil(sorted.length / itemsPerPage);
   const filteredItems = sorted.slice(
     (currentPage - 1) * itemsPerPage,
