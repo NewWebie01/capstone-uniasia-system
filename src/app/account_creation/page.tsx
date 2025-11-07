@@ -1,4 +1,5 @@
 "use client";
+
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
@@ -8,13 +9,8 @@ import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import { toast } from "sonner";
 import supabase from "@/config/supabaseClient";
 
+/* ----------------------------- Helpers ----------------------------- */
 const EMAIL_REGEX = /^[\w-\.]+@(gmail\.com|hotmail\.com|yahoo\.com)$/i;
-
-function getPHISOString() {
-  const now = new Date();
-  const ph = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  return ph.toISOString().replace("T", " ").slice(0, 19);
-}
 
 function getPasswordStrength(pw: string, personal: string[] = []) {
   if (!pw) return "Invalid";
@@ -32,6 +28,7 @@ function getPasswordStrength(pw: string, personal: string[] = []) {
   return "Weak";
 }
 
+/* =========================== Component ============================ */
 export default function AccountCreationPage() {
   const router = useRouter();
 
@@ -52,41 +49,44 @@ export default function AccountCreationPage() {
   const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
   const [policyAccepted, setPolicyAccepted] = useState(false);
 
-  // Success modal
+  // Success modal (email verification)
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState("");
 
-  // Open privacy policy
+  /* ----------------------------- Handlers ----------------------------- */
   function handleOpenPrivacy(e?: React.MouseEvent | React.KeyboardEvent) {
     if (e) e.preventDefault();
     setShowPrivacy(true);
     setHasScrolledToBottom(false);
   }
-
-  // Only enable checkbox after scrolling to bottom
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
       setHasScrolledToBottom(true);
     }
   }
-
-  // Accept button in modal
   function handleAcceptPolicy() {
     setPolicyAccepted(true);
     setShowPrivacy(false);
+    if (errors.privacy) setErrors((p) => ({ ...p, privacy: "" }));
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
+    const { name, value, type, checked } = e.target;
     if (name === "contact_number") {
       if (!/^\d*$/.test(value)) return;
       if (value.length > 10) return;
-      setFormData({ ...formData, [name]: value });
-      if (errors[name]) setErrors({ ...errors, [name]: "" });
+      setFormData((p) => ({ ...p, [name]: value }));
+      if (errors[name]) setErrors((p) => ({ ...p, [name]: "" }));
       return;
     }
-    setFormData({ ...formData, [name]: value });
-    if (errors[name]) setErrors({ ...errors, [name]: "" });
+    if (type === "checkbox") {
+      setPolicyAccepted(checked);
+      if (errors.privacy) setErrors((p) => ({ ...p, privacy: "" }));
+      return;
+    }
+    setFormData((p) => ({ ...p, [name]: value }));
+    if (errors[name]) setErrors((p) => ({ ...p, [name]: "" }));
   };
 
   const handleReset = () => {
@@ -118,14 +118,11 @@ export default function AccountCreationPage() {
       newErrors.password =
         pwStrength === "Too Personal"
           ? "Password must not include your name, email, or contact."
-          : "Password is too weak. Use a mix of letters, numbers, special symbols (10+ chars).";
+          : "Password is too weak. Use a mix of letters, numbers, and special symbols (10+ chars).";
     }
     if (formData.password !== formData.confirmPassword)
       newErrors.confirmPassword = "Passwords do not match";
-
-    if (!policyAccepted) {
-      newErrors.privacy = "You must read and accept the Privacy Policy.";
-    }
+    if (!policyAccepted) newErrors.privacy = "You must read and accept the Privacy Policy.";
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -134,32 +131,41 @@ export default function AccountCreationPage() {
 
     setIsLoading(true);
     try {
-      const contactNumber = "+63" + formData.contact_number;
-      const { error } = await supabase.from("account_requests").insert([
-        {
-          name: formData.name,
-          email: formData.email,
-          contact_number: contactNumber,
-          role: "customer", // Always customer for public signup!
-          password: formData.password,
-          status: "Pending",
-          date_created: getPHISOString(),
+      const origin =
+        typeof window !== "undefined"
+          ? window.location.origin
+          : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
+      const { data, error } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: {
+            name: formData.name,
+            contact_number: "+63" + formData.contact_number,
+            role: "customer",
+          },
+          emailRedirectTo: `${origin}/auth/callback`,
         },
-      ]);
+      });
+
+      console.log("signUp result:", { data, error });
+
       if (error) {
-        if (
-          error.message?.toLowerCase().includes("unique") &&
-          error.message?.toLowerCase().includes("email")
-        ) {
-          setErrors({ email: "This email address is already registered. Please use a different email." });
-          toast.error("This email address is already registered. Please use a different email.");
+        // Friendly duplicate handling
+        const msg = error.message || "";
+        if (/already (registered|exists)/i.test(msg)) {
+          setErrors((p) => ({ ...p, email: "This email is already registered. Please log in instead." }));
+          toast.error("Email already registered.");
         } else {
-          toast.error("Unexpected error: " + (error.message || "Unknown error"));
+          toast.error(msg);
         }
         return;
       }
 
-      setShowSuccessModal(true); // <-- Open success modal!
+      // Show “verify your email” modal
+      setPendingEmail(formData.email);
+      setShowSuccessModal(true);
       handleReset();
     } catch (err: any) {
       console.error(err);
@@ -172,6 +178,7 @@ export default function AccountCreationPage() {
   const personalInfo = [formData.name, formData.email, "+63" + formData.contact_number];
   const passwordStrength = getPasswordStrength(formData.password, personalInfo);
 
+  /* ------------------------------- UI ------------------------------- */
   return (
     <div className="min-h-screen flex flex-col overflow-hidden relative">
       {/* Header */}
@@ -198,7 +205,7 @@ export default function AccountCreationPage() {
         </div>
       </header>
 
-      {/* Main content */}
+      {/* Main */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -210,6 +217,7 @@ export default function AccountCreationPage() {
             <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-neutral-800 mb-6 text-center">
               Create Account
             </h1>
+
             <form onSubmit={handleSubmit} className="space-y-4">
               {/* Name */}
               <div>
@@ -227,6 +235,7 @@ export default function AccountCreationPage() {
                 />
                 {errors.name && <p className="text-red-500 text-xs mt-1">{errors.name}</p>}
               </div>
+
               {/* Email */}
               <div>
                 <label className="block text-sm font-medium text-neutral-700">Email</label>
@@ -243,6 +252,7 @@ export default function AccountCreationPage() {
                 />
                 {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
               </div>
+
               {/* Contact Number */}
               <div>
                 <label className="block text-sm font-medium text-neutral-700">Contact Number</label>
@@ -267,6 +277,7 @@ export default function AccountCreationPage() {
                 <span className="text-xs text-gray-500 ml-1">Philippine mobile (enter 10 digits after +63)</span>
                 {errors.contact_number && <p className="text-red-500 text-xs mt-1">{errors.contact_number}</p>}
               </div>
+
               {/* Password */}
               <div>
                 <label className="block text-sm font-medium text-neutral-700">Password</label>
@@ -291,6 +302,7 @@ export default function AccountCreationPage() {
                     {showPassword ? "Hide" : "Show"}
                   </button>
                 </div>
+
                 <div className="flex items-center gap-2 mt-1">
                   {formData.password && (
                     <span
@@ -312,6 +324,7 @@ export default function AccountCreationPage() {
                 </div>
                 {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password}</p>}
               </div>
+
               {/* Confirm Password */}
               <div>
                 <label className="block text-sm font-medium text-neutral-700">Confirm Password</label>
@@ -329,33 +342,30 @@ export default function AccountCreationPage() {
                 {errors.confirmPassword && <p className="text-red-500 text-xs mt-1">{errors.confirmPassword}</p>}
               </div>
 
-              {/* Privacy Policy Consent (all clickable, faded checkbox) */}
-              <div
-                className="flex items-center gap-2 mt-3 cursor-pointer select-none group"
-                tabIndex={0}
-                role="button"
-                aria-label="View and accept Privacy Policy"
-                onClick={handleOpenPrivacy}
-                onKeyDown={e => { if (e.key === "Enter" || e.key === " ") handleOpenPrivacy(); }}
-              >
-                {/* Faded or checked checkbox */}
-                <input
-                  type="checkbox"
-                  className={`w-4 h-4 rounded accent-[#ffba20] transition
-                    ${!policyAccepted ? "opacity-40 cursor-pointer" : "opacity-100 cursor-pointer"}
-                  `}
-                  checked={policyAccepted}
-                  readOnly
-                  tabIndex={-1}
-                />
-                {/* The full sentence, all clickable */}
-                <span className="text-xs text-gray-700 leading-tight group-hover:underline">
-                  I have read and agree to the <span className="underline text-[#ffba20] hover:text-[#181918]">Privacy Policy</span> regarding the collection and use of my personal information by UniAsia Hardware & Electrical Marketing Corp.
-                </span>
+              {/* Privacy Policy consent (checkbox + link) */}
+              <div className="mt-3">
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    name="policyAccepted"
+                    className="mt-1 accent-[#ffba20]"
+                    checked={policyAccepted}
+                    onChange={handleChange}
+                  />
+                  <span>
+                    I agree to the{" "}
+                    <button
+                      type="button"
+                      className="underline text-[#ffba20] hover:text-[#181918]"
+                      onClick={handleOpenPrivacy}
+                    >
+                      Privacy Policy & Terms
+                    </button>
+                    .
+                  </span>
+                </label>
+                {errors.privacy && <p className="text-red-500 text-xs mt-1">{errors.privacy}</p>}
               </div>
-              {errors.privacy && (
-                <span className="text-red-500 text-xs mt-1">{errors.privacy}</span>
-              )}
 
               {/* Actions */}
               <div className="flex gap-2 mt-2">
@@ -386,15 +396,20 @@ export default function AccountCreationPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setShowPrivacy(false);
+              }}
             >
               <motion.div
                 initial={{ scale: 0.98, y: 40, opacity: 0 }}
                 animate={{ scale: 1, y: 0, opacity: 1 }}
                 exit={{ scale: 0.98, y: 40, opacity: 0 }}
                 className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-xl relative"
-                style={{ maxHeight: '90vh' }}
+                style={{ maxHeight: "90vh" }}
+                role="dialog"
+                aria-modal="true"
               >
-                {/* Close button */}
+                {/* Close */}
                 <button
                   onClick={() => setShowPrivacy(false)}
                   className="absolute top-4 right-4 text-gray-400 hover:text-gray-900 transition-colors"
@@ -404,6 +419,7 @@ export default function AccountCreationPage() {
                     <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
                   </svg>
                 </button>
+
                 <h2 className="text-2xl font-bold mb-3 text-[#181918]">Privacy Policy</h2>
                 <div
                   className="text-gray-700 text-sm leading-relaxed space-y-3 max-h-[65vh] overflow-y-auto pr-1 border border-gray-200 rounded p-3"
@@ -411,78 +427,46 @@ export default function AccountCreationPage() {
                   onScroll={handleScroll}
                   tabIndex={0}
                 >
-<p>
-                    <strong>Last updated:</strong> September 2025
-                  </p>
+                  <p><strong>Last updated:</strong> September 2025</p>
                   <p>
-                    This Privacy Policy applies to the collection, use, and processing of personal information by <b>UniAsia Hardware & Electrical Marketing Corp.</b> (“UniAsia”, “we”, “our”, “us”), in compliance with Republic Act No. 10173, otherwise known as the Data Privacy Act of 2012 and its Implementing Rules and Regulations.
+                    This Privacy Policy applies to the collection, use, and processing of personal information by
+                    <b> UniAsia Hardware & Electrical Marketing Corp.</b> (“UniAsia”, “we”, “our”, “us”), in compliance
+                    with the Data Privacy Act of 2012 and its IRR.
                   </p>
                   <h3 className="font-semibold text-base mt-4 mb-1">1. Collection of Personal Information</h3>
                   <ul className="list-disc pl-6 space-y-2">
-                    <li>
-                      <b>Personal Data:</b> We collect your full name, email address, contact number, and password when you register for an account or use our services.
-                    </li>
-                    <li>
-                      <b>Additional Information:</b> We may also collect information such as delivery addresses and transaction history for order processing and after-sales service.
-                    </li>
-                    <li>
-                      <b>Automatic Collection:</b> Our website may automatically collect technical information such as your device type, browser, IP address, and usage logs for security and analytics purposes.
-                    </li>
+                    <li><b>Personal Data:</b> name, email address, contact number, password.</li>
+                    <li><b>Additional:</b> delivery address and transaction history for orders.</li>
+                    <li><b>Automatic:</b> device, browser, IP, usage logs for security and analytics.</li>
                   </ul>
                   <h3 className="font-semibold text-base mt-4 mb-1">2. Purpose and Use</h3>
                   <ul className="list-disc pl-6 space-y-2">
-                    <li>To process your account creation and manage your profile;</li>
-                    <li>To communicate with you regarding your orders, deliveries, and customer service concerns;</li>
-                    <li>To improve our products and services, including data analytics and website security;</li>
-                    <li>To comply with legal, regulatory, and contractual obligations.</li>
+                    <li>Process account creation and manage your profile;</li>
+                    <li>Communicate about orders, deliveries, and support;</li>
+                    <li>Improve products/services and website security;</li>
+                    <li>Comply with legal and regulatory obligations.</li>
                   </ul>
-                  <h3 className="font-semibold text-base mt-4 mb-1">3. Data Sharing and Disclosure</h3>
+                  <h3 className="font-semibold text-base mt-4 mb-1">3. Sharing & Disclosure</h3>
                   <ul className="list-disc pl-6 space-y-2">
-                    <li>
-                      We do <b>not</b> sell, trade, or rent your personal information to third parties.
-                    </li>
-                    <li>
-                      We may share data with trusted service providers (e.g., courier, payment gateways, IT support) only as necessary to fulfill our services, subject to strict confidentiality.
-                    </li>
-                    <li>
-                      We may disclose personal data if required by law, subpoena, or government request, or to protect our rights and property.
-                    </li>
+                    <li>No selling of personal information.</li>
+                    <li>Share only with trusted providers as necessary (e.g., courier/payment), under confidentiality.</li>
+                    <li>Disclose if required by law or to protect our rights/property.</li>
                   </ul>
-                  <h3 className="font-semibold text-base mt-4 mb-1">4. Data Retention and Security</h3>
+                  <h3 className="font-semibold text-base mt-4 mb-1">4. Retention & Security</h3>
                   <ul className="list-disc pl-6 space-y-2">
-                    <li>
-                      Your information is retained only for as long as necessary for the purposes stated above, or as required by applicable law.
-                    </li>
-                    <li>
-                      We implement appropriate organizational, physical, and technical security measures (such as SSL, restricted access, audit logs) to safeguard your data from unauthorized access, alteration, or destruction.
-                    </li>
+                    <li>Retained as long as necessary or required by law.</li>
+                    <li>We apply organizational, physical, and technical safeguards.</li>
                   </ul>
                   <h3 className="font-semibold text-base mt-4 mb-1">5. Your Rights</h3>
                   <ul className="list-disc pl-6 space-y-2">
-                    <li>
-                      Under the Data Privacy Act, you have the right to be informed, to access, correct, and update your personal data, to object to processing, to request deletion or blocking, and to withdraw your consent at any time, subject to legal and contractual restrictions.
-                    </li>
-                    <li>
-                      You may contact us to exercise these rights or for privacy-related concerns by emailing <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">support@uniasia.com</a>.
-                    </li>
+                    <li>Be informed; access/correct/delete; object; withdraw consent (subject to limits).</li>
+                    <li>Contact: <a className="underline text-[#ffba20]" href="mailto:support@uniasia.com">support@uniasia.com</a></li>
                   </ul>
-                  <h3 className="font-semibold text-base mt-4 mb-1">6. Changes to This Policy</h3>
-                  <p>
-                    We may revise this Privacy Policy to reflect changes in the law or our practices. Any significant changes will be posted on this page and, where appropriate, notified to you by email.
-                  </p>
-                  <h3 className="font-semibold text-base mt-4 mb-1">7. Consent</h3>
-                  <p>
-                    By creating an account, you acknowledge that you have read and understood this Privacy Policy and consent to the collection and processing of your personal data as described above.
-                  </p>
-                  <h3 className="font-semibold text-base mt-4 mb-1">8. Contact Information</h3>
-                  <p>
-                    For any privacy-related inquiries or requests, please contact our Data Privacy Officer:<br />
-                    <b>Email:</b> <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">support@uniasia.com</a>
-                  </p>
                 </div>
- <button
+
+                <button
                   type="button"
-                  className={`mt-4 w-full bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] transition disabled:opacity-60`}
+                  className="mt-4 w-full bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] transition disabled:opacity-60"
                   disabled={!hasScrolledToBottom}
                   onClick={handleAcceptPolicy}
                 >
@@ -498,7 +482,7 @@ export default function AccountCreationPage() {
           )}
         </AnimatePresence>
 
-        {/* --- SUCCESS MODAL --- */}
+        {/* --- VERIFY EMAIL MODAL --- */}
         <AnimatePresence>
           {showSuccessModal && (
             <motion.div
@@ -506,26 +490,41 @@ export default function AccountCreationPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setShowSuccessModal(false);
+              }}
             >
               <motion.div
                 className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center relative"
                 initial={{ scale: 0.98, y: 40, opacity: 0 }}
                 animate={{ scale: 1, y: 0, opacity: 1 }}
                 exit={{ scale: 0.98, y: 40, opacity: 0 }}
+                role="dialog"
+                aria-modal="true"
               >
-                <h2 className="text-2xl font-bold text-[#181918] mb-2">Account Request Submitted!</h2>
+                <h2 className="text-2xl font-bold text-[#181918] mb-2">Verify your email</h2>
                 <p className="text-gray-700 mb-6 text-sm">
-                  Please wait for admin approval before logging in.
+                  We sent a verification link to <b>{pendingEmail}</b>. Please open your inbox and click the link to activate your account.
                 </p>
-                <button
-                  className="w-full bg-[#181918] text-white py-2 rounded hover:text-[#ffba20] transition"
-                  onClick={() => {
-                    setShowSuccessModal(false);
-                    router.push("/login");
-                  }}
-                >
-                  OK
-                </button>
+                <div className="grid grid-cols-1 gap-2">
+                  <button
+                    className="w-full bg-[#181918] text-white py-2 rounded hover:text-[#ffba20] transition"
+                    onClick={() => {
+                      setShowSuccessModal(false);
+                      router.push("/login?verify=1");
+                    }}
+                  >
+                    Go to Login
+                  </button>
+                  <a
+                    href="https://mail.google.com"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block w-full bg-gray-200 text-black py-2 rounded hover:bg-gray-300 transition"
+                  >
+                    Open Gmail
+                  </a>
+                </div>
               </motion.div>
             </motion.div>
           )}

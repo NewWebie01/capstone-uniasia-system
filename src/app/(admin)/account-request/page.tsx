@@ -1,387 +1,47 @@
+// src/app/account_creation/page.tsx
 "use client";
-
-import { useEffect, useState } from "react";
-import supabase from "@/config/supabaseClient";
-import { motion, AnimatePresence } from "framer-motion";
-import { BadgeCheck, Ban, Loader2 } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
+import supabase from "@/config/supabaseClient";
 
-// --- Types
-type AccountRequest = {
-  id: string;
-  name: string;
-  email: string;
-  contact_number: string;
-  password: string;
-  status: "Pending" | "Approved" | "Rejected";
-  date_created: string;
-  role?: string;
-};
+export default function AccountCreationPage() {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
-// --- Activity Logger ---
-async function logActivity(action: string, details: any = {}) {
-  try {
-    const { data } = await supabase.auth.getUser();
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: data?.user?.email || "",
-        user_role: "admin",
-        action,
-        details,
-        created_at: new Date().toISOString(),
+  async function handleSignup(e: React.FormEvent) {
+    e.preventDefault();
+
+    // ⬇️ paste this block here
+    const origin =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { name, role: "customer" },
+        emailRedirectTo: `${origin}/auth/callback`,
       },
-    ]);
-  } catch (e) {
-    console.error("logActivity failed:", e);
-  }
-}
+    });
 
-// --- Date Formatter ---
-function formatPHDate(d?: string | number | Date | null) {
-  if (!d) return "—";
-  return new Intl.DateTimeFormat("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    timeZone: "Asia/Manila",
-  }).format(new Date(d));
-}
-
-// --- Roles ---
-const ROLES = [
-  { value: "customer", label: "Customer" },
-  { value: "admin", label: "Admin" },
-  { value: "cashier", label: "Cashier / Sales Rep" },
-  { value: "warehouse", label: "Warehouse Keeper" },
-  { value: "trucker", label: "Trucker" },
-];
-
-export default function AccountRequestPage() {
-  const [requests, setRequests] = useState<AccountRequest[]>([]);
-  const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  // Modal
-  const [showModal, setShowModal] = useState(false);
-  const [modalReq, setModalReq] = useState<AccountRequest | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedRoles, setSelectedRoles] = useState<{ [id: string]: string }>(
-    {}
-  );
-
-  useEffect(() => {
-    fetchRequests();
-    const channel = supabase
-      .channel("account-requests-rt")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "account_requests" },
-        () => fetchRequests()
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
-    // eslint-disable-next-line
-  }, []);
-
-  async function fetchRequests() {
-    setLoading(true);
-    const { data } = await supabase
-      .from("account_requests")
-      .select("*")
-      .order("date_created", { ascending: false });
-    if (data) setRequests(data as AccountRequest[]);
-    setLoading(false);
-  }
-
-  const filteredRequests = requests.filter((req) => {
-    const q = search.toLowerCase();
-    return (
-      req.name.toLowerCase().includes(q) ||
-      req.email.toLowerCase().includes(q) ||
-      req.contact_number.toLowerCase().includes(q) ||
-      (req.status ?? "").toLowerCase().includes(q) ||
-      formatPHDate(req.date_created).toLowerCase().includes(q)
-    );
-  });
-
-  function StatusBadge({ status }: { status: string }) {
-    return (
-      <motion.span
-        className={
-          "flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold border " +
-          (status === "Approved"
-            ? "bg-[#dcfce7] text-green-800 border-green-200"
-            : status === "Rejected"
-            ? "bg-[#fee2e2] text-red-700 border-red-200"
-            : "bg-[#fef9c3] text-yellow-800 border-yellow-200")
-        }
-        initial={{ scale: 0.8, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 400, damping: 18 }}
-      >
-        {status === "Approved" && <BadgeCheck className="w-3 h-3" />}
-        {status === "Rejected" && <Ban className="w-3 h-3" />}
-        {status}
-      </motion.span>
-    );
-  }
-
-  const handleApprove = (req: AccountRequest) => {
-    setModalReq(req);
-    setShowModal(true);
-  };
-
-  const handleModalApprove = async () => {
-    if (!modalReq) return;
-    setIsProcessing(true);
-    const id = modalReq.id;
-    const role = selectedRoles[id] || "customer";
-
-    try {
-      const res = await fetch("/api/setup-admin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: modalReq.name,
-          email: modalReq.email,
-          contact_number: modalReq.contact_number,
-          password: modalReq.password,
-          role,
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to create user");
-      await supabase
-        .from("account_requests")
-        .update({ status: "Approved", role })
-        .eq("id", id);
-      await logActivity("Approved Account Request", {
-        request_id: modalReq.id,
-        name: modalReq.name,
-        email: modalReq.email,
-        contact_number: modalReq.contact_number,
-        approved_role: role,
-      });
-      await fetch("/api/send-approval-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: modalReq.email, name: modalReq.name }),
-      });
-      toast.success(
-        `Account for ${modalReq.name} approved as ${role}. Email sent.`
-      );
-    } catch (err: any) {
-      toast.error("Failed to approve: " + (err?.message || "Unknown"));
-    } finally {
-      setIsProcessing(false);
-      setShowModal(false);
+    console.log("signUp result:", { data, error });
+    if (error) {
+      console.error(error);
+      toast.error(error.message);
+      return;
     }
-  };
 
-  const handleReject = async (req: AccountRequest) => {
-    if (isProcessing) return;
-    setIsProcessing(true);
-    try {
-      await supabase
-        .from("account_requests")
-        .update({ status: "Rejected" })
-        .eq("id", req.id);
-      await logActivity("Rejected Account Request", {
-        request_id: req.id,
-        name: req.name,
-        email: req.email,
-        contact_number: req.contact_number,
-        prev_status: req.status,
-      });
-      toast.success("Request rejected.");
-    } catch {
-      toast.error("Failed to reject.");
-    } finally {
-      setIsProcessing(false);
-    }
-  };
+    toast.success("Check your email to verify your account.");
+    // optionally: router.push("/login?verify=1");
+  }
 
   return (
-    <div className="px-4 pb-6 pt-1 min-h-screen">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="pt-2 pb-1">
-          <h1 className="text-3xl font-bold mb-1">Account Requests</h1>
-          <p className="text-sm text-gray-500 mb-2">
-            View, approve, or reject new account signups in real time.
-          </p>
-        </div>
-
-        {/* Search */}
-        <div className="flex flex-wrap items-center gap-3 mb-5">
-          <input
-            type="text"
-            className="w-full md:w-[22rem] px-4 py-2 rounded-xl border border-gray-200 bg-white shadow-sm text-sm outline-none focus:ring-2 focus:ring-[#ffba20] transition-all"
-            placeholder="Search by name, email, contact, or status…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-
-        {/* Table */}
-        <div className="overflow-x-auto rounded-2xl border border-[#f1d26a]/50 shadow-sm bg-transparent">
-          <table className="min-w-full text-[13.5px] border-collapse">
-            <thead>
-              <tr className="bg-[#ffd033] text-neutral-900 font-bold">
-                <th className="py-3 px-4 text-left rounded-tl-2xl">Date</th>
-                <th className="py-3 px-4 text-left">Name</th>
-                <th className="py-3 px-4 text-left">Email</th>
-                <th className="py-3 px-4 text-left">Contact #</th>
-                <th className="py-3 px-4 text-left">Status</th>
-                <th className="py-3 px-4 text-left">Role</th>
-                <th className="py-3 px-4 text-left rounded-tr-2xl">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={7} className="py-8 text-center text-gray-400">
-                    <Loader2 className="mx-auto animate-spin" /> Loading…
-                  </td>
-                </tr>
-              ) : filteredRequests.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-8 text-center text-gray-400">
-                    No requests found.
-                  </td>
-                </tr>
-              ) : (
-                filteredRequests.map((req, i) => (
-                  <tr
-                    key={req.id}
-                    className={
-                      (i % 2 === 0 ? "bg-white" : "bg-[#fffdf3]") +
-                      " border-b border-gray-200 hover:bg-yellow-50/50 transition"
-                    }
-                  >
-                    <td className="py-2 px-4 font-mono text-[13px] whitespace-nowrap">
-                      {formatPHDate(req.date_created)}
-                    </td>
-                    <td className="py-2 px-4">{req.name}</td>
-                    <td className="py-2 px-4 whitespace-nowrap">{req.email}</td>
-                    <td className="py-2 px-4 whitespace-nowrap">
-                      {req.contact_number}
-                    </td>
-                    <td className="py-2 px-4">
-                      <StatusBadge status={req.status} />
-                    </td>
-                    <td className="py-2 px-4">
-                      {req.status === "Pending" ? (
-                        <select
-                          className="border rounded px-2 py-1 bg-gray-50 outline-none focus:ring-2 focus:ring-[#ffba20] transition text-[13px]"
-                          value={selectedRoles[req.id] || "customer"}
-                          onChange={(e) =>
-                            setSelectedRoles({
-                              ...selectedRoles,
-                              [req.id]: e.target.value,
-                            })
-                          }
-                          disabled={isProcessing}
-                        >
-                          {ROLES.map((role) => (
-                            <option key={role.value} value={role.value}>
-                              {role.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="capitalize">
-                          {ROLES.find((r) => r.value === req.role)?.label ||
-                            req.role ||
-                            "—"}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2 px-4">
-                      {req.status === "Pending" && (
-                        <div className="flex gap-2">
-                          <button
-                            className="bg-green-600 hover:bg-green-700 text-white text-xs px-4 py-1 rounded-full shadow"
-                            onClick={() => handleApprove(req)}
-                            disabled={isProcessing}
-                          >
-                            Approve
-                          </button>
-                          <button
-                            className="bg-red-500 hover:bg-red-600 text-white text-xs px-4 py-1 rounded-full shadow"
-                            onClick={() => handleReject(req)}
-                            disabled={isProcessing}
-                          >
-                            Reject
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Modal */}
-      <AnimatePresence>
-        {showModal && modalReq && (
-          <motion.div
-            key="approve-modal"
-            initial={{ opacity: 0, scale: 0.98, y: 30 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: 30 }}
-            className="fixed inset-0 bg-black/30 z-40 flex items-center justify-center backdrop-blur"
-          >
-            <motion.div
-              initial={{ opacity: 0, y: 40, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 40, scale: 0.98 }}
-              className="bg-white/90 rounded-2xl shadow-2xl max-w-sm w-full p-8 border border-yellow-200"
-            >
-              <h2 className="font-bold text-xl mb-3">Approve Account</h2>
-              <p className="mb-2">
-                Approve account for{" "}
-                <span className="font-semibold">{modalReq.name}</span> as{" "}
-                <span className="font-semibold">
-                  {
-                    ROLES.find(
-                      (r) =>
-                        r.value === (selectedRoles[modalReq.id] || "customer")
-                    )?.label
-                  }
-                </span>
-                ?
-              </p>
-              <div className="flex gap-2 mt-6">
-                <button
-                  onClick={handleModalApprove}
-                  className={`w-full bg-green-600 hover:bg-green-700 text-white py-2 rounded-md font-semibold transition ${
-                    isProcessing ? "opacity-60 pointer-events-none" : ""
-                  }`}
-                  disabled={isProcessing}
-                >
-                  {isProcessing ? (
-                    <Loader2 className="w-4 h-4 animate-spin inline" />
-                  ) : (
-                    "Confirm & Create"
-                  )}
-                </button>
-                <button
-                  className="w-full bg-gray-200 text-black py-2 rounded-md hover:bg-gray-300 font-semibold"
-                  onClick={() => setShowModal(false)}
-                  disabled={isProcessing}
-                >
-                  Cancel
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    <form onSubmit={handleSignup}>
+      {/* your inputs for name/email/password */}
+      <button type="submit">Create Account</button>
+    </form>
   );
 }

@@ -374,7 +374,9 @@ const fetchOrders = async () => {
 
   if (error) {
     console.error("fetchOrders error:", error);
-    toast.error("Orders fetch failed: " + error.message);
+    const errMsg =
+      typeof error === "string" ? error : (error as any)?.message ?? JSON.stringify(error);
+    toast.error("Orders fetch failed: " + errMsg);
     return;
   }
 

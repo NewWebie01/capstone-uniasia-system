@@ -9,6 +9,7 @@ import Image from "next/image";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
 import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 import supabase from "@/config/supabaseClient";
 
 const dmSans = DM_Sans({
@@ -21,6 +22,13 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+/** Filter out Supabase PKCE noise we don't want to show to users */
+const isNoisyPkceError = (m?: string) =>
+  !!m &&
+  /(both auth code and code verifier should be non-empty|invalid flow state)/i.test(
+    m ?? ""
+  );
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -28,14 +36,31 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const didNavigate = useRef(false);
   const [checking, setChecking] = useState(true);
 
-  // Privacy modal
-  const [showPrivacy, setShowPrivacy] = useState(false);
+  // Read URL ?error / ?error_description once and clean them
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const raw =
+      url.searchParams.get("error") ||
+      url.searchParams.get("error_description");
+    if (raw) {
+      const msg = decodeURIComponent(raw);
+      if (!isNoisyPkceError(msg)) {
+        toast.error(msg);
+      }
+      url.searchParams.delete("error");
+      url.searchParams.delete("error_description");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
 
+  // Prefill remembered email & warm up session
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -76,14 +101,27 @@ export default function LoginPage() {
     setIsLoading(true);
     setErrorMessage("");
 
-    // 1. Password check
+    // 1) Password login
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
 
     if (error) {
-      setErrorMessage("Incorrect email or password.");
+      const msg = error.message ?? "";
+
+      // Quiet the PKCE noise; show clear messages for real auth errors
+      if (!isNoisyPkceError(msg)) {
+        if (/email not confirmed/i.test(msg)) {
+          setErrorMessage("Please verify your email first, then try again.");
+        } else if (/invalid login credentials/i.test(msg)) {
+          // We can’t 100% tell “not registered” on client without service role,
+          // so present the most helpful guidance:
+          setErrorMessage("Account not registered or wrong password.");
+        } else {
+          setErrorMessage(msg);
+        }
+      }
       setPassword("");
       setIsLoading(false);
       return;
@@ -101,7 +139,7 @@ export default function LoginPage() {
     const user = data?.user;
     const role = (user?.user_metadata?.role as string | undefined) ?? undefined;
 
-    // 2. Check skip-OTP logic (1hr)
+    // 2) Skip-OTP window (1hr)
     if (shouldBypassOtp(email)) {
       didNavigate.current = true;
       supabase
@@ -116,9 +154,9 @@ export default function LoginPage() {
           },
         ])
         .then(({ error: logError }) => {
-          if (logError)
-            console.error("Failed to insert activity log:", logError);
+          if (logError) console.error("Failed to insert activity log:", logError);
         });
+
       if (role === "admin") router.replace("/dashboard");
       else if (role === "customer") router.replace("/customer/product-catalog");
       else {
@@ -130,12 +168,12 @@ export default function LoginPage() {
       return;
     }
 
-    // 3. OTP required: generate and redirect
+    // 3) OTP required
     const newOtp = generateOTP();
-    const otpExpiry = Date.now() + 60 * 60 * 1000; // 1 hour
+    const otpExpiry = Date.now() + 60 * 60 * 1000; // 1 hour trusted session
 
     localStorage.setItem("otpCode", newOtp);
-    localStorage.setItem("otpExpiry", (Date.now() + 5 * 60 * 1000).toString()); // 5 mins to enter code
+    localStorage.setItem("otpExpiry", (Date.now() + 5 * 60 * 1000).toString());
     localStorage.setItem("otpEmail", email.trim());
     localStorage.setItem("otpVerified", "false");
     localStorage.setItem("otpVerifiedEmail", email.trim());
@@ -158,17 +196,13 @@ export default function LoginPage() {
       return;
     }
 
-    router.replace(
-      `/otp-verification?email=${encodeURIComponent(email.trim())}`
-    );
+    router.replace(`/otp-verification?email=${encodeURIComponent(email.trim())}`);
   };
 
   if (checking) return null;
 
   return (
-    <div
-      className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}
-    >
+    <div className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}>
       {/* Loading Overlay */}
       <AnimatePresence>
         {isLoading && (
@@ -186,13 +220,12 @@ export default function LoginPage() {
               className="bg-white rounded-xl shadow-2xl px-8 py-6 flex items-center gap-3"
             >
               <span className="h-5 w-5 rounded-full border-2 border-gray-300 border-t-transparent animate-spin" />
-              <span className="text-sm font-medium text-gray-700">
-                Signing in…
-              </span>
+              <span className="text-sm font-medium text-gray-700">Signing in…</span>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
+
       {/* Header */}
       <header className="sticky top-0 backdrop-blur-sm z-20">
         <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
@@ -203,20 +236,13 @@ export default function LoginPage() {
         <div className="py-5">
           <div className="container">
             <div className="flex items-center justify-between relative">
-              {/* Logo */}
               <motion.button
                 onClick={() => router.push("/")}
                 whileHover={{ scale: 1.1 }}
                 transition={{ type: "spring", stiffness: 300 }}
                 aria-label="Go to Home"
               >
-                <Image
-                  src={Logo}
-                  alt="UniAsia Logo"
-                  height={50}
-                  width={50}
-                  className="cursor-pointer"
-                />
+                <Image src={Logo} alt="UniAsia Logo" height={50} width={50} className="cursor-pointer" />
               </motion.button>
               <MenuIcon
                 className="h-5 w-5 md:hidden cursor-pointer"
@@ -244,6 +270,7 @@ export default function LoginPage() {
           </div>
         </div>
       </header>
+
       {/* Login Section */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
@@ -254,20 +281,12 @@ export default function LoginPage() {
         <div className="w-full max-w-4xl flex flex-col lg:flex-row bg-white rounded-2xl shadow-2xl overflow-hidden">
           {/* Form Box */}
           <div className="flex flex-col items-center justify-center text-center p-8 sm:p-12 lg:p-16 gap-8 w-full lg:w-1/2">
-            <h1 className="section-title text-4xl sm:text-5xl font-bold">
-              Welcome
-            </h1>
+            <h1 className="section-title text-4xl sm:text-5xl font-bold">Welcome</h1>
 
-            <form
-              onSubmit={handleSubmit}
-              className="flex flex-col gap-6 w-full max-w-sm"
-            >
-              {/* Email Field */}
+            <form onSubmit={handleSubmit} className="flex flex-col gap-6 w-full max-w-sm">
+              {/* Email */}
               <div className="flex flex-col text-left">
-                <label
-                  htmlFor="username"
-                  className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]"
-                >
+                <label htmlFor="username" className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
                   Username
                 </label>
                 <input
@@ -281,12 +300,10 @@ export default function LoginPage() {
                   disabled={isLoading}
                 />
               </div>
-              {/* Password Field */}
+
+              {/* Password */}
               <div className="flex flex-col text-left">
-                <label
-                  htmlFor="password"
-                  className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]"
-                >
+                <label htmlFor="password" className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
                   Password
                 </label>
                 <input
@@ -300,9 +317,9 @@ export default function LoginPage() {
                   disabled={isLoading}
                 />
               </div>
-              {errorMessage && (
-                <p className="text-red-600 text-sm -mt-3">{errorMessage}</p>
-              )}
+
+              {errorMessage && <p className="text-red-600 text-sm -mt-3">{errorMessage}</p>}
+
               <div className="flex gap-2 items-center">
                 <input
                   id="remember"
@@ -315,6 +332,7 @@ export default function LoginPage() {
                   Remember Password
                 </label>
               </div>
+
               <motion.button
                 type="submit"
                 whileTap={{ scale: 0.95 }}
@@ -333,6 +351,7 @@ export default function LoginPage() {
                 )}
               </motion.button>
             </form>
+
             <p className="text-sm text-gray-600">
               Don’t have an account?{" "}
               <button
@@ -343,6 +362,7 @@ export default function LoginPage() {
                 Sign Up
               </button>
             </p>
+
             <button
               type="button"
               onClick={() => router.push("/reset")}
@@ -350,6 +370,7 @@ export default function LoginPage() {
             >
               Forgot password?
             </button>
+
             <button
               type="button"
               onClick={() => setShowPrivacy(true)}
@@ -358,6 +379,7 @@ export default function LoginPage() {
               Privacy Policy
             </button>
           </div>
+
           <Image
             src={splashImage}
             alt="Splash Image"
@@ -365,6 +387,8 @@ export default function LoginPage() {
             priority
           />
         </div>
+
+        {/* Privacy modal */}
         <AnimatePresence>
           {showPrivacy && (
             <motion.div
@@ -372,12 +396,17 @@ export default function LoginPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setShowPrivacy(false);
+              }}
             >
               <motion.div
                 initial={{ scale: 0.98, y: 40, opacity: 0 }}
                 animate={{ scale: 1, y: 0, opacity: 1 }}
                 exit={{ scale: 0.98, y: 40, opacity: 0 }}
                 className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-xl relative"
+                role="dialog"
+                aria-modal="true"
               >
                 <button
                   onClick={() => setShowPrivacy(false)}
@@ -385,49 +414,30 @@ export default function LoginPage() {
                   aria-label="Close"
                 >
                   <span className="sr-only">Close</span>
-                  <svg
-                    width={20}
-                    height={20}
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
-                    />
+                  <svg width={20} height={20} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
-                <h2 className="text-2xl font-bold mb-2 text-[#181918]">
-                  Privacy Policy
-                </h2>
+
+                <h2 className="text-2xl font-bold mb-2 text-[#181918]">Privacy Policy</h2>
                 <div className="text-gray-700 text-sm leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto pr-1">
                   <p>
-                    <b>UniAsia Hardware & Electrical Marketing Corp</b> values
-                    your privacy. We collect only the necessary information
-                    (such as email and password) to authenticate your account
-                    and provide access to our services.
+                    <b>UniAsia Hardware & Electrical Marketing Corp</b> values your privacy. We collect only the
+                    necessary information (such as email and password) to authenticate your account and provide access
+                    to our services.
                   </p>
                   <p>
-                    Your credentials are never shared or sold. We may use your
-                    email to communicate important account information or
-                    security alerts.
+                    Your credentials are never shared or sold. We may use your email to communicate important account
+                    information or security alerts.
                   </p>
                   <p>
                     For support or more details, contact{" "}
-                    <a
-                      href="mailto:support@uniasia.com"
-                      className="underline text-[#ffba20]"
-                    >
+                    <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">
                       support@uniasia.com
                     </a>
                     .
                   </p>
-                  <p className="mt-2 text-xs text-gray-400">
-                    Last updated: September 2025
-                  </p>
+                  <p className="mt-2 text-xs text-gray-400">Last updated: September 2025</p>
                 </div>
               </motion.div>
             </motion.div>
