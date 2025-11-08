@@ -17,6 +17,43 @@ type Transaction = {
   total: number | null; // v_transaction_history_full.grand_total_with_interest
 };
 
+type OrderItemRow = {
+  id: number | string;
+  quantity: number;
+  discount_percent: number | null;
+  price: number | null; // <- matches order_items.price
+  inventory?:
+    | {
+        product_name?: string | null;
+        category?: string | null;
+        subcategory?: string | null;
+        unit?: string | null;
+      }
+    | null;
+};
+
+type OrderDetail = {
+  id: number | string;
+  status?: string | null;
+  date_completed?: string | null;
+  grand_total_with_interest?: number | null;
+  sales_tax?: number | null; // amount in PHP
+  interest_percent?: number | null; // % value
+  terms?: number | string | null;
+  shipping_fee?: number | null; // NEW: show but do not add to grand total
+  customers?:
+    | {
+        name?: string | null;
+        email?: string | null;
+        phone?: string | null; // matches customers.phone
+        address?: string | null;
+        payment_type?: string | null;
+        code?: string | null; // TXN code lives here
+      }
+    | null;
+  order_items?: OrderItemRow[] | null;
+};
+
 /* ---------------------- PH Time Utilities ----------------------- */
 const PH_OFFSET_HOURS = 8;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -160,18 +197,18 @@ export default function TransactionHistoryPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // View modal
+  const [viewOpen, setViewOpen] = useState(false);
+  const [viewLoading, setViewLoading] = useState(false);
+  const [viewError, setViewError] = useState("");
+  const [orderDetail, setOrderDetail] = useState<OrderDetail | null>(null);
+
   // Pagination (10 per page)
   const ITEMS_PER_PAGE = 10;
   const [currentPage, setCurrentPage] = useState(1);
 
   // Export modal state
-  type ExportChoice =
-    | "today"
-    | "this_week"
-    | "this_month"
-    | "this_year"
-    | "custom"
-    | "all";
+  type ExportChoice = "today" | "this_week" | "this_month" | "this_year" | "custom" | "all";
   const [showExport, setShowExport] = useState(false);
   const [exportChoice, setExportChoice] = useState<ExportChoice>("today");
   const [customStart, setCustomStart] = useState("");
@@ -240,7 +277,6 @@ export default function TransactionHistoryPage() {
 
   // Realtime: listen on ORDERS (source of the view) and refetch the view
   useEffect(() => {
-    // We refetch on any INSERT/UPDATE/DELETE because status/paid_amount/total can change the view membership.
     const channel = supabase
       .channel("txn-history-realtime")
       .on(
@@ -270,13 +306,7 @@ export default function TransactionHistoryPage() {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return transactions;
     return transactions.filter((t) =>
-      [
-        formatDate(t.date),
-        t.code ?? "",
-        t.customer ?? "",
-        t.status,
-        currency(t.total),
-      ]
+      [formatDate(t.date), t.code ?? "", t.customer ?? "", t.status, currency(t.total)]
         .join(" ")
         .toLowerCase()
         .includes(q)
@@ -297,6 +327,66 @@ export default function TransactionHistoryPage() {
     [filtered, pageStartIndex]
   );
 
+  /* ---------------------- View handlers ---------------------- */
+  async function openView(orderId: string) {
+    try {
+      setViewError("");
+      setOrderDetail(null);
+      setViewLoading(true);
+      setViewOpen(true);
+
+      // Join orders -> customers, order_items -> inventory
+      const { data, error } = await supabase
+        .from("orders")
+        .select(
+          `
+          id,
+          status,
+          date_completed,
+          grand_total_with_interest,
+          sales_tax,
+          interest_percent,
+          terms,
+          shipping_fee,
+          customers:customer_id(
+            name,
+            email,
+            phone,
+            address,
+            payment_type,
+            code
+          ),
+          order_items(
+            id,
+            quantity,
+            discount_percent,
+            price,
+            inventory:inventory_id(
+              product_name,
+              category,
+              subcategory,
+              unit
+            )
+          )
+        `
+        )
+        .eq("id", orderId)
+        .single();
+
+      if (error) {
+        console.error(error);
+        setViewError(error.message || "Failed to load order.");
+      } else {
+        setOrderDetail(data as unknown as OrderDetail);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setViewError(err?.message || "Failed to load order.");
+    } finally {
+      setViewLoading(false);
+    }
+  }
+
   /* ---------------------------- UI ---------------------------- */
   return (
     <div className="px-4 pb-4 pt-1">
@@ -304,8 +394,8 @@ export default function TransactionHistoryPage() {
         <div>
           <h1 className="pt-1 text-3xl font-bold mb-1">Transaction History</h1>
           <p className="text-sm text-gray-500 mb-2">
-            View <span className="font-medium">completed & fully-paid</span>{" "}
-            orders. Search and export by time frame.
+            View <span className="font-medium">completed & fully-paid</span> orders.
+            Search and export by time frame.
           </p>
         </div>
       </div>
@@ -338,18 +428,19 @@ export default function TransactionHistoryPage() {
               <th className="px-4 py-3">Customer</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3 text-right">Total</th>
+              <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="text-center py-6 text-gray-500">
+                <td colSpan={6} className="text-center py-6 text-gray-500">
                   Loading…
                 </td>
               </tr>
             ) : paginated.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center py-6 text-gray-500">
+                <td colSpan={6} className="text-center py-6 text-gray-500">
                   No fully paid transactions found.
                 </td>
               </tr>
@@ -363,6 +454,15 @@ export default function TransactionHistoryPage() {
                     <StatusBadge status={t.status} />
                   </td>
                   <td className="px-4 py-3 text-right">{currency(t.total)}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      className="px-3 py-1.5 rounded bg-black text-white hover:opacity-90"
+                      onClick={() => openView(t.id)}
+                      title="View order details"
+                    >
+                      View
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
@@ -429,6 +529,21 @@ export default function TransactionHistoryPage() {
           }}
         />
       )}
+
+      {/* View Order modal */}
+      {viewOpen && (
+        <ViewOrderModal
+          open={viewOpen}
+          loading={viewLoading}
+          error={viewError}
+          order={orderDetail}
+          onClose={() => {
+            setViewOpen(false);
+            setOrderDetail(null);
+            setViewError("");
+          }}
+        />
+      )}
     </div>
   );
 
@@ -488,55 +603,40 @@ export default function TransactionHistoryPage() {
     return { start: s, end: e, label: describeRangeLabel("custom", s, e) };
   }
 
+  /* ---------------------- EXPORT FIX (client-side) ---------------------- */
   async function doExportNow() {
     setExporting(true);
     try {
       const { start, end, label } = resolveRange();
 
-      // Export from the SAME VIEW for consistency
-      let q = supabase
-        .from("v_transaction_history_full")
-        .select(
-          `
-          date_completed,
-          transaction_code,
-          customer_name,
-          status,
-          grand_total_with_interest
-        `
-        )
-        .order("date_completed", { ascending: false });
+      // Export from already-loaded rows to avoid timezone/type mismatches
+      const source = transactions; // or use `filtered` to honor on-screen filtering
 
+      let rowsForExport = source;
       if (exportChoice !== "all") {
         if (!start || !end) {
           setExportError("Please provide a valid date range.");
           setExporting(false);
           return;
         }
-        const endExclusive = new Date(end.getTime() + 1); // inclusive UI → exclusive query
-        q = q
-          .gte("date_completed", toPHSqlNoTZ(start))
-          .lt("date_completed", toPHSqlNoTZ(endExclusive));
+        // Inclusive bounds
+        const startBound = start;
+        const endBound = new Date(end.getTime());
+        rowsForExport = source.filter((t) => {
+          const d = new Date(t.date);
+          return d >= startBound && d <= endBound;
+        });
       }
 
-      const { data, error } = await q;
-      if (error) throw error;
-
-      const rows = (data ?? []).map((o: any) => [
-        formatDate(o.date_completed),
-        o.transaction_code ?? "",
-        o.customer_name ?? "—",
-        String(o.status ?? "completed"),
-        currency(o.grand_total_with_interest ?? 0),
+      const rows = rowsForExport.map((t) => [
+        formatDate(t.date),
+        t.code ?? "",
+        t.customer ?? "—",
+        String(t.status ?? "completed"),
+        currency(t.total ?? 0),
       ]);
 
-      const headers = [
-        "Date",
-        "Transaction Code",
-        "Customer",
-        "Status",
-        "Total (PHP)",
-      ];
+      const headers = ["Date", "Transaction Code", "Customer", "Status", "Total (PHP)"];
       const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Transactions");
@@ -571,13 +671,7 @@ export default function TransactionHistoryPage() {
 /* ---------------------- Small Components ---------------------- */
 
 function ExportModal(props: {
-  exportChoice:
-    | "today"
-    | "this_week"
-    | "this_month"
-    | "this_year"
-    | "custom"
-    | "all";
+  exportChoice: "today" | "this_week" | "this_month" | "this_year" | "custom" | "all";
   setExportChoice: (c: any) => void;
   customStart: string;
   setCustomStart: (s: string) => void;
@@ -605,7 +699,7 @@ function ExportModal(props: {
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg">
-        <h3 className="text-base font-semibold mb-2 text-center">
+        <h3 className="text/base font-semibold mb-2 text-center">
           Export Transaction History
         </h3>
         <p className="text-sm text-gray-700 text-center mb-4">
@@ -672,9 +766,7 @@ function ExportModal(props: {
             </div>
           )}
 
-          {exportError && (
-            <div className="text-xs text-red-600">{exportError}</div>
-          )}
+          {exportError && <div className="text-xs text-red-600">{exportError}</div>}
         </div>
 
         <div className="flex gap-3 justify-center">
@@ -682,8 +774,7 @@ function ExportModal(props: {
             className="px-4 py-2 rounded bg-black text-white hover:opacity-90 text-sm disabled:opacity-50"
             onClick={onExport}
             disabled={
-              exporting ||
-              (exportChoice === "custom" && (!customStart || !customEnd))
+              exporting || (exportChoice === "custom" && (!customStart || !customEnd))
             }
           >
             {exporting ? "Exporting…" : "Export Now"}
@@ -694,6 +785,173 @@ function ExportModal(props: {
           >
             Cancel
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ViewOrderModal({
+  open,
+  loading,
+  error,
+  order,
+  onClose,
+}: {
+  open: boolean;
+  loading: boolean;
+  error: string;
+  order: OrderDetail | null;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+
+  const cust = order?.customers;
+  const items = order?.order_items ?? [];
+
+  return (
+    <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-auto">
+        <div className="px-6 py-4 border-b flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Order Details</h3>
+          <button onClick={onClose} className="text-gray-600 text-lg">
+            ✕
+          </button>
+        </div>
+
+        <div className="p-6">
+          {loading ? (
+            <div className="text-center text-gray-600 py-10">Loading…</div>
+          ) : error ? (
+            <div className="text-center text-red-600 py-10">{error}</div>
+          ) : !order ? (
+            <div className="text-center text-gray-600 py-10">No data available.</div>
+          ) : (
+            <>
+              {/* Header info */}
+              <div className="grid md:grid-cols-2 gap-4 mb-6">
+                <div className="rounded-lg border p-4">
+                  <div className="text-xs text-gray-500 mb-1">Transaction</div>
+                  <div className="text-sm">
+                    <div>
+                      <span className="font-medium">Code:</span>{" "}
+                      {cust?.code || "—"}
+                    </div>
+                    <div>
+                      <span className="font-medium">Status:</span>{" "}
+                      <StatusBadge status={order.status || "completed"} />
+                    </div>
+                    <div>
+                      <span className="font-medium">Completed:</span>{" "}
+                      {order.date_completed ? formatDate(order.date_completed) : "—"}
+                    </div>
+                    <div>
+                      <span className="font-medium">Terms:</span>{" "}
+                      {order.terms ?? "—"}
+                    </div>
+                    <div>
+                      <span className="font-medium">Sales Tax:</span>{" "}
+                      {currency(order.sales_tax ?? 0)}
+                    </div>
+                    <div>
+                      <span className="font-medium">Interest (%):</span>{" "}
+                      {order.interest_percent ?? 0}
+                    </div>
+                    <div>
+                      <span className="font-medium">Shipping Fee:</span>{" "}
+                      {currency(order.shipping_fee ?? 0)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border p-4">
+                  <div className="text-xs text-gray-500 mb-1">Customer</div>
+                  <div className="text-sm">
+                    <div>
+                      <span className="font-medium">Name:</span> {cust?.name || "—"}
+                    </div>
+                    <div>
+                      <span className="font-medium">Email:</span> {cust?.email || "—"}
+                    </div>
+                    <div>
+                      <span className="font-medium">Phone:</span>{" "}
+                      {cust?.phone || "—"}
+                    </div>
+                    <div>
+                      <span className="font-medium">Address:</span>{" "}
+                      {cust?.address || "—"}
+                    </div>
+                    <div>
+                      <span className="font-medium">Payment Type:</span>{" "}
+                      {cust?.payment_type || "—"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Items */}
+              <div className="rounded-lg border overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50 text-left">
+                    <tr>
+                      <th className="px-4 py-2">Product</th>
+                      <th className="px-4 py-2">Category</th>
+                      <th className="px-4 py-2">Unit</th>
+                      <th className="px-4 py-2 text-right">Qty</th>
+                      <th className="px-4 py-2 text-right">Unit Price</th>
+                      <th className="px-4 py-2 text-right">Discount %</th>
+                      <th className="px-4 py-2 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="text-center text-gray-500 py-6">
+                          No items found.
+                        </td>
+                      </tr>
+                    ) : (
+                      items.map((it) => {
+                        const name =
+                          it.inventory?.product_name ??
+                          it.inventory?.subcategory ??
+                          "—";
+                        const cat = it.inventory?.category ?? "—";
+                        const unit = it.inventory?.unit ?? "—";
+                        const qty = Number(it.quantity || 0);
+                        const price = Number(it.price || 0);
+                        const disc = Number(it.discount_percent || 0);
+                        const amount = price * qty * (1 - disc / 100);
+
+                        return (
+                          <tr key={String(it.id)} className="border-t">
+                            <td className="px-4 py-2">{name}</td>
+                            <td className="px-4 py-2">{cat}</td>
+                            <td className="px-4 py-2">{unit}</td>
+                            <td className="px-4 py-2 text-right">{qty}</td>
+                            <td className="px-4 py-2 text-right">{currency(price)}</td>
+                            <td className="px-4 py-2 text-right">{disc.toFixed(0)}</td>
+                            <td className="px-4 py-2 text-right">{currency(amount)}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Totals */}
+              <div className="flex justify-end mt-4">
+                <div className="text-right">
+                  <div className="text-sm text-gray-600">Grand Total</div>
+                  <div className="text-2xl font-bold text-[#ffba20]">
+                    {currency(order.grand_total_with_interest ?? 0)}
+                  </div>
+                  {/* NOTE: Shipping fee is intentionally not added to Grand Total */}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
