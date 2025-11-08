@@ -504,7 +504,8 @@ export default function InventoryPage() {
         category: !newItem.category,
         subcategory: !newItem.subcategory,
         unit: !newItem.unit,
-        quantity: newItem.quantity < 0 || newItem.quantity > LIMITS.MAX_QUANTITY,
+        quantity:
+          newItem.quantity < 0 || newItem.quantity > LIMITS.MAX_QUANTITY,
         cost_price:
           newItem.cost_price === null ||
           newItem.cost_price < 0 ||
@@ -1124,7 +1125,10 @@ export default function InventoryPage() {
               ))}
               {filteredItems.length === 0 && !loading && (
                 <tr>
-                  <td className="px-4 py-6 text-center text-gray-500" colSpan={15}>
+                  <td
+                    className="px-4 py-6 text-center text-gray-500"
+                    colSpan={15}
+                  >
                     No items found.
                   </td>
                 </tr>
@@ -1339,7 +1343,9 @@ export default function InventoryPage() {
                         <input
                           type="checkbox"
                           checked={isCustomCategory}
-                          onChange={(e) => setIsCustomCategory(e.target.checked)}
+                          onChange={(e) =>
+                            setIsCustomCategory(e.target.checked)
+                          }
                         />{" "}
                         New
                       </label>
@@ -1425,7 +1431,10 @@ export default function InventoryPage() {
                           placeholder="Enter new unit"
                           value={newItem.unit}
                           onChange={(e) =>
-                            setNewItem((prev) => ({ ...prev, unit: e.target.value }))
+                            setNewItem((prev) => ({
+                              ...prev,
+                              unit: e.target.value,
+                            }))
                           }
                         />
                       ) : (
@@ -1447,7 +1456,8 @@ export default function InventoryPage() {
                           ))}
                           {unitOptions
                             .filter(
-                              (u) => !FIXED_UNIT_OPTIONS.includes(u as FixedUnit)
+                              (u) =>
+                                !FIXED_UNIT_OPTIONS.includes(u as FixedUnit)
                             )
                             .map((u) => (
                               <option key={u} value={u}>
@@ -1537,15 +1547,23 @@ export default function InventoryPage() {
                           : ""
                       }`}
                       placeholder={
-                        newItem.unit === "Kg" ? "1 (auto for Kg items)" : "e.g. 0.45"
+                        newItem.unit === "Kg"
+                          ? "1 (auto for Kg items)"
+                          : "e.g. 0.45"
                       }
                       value={
-                        newItem.unit === "Kg" ? 1 : newItem.weight_per_piece_kg ?? ""
+                        newItem.unit === "Kg"
+                          ? 1
+                          : newItem.weight_per_piece_kg ?? ""
                       }
                       disabled={newItem.unit === "Kg"}
                       onChange={(e) => {
                         const raw = parseFloat(e.target.value) || 0;
-                        const val = clamp(raw, 0, LIMITS.MAX_WEIGHT_PER_PIECE_KG);
+                        const val = clamp(
+                          raw,
+                          0,
+                          LIMITS.MAX_WEIGHT_PER_PIECE_KG
+                        );
                         if (raw !== val)
                           toast.info(
                             `Capped at ${LIMITS.MAX_WEIGHT_PER_PIECE_KG} kg`
@@ -1614,7 +1632,10 @@ export default function InventoryPage() {
                           ceiling_qty:
                             e.target.value === ""
                               ? null
-                              : Math.max(0, parseInt(e.target.value || "0", 10)),
+                              : Math.max(
+                                  0,
+                                  parseInt(e.target.value || "0", 10)
+                                ),
                         }))
                       }
                     />
@@ -1673,7 +1694,10 @@ export default function InventoryPage() {
                         const val = clamp(raw, 0, LIMITS.MAX_MARKUP_PERCENT);
                         if (raw !== val)
                           toast.info(`Capped at ${LIMITS.MAX_MARKUP_PERCENT}%`);
-                        setNewItem((prev) => ({ ...prev, markup_percent: val }));
+                        setNewItem((prev) => ({
+                          ...prev,
+                          markup_percent: val,
+                        }));
                       }}
                     />
                   </div>
