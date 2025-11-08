@@ -154,7 +154,8 @@ export default function LoginPage() {
           },
         ])
         .then(({ error: logError }) => {
-          if (logError) console.error("Failed to insert activity log:", logError);
+          if (logError)
+            console.error("Failed to insert activity log:", logError);
         });
 
       if (role === "admin") router.replace("/dashboard");
@@ -196,13 +197,17 @@ export default function LoginPage() {
       return;
     }
 
-    router.replace(`/otp-verification?email=${encodeURIComponent(email.trim())}`);
+    router.replace(
+      `/otp-verification?email=${encodeURIComponent(email.trim())}`
+    );
   };
 
   if (checking) return null;
 
   return (
-    <div className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}>
+    <div
+      className={`h-screen flex flex-col overflow-hidden relative ${dmSans.className}`}
+    >
       {/* Loading Overlay */}
       <AnimatePresence>
         {isLoading && (
@@ -220,7 +225,9 @@ export default function LoginPage() {
               className="bg-white rounded-xl shadow-2xl px-8 py-6 flex items-center gap-3"
             >
               <span className="h-5 w-5 rounded-full border-2 border-gray-300 border-t-transparent animate-spin" />
-              <span className="text-sm font-medium text-gray-700">Signing in…</span>
+              <span className="text-sm font-medium text-gray-700">
+                Signing in…
+              </span>
             </motion.div>
           </motion.div>
         )}
@@ -242,7 +249,13 @@ export default function LoginPage() {
                 transition={{ type: "spring", stiffness: 300 }}
                 aria-label="Go to Home"
               >
-                <Image src={Logo} alt="UniAsia Logo" height={50} width={50} className="cursor-pointer" />
+                <Image
+                  src={Logo}
+                  alt="UniAsia Logo"
+                  height={50}
+                  width={50}
+                  className="cursor-pointer"
+                />
               </motion.button>
               <MenuIcon
                 className="h-5 w-5 md:hidden cursor-pointer"
@@ -281,13 +294,21 @@ export default function LoginPage() {
         <div className="w-full max-w-4xl flex flex-col lg:flex-row bg-white rounded-2xl shadow-2xl overflow-hidden">
           {/* Form Box */}
           <div className="flex flex-col items-center justify-center text-center p-8 sm:p-12 lg:p-16 gap-8 w-full lg:w-1/2">
-            <h1 className="section-title text-4xl sm:text-5xl font-bold">Welcome</h1>
+            <h1 className="section-title text-4xl sm:text-5xl font-bold">
+              Welcome
+            </h1>
 
-            <form onSubmit={handleSubmit} className="flex flex-col gap-6 w-full max-w-sm">
+            <form
+              onSubmit={handleSubmit}
+              className="flex flex-col gap-6 w-full max-w-sm"
+            >
               {/* Email */}
               <div className="flex flex-col text-left">
-                <label htmlFor="username" className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
-                  Username
+                <label
+                  htmlFor="username"
+                  className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]"
+                >
+                  Email Address
                 </label>
                 <input
                   id="username"
@@ -303,7 +324,10 @@ export default function LoginPage() {
 
               {/* Password */}
               <div className="flex flex-col text-left">
-                <label htmlFor="password" className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]">
+                <label
+                  htmlFor="password"
+                  className="text-[22px] leading-[30px] tracking-tight text-[#010D3E]"
+                >
                   Password
                 </label>
                 <input
@@ -318,7 +342,9 @@ export default function LoginPage() {
                 />
               </div>
 
-              {errorMessage && <p className="text-red-600 text-sm -mt-3">{errorMessage}</p>}
+              {errorMessage && (
+                <p className="text-red-600 text-sm -mt-3">{errorMessage}</p>
+              )}
 
               <div className="flex gap-2 items-center">
                 <input
@@ -414,30 +440,50 @@ export default function LoginPage() {
                   aria-label="Close"
                 >
                   <span className="sr-only">Close</span>
-                  <svg width={20} height={20} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  <svg
+                    width={20}
+                    height={20}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
                   </svg>
                 </button>
 
-                <h2 className="text-2xl font-bold mb-2 text-[#181918]">Privacy Policy</h2>
+                <h2 className="text-2xl font-bold mb-2 text-[#181918]">
+                  Privacy Policy
+                </h2>
                 <div className="text-gray-700 text-sm leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto pr-1">
                   <p>
-                    <b>UniAsia Hardware & Electrical Marketing Corp</b> values your privacy. We collect only the
-                    necessary information (such as email and password) to authenticate your account and provide access
-                    to our services.
+                    <b>UniAsia Hardware & Electrical Marketing Corp</b> values
+                    your privacy. We collect only the necessary information
+                    (such as email and password) to authenticate your account
+                    and provide access to our services.
                   </p>
                   <p>
-                    Your credentials are never shared or sold. We may use your email to communicate important account
-                    information or security alerts.
+                    Your credentials are never shared or sold. We may use your
+                    email to communicate important account information or
+                    security alerts.
                   </p>
                   <p>
                     For support or more details, contact{" "}
-                    <a href="mailto:support@uniasia.com" className="underline text-[#ffba20]">
+                    <a
+                      href="mailto:support@uniasia.com"
+                      className="underline text-[#ffba20]"
+                    >
                       support@uniasia.com
                     </a>
                     .
                   </p>
-                  <p className="mt-2 text-xs text-gray-400">Last updated: September 2025</p>
+                  <p className="mt-2 text-xs text-gray-400">
+                    Last updated: September 2025
+                  </p>
                 </div>
               </motion.div>
             </motion.div>
