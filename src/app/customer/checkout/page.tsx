@@ -42,6 +42,14 @@ type CustomerInfo = {
   customer_type?: "New Customer" | "Existing Customer";
 };
 
+type SidebarOrder = {
+  id: number;
+  status: string | null;
+  created_at: string | null;
+  total: number | null;
+};
+
+
 type PSGCRegion = { id: number; name: string; code: string };
 type PSGCProvince = { id: number; name: string; code: string; region_id: number };
 type PSGCCity = { id: number; name: string; code: string; province_id?: number; type: string };
@@ -238,6 +246,7 @@ export default function CheckoutPage() {
     customer_type: undefined,
     landmark: "",
   });
+  
 
   // credit terms
   const [termsMonths, setTermsMonths] = useState<number | null>(null);
@@ -248,11 +257,7 @@ export default function CheckoutPage() {
   const [showFinalModal, setShowFinalModal] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
 
-  // after-submit modal
-  const [showAfterSubmitModal, setShowAfterSubmitModal] = useState(false);
-  const [lastOrderId, setLastOrderId] = useState<string | null>(null);
-  const [lastTxnCode, setLastTxnCode] = useState<string | null>(null);
-  const [lastOrderTotal, setLastOrderTotal] = useState<number>(0);
+
 
   // orders sidebar
   const [authUserId, setAuthUserId] = useState<string | null>(null);
@@ -311,6 +316,8 @@ export default function CheckoutPage() {
   useEffect(() => {
     setCustomerInfo((prev) => ({ ...prev, address: computedAddress }));
   }, [computedAddress]);
+
+  
 
   /* ------------------------ Prefill from auth ------------------------ */
   useEffect(() => {
@@ -476,67 +483,66 @@ export default function CheckoutPage() {
     loadBarangays();
   }, [cityCode]);
 
-  /* ----------------------------- Sidebar orders ----------------------------- */
-  useEffect(() => {
-    let mounted = true;
-    const run = async () => {
-      if (!authUserId) {
-        setOrders([]);
+/* ----------------------------- Sidebar orders ----------------------------- */
+// Directly read orders joined to customers, filtered by the signed-in email.
+useEffect(() => {
+  let mounted = true;
+
+  const load = async () => {
+    setFetchingOrders(true);
+    try {
+      const { data: uw } = await supabase.auth.getUser();
+      const email = uw?.user?.email?.trim().toLowerCase() ?? "";
+      if (!email) {
+        if (mounted) setOrders([]);
         return;
       }
-      setFetchingOrders(true);
-      try {
-        const { data: userData } = await supabase.auth.getUser();
-        const authUser = userData?.user;
-        const authUserIdInner = authUser?.id ?? authUserId;
-        const authEmail = authUser?.email ?? "";
 
-        let { data: ordersData, error: ordersErr } = await supabase
-          .from("orders")
-          .select("id, status, grand_total_with_interest, created_at")
-          .eq("customer_id", authUserIdInner || "__no_such_id__")
-          .order("created_at", { ascending: false })
-          .limit(50);
+      // Direct join: orders -> customer (filter by email)
+      const { data, error } = await supabase
+        .from("orders")
+        .select(`
+          id,
+          status,
+          created_at,
+          grand_total_with_interest,
+          customer:customer_id ( email )
+        `)
+        .eq("customer.email", email)
+        .order("created_at", { ascending: false })
+        .limit(20);
 
-        if (ordersErr) {
-          const orParts: string[] = [];
-          if (authUserIdInner) orParts.push(`id.eq.${authUserIdInner}`); // customers.id
-          if (authEmail) orParts.push(`email.eq.${authEmail}`);
-          if (orParts.length) {
-            const { data: customerRow } = await supabase
-              .from("customers")
-              .select("id")
-              .or(orParts.join(","))
-              .maybeSingle();
-            if (customerRow?.id) {
-              const { data: byCust } = await supabase
-                .from("orders")
-                .select("id, status, grand_total_with_interest, created_at")
-                .eq("customer_id", customerRow.id)
-                .order("created_at", { ascending: false })
-                .limit(50);
-              ordersData = byCust ?? [];
-            } else {
-              ordersData = [];
-            }
-          } else {
-            ordersData = [];
-          }
-        }
-        if (mounted) setOrders(ordersData ?? []);
-      } catch (err) {
-        console.error("[checkout] load orders error:", err);
-        toast.error("Unable to load past orders.");
+      if (error) {
+        console.warn("[checkout sidebar] orders join fetch error:", error);
         if (mounted) setOrders([]);
-      } finally {
-        if (mounted) setFetchingOrders(false);
+        return;
       }
-    };
-    run();
-    return () => {
-      mounted = false;
-    };
-  }, [authUserId]);
+
+      const rows = (data ?? []).map((o: any) => ({
+        id: o.id,
+        status: o?.status ?? "pending",
+        created_at: o?.created_at ?? null,
+        total: o?.grand_total_with_interest ?? null,
+      }));
+
+      if (mounted) setOrders(rows);
+      console.log("[checkout sidebar] loaded orders:", rows.length, rows);
+    } catch (e) {
+      console.error("[checkout sidebar] load failed:", e);
+      if (mounted) setOrders([]);
+    } finally {
+      if (mounted) setFetchingOrders(false);
+    }
+  };
+
+  load();
+  return () => {
+    mounted = false;
+  };
+}, []); // reads auth inside
+
+
+
 
   /* --------------------------- Payment type logic --------------------------- */
   useEffect(() => {
@@ -883,9 +889,7 @@ export default function CheckoutPage() {
 
       toast.success("Your order has been submitted successfully!");
 
-      setLastOrderId(orderId);
-      setLastTxnCode(customerCode || null);
-      setLastOrderTotal(subtotal);
+
 
       // reset cart + keep auth defaults
       setShowFinalModal(false);
@@ -917,7 +921,7 @@ export default function CheckoutPage() {
         if (emailUsed) await setTypeFromHistory(emailUsed);
       } catch {}
 
-      setShowAfterSubmitModal(true);
+
     } catch (e: any) {
       console.error("Order submission error:", e?.message || e);
       toast.error(e?.message?.includes("customers_code_key")
@@ -928,12 +932,7 @@ export default function CheckoutPage() {
     }
   };
 
-  const goToPayments = () => {
-    const qp = new URLSearchParams();
-    if (lastOrderId) qp.set("orderId", lastOrderId);
-    if (lastTxnCode) qp.set("code", lastTxnCode);
-    router.push(`/customer/payments${qp.toString() ? `?${qp.toString()}` : ""}`);
-  };
+
 
   /* --------------------------------- UI --------------------------------- */
   return (
@@ -1165,7 +1164,7 @@ export default function CheckoutPage() {
             initial={{ opacity: 0, y: 16, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
+            className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
             <h2 className="text-2xl font-semibold tracking-tight shrink-0">Confirm Order</h2>
 
@@ -1206,7 +1205,8 @@ export default function CheckoutPage() {
                   }`}
                   value={customerInfo.contact_person || ""}
                   onChange={(e) => {
-                    const value = e.target.value.replace(/[^A-Za-z\\s]/g, "");
+                    const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
+
                     if (value.length <= 30) {
                       setCustomerInfo({ ...customerInfo, contact_person: value });
                     }
@@ -1652,60 +1652,7 @@ export default function CheckoutPage() {
         </div>
       )}
 
-      {/* ------------------------ After-Submit Choice Modal ------------------------ */}
-      {showAfterSubmitModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-md p-6 rounded-2xl shadow-2xl ring-1 ring-black/5"
-          >
-            <div className="flex items-start justify-between">
-              <h3 className="text-xl font-semibold">Order Submitted</h3>
-              <button
-                className="text-gray-500 hover:text-black"
-                onClick={() => setShowAfterSubmitModal(false)}
-                aria-label="Close"
-                title="Close"
-              >
-                ✕
-              </button>
-            </div>
 
-            <div className="mt-3 text-sm text-gray-700 space-y-2">
-              <p>Your order was placed successfully.</p>
-              <div className="rounded-lg bg-gray-50 p-3 ring-1 ring-black/5">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Transaction Code:</span>
-                  <span className="font-medium">{lastTxnCode || "—"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Estimated Total:</span>
-                  <span className="font-semibold">{formatCurrency(lastOrderTotal)}</span>
-                </div>
-              </div>
-
-              <p className="mt-2">
-                Would you like to proceed to the <strong>Payments</strong> page now, or stay
-                here to place another order?
-              </p>
-            </div>
-
-            <div className="mt-5 flex gap-2 justify-end">
-              <button
-                onClick={() => setShowAfterSubmitModal(false)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50"
-              >
-                Stay & Order More
-              </button>
-              <button onClick={goToPayments} className="px-4 py-2 rounded-xl bg-[#ffba20] text-black">
-                Proceed to Payments
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
     </div>
   );
 }
