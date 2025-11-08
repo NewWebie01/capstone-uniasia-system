@@ -44,13 +44,13 @@ type PaymentRow = {
   customer_id: string | number;
   order_id: string | number;
   amount: number;
-  method: string | null;
-  cheque_number: string | null;
+  method: string | null;          // "Cash" | "Deposit Slip" | legacy "Cheque"
+  cheque_number: string | null;   // kept for compatibility (now “slip #”)
   bank_name: string | null;
-  cheque_date: string | null;
+  cheque_date: string | null;     // kept for compatibility (now “deposit date”)
   image_url: string | null;
   created_at: string | null;
-  status?: string | null; // 'pending' | 'received' | 'rejected'
+  status?: string | null;         // 'pending' | 'received' | 'rejected'
   received_at?: string | null;
   received_by?: string | null;
 };
@@ -61,6 +61,14 @@ type CustomerLite = {
   email: string | null;
 };
 
+/* ------------------------------- Helpers ------------------------------- */
+function displayMethod(method?: string | null) {
+  const m = (method || "").trim();
+  // Map legacy "Cheque" → "Deposit Slip" for display and filtering
+  if (/^cheque$/i.test(m)) return "Deposit Slip";
+  return m || "—";
+}
+
 /* --------------------------------- Page ---------------------------------- */
 export default function PaymentHistoryPage() {
   const [loading, setLoading] = useState(true);
@@ -70,12 +78,12 @@ export default function PaymentHistoryPage() {
 
   // Filters
   const [q, setQ] = useState("");
-  const [method, setMethod] = useState<"All" | "Cheque" | "Cash">("All");
+  const [method, setMethod] = useState<"All" | "Deposit Slip" | "Cash">("All");
 
   // Image modal
   const [imgOpen, setImgOpen] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [imgMeta, setImgMeta] = useState<{ cheque?: string | null; bank?: string | null } | null>(
+  const [imgMeta, setImgMeta] = useState<{ slip?: string | null; bank?: string | null } | null>(
     null
   );
 
@@ -112,7 +120,7 @@ export default function PaymentHistoryPage() {
               "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, created_at, status, received_at, received_by"
             )
             .in("customer_id", ids)
-            .in("status", ["received", "rejected"]) // <-- include both
+            .in("status", ["received", "rejected"]) // show both reviewed states
             .order("created_at", { ascending: false });
           if (pErr) throw pErr;
           setPayments((pays as PaymentRow[]) || []);
@@ -138,7 +146,6 @@ export default function PaymentHistoryPage() {
     const filter = `customer_id=in.(${ids
       .map((v) => (typeof v === "string" ? `"${v}"` : String(v)))
       .join(",")})`;
-
     const included = new Set(["received", "rejected"]);
 
     const channel = supabase.channel("realtime-payments-history");
@@ -195,13 +202,14 @@ export default function PaymentHistoryPage() {
   const filtered = useMemo(() => {
     const qx = q.trim().toLowerCase();
     return payments.filter((p) => {
-      if (method !== "All" && (p.method || "Cheque") !== method) return false;
+      const dispMethod = displayMethod(p.method);
+      if (method !== "All" && dispMethod !== method) return false;
       if (!qx) return true;
 
       const code = codeByCustomerId.get(String(p.customer_id)) || "";
       const hay = [
         code,
-        p.method || "",
+        dispMethod,
         p.bank_name || "",
         p.cheque_number || "",
         p.order_id?.toString?.() || "",
@@ -215,7 +223,7 @@ export default function PaymentHistoryPage() {
   }, [payments, q, method, codeByCustomerId]);
 
   /* ------------------------------ Image modal helpers ------------------------------ */
-  function openImage(url: string, meta?: { cheque?: string | null; bank?: string | null }) {
+  function openImage(url: string, meta?: { slip?: string | null; bank?: string | null }) {
     setImgSrc(url);
     setImgMeta(meta || null);
     setImgOpen(true);
@@ -234,7 +242,8 @@ export default function PaymentHistoryPage() {
           </h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Cheques appear here after an admin marks them as <b>Received</b> or <b>Rejected</b>.
+          <b>Deposit Slips</b> appear here after an admin marks them as <b>Received</b> or{" "}
+          <b>Rejected</b>.
         </p>
 
         {/* Filters */}
@@ -244,7 +253,7 @@ export default function PaymentHistoryPage() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search TXN / bank / cheque # / amount…"
+              placeholder="Search TXN / bank / slip # / amount…"
               className="w-full rounded-lg border border-gray-300 pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
             />
           </div>
@@ -254,7 +263,7 @@ export default function PaymentHistoryPage() {
             className="w-full md:w-[180px] rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
           >
             <option>All</option>
-            <option>Cheque</option>
+            <option>Deposit Slip</option>
             <option>Cash</option>
           </select>
         </div>
@@ -269,9 +278,9 @@ export default function PaymentHistoryPage() {
                   <th className={cellNowrap}>TXN Code</th>
                   <th className={cellNowrap}>Amount</th>
                   <th className={cellNowrap}>Method</th>
-                  <th className={cellNowrap}>Cheque #</th>
+                  <th className={cellNowrap}>Slip #</th>
                   <th className={cellNowrap}>Bank</th>
-                  <th className={cellNowrap}>Cheque Date</th>
+                  <th className={cellNowrap}>Deposit Date</th>
                   <th className={cellNowrap}>Image</th>
                   <th className={cellNowrap}>Status</th>
                 </tr>
@@ -295,6 +304,8 @@ export default function PaymentHistoryPage() {
                     </span>
                   );
 
+                  const dispMethod = displayMethod(p.method);
+
                   return (
                     <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
                       <td className="py-2.5 px-3 whitespace-nowrap">
@@ -304,7 +315,7 @@ export default function PaymentHistoryPage() {
                       <td className="py-2.5 px-3 font-mono tabular-nums whitespace-nowrap">
                         {formatCurrency(p.amount)}
                       </td>
-                      <td className="py-2.5 px-3">{p.method ?? "—"}</td>
+                      <td className="py-2.5 px-3">{dispMethod}</td>
                       <td className="py-2.5 px-3">{p.cheque_number ?? "—"}</td>
                       <td className="py-2.5 px-3">{p.bank_name ?? "—"}</td>
                       <td className="py-2.5 px-3 whitespace-nowrap">
@@ -316,7 +327,7 @@ export default function PaymentHistoryPage() {
                             type="button"
                             onClick={() =>
                               openImage(p.image_url!, {
-                                cheque: p.cheque_number,
+                                slip: p.cheque_number,
                                 bank: p.bank_name,
                               })
                             }
@@ -337,7 +348,7 @@ export default function PaymentHistoryPage() {
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={9} className="py-10 text-center text-neutral-400">
-                      {loading ? "Loading…" : "No reviewed cheques yet."}
+                      {loading ? "Loading…" : "No reviewed deposit slips yet."}
                     </td>
                   </tr>
                 )}
@@ -350,7 +361,8 @@ export default function PaymentHistoryPage() {
         <div className="mt-4 flex items-start gap-2 text-sm text-gray-600">
           <Info className="h-4 w-4 mt-0.5" />
           <span>
-            This page shows cheques after admin review — both <b>Received</b> and <b>Rejected</b>.
+            This page shows <b>deposit slips</b> after admin review — both <b>Received</b> and{" "}
+            <b>Rejected</b>.
           </span>
         </div>
       </div>
@@ -359,10 +371,10 @@ export default function PaymentHistoryPage() {
       <Dialog open={imgOpen} onOpenChange={setImgOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Cheque Image</DialogTitle>
+            <DialogTitle>Deposit Slip Image</DialogTitle>
             <DialogDescription className="text-xs">
               {imgMeta?.bank ? `Bank: ${imgMeta.bank}` : ""}{" "}
-              {imgMeta?.cheque ? `• Cheque #: ${imgMeta.cheque}` : ""}
+              {imgMeta?.slip ? `• Slip #: ${imgMeta.slip}` : ""}
             </DialogDescription>
           </DialogHeader>
 
@@ -370,7 +382,7 @@ export default function PaymentHistoryPage() {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={imgSrc || ""}
-              alt="Cheque"
+              alt="Deposit Slip"
               className="w-full h-auto object-contain max-h-[70vh] bg-black/5"
             />
           </div>

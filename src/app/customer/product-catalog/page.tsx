@@ -38,6 +38,39 @@ const formatPH = (d?: string | number | Date) =>
   }).format(d ? new Date(d) : new Date());
 
 /* ----------------------------- Helpers ----------------------------- */
+/* ---------------------- Computed MOQ (no DB) ---------------------- */
+/**
+ * Tweak these rules anytime:
+ * - If sold by Box/Carton/Case → MOQ = 1 unit
+ * - Lighting / “bulb” → 20 pcs
+ * - Electrical tape → 10 pcs
+ * - Very low price (≤ ₱100) → 10
+ * - Low price (≤ ₱250)  → 5
+ * - Otherwise           → 1
+ */
+function getMOQ(i: SharedInventoryItem): number {
+  const unit = (i.unit ?? "").trim().toLowerCase();
+  const cat = (i.category ?? "").toLowerCase();
+  const sub = (i.subcategory ?? "").toLowerCase();
+  const name = (i.product_name ?? "").toLowerCase();
+  const price = Number(i.unit_price ?? 0);
+
+  if (["box", "carton", "case"].includes(unit)) return 1;
+
+  const isBulb =
+    cat.includes("light") || sub.includes("light") || name.includes("bulb");
+  if (isBulb) return 20;
+
+  const isTape =
+    name.includes("tape") || sub.includes("tape") || cat.includes("electrical");
+  if (isTape && (name.includes("tape") || sub.includes("tape"))) return 10;
+
+  if (price <= 100) return 10;
+  if (price <= 250) return 5;
+
+  return 1;
+}
+
 const isOutOfStock = (i: SharedInventoryItem) =>
   (i.status || "").toLowerCase().includes("out") || Number(i.quantity ?? 0) <= 0;
 
@@ -214,10 +247,11 @@ export default function CustomerInventoryPage() {
       toast.error("This item is out of stock.");
       return;
     }
-    setSelected(item);
-    setModalQty(1);
-    setShowAddModal(true);
-    document.body.style.overflow = "hidden";
+setSelected(item);
+setModalQty(getMOQ(item)); // start at computed MOQ
+setShowAddModal(true);
+document.body.style.overflow = "hidden";
+
   };
 
   const closeAddModal = () => {
@@ -227,59 +261,81 @@ export default function CustomerInventoryPage() {
   };
 
   const confirmAddToCart = () => {
-    if (!selected) {
-      toast.error("No item selected.");
-      return;
-    }
+  if (!selected) {
+    toast.error("No item selected.");
+    return;
+  }
 
-    // 1) Clamp qty
-    const qty = clampQty(modalQty);
-    if (modalQty > MAX_QTY) {
-      toast.error(
-        `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
-      );
-    }
+  // --- MOQ + base qty ---
+  const moq = getMOQ(selected);                 // computed MOQ (no-DB)
+  let qty = clampQty(modalQty);                 // declare qty ONCE
 
-    // 2) Enforce weight & distinct limits BEFORE add
-    const check = canAddItemWithQty(sharedCart, selected, qty);
-    if (!check.ok) {
+  // hard cap you already had
+  if (modalQty > MAX_QTY) {
+    toast.error(`Maximum ${MAX_QTY} per item. For more, please submit another transaction.`);
+  }
+
+  // bring qty up to MOQ if needed
+  if (qty < moq) {
+    qty = moq;
+    toast.message(`Minimum order for this item is ${moq}. Quantity set to ${moq}.`);
+  }
+
+  // --- Pre-check: distinct + weight with current qty ---
+  const check = canAddItemWithQty(sharedCart, selected, qty);
+  if (!check.ok) {
+    toast.error(LIMIT_TOAST);
+    return;
+  }
+
+  // --- If already in cart, MOQ applies to the final total quantity ---
+  const existing = sharedCart.find((ci) => ci.item.id === selected.id);
+  if (existing && existing.quantity + qty < moq) {
+    const needed = moq - existing.quantity;
+    qty = Math.max(qty, needed);
+    toast.message(`Minimum order is ${moq}. Adding ${needed} to reach MOQ.`);
+  }
+
+  // --- If already in cart, also ensure increasing qty won’t violate the weight cap ---
+  if (existing) {
+    const perUnitKg = unitWeightKg(selected);
+    if (perUnitKg <= 0) {
       toast.error(LIMIT_TOAST);
       return;
     }
+    const weightWithoutThis =
+      cartTotalWeightKg(sharedCart) - perUnitKg * existing.quantity;
+    const remainingKg = TRUCK_LIMITS.maxTotalWeightKg - weightWithoutThis;
+    const maxQtyByWeight = Math.max(0, Math.floor(remainingKg / perUnitKg));
 
-    // 3) If item already exists, also ensure increasing its qty won't violate the weight cap
-    const existing = sharedCart.find((ci) => ci.item.id === selected.id);
-    if (existing) {
-      const perUnitKg = unitWeightKg(selected);
-      if (perUnitKg <= 0) {
-        toast.error(LIMIT_TOAST);
-        return;
-      }
-      const weightWithoutThis =
-        cartTotalWeightKg(sharedCart) - perUnitKg * existing.quantity;
-      const remainingKg =
-        TRUCK_LIMITS.maxTotalWeightKg - weightWithoutThis;
-      const maxQtyByWeight = Math.max(0, Math.floor(remainingKg / perUnitKg));
-      if (qty + existing.quantity > maxQtyByWeight) {
-        toast.error(LIMIT_TOAST);
-        return;
-      }
+    if (qty + existing.quantity > maxQtyByWeight) {
+      toast.error(LIMIT_TOAST);
+      return;
     }
+  }
 
-    addItem(selected, qty);
-    toast.success("Item added to cart.");
-    closeAddModal();
-  };
+  // --- Commit add ---
+  addItem(selected, qty);
+  toast.success("Item added to cart.");
+  closeAddModal();
+};
+
 
   /* ------------------ Floating cart derived ------------------ */
-  const totalItems = sharedCart.reduce((s, ci) => s + ci.quantity, 0);
-  const cartTotal = Number(sharedCartTotal ?? 0) || cartSum(sharedCart);
+/* ------------------ Floating cart derived ------------------ */
+const totalItems = sharedCart.reduce((s, ci) => s + ci.quantity, 0);
+const cartTotal = Number(sharedCartTotal ?? 0) || cartSum(sharedCart);
 
-  const overDistinctLimit = sharedCart.length > TRUCK_LIMITS.maxDistinctItems;
-  const overWeightLimit =
-    cartTotalWeightKg(sharedCart) > TRUCK_LIMITS.maxTotalWeightKg;
+const overDistinctLimit = sharedCart.length > TRUCK_LIMITS.maxDistinctItems;
+const overWeightLimit =
+  cartTotalWeightKg(sharedCart) > TRUCK_LIMITS.maxTotalWeightKg;
 
-  const canProceedCheckout = !overDistinctLimit && !overWeightLimit;
+// NEW: MOQ violations
+const belowMOQ = sharedCart.filter((ci) => ci.quantity < getMOQ(ci.item));
+const hasMOQIssue = belowMOQ.length > 0;
+
+const canProceedCheckout = !overDistinctLimit && !overWeightLimit && !hasMOQIssue;
+
 
   return (
     <div className="p-4">
@@ -534,34 +590,46 @@ export default function CustomerInventoryPage() {
                         {String(selected.weight_per_piece_kg)} kg
                       </div>
                     )}
+
+                    <div className="text-sm text-gray-600">
+  <span className="font-medium text-gray-800">Minimum order:</span>{" "}
+  {getMOQ(selected)} {selected.unit ? selected.unit : "unit(s)"}
+</div>
+
                   </div>
 
                   {/* Quantity Controls */}
                   <div>
-                    <label className="text-sm text-gray-600">Quantity</label>
-                    <div className="mt-2 flex items-center gap-3">
-                      <button
-                        onClick={() => setModalQty((q) => clampQty(q - 1))}
-                        className="px-3 py-1 rounded border"
-                      >
-                        −
-                      </button>
-                      <input
-                        type="number"
-                        value={modalQty}
-                        min={1}
-                        onChange={(e) =>
-                          setModalQty(clampQty(Number(e.target.value) || 1))
-                        }
-                        className="w-20 text-center border rounded px-2 py-1"
-                      />
-                      <button
-                        onClick={() => setModalQty((q) => clampQty(q + 1))}
-                        className="px-3 py-1 rounded border"
-                      >
-                        +
-                      </button>
-                    </div>
+<label className="text-sm text-gray-600">Quantity</label>
+<div className="mt-2 flex items-center gap-3">
+  <button
+    onClick={() =>
+      setModalQty((q) => Math.max(getMOQ(selected!), clampQty(q - 1)))
+    }
+    className="px-3 py-1 rounded border"
+  >
+    −
+  </button>
+  <input
+    type="number"
+    value={modalQty}
+    min={getMOQ(selected!)}
+    onChange={(e) => {
+      const v = Number(e.target.value) || 0;
+      setModalQty(Math.max(getMOQ(selected!), clampQty(v)));
+    }}
+    className="w-20 text-center border rounded px-2 py-1"
+  />
+  <button
+    onClick={() =>
+      setModalQty((q) => clampQty(Math.max(getMOQ(selected!), q + 1)))
+    }
+    className="px-3 py-1 rounded border"
+  >
+    +
+  </button>
+</div>
+
 
 
 
@@ -605,26 +673,37 @@ export default function CustomerInventoryPage() {
 
             <div className="p-6">
               {/* Limit warnings */}
-              {(overDistinctLimit || overWeightLimit) && (
-                <div className="mb-4 rounded-md bg-yellow-50 text-yellow-800 border border-yellow-200 px-4 py-3 text-sm">
-                  <div className="font-medium mb-1">Order limit reached</div>
-                  <ul className="list-disc ml-5 space-y-1">
-                    {overDistinctLimit && (
-                      <li>
-                        Too many different items. Max{" "}
-                        {TRUCK_LIMITS.maxDistinctItems} SKUs per transaction.
-                      </li>
-                    )}
-                    {overWeightLimit && (
-                      <li>
-                        Cart exceeds weight limit of{" "}
-                        {TRUCK_LIMITS.maxTotalWeightKg.toLocaleString()} kg.
-                      </li>
-                    )}
-                  </ul>
-                  <div className="mt-1">Please remove some items to continue.</div>
-                </div>
-              )}
+{(overDistinctLimit || overWeightLimit || hasMOQIssue) && (
+  <div className="mb-4 rounded-md bg-yellow-50 text-yellow-800 border border-yellow-200 px-4 py-3 text-sm">
+    <div className="font-medium mb-1">Order limit reached</div>
+    <ul className="list-disc ml-5 space-y-1">
+      {overDistinctLimit && (
+        <li>
+          Too many different items. Max {TRUCK_LIMITS.maxDistinctItems} SKUs per transaction.
+        </li>
+      )}
+      {overWeightLimit && (
+        <li>
+          Cart exceeds weight limit of {TRUCK_LIMITS.maxTotalWeightKg.toLocaleString()} kg.
+        </li>
+      )}
+      {hasMOQIssue && (
+        <li>
+          Some items are below the minimum order. Please increase quantities:
+          <ul className="list-disc ml-6 mt-1">
+            {belowMOQ.map((ci, idx) => (
+              <li key={idx}>
+                {ci.item.product_name}: min {getMOQ(ci.item)}, current {ci.quantity}
+              </li>
+            ))}
+          </ul>
+        </li>
+      )}
+    </ul>
+    <div className="mt-1">Please resolve these to continue.</div>
+  </div>
+)}
+
 
               {sharedCart.length === 0 ? (
                 <p className="text-gray-500 text-center py-10">
