@@ -1,3 +1,4 @@
+// src/app/account_creation/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -33,7 +34,8 @@ export default function AccountCreationPage() {
   const router = useRouter();
 
   const [formData, setFormData] = useState({
-    name: "",
+    first_name: "",
+    last_name: "",
     email: "",
     contact_number: "",
     password: "",
@@ -91,7 +93,8 @@ export default function AccountCreationPage() {
 
   const handleReset = () => {
     setFormData({
-      name: "",
+      first_name: "",
+      last_name: "",
       email: "",
       contact_number: "",
       password: "",
@@ -106,13 +109,15 @@ export default function AccountCreationPage() {
     e.preventDefault();
     const newErrors: Record<string, string> = {};
 
-    if (!formData.name.trim()) newErrors.name = "Name is required";
+    if (!formData.first_name.trim()) newErrors.first_name = "First name is required";
+    if (!formData.last_name.trim()) newErrors.last_name = "Last name is required";
     if (!EMAIL_REGEX.test(formData.email))
       newErrors.email = "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
     if (!/^\d{10}$/.test(formData.contact_number))
       newErrors.contact_number = "Enter 10 digits after +63 (e.g., 9201234567)";
 
-    const personalInfo = [formData.name, formData.email, "+63" + formData.contact_number];
+    const fullName = `${formData.first_name.trim()} ${formData.last_name.trim()}`.replace(/\s+/g, " ");
+    const personalInfo = [fullName, formData.email, "+63" + formData.contact_number];
     const pwStrength = getPasswordStrength(formData.password, personalInfo);
     if (["Weak", "Too Personal", "Invalid"].includes(pwStrength)) {
       newErrors.password =
@@ -136,23 +141,26 @@ export default function AccountCreationPage() {
           ? window.location.origin
           : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
+      // 1) Create auth user with rich metadata
       const { data, error } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,
         options: {
           data: {
-            name: formData.name,
+            full_name: fullName, // shows in Auth "Display name"
+            name: fullName,
+            first_name: formData.first_name.trim(),
+            last_name: formData.last_name.trim(),
             contact_number: "+63" + formData.contact_number,
+            phone: "+63" + formData.contact_number,
             role: "customer",
+            provider_type: "email", // for quick reference in your UI
           },
           emailRedirectTo: `${origin}/auth/callback`,
         },
       });
 
-      console.log("signUp result:", { data, error });
-
       if (error) {
-        // Friendly duplicate handling
         const msg = error.message || "";
         if (/already (registered|exists)/i.test(msg)) {
           setErrors((p) => ({ ...p, email: "This email is already registered. Please log in instead." }));
@@ -163,7 +171,29 @@ export default function AccountCreationPage() {
         return;
       }
 
-      // Show “verify your email” modal
+      // 2) Upsert into public.profiles (id = auth user id)
+      const userId = data.user?.id;
+      if (userId) {
+        const { error: upsertErr } = await supabase
+          .from("profiles")
+          .upsert(
+            {
+              id: userId,
+              first_name: formData.first_name.trim(),
+              last_name: formData.last_name.trim(),
+              name: fullName,
+              contact_number: "+63" + formData.contact_number,
+              role: "customer",
+            },
+            { onConflict: "id" }
+          );
+        if (upsertErr) {
+          console.error("profiles upsert error:", upsertErr);
+          toast.error("Profile saving warning: " + (upsertErr?.message ?? JSON.stringify(upsertErr)));
+        }
+      }
+
+      // 3) Show “verify your email” modal
       setPendingEmail(formData.email);
       setShowSuccessModal(true);
       handleReset();
@@ -175,7 +205,8 @@ export default function AccountCreationPage() {
     }
   };
 
-  const personalInfo = [formData.name, formData.email, "+63" + formData.contact_number];
+  const fullNamePreview = `${formData.first_name || ""} ${formData.last_name || ""}`.trim();
+  const personalInfo = [fullNamePreview, formData.email, "+63" + formData.contact_number];
   const passwordStrength = getPasswordStrength(formData.password, personalInfo);
 
   /* ------------------------------- UI ------------------------------- */
@@ -219,21 +250,38 @@ export default function AccountCreationPage() {
             </h1>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              {/* Name */}
-              <div>
-                <label className="block text-sm font-medium text-neutral-700">Name</label>
-                <input
-                  name="name"
-                  type="text"
-                  placeholder="Enter your full name"
-                  value={formData.name}
-                  onChange={handleChange}
-                  required
-                  className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
-                    errors.name ? "border-red-500" : "focus:ring-black border-gray-300"
-                  }`}
-                />
-                {errors.name && <p className="text-red-500 text-xs mt-1">{errors.name}</p>}
+              {/* First / Last Name */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700">First Name</label>
+                  <input
+                    name="first_name"
+                    type="text"
+                    placeholder="Enter first name"
+                    value={formData.first_name}
+                    onChange={handleChange}
+                    required
+                    className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
+                      errors.first_name ? "border-red-500" : "focus:ring-black border-gray-300"
+                    }`}
+                  />
+                  {errors.first_name && <p className="text-red-500 text-xs mt-1">{errors.first_name}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700">Last Name</label>
+                  <input
+                    name="last_name"
+                    type="text"
+                    placeholder="Enter last name"
+                    value={formData.last_name}
+                    onChange={handleChange}
+                    required
+                    className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
+                      errors.last_name ? "border-red-500" : "focus:ring-black border-gray-300"
+                    }`}
+                  />
+                  {errors.last_name && <p className="text-red-500 text-xs mt-1">{errors.last_name}</p>}
+                </div>
               </div>
 
               {/* Email */}
@@ -372,9 +420,19 @@ export default function AccountCreationPage() {
                 <button
                   type="submit"
                   disabled={isLoading || !policyAccepted}
-                  className="w-full bg-[#181918] text-white py-2 rounded-md hover:text-[#ffba20] transition text-sm disabled:opacity-70"
+                  className="w-full bg-[#181918] text-white py-2 rounded-md hover:text-[#ffba20] transition text-sm disabled:opacity-70 inline-flex items-center justify-center"
                 >
-                  {isLoading ? "Submitting..." : "Create Account"}
+                  {isLoading ? (
+                    <span className="inline-flex items-center gap-2">
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                      </svg>
+                      Creating…
+                    </span>
+                  ) : (
+                    "Create Account"
+                  )}
                 </button>
                 <button
                   type="button"
@@ -435,7 +493,7 @@ export default function AccountCreationPage() {
                   </p>
                   <h3 className="font-semibold text-base mt-4 mb-1">1. Collection of Personal Information</h3>
                   <ul className="list-disc pl-6 space-y-2">
-                    <li><b>Personal Data:</b> name, email address, contact number, password.</li>
+                    <li><b>Personal Data:</b> first name, last name, email address, contact number, password.</li>
                     <li><b>Additional:</b> delivery address and transaction history for orders.</li>
                     <li><b>Automatic:</b> device, browser, IP, usage logs for security and analytics.</li>
                   </ul>
