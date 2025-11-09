@@ -1,12 +1,14 @@
 // src/app/customer/checkout/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import supabase from "@/config/supabaseClient";
 import { useCart, CartItem as CtxCartItem } from "@/context/CartContext";
+
 
 /* -------------------------------- Types -------------------------------- */
 type InventoryItem = {
@@ -233,6 +235,13 @@ export default function CheckoutPage() {
   const [showFinalModal, setShowFinalModal] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [txnCode, setTxnCode] = useState<string>("");
+
+  // Terms & Conditions (Credit) state
+const [showTermsModal, setShowTermsModal] = useState(false);
+const [tcAccepted, setTcAccepted] = useState(false);       // user tick on main confirm modal
+const [tcReadyToAccept, setTcReadyToAccept] = useState(false); // becomes true after reading terms
+const termsBodyRef = useRef<HTMLDivElement | null>(null);
+
 
 
   // orders sidebar
@@ -648,6 +657,15 @@ const rows = (data ?? []).map((o: any) => ({
       setInterestPercent(0);
     }
   }, [customerInfo.payment_type]);
+  
+  useEffect(() => {
+  if (customerInfo.payment_type !== "Credit") {
+    setTcAccepted(false);
+    setTcReadyToAccept(false);
+    setShowTermsModal(false);
+  }
+}, [customerInfo.payment_type]);
+
 
   useEffect(() => {
     if (customerInfo.payment_type === "Credit" && termsMonths != null) {
@@ -691,40 +709,45 @@ const rows = (data ?? []).map((o: any) => ({
   const shipping = 0;
   const grandTotal = subtotal + tax + shipping;
 
-  /* ------------------------------ Validation ------------------------------ */
-  const missingFields = useMemo(() => {
-    const missing: string[] = [];
-    if (!customerInfo.name?.trim()) missing.push("Customer Name");
-    if (!customerInfo.email?.includes("@")) missing.push("Email");
-    if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
-    if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) missing.push("Phone (11 digits)");
-    if (!houseStreet?.trim()) missing.push("House & Street");
-    if (!regionCode) missing.push("Region");
-    if (!isNCR && !provinceCode) missing.push("Province");
-    if (!cityCode) missing.push("City / Municipality");
-    if (!barangayCode) missing.push("Barangay");
-    if (cart.length === 0) missing.push("Cart");
-    if (customerInfo.payment_type === "Credit") {
-      if (!termsMonths) missing.push("Payment Terms (months)");
-      if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
-    }
-    return missing;
-  }, [
-    customerInfo.name,
-    customerInfo.email,
-    customerInfo.contact_person,
-    customerInfo.phone,
-    customerInfo.payment_type,
-    houseStreet,
-    regionCode,
-    provinceCode,
-    cityCode,
-    barangayCode,
-    cart,
-    isNCR,
-    termsMonths,
-    interestPercent,
-  ]);
+/* ------------------------------ Validation ------------------------------ */
+const missingFields = useMemo(() => {
+  const missing: string[] = [];
+  if (!customerInfo.name?.trim()) missing.push("Customer Name");
+  if (!customerInfo.email?.includes("@")) missing.push("Email");
+  if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
+  if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) missing.push("Phone (11 digits)");
+  if (!houseStreet?.trim()) missing.push("House & Street");
+  if (!regionCode) missing.push("Region");
+  if (!isNCR && !provinceCode) missing.push("Province");
+  if (!cityCode) missing.push("City / Municipality");
+  if (!barangayCode) missing.push("Barangay");
+  if (cart.length === 0) missing.push("Cart");
+
+  if (customerInfo.payment_type === "Credit") {
+    if (!termsMonths) missing.push("Payment Terms (months)");
+    if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
+    if (!tcAccepted) missing.push("Accept Terms & Conditions");
+  }
+
+  return missing;
+}, [
+  customerInfo.name,
+  customerInfo.email,
+  customerInfo.contact_person,
+  customerInfo.phone,
+  customerInfo.payment_type,
+  houseStreet,
+  regionCode,
+  provinceCode,
+  cityCode,
+  barangayCode,
+  cart,
+  isNCR,
+  termsMonths,
+  interestPercent,
+  tcAccepted,          // <-- ADD THIS
+]);
+
 
   const isConfirmEnabled = missingFields.length === 0;
 
@@ -879,6 +902,22 @@ const openConfirmModal = async () => {
 
   setShowConfirmModal(true);
 };
+
+// Open/close terms modal
+const openTerms = () => {
+  setShowTermsModal(true);
+  setTcReadyToAccept(false); // must scroll again to bottom each view
+};
+const closeTerms = () => setShowTermsModal(false);
+
+// When user scrolls the terms body, unlock the checkbox
+const onTermsScroll = () => {
+  const el = termsBodyRef.current;
+  if (!el) return;
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+  if (atBottom) setTcReadyToAccept(true);
+};
+
 
 
   const proceedToFinal = () => {
@@ -1511,6 +1550,41 @@ await supabase.from("system_notifications").insert([
                 )}
               </div>
 
+              {/* Credit Terms & Conditions acknowledgement */}
+{customerInfo.payment_type === "Credit" && (
+  <div className="col-span-2 rounded border p-3 bg-amber-50/50">
+    <div className="text-sm">
+      By selecting <span className="font-medium">Credit</span>, you agree to our{" "}
+      <button
+        type="button"
+        onClick={openTerms}
+        className="text-blue-600 hover:underline underline-offset-2"
+      >
+        Terms & Conditions on interest
+      </button>.
+    </div>
+
+    <label className="mt-2 flex items-start gap-2 text-sm">
+      <input
+        type="checkbox"
+        className="mt-0.5"
+        checked={tcAccepted}
+        onChange={(e) => setTcAccepted(e.target.checked)}
+        disabled={!tcReadyToAccept}
+      />
+      <span>
+        I have read and agree to the Terms & Conditions on interest.
+        {!tcReadyToAccept && (
+          <span className="ml-1 text-xs text-gray-500">
+            (open & read the terms first)
+          </span>
+        )}
+      </span>
+    </label>
+  </div>
+)}
+
+
               {/* Items table */}
               <div className="border rounded-xl bg-gray-100 overflow-hidden">
                 <table className="w-full text-sm">
@@ -1594,6 +1668,107 @@ await supabase.from("system_notifications").insert([
           </motion.div>
         </div>
       )}
+
+      {/* ------------------------ Terms & Conditions Modal ------------------------ */}
+{showTermsModal && (
+  <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <motion.div
+      initial={{ opacity: 0, y: 16, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: "spring", stiffness: 260, damping: 22 }}
+      className="bg-white w-full max-w-3xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col"
+    >
+      <h2 className="text-xl font-semibold tracking-tight">Terms &amp; Conditions – Credit Interest</h2>
+
+      {/* Scrollable body; must reach bottom to enable main checkbox */}
+      <div
+        ref={termsBodyRef}
+        onScroll={onTermsScroll}
+        className="mt-4 overflow-auto pr-2"
+        style={{ maxHeight: "60vh" }}
+      >
+        <div className="prose prose-sm max-w-none">
+          <p>
+            These Terms &amp; Conditions govern the application of interest for credit purchases
+            made through UniAsia Hardware &amp; Electrical Mktg. Corp. By using the Credit payment
+            option, you acknowledge and agree to the following:
+          </p>
+
+          <h3>1. Interest Schedule</h3>
+          <ul>
+            <li>Net 1 month: <strong>2%</strong> interest for the whole term.</li>
+            <li>Net 3 months: <strong>6%</strong> interest for the whole term.</li>
+            <li>Net 6 months: <strong>12%</strong> interest for the whole term.</li>
+            <li>Net 12 months: <strong>24%</strong> interest for the whole term.</li>
+          </ul>
+
+          <h3>2. Computation Basis</h3>
+          <p>
+            Interest is computed on the order subtotal (exclusive of shipping). Shipping fees, if
+            any, may be added separately and are not part of the interest base.
+          </p>
+
+          <h3>3. Payment Schedule</h3>
+          <p>
+            The total with interest is divided into equal monthly installments over the selected
+            term. Any missed or late installment may be subject to additional charges or order
+            restrictions at the Company’s discretion.
+          </p>
+
+          <h3>4. Early Settlement</h3>
+          <p>
+            Early payment of the remaining balance is allowed. Any request for interest adjustment
+            on early settlement is subject to approval by the Company.
+          </p>
+
+          <h3>5. Order Changes</h3>
+          <p>
+            Discounts, returns, or adjustments approved by an administrator may change the final
+            payable amount. Such changes will reflect in subsequent statements or installment
+            schedules.
+          </p>
+
+          <h3>6. Defaults</h3>
+          <p>
+            Failure to comply with the payment schedule may result in suspension of credit
+            privileges and collection actions permitted by law.
+          </p>
+
+          <h3>7. Acceptance</h3>
+          <p>
+            You must read this document in full before accepting. The agreement checkbox in the
+            confirmation form will only be enabled after you scroll to the bottom of this page.
+          </p>
+
+          <p className="text-gray-500 text-sm mt-6">
+            <em>Scroll to the very bottom to enable acceptance.</em>
+          </p>
+        </div>
+
+        {/* Invisible spacer so the user truly reaches the bottom */}
+        <div className="h-6" />
+      </div>
+
+      <div className="mt-4 flex justify-between items-center">
+        <div className="text-sm">
+          {tcReadyToAccept ? (
+            <span className="text-green-700 font-medium">You may now tick the checkbox in the form.</span>
+          ) : (
+            <span className="text-gray-600">Please scroll to the bottom to unlock acceptance.</span>
+          )}
+        </div>
+
+        <button
+          onClick={closeTerms}
+          className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
+        >
+          Close
+        </button>
+      </div>
+    </motion.div>
+  </div>
+)}
+
 
       {/* ------------------------ Final Confirmation Modal ------------------------ */}
       {showFinalModal && (
