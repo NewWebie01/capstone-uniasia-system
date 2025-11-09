@@ -49,7 +49,6 @@ type SidebarOrder = {
   total: number | null;
 };
 
-
 type PSGCRegion = { id: number; name: string; code: string };
 type PSGCProvince = { id: number; name: string; code: string; region_id: number };
 type PSGCCity = { id: number; name: string; code: string; province_id?: number; type: string };
@@ -86,6 +85,9 @@ const formatPH = (d?: string | number | Date) =>
     timeZone: "Asia/Manila",
   }).format(d ? new Date(d) : new Date());
 
+const safeFormatPH = (d?: string | null) => (d ? formatPH(d) : "—");
+
+
 const fixEncoding = (s: string) => {
   try {
     return decodeURIComponent(escape(s));
@@ -115,6 +117,17 @@ function normalizePhone(input: string | null | undefined): string {
   return "";
 }
 
+// Deterministic order TXN derived from order id (no DB change needed)
+function getTxnCode(orderId: string | number, createdAt?: string | Date | null) {
+  const s = String(orderId);
+  const last6 = s.slice(-6).toUpperCase();
+  const dt = createdAt ? new Date(createdAt) : new Date();
+  const ymd = dt.toISOString().slice(0, 10).replace(/-/g, "");
+  return `TXN-${ymd}-${last6}`;
+}
+
+
+
 function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
   const nameFromMeta =
     meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
@@ -124,7 +137,7 @@ function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
 }
 
 function isValidPhone(phone: string) {
-  return /^\d{11}$/.test(phone); // 09xxxxxxxxx
+  return /^\d{11}$/.test(phone);
 }
 
 const getAuthIdentity = async () => {
@@ -137,53 +150,31 @@ const getAuthIdentity = async () => {
   return { email, name, phone, authUserId: user?.id ?? null };
 };
 
-// Replace the old loadPhoneForEmail with this:
+// pull contact number from profiles instead of account_requests
 const loadPhoneForEmail = async (email: string): Promise<string> => {
   const clean = (email || "").trim();
   try {
-    // 1) Try profiles by auth uid first (common Supabase pattern: profiles.id === auth.uid)
     const { data: userWrap } = await supabase.auth.getUser();
     const uid = userWrap?.user?.id || null;
-
     if (uid) {
       const { data: byUid } = await supabase
         .from("profiles")
         .select("contact_number")
         .eq("id", uid)
         .maybeSingle();
-
-      const phoneFromProfilesByUid = normalizePhone(byUid?.contact_number);
-      if (phoneFromProfilesByUid) return phoneFromProfilesByUid;
+      const phone = normalizePhone(byUid?.contact_number);
+      if (phone) return phone;
     }
-
-    // 2) Fallback: profiles by email (if your profiles table stores email)
     if (clean) {
       const { data: byEmail } = await supabase
         .from("profiles")
         .select("contact_number")
         .ilike("email", clean)
-        .order("updated_at", { ascending: false }) // adjust if you use a different timestamp
         .limit(1)
         .maybeSingle();
-
-      const phoneFromProfilesByEmail = normalizePhone(byEmail?.contact_number);
-      if (phoneFromProfilesByEmail) return phoneFromProfilesByEmail;
+      const phone = normalizePhone(byEmail?.contact_number);
+      if (phone) return phone;
     }
-
-    // 3) Last fallback: customers.phone (kept, since you already use it elsewhere)
-    if (clean) {
-      const { data: cust } = await supabase
-        .from("customers")
-        .select("phone")
-        .ilike("email", clean)
-        .order("date", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      const fromCustomers = normalizePhone(cust?.phone);
-      if (fromCustomers) return fromCustomers;
-    }
-
     return "";
   } catch {
     return "";
@@ -209,20 +200,6 @@ function unitWeightKg(i: InventoryItem): number {
 function cartTotalWeightKg(list: CartItem[]) {
   return list.reduce((sum, ci) => sum + unitWeightKg(ci.item) * ci.quantity, 0);
 }
-function canAddItemWithQty(current: CartItem[], item: InventoryItem, qty: number) {
-  const nextDistinct = current.some((ci) => ci.item.id === item.id)
-    ? current.length
-    : current.length + 1;
-  if (nextDistinct > TRUCK_LIMITS.maxDistinctItems)
-    return { ok: false as const, reason: "distinct", message: LIMIT_TOAST };
-  const perUnitKg = unitWeightKg(item);
-  if (perUnitKg <= 0)
-    return { ok: false as const, reason: "weight-missing", message: LIMIT_TOAST };
-  const nextWeight = cartTotalWeightKg(current) + perUnitKg * qty;
-  if (nextWeight > TRUCK_LIMITS.maxTotalWeightKg)
-    return { ok: false as const, reason: "weight", message: LIMIT_TOAST };
-  return { ok: true as const };
-}
 
 /* ----------------------------- Component ----------------------------- */
 export default function CheckoutPage() {
@@ -246,22 +223,21 @@ export default function CheckoutPage() {
     customer_type: undefined,
     landmark: "",
   });
-  
 
   // credit terms
   const [termsMonths, setTermsMonths] = useState<number | null>(null);
   const [interestPercent, setInterestPercent] = useState<number>(0);
 
-  // confirm + final modals
+  // modals
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showFinalModal, setShowFinalModal] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
-
+  const [txnCode, setTxnCode] = useState<string>("");
 
 
   // orders sidebar
   const [authUserId, setAuthUserId] = useState<string | null>(null);
-  const [orders, setOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<SidebarOrder[]>([]);
   const [fetchingOrders, setFetchingOrders] = useState(false);
 
   // PSGC state
@@ -275,6 +251,17 @@ export default function CheckoutPage() {
   const [barangayCode, setBarangayCode] = useState("");
   const [houseStreet, setHouseStreet] = useState("");
 
+  // NEW: staged address prefill holder (applied level-by-level)
+const [pendingAddress, setPendingAddress] = useState<{
+  region?: string;
+  province?: string;
+  city?: string;
+  barangay?: string;
+  house?: string;
+} | null>(null);
+
+
+  /* ---------------------- Address computation hooks ---------------------- */
   const selectedRegion = useMemo(
     () => regions.find((r) => r.code === regionCode) || null,
     [regions, regionCode]
@@ -317,7 +304,60 @@ export default function CheckoutPage() {
     setCustomerInfo((prev) => ({ ...prev, address: computedAddress }));
   }, [computedAddress]);
 
-  
+  /* -------------------- Autofill from last customer row -------------------- */
+  const loadLastCustomerSnapshot = useCallback(async (email: string) => {
+  const clean = (email || "").trim();
+  if (!clean) return;
+
+  const { data: last, error } = await supabase
+    .from("customers")
+    .select(`
+      contact_person,
+      landmark,
+      payment_type,
+      customer_type,
+      region_code,
+      province_code,
+      city_code,
+      barangay_code,
+      house_street,
+      address
+    `)
+    .ilike("email", clean)
+    .order("date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !last) return;
+
+  // Stage the codes so we can apply them when each list is ready.
+  setPendingAddress({
+    region: last.region_code || undefined,
+    province: last.province_code || undefined,
+    city: last.city_code || undefined,
+    barangay: last.barangay_code || undefined,
+    house: last.house_street || undefined,
+  });
+
+  // Do NOT set region/province/city/barangay here directly — they’ll be
+  // applied by the staged effects below once each options list is ready.
+
+  setCustomerInfo((prev) => {
+    const resolvedType = prev.customer_type || last.customer_type || undefined;
+    const canUseCredit = resolvedType === "Existing Customer";
+    const priorPay = last.payment_type === "Credit" && canUseCredit ? "Credit" : "Cash";
+
+    return {
+      ...prev,
+      contact_person: prev.contact_person || last.contact_person || "",
+      landmark: prev.landmark || last.landmark || "",
+      payment_type: prev.payment_type || priorPay,
+      customer_type: resolvedType,
+    };
+  });
+}, []);
+
+
 
   /* ------------------------ Prefill from auth ------------------------ */
   useEffect(() => {
@@ -483,6 +523,52 @@ export default function CheckoutPage() {
     loadBarangays();
   }, [cityCode]);
 
+// 3.1 Apply REGION once regions are loaded
+useEffect(() => {
+  if (!pendingAddress) return;
+  if (pendingAddress.region && regions.length && regionCode !== pendingAddress.region) {
+    setRegionCode(pendingAddress.region);
+  }
+}, [pendingAddress, regions, regionCode]);
+
+// 3.2 Apply PROVINCE (only for non-NCR) once provinces are ready
+useEffect(() => {
+  if (!pendingAddress) return;
+  if (isNCR) return;              // NCR has no provinces
+  if (!regionCode) return;        // need region first
+  if (provinces.length && pendingAddress.province && !provinceCode) {
+    const exists = provinces.some((p) => p.code === pendingAddress.province);
+    if (exists) setProvinceCode(pendingAddress.province);
+  }
+}, [pendingAddress, isNCR, regionCode, provinces, provinceCode]);
+
+// 3.3 Apply CITY once cities are ready
+useEffect(() => {
+  if (!pendingAddress) return;
+  if (!regionCode) return;
+  // for non-NCR, province must be set first
+  if (!isNCR && !provinceCode) return;
+  if (cities.length && pendingAddress.city && !cityCode) {
+    const exists = cities.some((c) => c.code === pendingAddress.city);
+    if (exists) setCityCode(pendingAddress.city);
+  }
+}, [pendingAddress, isNCR, regionCode, provinceCode, cities, cityCode]);
+
+// 3.4 Apply BARANGAY (and house/street) once barangays are ready, then clear pending
+useEffect(() => {
+  if (!pendingAddress) return;
+  if (!cityCode) return;
+  if (barangays.length && pendingAddress.barangay && !barangayCode) {
+    const exists = barangays.some((b) => b.code === pendingAddress.barangay);
+    if (exists) {
+      setBarangayCode(pendingAddress.barangay);
+      if (pendingAddress.house) setHouseStreet(pendingAddress.house);
+      // Clear after final step so we don't keep re-applying
+      setPendingAddress(null);
+    }
+  }
+}, [pendingAddress, cityCode, barangays, barangayCode]);
+
 /* ----------------------------- Sidebar orders ----------------------------- */
 // Directly read orders joined to customers, filtered by the signed-in email.
 useEffect(() => {
@@ -499,31 +585,32 @@ useEffect(() => {
       }
 
       // Direct join: orders -> customer (filter by email)
-      const { data, error } = await supabase
-        .from("orders")
-        .select(`
-          id,
-          status,
-          created_at,
-          grand_total_with_interest,
-          customer:customer_id ( email )
-        `)
-        .eq("customer.email", email)
-        .order("created_at", { ascending: false })
-        .limit(20);
+const { data, error } = await supabase
+  .from("orders")
+  .select(`
+    id,
+    status,
+    date_created,
+    grand_total_with_interest,
+    customer:customer_id ( email )
+  `)
+  .eq("customer.email", email)
+  .order("date_created", { ascending: false })
+  .limit(20);
+
 
       if (error) {
         console.warn("[checkout sidebar] orders join fetch error:", error);
         if (mounted) setOrders([]);
         return;
       }
+const rows = (data ?? []).map((o: any) => ({
+  id: o.id,
+  status: o?.status ?? "pending",
+  created_at: o?.date_created ?? null,   // mapped for UI
+  total: o?.grand_total_with_interest ?? null,
+}));
 
-      const rows = (data ?? []).map((o: any) => ({
-        id: o.id,
-        status: o?.status ?? "pending",
-        created_at: o?.created_at ?? null,
-        total: o?.grand_total_with_interest ?? null,
-      }));
 
       if (mounted) setOrders(rows);
       console.log("[checkout sidebar] loaded orders:", rows.length, rows);
@@ -685,7 +772,8 @@ useEffect(() => {
         .from("customers")
         .select("id, code")
         .ilike("email", email)
-        .order("created_at", { ascending: false })
+        .order("date_created", { ascending: false })
+
         .limit(1)
         .maybeSingle();
       if (byEmail?.id) existing = { id: byEmail.id, code: byEmail.code ?? null };
@@ -713,11 +801,13 @@ useEffect(() => {
       transaction: cart.map((ci) => `${ci.item.product_name} x${ci.quantity}`).join(", "),
     };
 
-    if (existing) {
-      // 2) Update existing with latest contact/address
-      await supabase.from("customers").update(baseFields).eq("id", existing.id);
-      return { id: existing.id, code: existing.code || "" };
-    }
+if (existing) {
+  // Update contact/address only — DO NOT touch customers.code
+  await supabase.from("customers").update(baseFields).eq("id", existing.id);
+  return { id: existing.id, code: existing.code || "" }; // code here is no longer used as TXN
+}
+
+
 
     // 3) Create a new customer once with a unique code
     const freshCode = await ensureUniqueCustomerCode();
@@ -752,36 +842,44 @@ useEffect(() => {
   }
 
   /* ------------------------------- Handlers ------------------------------- */
-  const openConfirmModal = async () => {
-    // Best-effort phone autofill
-    const { email: authEmail, name: authName } = await getAuthIdentity();
-    const emailToUse =
-      (customerInfo.email && customerInfo.email.trim()) || authDefaults.email || authEmail;
+const openConfirmModal = async () => {
+  // Best-effort phone autofill
+  const { email: authEmail, name: authName } = await getAuthIdentity();
+  const emailToUse =
+    (customerInfo.email && customerInfo.email.trim()) ||
+    authDefaults.email ||
+    authEmail;
 
-    let ensuredPhone = normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
-    if (!ensuredPhone && emailToUse) ensuredPhone = await loadPhoneForEmail(emailToUse);
+  let ensuredPhone =
+    normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
+  if (!ensuredPhone && emailToUse) ensuredPhone = await loadPhoneForEmail(emailToUse);
 
-    setAuthDefaults((prev) => ({
-      ...prev,
-      name: prev.name || authName,
-      email: prev.email || authEmail,
-      phone: ensuredPhone || prev.phone,
-    }));
+  setAuthDefaults((prev) => ({
+    ...prev,
+    name: prev.name || authName,
+    email: prev.email || authEmail,
+    phone: ensuredPhone || prev.phone,
+  }));
 
-    setCustomerInfo((prev) => ({
-      ...prev,
-      name: prev.name || authDefaults.name || authName,
-      email: prev.email || authDefaults.email || authEmail,
-      phone: ensuredPhone || prev.phone,
-      // keep code blank here — will be set only on first customer creation
-    }));
+  setCustomerInfo((prev) => ({
+    ...prev,
+    name: prev.name || authDefaults.name || authName,
+    email: prev.email || authDefaults.email || authEmail,
+    phone: ensuredPhone || prev.phone,
+  }));
 
-    if (!ensuredPhone) {
-      toast.error("We couldn't auto-fill your phone number. Please update your profile.");
-    }
+  // NEW: Autofill from the most recent customer snapshot for this email
+  if (emailToUse) {
+    await loadLastCustomerSnapshot(emailToUse);
+  }
 
-    setShowConfirmModal(true);
-  };
+  if (!ensuredPhone) {
+    toast.error("We couldn't auto-fill your phone number. Please update your profile.");
+  }
+
+  setShowConfirmModal(true);
+};
+
 
   const proceedToFinal = () => {
     if (!isConfirmEnabled) {
@@ -817,31 +915,41 @@ useEffect(() => {
       // (1) Ensure customer exists once (no duplicate code inserts)
       const { id: customerId, code: customerCode } = await getOrCreateCustomer();
 
-      // (2) Create order
-      const now = new Date();
-      const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
+// (2) Create order
+const now = new Date();
+const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
 
-      const orderPayload: any = {
-        customer_id: customerId,
-        total_amount: subtotal,
-        status: "pending",
-        date_created: phTime,
-        // optional credit fields
-      };
-      if (customerInfo.payment_type === "Credit") {
-        const months = termsMonths ?? 1;
-        orderPayload.terms = `Net ${months} Monthly`;
-        orderPayload.payment_terms = months;
-        orderPayload.interest_percent = TERM_TO_INTEREST[months];
-      }
+const orderPayload: any = {
+  customer_id: customerId,
+  total_amount: subtotal,
+  status: "pending",
+  date_created: phTime,            // <-- make sure your orders table has this column
+};
 
-      const { data: ord, error: ordErr } = await supabase
-        .from("orders")
-        .insert([orderPayload])
-        .select("id")
-        .single();
-      if (ordErr) throw ordErr;
-      const orderId = ord.id as string;
+// optional credit fields
+if (customerInfo.payment_type === "Credit") {
+  const months = termsMonths ?? 1;
+  orderPayload.terms = `Net ${months} Monthly`;
+  orderPayload.payment_terms = months;
+  orderPayload.interest_percent = TERM_TO_INTEREST[months];
+}
+
+// insert the order and get id + date_created back
+const { data: ord, error: ordErr } = await supabase
+  .from("orders")
+  .insert([orderPayload])
+  .select("id, date_created")
+  .single();
+if (ordErr) throw ordErr;
+
+// build the display TXN code from the new row
+const orderId = ord.id as string;
+const thisOrderCode = getTxnCode(orderId, ord?.date_created);
+setTxnCode(thisOrderCode);
+
+
+
+
 
       // (3) Create order_items
       const items = cart.map((ci) => ({
@@ -860,29 +968,28 @@ useEffect(() => {
           .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
           .join(", ");
         const more = cart.length > 3 ? `, +${cart.length - 3} more` : "";
-        await supabase.from("system_notifications").insert([
-          {
-            type: "order",
-            title: "🛒 Order Request",
-            message: `${customerInfo.name || authDefaults.name} • TXN ${customerCode || "—"} • ${preview}${more} • Total: ${formatCurrency(
-              subtotal
-            )}`,
-            order_id: orderId,
-            customer_id: customerId,
-            source: "customer",
-            read: false,
-            metadata: {
-              order_id: orderId,
-              txn_code: customerCode || null,
-              total_amount: Number(subtotal || 0),
-              item_count: cart.length,
-              payment_type: customerInfo.payment_type || "Cash",
-              terms_months: customerInfo.payment_type === "Credit" ? termsMonths ?? null : null,
-              interest_percent:
-                customerInfo.payment_type === "Credit" ? interestPercent ?? null : null,
-            },
-          },
-        ]);
+await supabase.from("system_notifications").insert([
+  {
+    type: "order",
+    title: "🛒 Order Request",
+    message: `${customerInfo.name || authDefaults.name} • TXN ${thisOrderCode} • ${preview}${more} • Total: ${formatCurrency(subtotal)}`,
+    order_id: orderId,
+    customer_id: customerId,
+    source: "customer",
+    read: false,
+    metadata: {
+      order_id: orderId,
+      txn_code: thisOrderCode,
+      total_amount: Number(subtotal || 0),
+      item_count: cart.length,
+      payment_type: customerInfo.payment_type || "Cash",
+      terms_months: customerInfo.payment_type === "Credit" ? termsMonths ?? null : null,
+      interest_percent:
+        customerInfo.payment_type === "Credit" ? interestPercent ?? null : null,
+    },
+  },
+]);
+
       } catch (notifErr) {
         console.warn("Failed to create order notification:", notifErr);
       }
@@ -1139,13 +1246,16 @@ useEffect(() => {
                   <li key={o.id} className="border rounded p-2">
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="font-medium">#{String(o.id).slice(0, 8)}</div>
-                        <div className="text-xs text-gray-500">{formatPH(o.created_at)}</div>
+                        <div className="font-medium">{getTxnCode(o.id, o.created_at)}</div>
+
+                        <div className="text-xs text-gray-500">{safeFormatPH(o.created_at)}</div>
+
                       </div>
                       <div className="text-right">
-                        <div className="font-semibold">
-                          {formatCurrency(Number(o.grand_total_with_interest ?? 0))}
-                        </div>
+<div className="font-semibold">
+  {formatCurrency(Number(o.total ?? 0))}
+</div>
+
                         <div className="text-xs text-gray-500">{o.status}</div>
                       </div>
                     </div>
@@ -1341,31 +1451,30 @@ useEffect(() => {
                   )}
                 </div>
 
-                <div className="col-span-2">
-                  <label className="block mb-1">Payment Type</label>
-                  <div className="flex gap-4">
-                    {(customerInfo.customer_type === "Existing Customer"
-                      ? ["Credit"]
-                      : ["Cash"]
-                    ).map((type) => (
-                      <label key={type} className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="payment_type"
-                          value={type}
-                          checked={customerInfo.payment_type === type}
-                          onChange={(e) =>
-                            setCustomerInfo({
-                              ...customerInfo,
-                              payment_type: e.target.value as "Cash" | "Credit",
-                            })
-                          }
-                        />
-                        {type}
-                      </label>
-                    ))}
-                  </div>
-                </div>
+<div className="flex gap-4">
+  {(
+    customerInfo.customer_type === "Existing Customer"
+      ? (["Cash", "Credit"] as const)  // Existing can pick Cash or Credit
+      : (["Cash"] as const)            // New = Cash only
+  ).map((type) => (
+    <label key={type} className="flex items-center gap-2">
+      <input
+        type="radio"
+        name="payment_type"
+        value={type}
+        checked={customerInfo.payment_type === type}
+        onChange={(e) =>
+          setCustomerInfo({
+            ...customerInfo,
+            payment_type: e.target.value as "Cash" | "Credit",
+          })
+        }
+      />
+      {type}
+    </label>
+  ))}
+</div>
+
 
                 {customerInfo.payment_type === "Credit" && (
                   <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1510,7 +1619,8 @@ useEffect(() => {
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Transaction Code</div>
-                  <div className="font-medium">{/* shown after submit */}</div>
+                  <div className="font-medium">{txnCode || "—"}</div>
+
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Date</div>
@@ -1656,3 +1766,4 @@ useEffect(() => {
     </div>
   );
 }
+  
