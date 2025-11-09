@@ -1157,46 +1157,44 @@ await supabase.from("system_notifications").insert([
                 </div>
 
                 {/* totals + proceed */}
-                <div className="mt-4 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
-                  <div className="w-full sm:w-auto bg-gray-50 p-4 rounded">
-                    <div className="flex justify-between text-sm text-gray-600 mb-1">
-                      <div>Subtotal</div>
-                      <div>{formatCurrency(subtotal)}</div>
-                    </div>
-                    <div className="flex justify-between text-sm text-gray-600 mb-1">
-                      <div>Shipping</div>
-                      <div>{formatCurrency(0)}</div>
-                    </div>
-                    <div className="flex justify-between text-sm text-gray-600 mb-1">
-                      <div>Tax</div>
-                      <div>{formatCurrency(0)}</div>
-                    </div>
-                    <div className="h-px bg-gray-200 my-2" />
-                    <div className="flex justify-between font-semibold text-lg">
-                      <div>Grand Total</div>
-                      <div>{formatCurrency(subtotal)}</div>
-                    </div>
-                  </div>
+<div className="mt-4 flex flex-col lg:flex-row items-start lg:items-center gap-4">
+  {/* Note + Estimated total */}
+  <div className="flex-1 bg-gray-50 p-4 rounded">
+    <div className="text-xs text-gray-600 mb-2">
+      * Final price may change if an admin applies a discount during order processing. 
+      Shipping fee is not yet applied and (if any) will be added later by the admin.
+    </div>
+    <div className="flex justify-between font-semibold text-lg">
+      <span>Estimated Total</span>
+      <span>{formatCurrency(subtotal)}</span>
+    </div>
+  </div>
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        clearCart();
-                        toast("Cart cleared.");
-                      }}
-                      className="px-4 py-2 rounded border"
-                    >
-                      Clear
-                    </button>
-                    <button
-                      onClick={openConfirmModal}
-                      className="px-4 py-2 rounded bg-[#ffba20] text-black font-semibold"
-                      disabled={cart.length === 0}
-                    >
-                      Proceed to Checkout
-                    </button>
-                  </div>
-                </div>
+  {/* Actions */}
+  <div className="flex items-center gap-3">
+    <button
+      onClick={() => {
+        clearCart();
+        toast("Cart cleared.");
+      }}
+      className="h-11 px-5 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 shadow-sm transition"
+    >
+      Clear
+    </button>
+
+    <button
+      onClick={openConfirmModal}
+      disabled={cart.length === 0}
+      className="h-11 px-6 rounded-lg bg-[#ffba20] text-black font-semibold hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed shadow-md transition whitespace-nowrap"
+      title={cart.length === 0 ? "Your cart is empty" : "Proceed to checkout"}
+    >
+      Proceed to Checkout
+    </button>
+  </div>
+</div>
+
+
+
               </>
             )}
           </div>
@@ -1251,13 +1249,10 @@ await supabase.from("system_notifications").insert([
                         <div className="text-xs text-gray-500">{safeFormatPH(o.created_at)}</div>
 
                       </div>
-                      <div className="text-right">
-<div className="font-semibold">
-  {formatCurrency(Number(o.total ?? 0))}
+<div className="text-right">
+  <div className="text-xs text-gray-500">{o.status}</div>
 </div>
 
-                        <div className="text-xs text-gray-500">{o.status}</div>
-                      </div>
                     </div>
                   </li>
                 ))}
