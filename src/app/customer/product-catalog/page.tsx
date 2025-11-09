@@ -10,8 +10,13 @@ import supabase from "@/config/supabaseClient";
 import {
   useCart,
   InventoryItem as SharedInventoryItem,
+  
   CartItem as SharedCartItem,
 } from "@/context/CartContext";
+
+// Extend the shared item to include SKU for this page
+type CatalogItem = SharedInventoryItem & { sku?: string | null };
+
 
 /* ----------------------------- Limits ----------------------------- */
 const MAX_QTY = 1000;
@@ -81,6 +86,36 @@ function cartSum(list: SharedCartItem[]) {
   return list.reduce((s, ci) => s + lineTotal(ci), 0);
 }
 
+/* --------------------------- Gallery helpers --------------------------- */
+const BUCKET = "inventory-images";
+const MAX_GALLERY = 5;
+const safeSlug = (s: string) => (s || "item").trim().replace(/\s+/g, "-").toLowerCase();
+
+async function listGalleryUrls(
+  skuOrName: string,
+  primary?: string | null
+): Promise<string[]> {
+  const folder = safeSlug(skuOrName);
+  const { data, error } = await supabase.storage.from(BUCKET).list(folder, {
+    limit: 50,
+    sortBy: { column: "name", order: "asc" },
+  });
+  if (error) {
+    console.warn("listGalleryUrls error:", error.message);
+  }
+  const fileUrls =
+    data?.map((f) => {
+      const { data } = supabase.storage
+        .from(BUCKET)
+        .getPublicUrl(`${folder}/${f.name}`);
+      return data.publicUrl;
+    }) || [];
+
+  const all = [...(primary ? [primary] : []), ...fileUrls];
+  return Array.from(new Set(all)).slice(0, MAX_GALLERY);
+}
+
+
 /* --------------------------- Weight helpers (NEW) --------------------------- */
 function unitWeightKg(i: SharedInventoryItem): number {
   const unit = (i.unit || "").trim();
@@ -141,7 +176,8 @@ export default function CustomerInventoryPage() {
   const { cart: sharedCart, addItem, updateQty, removeItem, cartTotal: sharedCartTotal } = useCart();
   const router = useRouter();
 
-  const [inventory, setInventory] = useState<SharedInventoryItem[]>([]);
+  const [inventory, setInventory] = useState<CatalogItem[]>([]);
+
   const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -149,8 +185,12 @@ export default function CustomerInventoryPage() {
 
   // modal state for Add to Cart inline
   const [showAddModal, setShowAddModal] = useState(false);
-  const [selected, setSelected] = useState<SharedInventoryItem | null>(null);
+  const [selected, setSelected] = useState<CatalogItem | null>(null);
+
   const [modalQty, setModalQty] = useState<number>(1);
+  const [modalImages, setModalImages] = useState<string[]>([]);
+const [modalIndex, setModalIndex] = useState(0);
+
 
   // floating cart modal state
   const [showCartModal, setShowCartModal] = useState(false);
@@ -161,31 +201,34 @@ export default function CustomerInventoryPage() {
 
   const fetchInventory = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("inventory")
-      .select(
-        "id, product_name, category, subcategory, quantity, unit_price, status, image_url, unit, pieces_per_unit, weight_per_piece_kg"
-      )
-      .limit(1000);
+const { data, error } = await supabase
+  .from("inventory")
+  .select(
+    "id, sku, product_name, category, subcategory, quantity, unit_price, status, image_url, unit, pieces_per_unit, weight_per_piece_kg"
+  )
+  .limit(1000);
+
 
     if (error) {
       console.error("Error fetching inventory:", error);
       toast.error("Could not load inventory.");
     } else {
-      const cleaned = (data ?? []).map((r: any) => ({
-        id: r.id,
-        product_name: r.product_name ?? "",
-        category: r.category ?? "",
-        subcategory: r.subcategory ?? "",
-        quantity: Number(r.quantity ?? 0),
-        unit_price: Number(r.unit_price ?? 0),
-        status: r.status ?? "",
-        image_url: r.image_url ?? null,
-        unit: r.unit ?? null,
-        pieces_per_unit: r.pieces_per_unit ?? null,
-        weight_per_piece_kg: r.weight_per_piece_kg ?? null,
-      }));
-      setInventory(cleaned);
+const cleaned: CatalogItem[] = (data ?? []).map((r: any) => ({
+  id: r.id,
+  sku: r.sku ?? null,
+  product_name: r.product_name ?? "",
+  category: r.category ?? "",
+  subcategory: r.subcategory ?? "",
+  quantity: Number(r.quantity ?? 0),
+  unit_price: Number(r.unit_price ?? 0),
+  status: r.status ?? "",
+  image_url: r.image_url ?? null,
+  unit: r.unit ?? null,
+  pieces_per_unit: r.pieces_per_unit ?? null,
+  weight_per_piece_kg: r.weight_per_piece_kg ?? null,
+}));
+setInventory(cleaned);
+
     }
     setLoading(false);
   }, []);
@@ -242,23 +285,34 @@ export default function CustomerInventoryPage() {
     setCurrentPage(Math.max(1, Math.min(totalPages, p)));
 
   /* ------------------ Modal behaviors ------------------ */
-  const openAddModal = (item: SharedInventoryItem) => {
-    if (isOutOfStock(item)) {
-      toast.error("This item is out of stock.");
-      return;
-    }
-setSelected(item);
-setModalQty(getMOQ(item)); // start at computed MOQ
-setShowAddModal(true);
-document.body.style.overflow = "hidden";
+const openAddModal = async (item: CatalogItem) => {
 
-  };
+  if (isOutOfStock(item)) {
+    toast.error("This item is out of stock.");
+    return;
+  }
+  setSelected(item);
+  setModalQty(getMOQ(item));
 
-  const closeAddModal = () => {
-    setShowAddModal(false);
-    setSelected(null);
-    document.body.style.overflow = "";
-  };
+  // Load gallery images (primary first, then bucket files)
+  const imgs = await listGalleryUrls((item.sku || item.product_name || "").toString(), item.image_url);
+
+  setModalImages(imgs);
+  setModalIndex(0);
+
+  setShowAddModal(true);
+  document.body.style.overflow = "hidden";
+};
+
+
+const closeAddModal = () => {
+  setShowAddModal(false);
+  setSelected(null);
+  setModalImages([]);
+  setModalIndex(0);
+  document.body.style.overflow = "";
+};
+
 
   const confirmAddToCart = () => {
   if (!selected) {
@@ -521,21 +575,70 @@ const canProceedCheckout = !overDistinctLimit && !overWeightLimit && !hasMOQIssu
         <div className="fixed inset-0 z-60 bg-black/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden">
             <div className="grid md:grid-cols-2 grid-cols-1">
-              {/* Left: Product Image */}
-              <div className="bg-gray-50 flex items-center justify-center p-6">
-                {selected.image_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={selected.image_url}
-                    alt={selected.product_name}
-                    className="w-full h-full object-contain max-h-[400px]"
-                  />
-                ) : (
-                  <div className="w-full h-[300px] flex items-center justify-center text-gray-400 text-sm">
-                    No Image Available
-                  </div>
-                )}
-              </div>
+{/* Left: Product Slideshow */}
+<div className="bg-gray-50 p-4 flex flex-col items-center justify-center">
+  {modalImages.length > 0 ? (
+    <div className="w-full">
+      {/* Stage */}
+      <div className="relative w-full h-64 md:h-72 bg-white rounded-lg overflow-hidden flex items-center justify-center border">
+        <img
+          src={modalImages[modalIndex]}
+          alt={`${selected.product_name} ${modalIndex + 1}`}
+          className="max-h-full max-w-full object-contain"
+        />
+        {modalImages.length > 1 && (
+          <>
+            <button
+              className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
+              onClick={() =>
+                setModalIndex((i) => (i - 1 + modalImages.length) % modalImages.length)
+              }
+              title="Previous"
+            >
+              ‹
+            </button>
+            <button
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
+              onClick={() => setModalIndex((i) => (i + 1) % modalImages.length)}
+              title="Next"
+            >
+              ›
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Thumbs */}
+      {modalImages.length > 1 && (
+        <div className="mt-3 flex gap-2 overflow-x-auto">
+          {modalImages.map((u, idx) => (
+            <button
+              key={u + idx}
+              className={`h-12 w-16 flex-shrink-0 border rounded overflow-hidden ${
+                idx === modalIndex ? "ring-2 ring-[#ffba20]" : ""
+              }`}
+              onClick={() => setModalIndex(idx)}
+              title={`Image ${idx + 1}`}
+            >
+              <img src={u} alt={`thumb-${idx + 1}`} className="h-full w-full object-cover" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  ) : selected?.image_url ? (
+    <img
+      src={selected.image_url}
+      alt={selected.product_name}
+      className="w-full h-full object-contain max-h-[400px]"
+    />
+  ) : (
+    <div className="w-full h-[300px] flex items-center justify-center text-gray-400 text-sm">
+      No Image Available
+    </div>
+  )}
+</div>
+
 
               {/* Right: Details */}
               <div className="flex flex-col justify-between p-6">

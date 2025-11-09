@@ -96,6 +96,13 @@ export default function InventoryPage() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
 
+  const [galleryFiles, setGalleryFiles] = useState<File[]>([]);
+const [galleryPreviews, setGalleryPreviews] = useState<string[]>([]);
+
+const [modalImages, setModalImages] = useState<string[]>([]);
+const [modalIndex, setModalIndex] = useState(0);
+
+
   const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
     sku: "",
     product_name: "",
@@ -340,6 +347,13 @@ export default function InventoryPage() {
   ]);
 
   const BUCKET = "inventory-images";
+  const MAX_GALLERY = 5;
+const ALLOWED_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const MAX_BYTES = 5 * 1024 * 1024; // 5MB
+
+const safeSlug = (s: string) =>
+  (s || "item").trim().replace(/\s+/g, "-").toLowerCase();
+
 
   /* ------------------------------ Fetching ------------------------------- */
   const fetchItems = async () => {
@@ -497,6 +511,63 @@ export default function InventoryPage() {
     };
   };
 
+  const handleGallerySelect = (files: FileList | null) => {
+  const arr = files ? Array.from(files) : [];
+  const filtered: File[] = [];
+  for (const f of arr) {
+    if (!ALLOWED_MIME.has(f.type)) {
+      toast.error(`"${f.name}" is not a supported image type.`);
+      continue;
+    }
+    if (f.size > MAX_BYTES) {
+      toast.error(`"${f.name}" is larger than 5MB.`);
+      continue;
+    }
+    filtered.push(f);
+    if (filtered.length >= MAX_GALLERY) break;
+  }
+  setGalleryFiles(filtered);
+  setGalleryPreviews(filtered.map((f) => URL.createObjectURL(f)));
+};
+
+const uploadGalleryAndReturnUrls = async (files: File[], skuForName: string) => {
+  const folder = safeSlug(skuForName);
+  const urls: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const ext = f.name.split(".").pop() || "jpg";
+    const path = `${folder}/${Date.now()}-${i}.${ext}`;
+    const { error } = await supabase.storage
+      .from(BUCKET)
+      .upload(path, f, { cacheControl: "3600", upsert: false });
+    if (error) throw error;
+    const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+    if (data?.publicUrl) urls.push(data.publicUrl);
+  }
+  return urls;
+};
+
+const listGalleryUrls = async (skuOrName: string, primary?: string | null) => {
+  const folder = safeSlug(skuOrName);
+  const { data, error } = await supabase.storage.from(BUCKET).list(folder, {
+    limit: 50,
+    sortBy: { column: "name", order: "asc" },
+  });
+  if (error) console.warn("List gallery error:", error.message);
+
+  const fileUrls =
+    data?.map((f) => {
+      const { data } = supabase.storage
+        .from(BUCKET)
+        .getPublicUrl(`${folder}/${f.name}`);
+      return data.publicUrl;
+    }) || [];
+
+  const all = [...(primary ? [primary] : []), ...fileUrls];
+  return Array.from(new Set(all)).slice(0, MAX_GALLERY);
+};
+
+
   const handleSubmitItem = async () => {
     try {
       const errors = {
@@ -551,6 +622,20 @@ export default function InventoryPage() {
           newItem.sku || newItem.product_name
         );
       }
+
+      // Upload additional gallery photos (if selected)
+if (galleryFiles.length) {
+  try {
+    await uploadGalleryAndReturnUrls(
+      galleryFiles,
+      newItem.sku || newItem.product_name
+    );
+  } catch (e: any) {
+    console.warn("Gallery upload error:", e?.message || e);
+    toast.error("Some additional photos failed to upload.");
+  }
+}
+
       const normalized = normalizeForSave();
       const dataToSave = {
         ...newItem,
@@ -621,6 +706,9 @@ export default function InventoryPage() {
       });
       setImageFile(null);
       setImagePreview(null);
+      setGalleryFiles([]);
+setGalleryPreviews([]);
+
       setShowForm(false);
       setEditingItemId(null);
       fetchItems();
@@ -658,10 +746,14 @@ export default function InventoryPage() {
     null
   );
 
-  const openImageModal = (item: InventoryItem) => {
-    setImageModalItem(item);
-    setShowImageModal(true);
-  };
+ const openImageModal = async (item: InventoryItem) => {
+  setImageModalItem(item);
+  const imgs = await listGalleryUrls(item.sku || item.product_name, item.image_url);
+  setModalImages(imgs);
+  setModalIndex(0);
+  setShowImageModal(true);
+};
+
   const closeImageModal = () => {
     setShowImageModal(false);
     setImageModalItem(null);
@@ -1158,84 +1250,117 @@ export default function InventoryPage() {
           </button>
         </div>
 
-        {/* Image Modal */}
-        {showImageModal && imageModalItem && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-            <div className="bg-white rounded-lg max-w-md w-full overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b">
-                <h3 className="font-semibold">{imageModalItem.product_name}</h3>
+{/* Image Modal (with slideshow) */}
+{showImageModal && imageModalItem && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div className="bg-white rounded-lg max-w-xl w-full overflow-hidden">
+
+      <div className="flex items-center justify-between px-4 py-3 border-b">
+        <h3 className="font-semibold">{imageModalItem.product_name}</h3>
+        <button
+          className="text-gray-500 hover:text-black"
+          onClick={() => {
+            setShowImageModal(false);
+            setImageModalItem(null);
+            setModalImages([]);
+            setModalIndex(0);
+          }}
+        >
+          ✕
+        </button>
+      </div>
+
+      <div className="p-3">
+        {modalImages.length > 0 ? (
+          <div className="w-full">
+            <div className="relative w-full h-64 md:h-72 bg-gray-100 rounded overflow-hidden flex items-center justify-center">
+
+              <img
+                src={modalImages[modalIndex]}
+                alt={`${imageModalItem.product_name} ${modalIndex + 1}`}
+                className="max-h-full max-w-full object-contain"
+              />
+              {modalImages.length > 1 && (
                 <button
-                  className="text-gray-500 hover:text-black"
-                  onClick={closeImageModal}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
+                  onClick={() =>
+                    setModalIndex((i) =>
+                      (i - 1 + modalImages.length) % modalImages.length
+                    )
+                  }
+                  title="Previous"
                 >
-                  ✕
+                  ‹
                 </button>
-              </div>
-              <div className="p-4">
-                {imageModalItem.image_url ? (
-                  <img
-                    src={imageModalItem.image_url}
-                    alt={imageModalItem.product_name}
-                    className="w-full h-auto rounded"
-                  />
-                ) : (
-                  <div className="text-center text-gray-500 border rounded p-6">
-                    No image uploaded for this item.
-                  </div>
-                )}
-                <div className="mt-3 text-sm text-gray-600">
-                  <div>
-                    <span className="font-medium">SKU:</span>{" "}
-                    {imageModalItem.sku || "—"}
-                  </div>
-                  <div>
-                    <span className="font-medium">Category:</span>{" "}
-                    {imageModalItem.category || "—"}
-                  </div>
-                  <div>
-                    <span className="font-medium">Subcategory:</span>{" "}
-                    {imageModalItem.subcategory || "—"}
-                  </div>
-                  <div>
-                    <span className="font-medium">Unit:</span>{" "}
-                    {imageModalItem.unit || "—"}
-                  </div>
-                  <div>
-                    <span className="font-medium">Quantity:</span>{" "}
-                    {imageModalItem.quantity}
-                  </div>
-                  <div>
-                    <span className="font-medium">Pieces/Unit:</span>{" "}
-                    {imageModalItem.pieces_per_unit ?? "—"}
-                  </div>
-                  <div>
-                    <span className="font-medium">Weight/Piece:</span>{" "}
-                    {imageModalItem.weight_per_piece_kg
-                      ? `${imageModalItem.weight_per_piece_kg} kg`
-                      : "—"}
-                  </div>
-                  <div>
-                    <span className="font-medium">Total Weight:</span>{" "}
-                    {imageModalItem.total_weight_kg
-                      ? `${imageModalItem.total_weight_kg.toLocaleString(
-                          undefined,
-                          { maximumFractionDigits: 3 }
-                        )} kg`
-                      : "—"}
-                  </div>
-                </div>
-              </div>
-              <div className="px-4 py-3 border-t text-right">
+              )}
+              {modalImages.length > 1 && (
                 <button
-                  onClick={closeImageModal}
-                  className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
+                  onClick={() =>
+                    setModalIndex((i) => (i + 1) % modalImages.length)
+                  }
+                  title="Next"
                 >
-                  Close
+                  ›
                 </button>
-              </div>
+              )}
             </div>
+
+            {modalImages.length > 1 && (
+              <div className="mt-3 flex gap-2 overflow-x-auto">
+                {modalImages.map((u, idx) => (
+                  <button
+                    key={u + idx}
+                    className={`h-12 w-16 flex-shrink-0 border rounded overflow-hidden ${
+
+                      idx === modalIndex ? "ring-2 ring-[#ffba20]" : ""
+                    }`}
+                    onClick={() => setModalIndex(idx)}
+                    title={`Image ${idx + 1}`}
+                  >
+                    <img src={u} alt={`thumb-${idx + 1}`} className="h-full w-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-center text-gray-500 border rounded p-6">
+            No images found for this item.
           </div>
         )}
+
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-gray-600">
+          <div><span className="font-medium">SKU:</span> {imageModalItem.sku || "—"}</div>
+          <div><span className="font-medium">Category:</span> {imageModalItem.category || "—"}</div>
+          <div><span className="font-medium">Subcategory:</span> {imageModalItem.subcategory || "—"}</div>
+          <div><span className="font-medium">Unit:</span> {imageModalItem.unit || "—"}</div>
+          <div><span className="font-medium">Quantity:</span> {imageModalItem.quantity}</div>
+          <div><span className="font-medium">Pieces/Unit:</span> {imageModalItem.pieces_per_unit ?? "—"}</div>
+          <div><span className="font-medium">Weight/Piece:</span> {imageModalItem.weight_per_piece_kg ? `${imageModalItem.weight_per_piece_kg} kg` : "—"}</div>
+          <div><span className="font-medium">Total Weight:</span> {imageModalItem.total_weight_kg
+            ? `${imageModalItem.total_weight_kg.toLocaleString(undefined, { maximumFractionDigits: 3 })} kg`
+            : "—"}</div>
+        </div>
+      </div>
+
+      <div className="px-4 py-3 border-t text-right">
+        <button
+          onClick={() => {
+            setShowImageModal(false);
+            setImageModalItem(null);
+            setModalImages([]);
+            setModalIndex(0);
+          }}
+          className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
 
         {/* Add / Edit Modal */}
         {showForm && (
@@ -1849,6 +1974,50 @@ export default function InventoryPage() {
                   </button>
                 )}
               </div>
+
+              {/* Additional Photos (Gallery) */}
+<div className="mt-4">
+  <label className="block text-sm font-medium text-gray-700 mb-1">
+    Additional Photos (up to {MAX_GALLERY})
+  </label>
+  <input
+    type="file"
+    multiple
+    accept="image/png, image/jpeg, image/webp, image/gif"
+    onChange={(e) => handleGallerySelect(e.target.files)}
+    className="block w-full text-sm text-gray-700"
+  />
+<p className="text-xs text-gray-500 mt-1">
+  JPG, PNG, WEBP, GIF · Max 5MB each
+</p>
+
+
+  {galleryPreviews.length > 0 && (
+    <>
+      <div className="mt-2 text-xs text-gray-600">
+        Selected {galleryPreviews.length}/{MAX_GALLERY}
+      </div>
+      <div className="mt-2 flex gap-2 flex-wrap">
+        {galleryPreviews.map((src, i) => (
+          <div key={i} className="h-20 w-24 border rounded overflow-hidden">
+            <img src={src} className="h-full w-full object-cover" alt={`preview-${i+1}`} />
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          setGalleryFiles([]);
+          setGalleryPreviews([]);
+        }}
+        className="mt-2 text-xs text-red-600 underline"
+      >
+        Clear additional photos
+      </button>
+    </>
+  )}
+</div>
+
 
               {/* Actions */}
               <div className="flex justify-end gap-2 pt-2">
