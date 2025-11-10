@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { CheckCircle, Clock, Truck } from "lucide-react";
 import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs";
 import { toast } from "sonner";
+import { ReceiptText } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 
 /* =========================
@@ -59,15 +60,48 @@ type OrderWithCustomer = {
   }>;
 };
 
+type DeliveredCustomer = {
+  id: number;
+  name: string;
+  code: string | null;
+  email?: string | null;
+  address?: string | null;
+  landmark?: string | null;
+  contact_person?: string | null;
+  phone?: string | null;
+  created_at?: string | null;
+  date?: string | null;
+};
+
+type DeliveredOrderItem = {
+  quantity: number;
+  price: number;
+  inventory: { product_name: string | null } | null;
+};
+
+type DeliveredOrder = {
+  id: number;
+  status: string | null;
+  terms?: string | null;
+  salesman?: string | null;
+  customer: DeliveredCustomer;
+  order_items: DeliveredOrderItem[];
+};
+
 /* =========================
    PAGE
 ========================= */
 export default function DeliveredPage() {
-  const [invoiceDialogOpenId, setInvoiceDialogOpenId] = useState<number | null>(null);
+  const [invoiceDialogOpenId, setInvoiceDialogOpenId] = useState<number | null>(
+    null
+  );
   const [selectedOrderForInvoice, setSelectedOrderForInvoice] =
     useState<OrderWithCustomer | null>(null);
 
-  const openInvoiceDialogForOrder = (deliveryId: number, order?: OrderWithCustomer) => {
+  const openInvoiceDialogForOrder = (
+    deliveryId: number,
+    order?: OrderWithCustomer
+  ) => {
     setInvoiceDialogOpenId(deliveryId);
     setSelectedOrderForInvoice(order ?? null);
   };
@@ -195,7 +229,8 @@ export default function DeliveredPage() {
             order_items: oRaw.order_items ?? [],
           };
           if (!o.truck_delivery_id) return;
-          if (!byDelivery.has(o.truck_delivery_id)) byDelivery.set(o.truck_delivery_id, []);
+          if (!byDelivery.has(o.truck_delivery_id))
+            byDelivery.set(o.truck_delivery_id, []);
           byDelivery.get(o.truck_delivery_id)!.push(o);
         });
 
@@ -291,8 +326,8 @@ export default function DeliveredPage() {
       {/* Delivered Cards – grouped by schedule_date, read-only */}
       {sortedDateKeys.length === 0 && !loading && (
         <p className="text-sm text-slate-500">
-          No records found for <span className="font-semibold">To Receive</span> or{" "}
-          <span className="font-semibold">Delivered</span>.
+          No records found for <span className="font-semibold">To Receive</span>{" "}
+          or <span className="font-semibold">Delivered</span>.
         </p>
       )}
 
@@ -319,7 +354,9 @@ export default function DeliveredPage() {
                       Delivery to{" "}
                       <span className="text-slate-900">
                         {delivery.destination || (
-                          <span className="italic text-gray-400">[No destination]</span>
+                          <span className="italic text-gray-400">
+                            [No destination]
+                          </span>
                         )}
                       </span>
                     </h2>
@@ -426,7 +463,9 @@ export default function DeliveredPage() {
                         ))}
                       </div>
                     ) : (
-                      <p className="text-sm text-slate-500">No invoices assigned.</p>
+                      <p className="text-sm text-slate-500">
+                        No invoices assigned.
+                      </p>
                     )}
                   </div>
 
@@ -493,6 +532,166 @@ export default function DeliveredPage() {
       </div>
 
       <div className="h-4" />
+      <Dialog
+        open={invoiceDialogOpenId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setInvoiceDialogOpenId(null);
+            setSelectedOrderForInvoice(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-5xl">
+          <div className="space-y-3">
+            {selectedOrderForInvoice ? (
+              <div className="bg-white p-6 text-sm">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold flex items-center gap-2">
+                    <ReceiptText /> Sales Invoice –{" "}
+                    {selectedOrderForInvoice.customer.code ??
+                      `#${selectedOrderForInvoice.id}`}
+                  </h2>
+                </div>
+
+                <div className="grid grid-cols-2 gap-y-1 text-sm">
+                  <p>
+                    <strong>NAME: </strong>
+                    {selectedOrderForInvoice.customer.name}
+                  </p>
+                  <p>
+                    <strong>TRANSACTION CODE: </strong>
+                    {selectedOrderForInvoice.customer.code ?? "—"}
+                  </p>
+                  <p className="col-span-2">
+                    <strong>ADDRESS: </strong>
+                    {selectedOrderForInvoice.customer.address ?? "—"}
+                  </p>
+                  {selectedOrderForInvoice.customer.landmark && (
+                    <p className="col-span-2">
+                      <strong>LANDMARK: </strong>
+                      {selectedOrderForInvoice.customer.landmark}
+                    </p>
+                  )}
+                  <p>
+                    <strong>CONTACT PERSON: </strong>
+                    {selectedOrderForInvoice.customer.contact_person ?? "—"}
+                  </p>
+                  <p>
+                    <strong>TEL NO: </strong>
+                    {selectedOrderForInvoice.customer.phone ?? "—"}
+                  </p>
+                  <p>
+                    <strong>TERMS: </strong>
+                    {selectedOrderForInvoice.terms ?? "—"}
+                  </p>
+                  <p>
+                    <strong>SALESMAN: </strong>
+                    {selectedOrderForInvoice.salesman ?? "—"}
+                  </p>
+                </div>
+
+                <div className="overflow-auto mt-4">
+                  <table className="w-full text-sm border">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="border px-2 py-1">TRANSACTION DATE</th>
+                        <th className="border px-2 py-1">RECEIVED DATE</th>
+                        <th className="border px-2 py-1">TRANSACTION</th>
+                        <th className="border px-2 py-1">STATUS</th>
+                        <th className="border px-2 py-1">CHARGE</th>
+                        <th className="border px-2 py-1">CREDIT</th>
+                        <th className="border px-2 py-1">BALANCE</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(selectedOrderForInvoice.order_items ?? []).map(
+                        (it, idx) => {
+                          const product = it.inventory?.product_name ?? "Item";
+                          const amount =
+                            (Number(it.price) || 0) *
+                            (Number(it.quantity) || 0);
+                          return (
+                            <tr key={idx}>
+                              <td className="border px-2 py-1">
+                                {selectedOrderForInvoice.customer.date ??
+                                  selectedOrderForInvoice.customer.created_at ??
+                                  "—"}
+                              </td>
+                              <td className="border px-2 py-1">
+                                {new Date().toLocaleDateString()}
+                              </td>
+                              <td className="border px-2 py-1">
+                                {product} — {it.quantity}
+                              </td>
+                              <td className="border px-2 py-1">
+                                {selectedOrderForInvoice.status ?? "—"}
+                              </td>
+                              <td className="border px-2 py-1">
+                                ₱{amount.toLocaleString("en-PH")}
+                              </td>
+                              <td className="border px-2 py-1">₱0</td>
+                              <td className="border px-2 py-1">
+                                ₱{amount.toLocaleString("en-PH")}
+                              </td>
+                            </tr>
+                          );
+                        }
+                      )}
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="text-right border px-2 py-1 font-semibold"
+                        >
+                          Total
+                        </td>
+                        <td className="border px-2 py-1 font-semibold">
+                          ₱
+                          {(selectedOrderForInvoice.order_items ?? [])
+                            .reduce(
+                              (s, it) =>
+                                s +
+                                (Number(it.price) || 0) *
+                                  (Number(it.quantity) || 0),
+                              0
+                            )
+                            .toLocaleString("en-PH")}
+                        </td>
+                        <td className="border px-2 py-1">₱0</td>
+                        <td className="border px-2 py-1 font-semibold">
+                          ₱
+                          {(selectedOrderForInvoice.order_items ?? [])
+                            .reduce(
+                              (s, it) =>
+                                s +
+                                (Number(it.price) || 0) *
+                                  (Number(it.quantity) || 0),
+                              0
+                            )
+                            .toLocaleString("en-PH")}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex justify-end mt-4">
+                  <button
+                    onClick={() => {
+                      setInvoiceDialogOpenId(null);
+                      setSelectedOrderForInvoice(null);
+                    }}
+                    className="px-4 py-2 border rounded"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-600">No invoice selected.</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  SelectLabel,
 } from "@/components/ui/select";
 
 // --- PSGC helpers (Region / Province only) ---
@@ -488,6 +489,13 @@ export default function TruckDeliveryPage() {
   const handleAddDelivery = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Require a driver (from Select or New input)
+    const driverClean = (newDelivery.driver || "").trim();
+    if (!driverClean) {
+      toast.error("Please select or enter a driver.");
+      return;
+    }
+
     const region = regions.find((r) => r.code === regionCode)?.name || "";
     const province = provinces.find((p) => p.code === provinceCode)?.name || "";
     const destinationComposed =
@@ -500,7 +508,7 @@ export default function TruckDeliveryPage() {
         {
           destination: destinationComposed,
           plate_number: newDelivery.plateNumber,
-          driver: newDelivery.driver,
+          driver: driverClean,
           participants: newDelivery.participants,
           status: newDelivery.status,
           schedule_date: newDelivery.scheduleDate,
@@ -517,6 +525,13 @@ export default function TruckDeliveryPage() {
       toast.error("Failed to add delivery");
       return;
     }
+
+    // ✅ Optimistically add new driver to dropdown if it's new
+    setDriverOptions((prev) => {
+      const set = new Set(prev);
+      set.add(driverClean);
+      return Array.from(set).sort((a, b) => a.localeCompare(b));
+    });
 
     if (prefillOrderId) {
       const { error: linkErr } = await supabase
@@ -1521,13 +1536,6 @@ export default function TruckDeliveryPage() {
             >
               Cancel
             </button>
-            <button
-              className="px-4 py-2 bg-[#181918] text-white rounded hover:bg-[#2b2b2b]"
-              onClick={assignSelected}
-              disabled={!assignForDeliveryId || selectedOrderIds.length === 0}
-            >
-              Assign Selected
-            </button>
           </div>
         </DialogContent>
       </Dialog>
@@ -1833,27 +1841,29 @@ export default function TruckDeliveryPage() {
                       />
                     ) : (
                       <Select
-                        value={newDelivery.driver}
-                        onValueChange={(val) =>
-                          setNewDelivery((prev) => ({ ...prev, driver: val }))
-                        }
+                        value={newDelivery.driver || undefined}
+                        onValueChange={(val) => {
+                          if (val === "__select_driver") return; // ignore placeholder
+                          setNewDelivery((prev) => ({ ...prev, driver: val }));
+                        }}
                       >
-                        {/* Make trigger same width/height as your text inputs */}
                         <SelectTrigger className="w-full border p-2 rounded bg-white">
-                          <SelectValue placeholder="Select Driver" />
+                          <SelectValue placeholder="Select driver" />
                         </SelectTrigger>
                         <SelectContent>
-                          {driverOptions.length === 0 ? (
-                            <SelectItem value="" disabled>
-                              No saved drivers yet
-                            </SelectItem>
-                          ) : (
-                            driverOptions.map((d) => (
+                          <SelectItem value="__select_driver" disabled>
+                            Select driver
+                          </SelectItem>
+                          {(driverOptions || [])
+                            .filter(
+                              (d) =>
+                                typeof d === "string" && d.trim().length > 0
+                            )
+                            .map((d) => (
                               <SelectItem key={d} value={d}>
                                 {d}
                               </SelectItem>
-                            ))
-                          )}
+                            ))}
                         </SelectContent>
                       </Select>
                     )}
