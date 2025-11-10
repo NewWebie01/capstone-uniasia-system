@@ -7,6 +7,14 @@ import { createPagesBrowserClient } from "@supabase/auth-helpers-nextjs";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+
 // --- PSGC helpers (Region / Province only) ---
 const fixEncoding = (s: string) => {
   try {
@@ -57,6 +65,7 @@ type Customer = {
   id: number;
   name: string;
   code: string;
+  email?: string | null;
   address?: string | null;
   contact_person?: string | null;
   phone?: string | null;
@@ -268,6 +277,7 @@ export default function TruckDeliveryPage() {
     customer:customer_id (
       id,
       name,
+      email,
       code,
       address,
       landmark,
@@ -336,6 +346,7 @@ export default function TruckDeliveryPage() {
         customer:customer_id(
           id,
           name,
+          email,
           code,
           address,
           contact_person,
@@ -415,6 +426,8 @@ export default function TruckDeliveryPage() {
           });
 
           await fetchDeliveriesAndAssignments();
+          await fetchDriverOptions();
+          hideForm();
         },
       },
       duration: 12000,
@@ -679,9 +692,38 @@ export default function TruckDeliveryPage() {
       arrival_date: date,
     });
   };
+  // SHIPPING FEE HANDLER
+  const handleShippingFeeChange = async (deliveryId: number, value: number) => {
+    // 1) Persist to DB
+    const { error } = await supabase
+      .from("truck_deliveries")
+      .update({ shipping_fee: value })
+      .eq("id", deliveryId);
+
+    if (error) {
+      toast.error("Failed to update Shipping Fee");
+      console.error("Shipping fee update error:", error);
+      return;
+    }
+
+    // 2) Optimistically update local state
+    setDeliveries((prev) =>
+      prev.map((d) => (d.id === deliveryId ? { ...d, shipping_fee: value } : d))
+    );
+
+    toast.success("Shipping Fee updated");
+
+    // 3) Activity log (optional but nice)
+    await logActivity("Updated Shipping Fee", {
+      delivery_id: deliveryId,
+      shipping_fee: value,
+    });
+  };
 
   /** Update eta_date (Estimated Arrival for Ongoing) */
+  /** Update eta_date (Estimated Arrival) AND email customers for cheque collection */
   const updateEtaDate = async (deliveryId: number, date: string) => {
+    // 1) Save ETA to DB
     const { error } = await supabase
       .from("truck_deliveries")
       .update({ eta_date: date })
@@ -689,12 +731,11 @@ export default function TruckDeliveryPage() {
 
     if (error) {
       console.error("ETA update failed:", error);
-      toast.error(
-        "Failed to update Estimated Arrival. Make sure 'eta_date' exists in truck_deliveries."
-      );
+      toast.error("Failed to update Estimated Arrival.");
       return;
     }
 
+    // 2) Optimistically update local state
     setDeliveries((prev) =>
       prev.map((d) => (d.id === deliveryId ? { ...d, eta_date: date } : d))
     );
@@ -704,30 +745,42 @@ export default function TruckDeliveryPage() {
       delivery_id: deliveryId,
       eta_date: date,
     });
-  };
 
-  // SHIPPING FEE HANDLER
-  const handleShippingFeeChange = async (deliveryId: number, value: number) => {
-    const { error } = await supabase
-      .from("truck_deliveries")
-      .update({ shipping_fee: value })
-      .eq("id", deliveryId);
+    // 3) Send collection emails to each assigned order's customer (dedup by email)
+    const delivery = deliveries.find((d) => d.id === deliveryId);
+    const ordersOnTruck = delivery?._orders || [];
 
-    if (error) {
-      toast.error("Failed to update Shipping Fee");
-      return;
+    if (!ordersOnTruck.length) return; // nothing to notify
+
+    const dedup = new Set<string>();
+    for (const o of ordersOnTruck) {
+      const email = o?.customer?.email?.trim();
+      if (!email || dedup.has(email)) continue;
+      dedup.add(email);
+
+      try {
+        // This calls the API route that composes the items + grand total and sends the email.
+        // It also logs a row in system_notifications.
+        const res = await fetch("/api/logistics/notify-collection", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderId: o.id, // or { transactionCode: o.customer?.code }
+            eta: date, // optional: so the email can mention the ETA
+          }),
+        });
+        const j = await res.json();
+        if (!res.ok || !j?.ok) {
+          console.error("notify-collection error:", j);
+          toast.error(`Failed to email ${email}`);
+          continue;
+        }
+        toast.success(`Collection notice sent to ${email}`);
+      } catch (e) {
+        console.error("notify-collection fetch failed:", e);
+        toast.error(`Failed to email ${email}`);
+      }
     }
-
-    setDeliveries((prev) =>
-      prev.map((d) => (d.id === deliveryId ? { ...d, shipping_fee: value } : d))
-    );
-
-    toast.success("Shipping Fee updated");
-
-    await logActivity("Updated Shipping Fee", {
-      delivery_id: deliveryId,
-      shipping_fee: value,
-    });
   };
 
   /* =========================
@@ -780,7 +833,9 @@ export default function TruckDeliveryPage() {
 
       if (taken.length) {
         toast.error(
-          `Some invoices are already assigned to another truck: ${taken.join(", ")}`
+          `Some invoices are already assigned to another truck: ${taken.join(
+            ", "
+          )}`
         );
       }
       if (wrongStatus.length) {
@@ -808,13 +863,17 @@ export default function TruckDeliveryPage() {
 
     const updatedCount = (updated ?? []).length;
     if (updatedCount === 0) {
-      toast.error("No invoices were assigned. They may have been taken or changed.");
+      toast.error(
+        "No invoices were assigned. They may have been taken or changed."
+      );
     } else if (updatedCount < selectedOrderIds.length) {
       const notUpdated = selectedOrderIds.filter(
         (id) => !(updated ?? []).some((u: any) => u.id === id)
       );
       toast.warning(
-        `Assigned ${updatedCount} invoice(s). Some were skipped: ${notUpdated.join(", ")}`
+        `Assigned ${updatedCount} invoice(s). Some were skipped: ${notUpdated.join(
+          ", "
+        )}`
       );
     } else {
       toast.success(`Assigned ${updatedCount} invoice(s) to the truck.`);
@@ -941,6 +1000,31 @@ export default function TruckDeliveryPage() {
       });
     }
   };
+  const [driverOptions, setDriverOptions] = useState<string[]>([]);
+  const [isCustomDriver, setIsCustomDriver] = useState(false);
+  const fetchDriverOptions = async () => {
+    const { data, error } = await supabase
+      .from("truck_deliveries")
+      .select("driver");
+
+    if (error) {
+      console.error("Fetch driver options error:", error);
+      return;
+    }
+
+    const unique = [
+      ...new Set(
+        (data as { driver: string | null }[])
+          .map((r) => (r.driver || "").trim())
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+
+    setDriverOptions(unique);
+  };
+  useEffect(() => {
+    fetchDriverOptions();
+  }, []);
 
   /* =========================
      RENDER
@@ -984,7 +1068,8 @@ export default function TruckDeliveryPage() {
               // - Scheduled & no shipping fee
               // - To Ship & no ETA date
               const disableForNoFee =
-                delivery.status === "Scheduled" && delivery.shipping_fee == null;
+                delivery.status === "Scheduled" &&
+                delivery.shipping_fee == null;
 
               const disableForNoEta =
                 delivery.status === "To Ship" && !delivery.eta_date;
@@ -1061,7 +1146,8 @@ export default function TruckDeliveryPage() {
                         {delivery.status === "To Ship" && (
                           <div className="mt-3">
                             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
-                              Estimated Arrival <span className="text-red-500">*</span>
+                              Estimated Arrival{" "}
+                              <span className="text-red-500">*</span>
                             </label>
                             <input
                               type="date"
@@ -1075,7 +1161,8 @@ export default function TruckDeliveryPage() {
                             />
                             {disableForNoEta && (
                               <p className="text-xs text-amber-600 mt-2">
-                                Set an Estimated Arrival date to enable status changes.
+                                Set an Estimated Arrival date to enable status
+                                changes.
                               </p>
                             )}
                           </div>
@@ -1085,7 +1172,8 @@ export default function TruckDeliveryPage() {
                         {delivery.status === "Scheduled" && (
                           <div className="mt-3">
                             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
-                              Shipping Fee (₱) <span className="text-red-500">*</span>
+                              Shipping Fee (₱){" "}
+                              <span className="text-red-500">*</span>
                             </label>
                             <input
                               type="number"
@@ -1310,7 +1398,9 @@ export default function TruckDeliveryPage() {
                             }}
                             disabled={disableSelect}
                             className={`border rounded-md px-2 py-1 text-sm bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10 ${
-                              disableSelect ? "opacity-60 cursor-not-allowed" : ""
+                              disableSelect
+                                ? "opacity-60 cursor-not-allowed"
+                                : ""
                             }`}
                             title={
                               disableForNoFee
@@ -1533,7 +1623,8 @@ export default function TruckDeliveryPage() {
                                   return (
                                     <tr key={idx}>
                                       <td className="border px-2 py-1">
-                                        {selectedOrderForInvoice.customer.date ??
+                                        {selectedOrderForInvoice.customer
+                                          .date ??
                                           selectedOrderForInvoice.customer
                                             .created_at}
                                       </td>
@@ -1728,13 +1819,60 @@ export default function TruckDeliveryPage() {
 
                 <div className="flex items-center gap-2">
                   <label className="w-32 text-sm font-medium">Driver</label>
-                  <input
-                    type="text"
-                    value={newDelivery.driver}
-                    onChange={(e) => handleDriverChange(e.target.value)}
-                    className="w-full border p-2 rounded"
-                    required
-                  />
+
+                  {/* full-width field + tiny checkbox column */}
+                  <div className="w-full grid grid-cols-[1fr_auto] gap-2 items-center">
+                    {isCustomDriver ? (
+                      <input
+                        type="text"
+                        className="w-full border p-2 rounded"
+                        placeholder="Enter new driver name"
+                        value={newDelivery.driver}
+                        onChange={(e) => handleDriverChange(e.target.value)}
+                        required
+                      />
+                    ) : (
+                      <Select
+                        value={newDelivery.driver}
+                        onValueChange={(val) =>
+                          setNewDelivery((prev) => ({ ...prev, driver: val }))
+                        }
+                      >
+                        {/* Make trigger same width/height as your text inputs */}
+                        <SelectTrigger className="w-full border p-2 rounded bg-white">
+                          <SelectValue placeholder="Select Driver" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {driverOptions.length === 0 ? (
+                            <SelectItem value="" disabled>
+                              No saved drivers yet
+                            </SelectItem>
+                          ) : (
+                            driverOptions.map((d) => (
+                              <SelectItem key={d} value={d}>
+                                {d}
+                              </SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
+                    )}
+
+                    {/* tiny column just for the checkbox */}
+                    <label className="text-sm flex items-center gap-1 shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={isCustomDriver}
+                        onChange={(e) => {
+                          setIsCustomDriver(e.target.checked);
+                          if (!e.target.checked) {
+                            setNewDelivery((prev) => ({ ...prev, driver: "" }));
+                          }
+                        }}
+                      />
+                      New
+                    </label>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2">

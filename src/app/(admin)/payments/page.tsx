@@ -72,13 +72,13 @@ type PaymentRow = {
   customer_id: string;
   order_id: string;
   amount: number;
-  method: string | null;
-  cheque_number: string | null;
+  method: string | null;        // "Cash" | "Deposit Slip" | legacy "Cheque"
+  cheque_number: string | null; // kept for compatibility (now “slip #”)
   bank_name: string | null;
-  cheque_date: string | null;
+  cheque_date: string | null;   // kept for compatibility (now “deposit date”)
   image_url: string | null;
   created_at: string | null;
-  status?: string | null; // 'pending' | 'received' | 'rejected'
+  status?: string | null;       // 'pending' | 'received' | 'rejected'
   received_at?: string | null;
   received_by?: string | null;
 };
@@ -89,6 +89,13 @@ type CustomerLite = {
   name: string | null;
   email: string | null; // stored lowercase
 };
+
+/* ---------------- Helpers ---------------- */
+function displayMethod(method?: string | null) {
+  const m = (method || "").trim();
+  if (/^cheque$/i.test(m)) return "Deposit Slip"; // map legacy term
+  return m || "—";
+}
 
 /* ---------------- Customer notifications (to Customer) via API ---------------- */
 async function createCustomerNotifPaymentReceived(paymentId: string, adminEmail: string | null) {
@@ -126,7 +133,7 @@ export default function AdminPaymentsPage() {
   // image modal
   const [imgOpen, setImgOpen] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [imgMeta, setImgMeta] = useState<{ cheque?: string | null; bank?: string | null } | null>(
+  const [imgMeta, setImgMeta] = useState<{ slip?: string | null; bank?: string | null } | null>(
     null
   );
 
@@ -223,6 +230,7 @@ export default function AdminPaymentsPage() {
       if (!qx) return true;
 
       const c = customerById.get(String(p.customer_id));
+      const dispMethod = displayMethod(p.method);
       const hay = [
         c?.code || "",
         c?.name || "",
@@ -231,7 +239,7 @@ export default function AdminPaymentsPage() {
         p.cheque_number || "",
         p.order_id || "",
         p.amount?.toString?.() || "",
-        p.method || "",
+        dispMethod,
       ]
         .join(" ")
         .toLowerCase();
@@ -256,12 +264,12 @@ export default function AdminPaymentsPage() {
     setConfirmOpen(true);
   }
 
-  function openImage(url: string, meta?: { cheque?: string | null; bank?: string | null }) {
+  function openImage(url: string, meta?: { slip?: string | null; bank?: string | null }) {
     setImgSrc(url);
     setImgMeta(meta || null);
     setImgOpen(true);
-    logActivity("View Payment Cheque", {
-      payment_id: meta?.cheque || "",
+    logActivity("View Payment Deposit Slip", {
+      slip_number: meta?.slip || "",
       bank_name: meta?.bank || "",
       image_url: url,
     });
@@ -328,7 +336,7 @@ export default function AdminPaymentsPage() {
 
         if (error) throw error;
         if (!updated) {
-          toast.warning("This cheque was already processed by someone else.");
+          toast.warning("This deposit slip was already processed by someone else.");
           return;
         }
 
@@ -368,7 +376,7 @@ export default function AdminPaymentsPage() {
           <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payments</h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Review submitted cheques. Mark as <b>Received</b> to post the payment and deduct it from
+          Review submitted <b>deposit slips</b>. Mark as <b>Received</b> to post the payment and deduct it from
           the customer’s balance.
         </p>
 
@@ -379,7 +387,7 @@ export default function AdminPaymentsPage() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search TXN / name / email / bank / cheque # …"
+              placeholder="Search TXN / name / email / bank / slip # …"
               className="w-full rounded-lg border border-gray-300 pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
             />
           </div>
@@ -431,8 +439,8 @@ export default function AdminPaymentsPage() {
                   <th className={cellNowrap}>TXN / Customer</th>
                   <th className={cellNowrap}>Amount</th>
                   <th className={cellNowrap}>Bank</th>
-                  <th className={cellNowrap}>Cheque #</th>
-                  <th className={cellNowrap}>Cheque Date</th>
+                  <th className={cellNowrap}>Slip #</th>
+                  <th className={cellNowrap}>Deposit Date</th>
                   <th className={cellNowrap}>Image</th>
                   <th className={cellNowrap}>Status</th>
                   <th className={cellNowrap}>Actions</th>
@@ -460,6 +468,7 @@ export default function AdminPaymentsPage() {
                   );
 
                   const disableAll = locked.has(p.id) || s !== "pending";
+                  const dispMethod = displayMethod(p.method); // available if needed
 
                   return (
                     <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
@@ -486,7 +495,7 @@ export default function AdminPaymentsPage() {
                             type="button"
                             onClick={() =>
                               openImage(p.image_url!, {
-                                cheque: p.cheque_number,
+                                slip: p.cheque_number,
                                 bank: p.bank_name,
                               })
                             }
@@ -575,11 +584,13 @@ export default function AdminPaymentsPage() {
       <Dialog open={confirmOpen} onOpenChange={(o) => setConfirmOpen(o)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{confirmType === "receive" ? "Mark as Received" : "Reject Cheque"}</DialogTitle>
+            <DialogTitle>
+              {confirmType === "receive" ? "Mark as Received" : "Reject Deposit Slip"}
+            </DialogTitle>
             <DialogDescription>
               {confirmType === "receive"
                 ? "This will post the payment and deduct it from the customer’s balance."
-                : "This will mark the cheque as rejected and will not deduct any balance."}
+                : "This will mark the deposit slip as rejected and will not deduct any balance."}
             </DialogDescription>
           </DialogHeader>
 
@@ -589,7 +600,7 @@ export default function AdminPaymentsPage() {
               <span className="font-mono font-semibold">{formatCurrency(targetRow?.amount || 0)}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-600">Cheque #</span>
+              <span className="text-gray-600">Slip #</span>
               <span className="font-mono">{targetRow?.cheque_number || "—"}</span>
             </div>
             <div className="flex justify-between">
@@ -627,15 +638,19 @@ export default function AdminPaymentsPage() {
       <Dialog open={imgOpen} onOpenChange={setImgOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Cheque Image</DialogTitle>
+            <DialogTitle>Deposit Slip Image</DialogTitle>
             <DialogDescription className="text-xs">
-              {imgMeta?.bank ? `Bank: ${imgMeta.bank}` : ""} {imgMeta?.cheque ? `• Cheque #: ${imgMeta.cheque}` : ""}
+              {imgMeta?.bank ? `Bank: ${imgMeta.bank}` : ""} {imgMeta?.slip ? `• Slip #: ${imgMeta.slip}` : ""}
             </DialogDescription>
           </DialogHeader>
 
           <div className="rounded-lg overflow-hidden border">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={imgSrc || ""} alt="Cheque" className="w-full h-auto object-contain max-h-[70vh] bg-black/5" />
+            <img
+              src={imgSrc || ""}
+              alt="Deposit Slip"
+              className="w-full h-auto object-contain max-h-[70vh] bg-black/5"
+            />
           </div>
 
           <DialogFooter>

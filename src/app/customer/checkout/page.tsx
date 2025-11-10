@@ -1,12 +1,14 @@
 // src/app/customer/checkout/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import supabase from "@/config/supabaseClient";
 import { useCart, CartItem as CtxCartItem } from "@/context/CartContext";
+
 
 /* -------------------------------- Types -------------------------------- */
 type InventoryItem = {
@@ -40,6 +42,13 @@ type CustomerInfo = {
   status?: "pending" | "completed" | "rejected";
   payment_type?: "Credit" | "Cash";
   customer_type?: "New Customer" | "Existing Customer";
+};
+
+type SidebarOrder = {
+  id: number;
+  status: string | null;
+  created_at: string | null;
+  total: number | null;
 };
 
 type PSGCRegion = { id: number; name: string; code: string };
@@ -78,6 +87,9 @@ const formatPH = (d?: string | number | Date) =>
     timeZone: "Asia/Manila",
   }).format(d ? new Date(d) : new Date());
 
+const safeFormatPH = (d?: string | null) => (d ? formatPH(d) : "—");
+
+
 const fixEncoding = (s: string) => {
   try {
     return decodeURIComponent(escape(s));
@@ -107,6 +119,17 @@ function normalizePhone(input: string | null | undefined): string {
   return "";
 }
 
+// Deterministic order TXN derived from order id (no DB change needed)
+function getTxnCode(orderId: string | number, createdAt?: string | Date | null) {
+  const s = String(orderId);
+  const last6 = s.slice(-6).toUpperCase();
+  const dt = createdAt ? new Date(createdAt) : new Date();
+  const ymd = dt.toISOString().slice(0, 10).replace(/-/g, "");
+  return `TXN-${ymd}-${last6}`;
+}
+
+
+
 function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
   const nameFromMeta =
     meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
@@ -116,7 +139,7 @@ function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
 }
 
 function isValidPhone(phone: string) {
-  return /^\d{11}$/.test(phone); // 09xxxxxxxxx
+  return /^\d{11}$/.test(phone);
 }
 
 const getAuthIdentity = async () => {
@@ -129,53 +152,31 @@ const getAuthIdentity = async () => {
   return { email, name, phone, authUserId: user?.id ?? null };
 };
 
-// Replace the old loadPhoneForEmail with this:
+// pull contact number from profiles instead of account_requests
 const loadPhoneForEmail = async (email: string): Promise<string> => {
   const clean = (email || "").trim();
   try {
-    // 1) Try profiles by auth uid first (common Supabase pattern: profiles.id === auth.uid)
     const { data: userWrap } = await supabase.auth.getUser();
     const uid = userWrap?.user?.id || null;
-
     if (uid) {
       const { data: byUid } = await supabase
         .from("profiles")
         .select("contact_number")
         .eq("id", uid)
         .maybeSingle();
-
-      const phoneFromProfilesByUid = normalizePhone(byUid?.contact_number);
-      if (phoneFromProfilesByUid) return phoneFromProfilesByUid;
+      const phone = normalizePhone(byUid?.contact_number);
+      if (phone) return phone;
     }
-
-    // 2) Fallback: profiles by email (if your profiles table stores email)
     if (clean) {
       const { data: byEmail } = await supabase
         .from("profiles")
         .select("contact_number")
         .ilike("email", clean)
-        .order("updated_at", { ascending: false }) // adjust if you use a different timestamp
         .limit(1)
         .maybeSingle();
-
-      const phoneFromProfilesByEmail = normalizePhone(byEmail?.contact_number);
-      if (phoneFromProfilesByEmail) return phoneFromProfilesByEmail;
+      const phone = normalizePhone(byEmail?.contact_number);
+      if (phone) return phone;
     }
-
-    // 3) Last fallback: customers.phone (kept, since you already use it elsewhere)
-    if (clean) {
-      const { data: cust } = await supabase
-        .from("customers")
-        .select("phone")
-        .ilike("email", clean)
-        .order("date", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      const fromCustomers = normalizePhone(cust?.phone);
-      if (fromCustomers) return fromCustomers;
-    }
-
     return "";
   } catch {
     return "";
@@ -200,20 +201,6 @@ function unitWeightKg(i: InventoryItem): number {
 }
 function cartTotalWeightKg(list: CartItem[]) {
   return list.reduce((sum, ci) => sum + unitWeightKg(ci.item) * ci.quantity, 0);
-}
-function canAddItemWithQty(current: CartItem[], item: InventoryItem, qty: number) {
-  const nextDistinct = current.some((ci) => ci.item.id === item.id)
-    ? current.length
-    : current.length + 1;
-  if (nextDistinct > TRUCK_LIMITS.maxDistinctItems)
-    return { ok: false as const, reason: "distinct", message: LIMIT_TOAST };
-  const perUnitKg = unitWeightKg(item);
-  if (perUnitKg <= 0)
-    return { ok: false as const, reason: "weight-missing", message: LIMIT_TOAST };
-  const nextWeight = cartTotalWeightKg(current) + perUnitKg * qty;
-  if (nextWeight > TRUCK_LIMITS.maxTotalWeightKg)
-    return { ok: false as const, reason: "weight", message: LIMIT_TOAST };
-  return { ok: true as const };
 }
 
 /* ----------------------------- Component ----------------------------- */
@@ -243,20 +230,23 @@ export default function CheckoutPage() {
   const [termsMonths, setTermsMonths] = useState<number | null>(null);
   const [interestPercent, setInterestPercent] = useState<number>(0);
 
-  // confirm + final modals
+  // modals
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showFinalModal, setShowFinalModal] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
+  const [txnCode, setTxnCode] = useState<string>("");
 
-  // after-submit modal
-  const [showAfterSubmitModal, setShowAfterSubmitModal] = useState(false);
-  const [lastOrderId, setLastOrderId] = useState<string | null>(null);
-  const [lastTxnCode, setLastTxnCode] = useState<string | null>(null);
-  const [lastOrderTotal, setLastOrderTotal] = useState<number>(0);
+  // Terms & Conditions (Credit) state
+const [showTermsModal, setShowTermsModal] = useState(false);
+const [tcAccepted, setTcAccepted] = useState(false);       // user tick on main confirm modal
+const [tcReadyToAccept, setTcReadyToAccept] = useState(false); // becomes true after reading terms
+const termsBodyRef = useRef<HTMLDivElement | null>(null);
+
+
 
   // orders sidebar
   const [authUserId, setAuthUserId] = useState<string | null>(null);
-  const [orders, setOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<SidebarOrder[]>([]);
   const [fetchingOrders, setFetchingOrders] = useState(false);
 
   // PSGC state
@@ -270,6 +260,17 @@ export default function CheckoutPage() {
   const [barangayCode, setBarangayCode] = useState("");
   const [houseStreet, setHouseStreet] = useState("");
 
+  // NEW: staged address prefill holder (applied level-by-level)
+const [pendingAddress, setPendingAddress] = useState<{
+  region?: string;
+  province?: string;
+  city?: string;
+  barangay?: string;
+  house?: string;
+} | null>(null);
+
+
+  /* ---------------------- Address computation hooks ---------------------- */
   const selectedRegion = useMemo(
     () => regions.find((r) => r.code === regionCode) || null,
     [regions, regionCode]
@@ -311,6 +312,61 @@ export default function CheckoutPage() {
   useEffect(() => {
     setCustomerInfo((prev) => ({ ...prev, address: computedAddress }));
   }, [computedAddress]);
+
+  /* -------------------- Autofill from last customer row -------------------- */
+  const loadLastCustomerSnapshot = useCallback(async (email: string) => {
+  const clean = (email || "").trim();
+  if (!clean) return;
+
+  const { data: last, error } = await supabase
+    .from("customers")
+    .select(`
+      contact_person,
+      landmark,
+      payment_type,
+      customer_type,
+      region_code,
+      province_code,
+      city_code,
+      barangay_code,
+      house_street,
+      address
+    `)
+    .ilike("email", clean)
+    .order("date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !last) return;
+
+  // Stage the codes so we can apply them when each list is ready.
+  setPendingAddress({
+    region: last.region_code || undefined,
+    province: last.province_code || undefined,
+    city: last.city_code || undefined,
+    barangay: last.barangay_code || undefined,
+    house: last.house_street || undefined,
+  });
+
+  // Do NOT set region/province/city/barangay here directly — they’ll be
+  // applied by the staged effects below once each options list is ready.
+
+  setCustomerInfo((prev) => {
+    const resolvedType = prev.customer_type || last.customer_type || undefined;
+    const canUseCredit = resolvedType === "Existing Customer";
+    const priorPay = last.payment_type === "Credit" && canUseCredit ? "Credit" : "Cash";
+
+    return {
+      ...prev,
+      contact_person: prev.contact_person || last.contact_person || "",
+      landmark: prev.landmark || last.landmark || "",
+      payment_type: prev.payment_type || priorPay,
+      customer_type: resolvedType,
+    };
+  });
+}, []);
+
+
 
   /* ------------------------ Prefill from auth ------------------------ */
   useEffect(() => {
@@ -476,67 +532,113 @@ export default function CheckoutPage() {
     loadBarangays();
   }, [cityCode]);
 
-  /* ----------------------------- Sidebar orders ----------------------------- */
-  useEffect(() => {
-    let mounted = true;
-    const run = async () => {
-      if (!authUserId) {
-        setOrders([]);
+// 3.1 Apply REGION once regions are loaded
+useEffect(() => {
+  if (!pendingAddress) return;
+  if (pendingAddress.region && regions.length && regionCode !== pendingAddress.region) {
+    setRegionCode(pendingAddress.region);
+  }
+}, [pendingAddress, regions, regionCode]);
+
+// 3.2 Apply PROVINCE (only for non-NCR) once provinces are ready
+useEffect(() => {
+  if (!pendingAddress) return;
+  if (isNCR) return;              // NCR has no provinces
+  if (!regionCode) return;        // need region first
+  if (provinces.length && pendingAddress.province && !provinceCode) {
+    const exists = provinces.some((p) => p.code === pendingAddress.province);
+    if (exists) setProvinceCode(pendingAddress.province);
+  }
+}, [pendingAddress, isNCR, regionCode, provinces, provinceCode]);
+
+// 3.3 Apply CITY once cities are ready
+useEffect(() => {
+  if (!pendingAddress) return;
+  if (!regionCode) return;
+  // for non-NCR, province must be set first
+  if (!isNCR && !provinceCode) return;
+  if (cities.length && pendingAddress.city && !cityCode) {
+    const exists = cities.some((c) => c.code === pendingAddress.city);
+    if (exists) setCityCode(pendingAddress.city);
+  }
+}, [pendingAddress, isNCR, regionCode, provinceCode, cities, cityCode]);
+
+// 3.4 Apply BARANGAY (and house/street) once barangays are ready, then clear pending
+useEffect(() => {
+  if (!pendingAddress) return;
+  if (!cityCode) return;
+  if (barangays.length && pendingAddress.barangay && !barangayCode) {
+    const exists = barangays.some((b) => b.code === pendingAddress.barangay);
+    if (exists) {
+      setBarangayCode(pendingAddress.barangay);
+      if (pendingAddress.house) setHouseStreet(pendingAddress.house);
+      // Clear after final step so we don't keep re-applying
+      setPendingAddress(null);
+    }
+  }
+}, [pendingAddress, cityCode, barangays, barangayCode]);
+
+/* ----------------------------- Sidebar orders ----------------------------- */
+// Directly read orders joined to customers, filtered by the signed-in email.
+useEffect(() => {
+  let mounted = true;
+
+  const load = async () => {
+    setFetchingOrders(true);
+    try {
+      const { data: uw } = await supabase.auth.getUser();
+      const email = uw?.user?.email?.trim().toLowerCase() ?? "";
+      if (!email) {
+        if (mounted) setOrders([]);
         return;
       }
-      setFetchingOrders(true);
-      try {
-        const { data: userData } = await supabase.auth.getUser();
-        const authUser = userData?.user;
-        const authUserIdInner = authUser?.id ?? authUserId;
-        const authEmail = authUser?.email ?? "";
 
-        let { data: ordersData, error: ordersErr } = await supabase
-          .from("orders")
-          .select("id, status, grand_total_with_interest, created_at")
-          .eq("customer_id", authUserIdInner || "__no_such_id__")
-          .order("created_at", { ascending: false })
-          .limit(50);
+      // Direct join: orders -> customer (filter by email)
+const { data, error } = await supabase
+  .from("orders")
+  .select(`
+    id,
+    status,
+    date_created,
+    grand_total_with_interest,
+    customer:customer_id ( email )
+  `)
+  .eq("customer.email", email)
+  .order("date_created", { ascending: false })
+  .limit(20);
 
-        if (ordersErr) {
-          const orParts: string[] = [];
-          if (authUserIdInner) orParts.push(`id.eq.${authUserIdInner}`); // customers.id
-          if (authEmail) orParts.push(`email.eq.${authEmail}`);
-          if (orParts.length) {
-            const { data: customerRow } = await supabase
-              .from("customers")
-              .select("id")
-              .or(orParts.join(","))
-              .maybeSingle();
-            if (customerRow?.id) {
-              const { data: byCust } = await supabase
-                .from("orders")
-                .select("id, status, grand_total_with_interest, created_at")
-                .eq("customer_id", customerRow.id)
-                .order("created_at", { ascending: false })
-                .limit(50);
-              ordersData = byCust ?? [];
-            } else {
-              ordersData = [];
-            }
-          } else {
-            ordersData = [];
-          }
-        }
-        if (mounted) setOrders(ordersData ?? []);
-      } catch (err) {
-        console.error("[checkout] load orders error:", err);
-        toast.error("Unable to load past orders.");
+
+      if (error) {
+        console.warn("[checkout sidebar] orders join fetch error:", error);
         if (mounted) setOrders([]);
-      } finally {
-        if (mounted) setFetchingOrders(false);
+        return;
       }
-    };
-    run();
-    return () => {
-      mounted = false;
-    };
-  }, [authUserId]);
+const rows = (data ?? []).map((o: any) => ({
+  id: o.id,
+  status: o?.status ?? "pending",
+  created_at: o?.date_created ?? null,   // mapped for UI
+  total: o?.grand_total_with_interest ?? null,
+}));
+
+
+      if (mounted) setOrders(rows);
+      console.log("[checkout sidebar] loaded orders:", rows.length, rows);
+    } catch (e) {
+      console.error("[checkout sidebar] load failed:", e);
+      if (mounted) setOrders([]);
+    } finally {
+      if (mounted) setFetchingOrders(false);
+    }
+  };
+
+  load();
+  return () => {
+    mounted = false;
+  };
+}, []); // reads auth inside
+
+
+
 
   /* --------------------------- Payment type logic --------------------------- */
   useEffect(() => {
@@ -555,6 +657,15 @@ export default function CheckoutPage() {
       setInterestPercent(0);
     }
   }, [customerInfo.payment_type]);
+  
+  useEffect(() => {
+  if (customerInfo.payment_type !== "Credit") {
+    setTcAccepted(false);
+    setTcReadyToAccept(false);
+    setShowTermsModal(false);
+  }
+}, [customerInfo.payment_type]);
+
 
   useEffect(() => {
     if (customerInfo.payment_type === "Credit" && termsMonths != null) {
@@ -598,40 +709,45 @@ export default function CheckoutPage() {
   const shipping = 0;
   const grandTotal = subtotal + tax + shipping;
 
-  /* ------------------------------ Validation ------------------------------ */
-  const missingFields = useMemo(() => {
-    const missing: string[] = [];
-    if (!customerInfo.name?.trim()) missing.push("Customer Name");
-    if (!customerInfo.email?.includes("@")) missing.push("Email");
-    if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
-    if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) missing.push("Phone (11 digits)");
-    if (!houseStreet?.trim()) missing.push("House & Street");
-    if (!regionCode) missing.push("Region");
-    if (!isNCR && !provinceCode) missing.push("Province");
-    if (!cityCode) missing.push("City / Municipality");
-    if (!barangayCode) missing.push("Barangay");
-    if (cart.length === 0) missing.push("Cart");
-    if (customerInfo.payment_type === "Credit") {
-      if (!termsMonths) missing.push("Payment Terms (months)");
-      if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
-    }
-    return missing;
-  }, [
-    customerInfo.name,
-    customerInfo.email,
-    customerInfo.contact_person,
-    customerInfo.phone,
-    customerInfo.payment_type,
-    houseStreet,
-    regionCode,
-    provinceCode,
-    cityCode,
-    barangayCode,
-    cart,
-    isNCR,
-    termsMonths,
-    interestPercent,
-  ]);
+/* ------------------------------ Validation ------------------------------ */
+const missingFields = useMemo(() => {
+  const missing: string[] = [];
+  if (!customerInfo.name?.trim()) missing.push("Customer Name");
+  if (!customerInfo.email?.includes("@")) missing.push("Email");
+  if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
+  if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) missing.push("Phone (11 digits)");
+  if (!houseStreet?.trim()) missing.push("House & Street");
+  if (!regionCode) missing.push("Region");
+  if (!isNCR && !provinceCode) missing.push("Province");
+  if (!cityCode) missing.push("City / Municipality");
+  if (!barangayCode) missing.push("Barangay");
+  if (cart.length === 0) missing.push("Cart");
+
+  if (customerInfo.payment_type === "Credit") {
+    if (!termsMonths) missing.push("Payment Terms (months)");
+    if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
+    if (!tcAccepted) missing.push("Accept Terms & Conditions");
+  }
+
+  return missing;
+}, [
+  customerInfo.name,
+  customerInfo.email,
+  customerInfo.contact_person,
+  customerInfo.phone,
+  customerInfo.payment_type,
+  houseStreet,
+  regionCode,
+  provinceCode,
+  cityCode,
+  barangayCode,
+  cart,
+  isNCR,
+  termsMonths,
+  interestPercent,
+  tcAccepted,          // <-- ADD THIS
+]);
+
 
   const isConfirmEnabled = missingFields.length === 0;
 
@@ -679,7 +795,8 @@ export default function CheckoutPage() {
         .from("customers")
         .select("id, code")
         .ilike("email", email)
-        .order("created_at", { ascending: false })
+        .order("date_created", { ascending: false })
+
         .limit(1)
         .maybeSingle();
       if (byEmail?.id) existing = { id: byEmail.id, code: byEmail.code ?? null };
@@ -707,11 +824,13 @@ export default function CheckoutPage() {
       transaction: cart.map((ci) => `${ci.item.product_name} x${ci.quantity}`).join(", "),
     };
 
-    if (existing) {
-      // 2) Update existing with latest contact/address
-      await supabase.from("customers").update(baseFields).eq("id", existing.id);
-      return { id: existing.id, code: existing.code || "" };
-    }
+if (existing) {
+  // Update contact/address only — DO NOT touch customers.code
+  await supabase.from("customers").update(baseFields).eq("id", existing.id);
+  return { id: existing.id, code: existing.code || "" }; // code here is no longer used as TXN
+}
+
+
 
     // 3) Create a new customer once with a unique code
     const freshCode = await ensureUniqueCustomerCode();
@@ -746,36 +865,60 @@ export default function CheckoutPage() {
   }
 
   /* ------------------------------- Handlers ------------------------------- */
-  const openConfirmModal = async () => {
-    // Best-effort phone autofill
-    const { email: authEmail, name: authName } = await getAuthIdentity();
-    const emailToUse =
-      (customerInfo.email && customerInfo.email.trim()) || authDefaults.email || authEmail;
+const openConfirmModal = async () => {
+  // Best-effort phone autofill
+  const { email: authEmail, name: authName } = await getAuthIdentity();
+  const emailToUse =
+    (customerInfo.email && customerInfo.email.trim()) ||
+    authDefaults.email ||
+    authEmail;
 
-    let ensuredPhone = normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
-    if (!ensuredPhone && emailToUse) ensuredPhone = await loadPhoneForEmail(emailToUse);
+  let ensuredPhone =
+    normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
+  if (!ensuredPhone && emailToUse) ensuredPhone = await loadPhoneForEmail(emailToUse);
 
-    setAuthDefaults((prev) => ({
-      ...prev,
-      name: prev.name || authName,
-      email: prev.email || authEmail,
-      phone: ensuredPhone || prev.phone,
-    }));
+  setAuthDefaults((prev) => ({
+    ...prev,
+    name: prev.name || authName,
+    email: prev.email || authEmail,
+    phone: ensuredPhone || prev.phone,
+  }));
 
-    setCustomerInfo((prev) => ({
-      ...prev,
-      name: prev.name || authDefaults.name || authName,
-      email: prev.email || authDefaults.email || authEmail,
-      phone: ensuredPhone || prev.phone,
-      // keep code blank here — will be set only on first customer creation
-    }));
+  setCustomerInfo((prev) => ({
+    ...prev,
+    name: prev.name || authDefaults.name || authName,
+    email: prev.email || authDefaults.email || authEmail,
+    phone: ensuredPhone || prev.phone,
+  }));
 
-    if (!ensuredPhone) {
-      toast.error("We couldn't auto-fill your phone number. Please update your profile.");
-    }
+  // NEW: Autofill from the most recent customer snapshot for this email
+  if (emailToUse) {
+    await loadLastCustomerSnapshot(emailToUse);
+  }
 
-    setShowConfirmModal(true);
-  };
+  if (!ensuredPhone) {
+    toast.error("We couldn't auto-fill your phone number. Please update your profile.");
+  }
+
+  setShowConfirmModal(true);
+};
+
+// Open/close terms modal
+const openTerms = () => {
+  setShowTermsModal(true);
+  setTcReadyToAccept(false); // must scroll again to bottom each view
+};
+const closeTerms = () => setShowTermsModal(false);
+
+// When user scrolls the terms body, unlock the checkbox
+const onTermsScroll = () => {
+  const el = termsBodyRef.current;
+  if (!el) return;
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+  if (atBottom) setTcReadyToAccept(true);
+};
+
+
 
   const proceedToFinal = () => {
     if (!isConfirmEnabled) {
@@ -811,31 +954,41 @@ export default function CheckoutPage() {
       // (1) Ensure customer exists once (no duplicate code inserts)
       const { id: customerId, code: customerCode } = await getOrCreateCustomer();
 
-      // (2) Create order
-      const now = new Date();
-      const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
+// (2) Create order
+const now = new Date();
+const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
 
-      const orderPayload: any = {
-        customer_id: customerId,
-        total_amount: subtotal,
-        status: "pending",
-        date_created: phTime,
-        // optional credit fields
-      };
-      if (customerInfo.payment_type === "Credit") {
-        const months = termsMonths ?? 1;
-        orderPayload.terms = `Net ${months} Monthly`;
-        orderPayload.payment_terms = months;
-        orderPayload.interest_percent = TERM_TO_INTEREST[months];
-      }
+const orderPayload: any = {
+  customer_id: customerId,
+  total_amount: subtotal,
+  status: "pending",
+  date_created: phTime,            // <-- make sure your orders table has this column
+};
 
-      const { data: ord, error: ordErr } = await supabase
-        .from("orders")
-        .insert([orderPayload])
-        .select("id")
-        .single();
-      if (ordErr) throw ordErr;
-      const orderId = ord.id as string;
+// optional credit fields
+if (customerInfo.payment_type === "Credit") {
+  const months = termsMonths ?? 1;
+  orderPayload.terms = `Net ${months} Monthly`;
+  orderPayload.payment_terms = months;
+  orderPayload.interest_percent = TERM_TO_INTEREST[months];
+}
+
+// insert the order and get id + date_created back
+const { data: ord, error: ordErr } = await supabase
+  .from("orders")
+  .insert([orderPayload])
+  .select("id, date_created")
+  .single();
+if (ordErr) throw ordErr;
+
+// build the display TXN code from the new row
+const orderId = ord.id as string;
+const thisOrderCode = getTxnCode(orderId, ord?.date_created);
+setTxnCode(thisOrderCode);
+
+
+
+
 
       // (3) Create order_items
       const items = cart.map((ci) => ({
@@ -854,38 +1007,35 @@ export default function CheckoutPage() {
           .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
           .join(", ");
         const more = cart.length > 3 ? `, +${cart.length - 3} more` : "";
-        await supabase.from("system_notifications").insert([
-          {
-            type: "order",
-            title: "🛒 Order Request",
-            message: `${customerInfo.name || authDefaults.name} • TXN ${customerCode || "—"} • ${preview}${more} • Total: ${formatCurrency(
-              subtotal
-            )}`,
-            order_id: orderId,
-            customer_id: customerId,
-            source: "customer",
-            read: false,
-            metadata: {
-              order_id: orderId,
-              txn_code: customerCode || null,
-              total_amount: Number(subtotal || 0),
-              item_count: cart.length,
-              payment_type: customerInfo.payment_type || "Cash",
-              terms_months: customerInfo.payment_type === "Credit" ? termsMonths ?? null : null,
-              interest_percent:
-                customerInfo.payment_type === "Credit" ? interestPercent ?? null : null,
-            },
-          },
-        ]);
+await supabase.from("system_notifications").insert([
+  {
+    type: "order",
+    title: "🛒 Order Request",
+    message: `${customerInfo.name || authDefaults.name} • TXN ${thisOrderCode} • ${preview}${more} • Total: ${formatCurrency(subtotal)}`,
+    order_id: orderId,
+    customer_id: customerId,
+    source: "customer",
+    read: false,
+    metadata: {
+      order_id: orderId,
+      txn_code: thisOrderCode,
+      total_amount: Number(subtotal || 0),
+      item_count: cart.length,
+      payment_type: customerInfo.payment_type || "Cash",
+      terms_months: customerInfo.payment_type === "Credit" ? termsMonths ?? null : null,
+      interest_percent:
+        customerInfo.payment_type === "Credit" ? interestPercent ?? null : null,
+    },
+  },
+]);
+
       } catch (notifErr) {
         console.warn("Failed to create order notification:", notifErr);
       }
 
       toast.success("Your order has been submitted successfully!");
 
-      setLastOrderId(orderId);
-      setLastTxnCode(customerCode || null);
-      setLastOrderTotal(subtotal);
+
 
       // reset cart + keep auth defaults
       setShowFinalModal(false);
@@ -917,7 +1067,7 @@ export default function CheckoutPage() {
         if (emailUsed) await setTypeFromHistory(emailUsed);
       } catch {}
 
-      setShowAfterSubmitModal(true);
+
     } catch (e: any) {
       console.error("Order submission error:", e?.message || e);
       toast.error(e?.message?.includes("customers_code_key")
@@ -928,12 +1078,7 @@ export default function CheckoutPage() {
     }
   };
 
-  const goToPayments = () => {
-    const qp = new URLSearchParams();
-    if (lastOrderId) qp.set("orderId", lastOrderId);
-    if (lastTxnCode) qp.set("code", lastTxnCode);
-    router.push(`/customer/payments${qp.toString() ? `?${qp.toString()}` : ""}`);
-  };
+
 
   /* --------------------------------- UI --------------------------------- */
   return (
@@ -1051,46 +1196,44 @@ export default function CheckoutPage() {
                 </div>
 
                 {/* totals + proceed */}
-                <div className="mt-4 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
-                  <div className="w-full sm:w-auto bg-gray-50 p-4 rounded">
-                    <div className="flex justify-between text-sm text-gray-600 mb-1">
-                      <div>Subtotal</div>
-                      <div>{formatCurrency(subtotal)}</div>
-                    </div>
-                    <div className="flex justify-between text-sm text-gray-600 mb-1">
-                      <div>Shipping</div>
-                      <div>{formatCurrency(0)}</div>
-                    </div>
-                    <div className="flex justify-between text-sm text-gray-600 mb-1">
-                      <div>Tax</div>
-                      <div>{formatCurrency(0)}</div>
-                    </div>
-                    <div className="h-px bg-gray-200 my-2" />
-                    <div className="flex justify-between font-semibold text-lg">
-                      <div>Grand Total</div>
-                      <div>{formatCurrency(subtotal)}</div>
-                    </div>
-                  </div>
+<div className="mt-4 flex flex-col lg:flex-row items-start lg:items-center gap-4">
+  {/* Note + Estimated total */}
+  <div className="flex-1 bg-gray-50 p-4 rounded">
+    <div className="text-xs text-gray-600 mb-2">
+      * Final price may change if an admin applies a discount during order processing. 
+      Shipping fee is not yet applied and (if any) will be added later by the admin.
+    </div>
+    <div className="flex justify-between font-semibold text-lg">
+      <span>Estimated Total</span>
+      <span>{formatCurrency(subtotal)}</span>
+    </div>
+  </div>
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        clearCart();
-                        toast("Cart cleared.");
-                      }}
-                      className="px-4 py-2 rounded border"
-                    >
-                      Clear
-                    </button>
-                    <button
-                      onClick={openConfirmModal}
-                      className="px-4 py-2 rounded bg-[#ffba20] text-black font-semibold"
-                      disabled={cart.length === 0}
-                    >
-                      Proceed to Checkout
-                    </button>
-                  </div>
-                </div>
+  {/* Actions */}
+  <div className="flex items-center gap-3">
+    <button
+      onClick={() => {
+        clearCart();
+        toast("Cart cleared.");
+      }}
+      className="h-11 px-5 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 shadow-sm transition"
+    >
+      Clear
+    </button>
+
+    <button
+      onClick={openConfirmModal}
+      disabled={cart.length === 0}
+      className="h-11 px-6 rounded-lg bg-[#ffba20] text-black font-semibold hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed shadow-md transition whitespace-nowrap"
+      title={cart.length === 0 ? "Your cart is empty" : "Proceed to checkout"}
+    >
+      Proceed to Checkout
+    </button>
+  </div>
+</div>
+
+
+
               </>
             )}
           </div>
@@ -1140,15 +1283,15 @@ export default function CheckoutPage() {
                   <li key={o.id} className="border rounded p-2">
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="font-medium">#{String(o.id).slice(0, 8)}</div>
-                        <div className="text-xs text-gray-500">{formatPH(o.created_at)}</div>
+                        <div className="font-medium">{getTxnCode(o.id, o.created_at)}</div>
+
+                        <div className="text-xs text-gray-500">{safeFormatPH(o.created_at)}</div>
+
                       </div>
-                      <div className="text-right">
-                        <div className="font-semibold">
-                          {formatCurrency(Number(o.grand_total_with_interest ?? 0))}
-                        </div>
-                        <div className="text-xs text-gray-500">{o.status}</div>
-                      </div>
+<div className="text-right">
+  <div className="text-xs text-gray-500">{o.status}</div>
+</div>
+
                     </div>
                   </li>
                 ))}
@@ -1165,7 +1308,7 @@ export default function CheckoutPage() {
             initial={{ opacity: 0, y: 16, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-5xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
+            className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
             <h2 className="text-2xl font-semibold tracking-tight shrink-0">Confirm Order</h2>
 
@@ -1206,7 +1349,8 @@ export default function CheckoutPage() {
                   }`}
                   value={customerInfo.contact_person || ""}
                   onChange={(e) => {
-                    const value = e.target.value.replace(/[^A-Za-z\\s]/g, "");
+                    const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
+
                     if (value.length <= 30) {
                       setCustomerInfo({ ...customerInfo, contact_person: value });
                     }
@@ -1341,31 +1485,30 @@ export default function CheckoutPage() {
                   )}
                 </div>
 
-                <div className="col-span-2">
-                  <label className="block mb-1">Payment Type</label>
-                  <div className="flex gap-4">
-                    {(customerInfo.customer_type === "Existing Customer"
-                      ? ["Credit"]
-                      : ["Cash"]
-                    ).map((type) => (
-                      <label key={type} className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="payment_type"
-                          value={type}
-                          checked={customerInfo.payment_type === type}
-                          onChange={(e) =>
-                            setCustomerInfo({
-                              ...customerInfo,
-                              payment_type: e.target.value as "Cash" | "Credit",
-                            })
-                          }
-                        />
-                        {type}
-                      </label>
-                    ))}
-                  </div>
-                </div>
+<div className="flex gap-4">
+  {(
+    customerInfo.customer_type === "Existing Customer"
+      ? (["Cash", "Credit"] as const)  // Existing can pick Cash or Credit
+      : (["Cash"] as const)            // New = Cash only
+  ).map((type) => (
+    <label key={type} className="flex items-center gap-2">
+      <input
+        type="radio"
+        name="payment_type"
+        value={type}
+        checked={customerInfo.payment_type === type}
+        onChange={(e) =>
+          setCustomerInfo({
+            ...customerInfo,
+            payment_type: e.target.value as "Cash" | "Credit",
+          })
+        }
+      />
+      {type}
+    </label>
+  ))}
+</div>
+
 
                 {customerInfo.payment_type === "Credit" && (
                   <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1406,6 +1549,41 @@ export default function CheckoutPage() {
                   </div>
                 )}
               </div>
+
+              {/* Credit Terms & Conditions acknowledgement */}
+{customerInfo.payment_type === "Credit" && (
+  <div className="col-span-2 rounded border p-3 bg-amber-50/50">
+    <div className="text-sm">
+      By selecting <span className="font-medium">Credit</span>, you agree to our{" "}
+      <button
+        type="button"
+        onClick={openTerms}
+        className="text-blue-600 hover:underline underline-offset-2"
+      >
+        Terms & Conditions on interest
+      </button>.
+    </div>
+
+    <label className="mt-2 flex items-start gap-2 text-sm">
+      <input
+        type="checkbox"
+        className="mt-0.5"
+        checked={tcAccepted}
+        onChange={(e) => setTcAccepted(e.target.checked)}
+        disabled={!tcReadyToAccept}
+      />
+      <span>
+        I have read and agree to the Terms & Conditions on interest.
+        {!tcReadyToAccept && (
+          <span className="ml-1 text-xs text-gray-500">
+            (open & read the terms first)
+          </span>
+        )}
+      </span>
+    </label>
+  </div>
+)}
+
 
               {/* Items table */}
               <div className="border rounded-xl bg-gray-100 overflow-hidden">
@@ -1491,6 +1669,107 @@ export default function CheckoutPage() {
         </div>
       )}
 
+      {/* ------------------------ Terms & Conditions Modal ------------------------ */}
+{showTermsModal && (
+  <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <motion.div
+      initial={{ opacity: 0, y: 16, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: "spring", stiffness: 260, damping: 22 }}
+      className="bg-white w-full max-w-3xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col"
+    >
+      <h2 className="text-xl font-semibold tracking-tight">Terms &amp; Conditions – Credit Interest</h2>
+
+      {/* Scrollable body; must reach bottom to enable main checkbox */}
+      <div
+        ref={termsBodyRef}
+        onScroll={onTermsScroll}
+        className="mt-4 overflow-auto pr-2"
+        style={{ maxHeight: "60vh" }}
+      >
+        <div className="prose prose-sm max-w-none">
+          <p>
+            These Terms &amp; Conditions govern the application of interest for credit purchases
+            made through UniAsia Hardware &amp; Electrical Mktg. Corp. By using the Credit payment
+            option, you acknowledge and agree to the following:
+          </p>
+
+          <h3>1. Interest Schedule</h3>
+          <ul>
+            <li>Net 1 month: <strong>2%</strong> interest for the whole term.</li>
+            <li>Net 3 months: <strong>6%</strong> interest for the whole term.</li>
+            <li>Net 6 months: <strong>12%</strong> interest for the whole term.</li>
+            <li>Net 12 months: <strong>24%</strong> interest for the whole term.</li>
+          </ul>
+
+          <h3>2. Computation Basis</h3>
+          <p>
+            Interest is computed on the order subtotal (exclusive of shipping). Shipping fees, if
+            any, may be added separately and are not part of the interest base.
+          </p>
+
+          <h3>3. Payment Schedule</h3>
+          <p>
+            The total with interest is divided into equal monthly installments over the selected
+            term. Any missed or late installment may be subject to additional charges or order
+            restrictions at the Company’s discretion.
+          </p>
+
+          <h3>4. Early Settlement</h3>
+          <p>
+            Early payment of the remaining balance is allowed. Any request for interest adjustment
+            on early settlement is subject to approval by the Company.
+          </p>
+
+          <h3>5. Order Changes</h3>
+          <p>
+            Discounts, returns, or adjustments approved by an administrator may change the final
+            payable amount. Such changes will reflect in subsequent statements or installment
+            schedules.
+          </p>
+
+          <h3>6. Defaults</h3>
+          <p>
+            Failure to comply with the payment schedule may result in suspension of credit
+            privileges and collection actions permitted by law.
+          </p>
+
+          <h3>7. Acceptance</h3>
+          <p>
+            You must read this document in full before accepting. The agreement checkbox in the
+            confirmation form will only be enabled after you scroll to the bottom of this page.
+          </p>
+
+          <p className="text-gray-500 text-sm mt-6">
+            <em>Scroll to the very bottom to enable acceptance.</em>
+          </p>
+        </div>
+
+        {/* Invisible spacer so the user truly reaches the bottom */}
+        <div className="h-6" />
+      </div>
+
+      <div className="mt-4 flex justify-between items-center">
+        <div className="text-sm">
+          {tcReadyToAccept ? (
+            <span className="text-green-700 font-medium">You may now tick the checkbox in the form.</span>
+          ) : (
+            <span className="text-gray-600">Please scroll to the bottom to unlock acceptance.</span>
+          )}
+        </div>
+
+        <button
+          onClick={closeTerms}
+          className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
+        >
+          Close
+        </button>
+      </div>
+    </motion.div>
+  </div>
+)}
+
+
       {/* ------------------------ Final Confirmation Modal ------------------------ */}
       {showFinalModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -1510,7 +1789,8 @@ export default function CheckoutPage() {
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Transaction Code</div>
-                  <div className="font-medium">{/* shown after submit */}</div>
+                  <div className="font-medium">{txnCode || "—"}</div>
+
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Date</div>
@@ -1652,60 +1932,8 @@ export default function CheckoutPage() {
         </div>
       )}
 
-      {/* ------------------------ After-Submit Choice Modal ------------------------ */}
-      {showAfterSubmitModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-md p-6 rounded-2xl shadow-2xl ring-1 ring-black/5"
-          >
-            <div className="flex items-start justify-between">
-              <h3 className="text-xl font-semibold">Order Submitted</h3>
-              <button
-                className="text-gray-500 hover:text-black"
-                onClick={() => setShowAfterSubmitModal(false)}
-                aria-label="Close"
-                title="Close"
-              >
-                ✕
-              </button>
-            </div>
 
-            <div className="mt-3 text-sm text-gray-700 space-y-2">
-              <p>Your order was placed successfully.</p>
-              <div className="rounded-lg bg-gray-50 p-3 ring-1 ring-black/5">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Transaction Code:</span>
-                  <span className="font-medium">{lastTxnCode || "—"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Estimated Total:</span>
-                  <span className="font-semibold">{formatCurrency(lastOrderTotal)}</span>
-                </div>
-              </div>
-
-              <p className="mt-2">
-                Would you like to proceed to the <strong>Payments</strong> page now, or stay
-                here to place another order?
-              </p>
-            </div>
-
-            <div className="mt-5 flex gap-2 justify-end">
-              <button
-                onClick={() => setShowAfterSubmitModal(false)}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50"
-              >
-                Stay & Order More
-              </button>
-              <button onClick={goToPayments} className="px-4 py-2 rounded-xl bg-[#ffba20] text-black">
-                Proceed to Payments
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
     </div>
   );
 }
+  

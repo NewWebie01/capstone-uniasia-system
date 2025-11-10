@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Upload, FileImage, Minus, Plus } from "lucide-react";
 
 /* ----------------------------- Config ----------------------------- */
-const CHEQUE_BUCKET = "payments-cheques";
+const DEPOSIT_BUCKET = "payments-deposit-slips";
 
 /* ----------------------------- Money ------------------------------ */
 const formatCurrency = (n: number) =>
@@ -85,9 +85,9 @@ type PaymentRow = {
   order_id: string | number | null;
   amount: number;
   method: string | null;
-  cheque_number: string | null;
+  cheque_number: string | null; // kept in DB, used for deposit reference number
   bank_name: string | null;
-  cheque_date: string | null;
+  cheque_date: string | null; // kept in DB, used for deposit date
   image_url: string | null;
   status: string | null;
   created_at: string | null;
@@ -151,9 +151,9 @@ export default function CustomerPaymentsPage() {
 
   // Upload form state
   const [amount, setAmount] = useState<string>(""); // LOCKED display
-  const [chequeNumber, setChequeNumber] = useState("");
+  const [depositRef, setDepositRef] = useState(""); // replaces chequeNumber
   const [bankName, setBankName] = useState("");
-  const [chequeDate, setChequeDate] = useState<string>("");
+  const [depositDate, setDepositDate] = useState<string>("");
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -972,13 +972,13 @@ export default function CustomerPaymentsPage() {
     isPaymentExact &&
     !exceedsBalance &&
     (isCash ||
-      (chequeNumber.trim().length > 0 &&
+      (depositRef.trim().length > 0 &&
         bankName.trim().length > 0 &&
-        chequeDate.trim().length > 0 &&
+        depositDate.trim().length > 0 &&
         !!file));
 
   /* ------------------------------ Upload logic ----------------------------- */
-  async function uploadChequeImage(
+  async function uploadDepositSlip(
     file: File,
     customerId: string | number,
     orderId: string | number
@@ -991,7 +991,7 @@ export default function CustomerPaymentsPage() {
       .slice(2)}.${ext}`;
 
     const { error } = await supabase.storage
-      .from(CHEQUE_BUCKET)
+      .from(DEPOSIT_BUCKET)
       .upload(path, file, { cacheControl: "3600", upsert: false });
 
     if (error) {
@@ -999,7 +999,7 @@ export default function CustomerPaymentsPage() {
       throw new Error(`Storage upload error: ${msg}`);
     }
 
-    const pub = supabase.storage.from(CHEQUE_BUCKET).getPublicUrl(path);
+    const pub = supabase.storage.from(DEPOSIT_BUCKET).getPublicUrl(path);
     const publicUrl = pub?.data?.publicUrl ?? null;
     if (!publicUrl)
       throw new Error("Could not get public URL for uploaded file.");
@@ -1020,12 +1020,12 @@ export default function CustomerPaymentsPage() {
       return;
     }
 
-    // Disallow past cheque dates
-    if (!isCash && chequeDate) {
+    // Disallow past deposit dates (same rule as before for cheque)
+    if (!isCash && depositDate) {
       const min = new Date(todayLocalISO());
-      const chosen = new Date(chequeDate + "T00:00:00");
+      const chosen = new Date(depositDate + "T00:00:00");
       if (chosen < min) {
-        toast.error("Cheque date cannot be in the past.");
+        toast.error("Deposit date cannot be in the past.");
         return;
       }
     }
@@ -1045,29 +1045,29 @@ export default function CustomerPaymentsPage() {
         customer_id: meId,
         order_id: orderId,
         amount: Number(finalAmount.toFixed(2)),
-        method: isCash ? "Cash" : "Cheque",
-        cheque_number: null,
+        method: isCash ? "Cash" : "Deposit", // changed from Cheque → Deposit
+        cheque_number: null, // will store deposit reference number here
         bank_name: null,
-        cheque_date: null,
+        cheque_date: null, // will store deposit date here
         image_url: null,
         status: "pending",
       };
 
       if (!isCash) {
-        if (file) image_url = await uploadChequeImage(file, meId, orderId);
+        if (file) image_url = await uploadDepositSlip(file, meId, orderId);
         insertData = {
           ...insertData,
-          cheque_number: chequeNumber || null,
+          cheque_number: depositRef || null, // deposit reference
           bank_name: bankName || null,
-          cheque_date: chequeDate || null,
+          cheque_date: depositDate || null,  // deposit date
           image_url,
         };
       } else {
         insertData = {
           ...insertData,
-          cheque_number: chequeNumber || null,
+          cheque_number: depositRef || null,
           bank_name: bankName || null,
-          cheque_date: chequeDate || null,
+          cheque_date: depositDate || null,
         };
       }
 
@@ -1086,10 +1086,9 @@ export default function CustomerPaymentsPage() {
         const message = `${me.name || "Customer"} • ${
           selectedPack.code
         } • ${formatCurrency(finalAmount)} ${
-          isCash ? "(Cash)" : `(Cheque ${chequeNumber || ""})`
+          isCash ? "(Cash)" : `(Deposit Ref: ${depositRef || "N/A"})`
         }`.trim();
 
-        // Keep order_id in metadata to avoid dedupe with order events.
         await supabase.from("system_notifications").insert([
           {
             type: "payment",
@@ -1103,10 +1102,10 @@ export default function CustomerPaymentsPage() {
               customer_id: meId,
               txn_code: selectedPack.code,
               amount: Number(finalAmount.toFixed(2)),
-              method: isCash ? "cash" : "cheque",
-              cheque_number: chequeNumber || null,
+              method: isCash ? "cash" : "deposit",
+              deposit_reference: depositRef || null,
               bank_name: bankName || null,
-              cheque_date: chequeDate || null,
+              deposit_date: depositDate || null,
             },
           },
         ]);
@@ -1115,20 +1114,20 @@ export default function CustomerPaymentsPage() {
       }
 
       toast.success(
-        ` ${isCash ? "Cash" : "Cheque"} payment submitted. Awaiting admin verification.`
+        ` ${isCash ? "Cash" : "Deposit"} payment submitted. Awaiting admin verification.`
       );
       setSelectedTxnCode("");
       setAmount("");
-      setChequeNumber("");
+      setDepositRef("");
       setBankName("");
-      setChequeDate("");
+      setDepositDate("");
       setFile(null);
       setTermMultiplier(1);
       setLockedTxn((prev) => ({ ...prev, [justSubmittedCode]: true }));
     } catch (err: any) {
       console.error("Submit failed:", err?.message || err);
       toast.error(
-        err?.message || `Failed to submit ${isCash ? "cash" : "cheque"} payment.`
+        err?.message || `Failed to submit ${isCash ? "cash" : "deposit"} payment.`
       );
     } finally {
       setSubmitting(false);
@@ -1160,7 +1159,7 @@ export default function CustomerPaymentsPage() {
           </h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Upload a cheque for your <b>Transaction Code (TXN)</b>. For{" "}
+          Upload a <b>deposit slip</b> for your <b>Transaction Code (TXN)</b>. For{" "}
           <b>Credit</b> customers, balances update automatically after admin
           verification.
         </p>
@@ -1178,7 +1177,7 @@ export default function CustomerPaymentsPage() {
           <div className="flex items-center gap-2 mb-3">
             <Upload className="h-5 w-5 text-amber-600" />
             <h2 className="text-lg font-semibold">
-              {isCash ? "Submit Cash Payment" : "Upload Cheque Payment"}
+              {isCash ? "Submit Cash Payment" : "Upload Deposit Slip"}
             </h2>
           </div>
 
@@ -1447,20 +1446,20 @@ export default function CustomerPaymentsPage() {
               )}
             </div>
 
-            {/* Cheque metadata */}
+            {/* Deposit slip metadata */}
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
-                Cheque Number {isCash ? "(optional)" : "*"}
+                Deposit Reference No. {isCash ? "(optional)" : "*"}
               </label>
               <input
                 type="text"
                 inputMode="numeric"
                 pattern="\d*"
                 maxLength={20}
-                value={chequeNumber}
+                value={depositRef}
                 onChange={(e) => {
                   const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 20);
-                  setChequeNumber(digitsOnly);
+                  setDepositRef(digitsOnly);
                 }}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 placeholder="e.g., 00012345678901234567"
@@ -1487,12 +1486,12 @@ export default function CustomerPaymentsPage() {
 
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
-                Cheque Date {isCash ? "(optional)" : "*"}
+                Deposit Date {isCash ? "(optional)" : "*"}
               </label>
               <input
                 type="date"
-                value={chequeDate}
-                onChange={(e) => setChequeDate(e.target.value)}
+                value={depositDate}
+                onChange={(e) => setDepositDate(e.target.value)}
                 min={todayLocalISO()}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 required={!isCash}
@@ -1501,7 +1500,7 @@ export default function CustomerPaymentsPage() {
 
             <div className="col-span-1">
               <label className="text-xs text-gray-600">
-                Cheque Image {isCash ? "(optional)" : "*"}
+                Deposit Slip File {isCash ? "(optional)" : "*"}
               </label>
               <div className="mt-1 flex items-center gap-3">
                 <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 cursor-pointer hover:bg-gray-50">
@@ -1509,7 +1508,7 @@ export default function CustomerPaymentsPage() {
                   <span className="text-sm">Choose file</span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/*,application/pdf"
                     className="hidden"
                     onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                     required={!isCash}
@@ -1527,9 +1526,9 @@ export default function CustomerPaymentsPage() {
                 onClick={() => {
                   setSelectedTxnCode("");
                   setAmount("");
-                  setChequeNumber("");
+                  setDepositRef("");
                   setBankName("");
-                  setChequeDate("");
+                  setDepositDate("");
                   setFile(null);
                   setTermMultiplier(1);
                 }}

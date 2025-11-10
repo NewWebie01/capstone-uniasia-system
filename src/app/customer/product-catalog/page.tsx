@@ -10,8 +10,13 @@ import supabase from "@/config/supabaseClient";
 import {
   useCart,
   InventoryItem as SharedInventoryItem,
+  
   CartItem as SharedCartItem,
 } from "@/context/CartContext";
+
+// Extend the shared item to include SKU for this page
+type CatalogItem = SharedInventoryItem & { sku?: string | null };
+
 
 /* ----------------------------- Limits ----------------------------- */
 const MAX_QTY = 1000;
@@ -38,6 +43,39 @@ const formatPH = (d?: string | number | Date) =>
   }).format(d ? new Date(d) : new Date());
 
 /* ----------------------------- Helpers ----------------------------- */
+/* ---------------------- Computed MOQ (no DB) ---------------------- */
+/**
+ * Tweak these rules anytime:
+ * - If sold by Box/Carton/Case → MOQ = 1 unit
+ * - Lighting / “bulb” → 20 pcs
+ * - Electrical tape → 10 pcs
+ * - Very low price (≤ ₱100) → 10
+ * - Low price (≤ ₱250)  → 5
+ * - Otherwise           → 1
+ */
+function getMOQ(i: SharedInventoryItem): number {
+  const unit = (i.unit ?? "").trim().toLowerCase();
+  const cat = (i.category ?? "").toLowerCase();
+  const sub = (i.subcategory ?? "").toLowerCase();
+  const name = (i.product_name ?? "").toLowerCase();
+  const price = Number(i.unit_price ?? 0);
+
+  if (["box", "carton", "case"].includes(unit)) return 1;
+
+  const isBulb =
+    cat.includes("light") || sub.includes("light") || name.includes("bulb");
+  if (isBulb) return 20;
+
+  const isTape =
+    name.includes("tape") || sub.includes("tape") || cat.includes("electrical");
+  if (isTape && (name.includes("tape") || sub.includes("tape"))) return 10;
+
+  if (price <= 100) return 10;
+  if (price <= 250) return 5;
+
+  return 1;
+}
+
 const isOutOfStock = (i: SharedInventoryItem) =>
   (i.status || "").toLowerCase().includes("out") || Number(i.quantity ?? 0) <= 0;
 
@@ -47,6 +85,36 @@ function lineTotal(ci: SharedCartItem) {
 function cartSum(list: SharedCartItem[]) {
   return list.reduce((s, ci) => s + lineTotal(ci), 0);
 }
+
+/* --------------------------- Gallery helpers --------------------------- */
+const BUCKET = "inventory-images";
+const MAX_GALLERY = 5;
+const safeSlug = (s: string) => (s || "item").trim().replace(/\s+/g, "-").toLowerCase();
+
+async function listGalleryUrls(
+  skuOrName: string,
+  primary?: string | null
+): Promise<string[]> {
+  const folder = safeSlug(skuOrName);
+  const { data, error } = await supabase.storage.from(BUCKET).list(folder, {
+    limit: 50,
+    sortBy: { column: "name", order: "asc" },
+  });
+  if (error) {
+    console.warn("listGalleryUrls error:", error.message);
+  }
+  const fileUrls =
+    data?.map((f) => {
+      const { data } = supabase.storage
+        .from(BUCKET)
+        .getPublicUrl(`${folder}/${f.name}`);
+      return data.publicUrl;
+    }) || [];
+
+  const all = [...(primary ? [primary] : []), ...fileUrls];
+  return Array.from(new Set(all)).slice(0, MAX_GALLERY);
+}
+
 
 /* --------------------------- Weight helpers (NEW) --------------------------- */
 function unitWeightKg(i: SharedInventoryItem): number {
@@ -108,7 +176,8 @@ export default function CustomerInventoryPage() {
   const { cart: sharedCart, addItem, updateQty, removeItem, cartTotal: sharedCartTotal } = useCart();
   const router = useRouter();
 
-  const [inventory, setInventory] = useState<SharedInventoryItem[]>([]);
+  const [inventory, setInventory] = useState<CatalogItem[]>([]);
+
   const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -116,8 +185,12 @@ export default function CustomerInventoryPage() {
 
   // modal state for Add to Cart inline
   const [showAddModal, setShowAddModal] = useState(false);
-  const [selected, setSelected] = useState<SharedInventoryItem | null>(null);
+  const [selected, setSelected] = useState<CatalogItem | null>(null);
+
   const [modalQty, setModalQty] = useState<number>(1);
+  const [modalImages, setModalImages] = useState<string[]>([]);
+const [modalIndex, setModalIndex] = useState(0);
+
 
   // floating cart modal state
   const [showCartModal, setShowCartModal] = useState(false);
@@ -128,31 +201,34 @@ export default function CustomerInventoryPage() {
 
   const fetchInventory = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("inventory")
-      .select(
-        "id, product_name, category, subcategory, quantity, unit_price, status, image_url, unit, pieces_per_unit, weight_per_piece_kg"
-      )
-      .limit(1000);
+const { data, error } = await supabase
+  .from("inventory")
+  .select(
+    "id, sku, product_name, category, subcategory, quantity, unit_price, status, image_url, unit, pieces_per_unit, weight_per_piece_kg"
+  )
+  .limit(1000);
+
 
     if (error) {
       console.error("Error fetching inventory:", error);
       toast.error("Could not load inventory.");
     } else {
-      const cleaned = (data ?? []).map((r: any) => ({
-        id: r.id,
-        product_name: r.product_name ?? "",
-        category: r.category ?? "",
-        subcategory: r.subcategory ?? "",
-        quantity: Number(r.quantity ?? 0),
-        unit_price: Number(r.unit_price ?? 0),
-        status: r.status ?? "",
-        image_url: r.image_url ?? null,
-        unit: r.unit ?? null,
-        pieces_per_unit: r.pieces_per_unit ?? null,
-        weight_per_piece_kg: r.weight_per_piece_kg ?? null,
-      }));
-      setInventory(cleaned);
+const cleaned: CatalogItem[] = (data ?? []).map((r: any) => ({
+  id: r.id,
+  sku: r.sku ?? null,
+  product_name: r.product_name ?? "",
+  category: r.category ?? "",
+  subcategory: r.subcategory ?? "",
+  quantity: Number(r.quantity ?? 0),
+  unit_price: Number(r.unit_price ?? 0),
+  status: r.status ?? "",
+  image_url: r.image_url ?? null,
+  unit: r.unit ?? null,
+  pieces_per_unit: r.pieces_per_unit ?? null,
+  weight_per_piece_kg: r.weight_per_piece_kg ?? null,
+}));
+setInventory(cleaned);
+
     }
     setLoading(false);
   }, []);
@@ -209,77 +285,111 @@ export default function CustomerInventoryPage() {
     setCurrentPage(Math.max(1, Math.min(totalPages, p)));
 
   /* ------------------ Modal behaviors ------------------ */
-  const openAddModal = (item: SharedInventoryItem) => {
-    if (isOutOfStock(item)) {
-      toast.error("This item is out of stock.");
-      return;
-    }
-    setSelected(item);
-    setModalQty(1);
-    setShowAddModal(true);
-    document.body.style.overflow = "hidden";
-  };
+const openAddModal = async (item: CatalogItem) => {
 
-  const closeAddModal = () => {
-    setShowAddModal(false);
-    setSelected(null);
-    document.body.style.overflow = "";
-  };
+  if (isOutOfStock(item)) {
+    toast.error("This item is out of stock.");
+    return;
+  }
+  setSelected(item);
+  setModalQty(getMOQ(item));
+
+  // Load gallery images (primary first, then bucket files)
+  const imgs = await listGalleryUrls((item.sku || item.product_name || "").toString(), item.image_url);
+
+  setModalImages(imgs);
+  setModalIndex(0);
+
+  setShowAddModal(true);
+  document.body.style.overflow = "hidden";
+};
+
+
+const closeAddModal = () => {
+  setShowAddModal(false);
+  setSelected(null);
+  setModalImages([]);
+  setModalIndex(0);
+  document.body.style.overflow = "";
+};
+
 
   const confirmAddToCart = () => {
-    if (!selected) {
-      toast.error("No item selected.");
-      return;
-    }
+  if (!selected) {
+    toast.error("No item selected.");
+    return;
+  }
 
-    // 1) Clamp qty
-    const qty = clampQty(modalQty);
-    if (modalQty > MAX_QTY) {
-      toast.error(
-        `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
-      );
-    }
+  // --- MOQ + base qty ---
+  const moq = getMOQ(selected);                 // computed MOQ (no-DB)
+  let qty = clampQty(modalQty);                 // declare qty ONCE
 
-    // 2) Enforce weight & distinct limits BEFORE add
-    const check = canAddItemWithQty(sharedCart, selected, qty);
-    if (!check.ok) {
+  // hard cap you already had
+  if (modalQty > MAX_QTY) {
+    toast.error(`Maximum ${MAX_QTY} per item. For more, please submit another transaction.`);
+  }
+
+  // bring qty up to MOQ if needed
+  if (qty < moq) {
+    qty = moq;
+    toast.message(`Minimum order for this item is ${moq}. Quantity set to ${moq}.`);
+  }
+
+  // --- Pre-check: distinct + weight with current qty ---
+  const check = canAddItemWithQty(sharedCart, selected, qty);
+  if (!check.ok) {
+    toast.error(LIMIT_TOAST);
+    return;
+  }
+
+  // --- If already in cart, MOQ applies to the final total quantity ---
+  const existing = sharedCart.find((ci) => ci.item.id === selected.id);
+  if (existing && existing.quantity + qty < moq) {
+    const needed = moq - existing.quantity;
+    qty = Math.max(qty, needed);
+    toast.message(`Minimum order is ${moq}. Adding ${needed} to reach MOQ.`);
+  }
+
+  // --- If already in cart, also ensure increasing qty won’t violate the weight cap ---
+  if (existing) {
+    const perUnitKg = unitWeightKg(selected);
+    if (perUnitKg <= 0) {
       toast.error(LIMIT_TOAST);
       return;
     }
+    const weightWithoutThis =
+      cartTotalWeightKg(sharedCart) - perUnitKg * existing.quantity;
+    const remainingKg = TRUCK_LIMITS.maxTotalWeightKg - weightWithoutThis;
+    const maxQtyByWeight = Math.max(0, Math.floor(remainingKg / perUnitKg));
 
-    // 3) If item already exists, also ensure increasing its qty won't violate the weight cap
-    const existing = sharedCart.find((ci) => ci.item.id === selected.id);
-    if (existing) {
-      const perUnitKg = unitWeightKg(selected);
-      if (perUnitKg <= 0) {
-        toast.error(LIMIT_TOAST);
-        return;
-      }
-      const weightWithoutThis =
-        cartTotalWeightKg(sharedCart) - perUnitKg * existing.quantity;
-      const remainingKg =
-        TRUCK_LIMITS.maxTotalWeightKg - weightWithoutThis;
-      const maxQtyByWeight = Math.max(0, Math.floor(remainingKg / perUnitKg));
-      if (qty + existing.quantity > maxQtyByWeight) {
-        toast.error(LIMIT_TOAST);
-        return;
-      }
+    if (qty + existing.quantity > maxQtyByWeight) {
+      toast.error(LIMIT_TOAST);
+      return;
     }
+  }
 
-    addItem(selected, qty);
-    toast.success("Item added to cart.");
-    closeAddModal();
-  };
+  // --- Commit add ---
+  addItem(selected, qty);
+  toast.success("Item added to cart.");
+  closeAddModal();
+};
+
 
   /* ------------------ Floating cart derived ------------------ */
-  const totalItems = sharedCart.reduce((s, ci) => s + ci.quantity, 0);
-  const cartTotal = Number(sharedCartTotal ?? 0) || cartSum(sharedCart);
+/* ------------------ Floating cart derived ------------------ */
+const totalItems = sharedCart.reduce((s, ci) => s + ci.quantity, 0);
+const cartTotal = Number(sharedCartTotal ?? 0) || cartSum(sharedCart);
 
-  const overDistinctLimit = sharedCart.length > TRUCK_LIMITS.maxDistinctItems;
-  const overWeightLimit =
-    cartTotalWeightKg(sharedCart) > TRUCK_LIMITS.maxTotalWeightKg;
+const overDistinctLimit = sharedCart.length > TRUCK_LIMITS.maxDistinctItems;
+const overWeightLimit =
+  cartTotalWeightKg(sharedCart) > TRUCK_LIMITS.maxTotalWeightKg;
 
-  const canProceedCheckout = !overDistinctLimit && !overWeightLimit;
+// NEW: MOQ violations
+const belowMOQ = sharedCart.filter((ci) => ci.quantity < getMOQ(ci.item));
+const hasMOQIssue = belowMOQ.length > 0;
+
+const canProceedCheckout = !overDistinctLimit && !overWeightLimit && !hasMOQIssue;
+
 
   return (
     <div className="p-4">
@@ -465,21 +575,70 @@ export default function CustomerInventoryPage() {
         <div className="fixed inset-0 z-60 bg-black/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden">
             <div className="grid md:grid-cols-2 grid-cols-1">
-              {/* Left: Product Image */}
-              <div className="bg-gray-50 flex items-center justify-center p-6">
-                {selected.image_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={selected.image_url}
-                    alt={selected.product_name}
-                    className="w-full h-full object-contain max-h-[400px]"
-                  />
-                ) : (
-                  <div className="w-full h-[300px] flex items-center justify-center text-gray-400 text-sm">
-                    No Image Available
-                  </div>
-                )}
-              </div>
+{/* Left: Product Slideshow */}
+<div className="bg-gray-50 p-4 flex flex-col items-center justify-center">
+  {modalImages.length > 0 ? (
+    <div className="w-full">
+      {/* Stage */}
+      <div className="relative w-full h-64 md:h-72 bg-white rounded-lg overflow-hidden flex items-center justify-center border">
+        <img
+          src={modalImages[modalIndex]}
+          alt={`${selected.product_name} ${modalIndex + 1}`}
+          className="max-h-full max-w-full object-contain"
+        />
+        {modalImages.length > 1 && (
+          <>
+            <button
+              className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
+              onClick={() =>
+                setModalIndex((i) => (i - 1 + modalImages.length) % modalImages.length)
+              }
+              title="Previous"
+            >
+              ‹
+            </button>
+            <button
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
+              onClick={() => setModalIndex((i) => (i + 1) % modalImages.length)}
+              title="Next"
+            >
+              ›
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Thumbs */}
+      {modalImages.length > 1 && (
+        <div className="mt-3 flex gap-2 overflow-x-auto">
+          {modalImages.map((u, idx) => (
+            <button
+              key={u + idx}
+              className={`h-12 w-16 flex-shrink-0 border rounded overflow-hidden ${
+                idx === modalIndex ? "ring-2 ring-[#ffba20]" : ""
+              }`}
+              onClick={() => setModalIndex(idx)}
+              title={`Image ${idx + 1}`}
+            >
+              <img src={u} alt={`thumb-${idx + 1}`} className="h-full w-full object-cover" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  ) : selected?.image_url ? (
+    <img
+      src={selected.image_url}
+      alt={selected.product_name}
+      className="w-full h-full object-contain max-h-[400px]"
+    />
+  ) : (
+    <div className="w-full h-[300px] flex items-center justify-center text-gray-400 text-sm">
+      No Image Available
+    </div>
+  )}
+</div>
+
 
               {/* Right: Details */}
               <div className="flex flex-col justify-between p-6">
@@ -534,34 +693,46 @@ export default function CustomerInventoryPage() {
                         {String(selected.weight_per_piece_kg)} kg
                       </div>
                     )}
+
+                    <div className="text-sm text-gray-600">
+  <span className="font-medium text-gray-800">Minimum order:</span>{" "}
+  {getMOQ(selected)} {selected.unit ? selected.unit : "unit(s)"}
+</div>
+
                   </div>
 
                   {/* Quantity Controls */}
                   <div>
-                    <label className="text-sm text-gray-600">Quantity</label>
-                    <div className="mt-2 flex items-center gap-3">
-                      <button
-                        onClick={() => setModalQty((q) => clampQty(q - 1))}
-                        className="px-3 py-1 rounded border"
-                      >
-                        −
-                      </button>
-                      <input
-                        type="number"
-                        value={modalQty}
-                        min={1}
-                        onChange={(e) =>
-                          setModalQty(clampQty(Number(e.target.value) || 1))
-                        }
-                        className="w-20 text-center border rounded px-2 py-1"
-                      />
-                      <button
-                        onClick={() => setModalQty((q) => clampQty(q + 1))}
-                        className="px-3 py-1 rounded border"
-                      >
-                        +
-                      </button>
-                    </div>
+<label className="text-sm text-gray-600">Quantity</label>
+<div className="mt-2 flex items-center gap-3">
+  <button
+    onClick={() =>
+      setModalQty((q) => Math.max(getMOQ(selected!), clampQty(q - 1)))
+    }
+    className="px-3 py-1 rounded border"
+  >
+    −
+  </button>
+  <input
+    type="number"
+    value={modalQty}
+    min={getMOQ(selected!)}
+    onChange={(e) => {
+      const v = Number(e.target.value) || 0;
+      setModalQty(Math.max(getMOQ(selected!), clampQty(v)));
+    }}
+    className="w-20 text-center border rounded px-2 py-1"
+  />
+  <button
+    onClick={() =>
+      setModalQty((q) => clampQty(Math.max(getMOQ(selected!), q + 1)))
+    }
+    className="px-3 py-1 rounded border"
+  >
+    +
+  </button>
+</div>
+
 
 
 
@@ -605,26 +776,37 @@ export default function CustomerInventoryPage() {
 
             <div className="p-6">
               {/* Limit warnings */}
-              {(overDistinctLimit || overWeightLimit) && (
-                <div className="mb-4 rounded-md bg-yellow-50 text-yellow-800 border border-yellow-200 px-4 py-3 text-sm">
-                  <div className="font-medium mb-1">Order limit reached</div>
-                  <ul className="list-disc ml-5 space-y-1">
-                    {overDistinctLimit && (
-                      <li>
-                        Too many different items. Max{" "}
-                        {TRUCK_LIMITS.maxDistinctItems} SKUs per transaction.
-                      </li>
-                    )}
-                    {overWeightLimit && (
-                      <li>
-                        Cart exceeds weight limit of{" "}
-                        {TRUCK_LIMITS.maxTotalWeightKg.toLocaleString()} kg.
-                      </li>
-                    )}
-                  </ul>
-                  <div className="mt-1">Please remove some items to continue.</div>
-                </div>
-              )}
+{(overDistinctLimit || overWeightLimit || hasMOQIssue) && (
+  <div className="mb-4 rounded-md bg-yellow-50 text-yellow-800 border border-yellow-200 px-4 py-3 text-sm">
+    <div className="font-medium mb-1">Order limit reached</div>
+    <ul className="list-disc ml-5 space-y-1">
+      {overDistinctLimit && (
+        <li>
+          Too many different items. Max {TRUCK_LIMITS.maxDistinctItems} SKUs per transaction.
+        </li>
+      )}
+      {overWeightLimit && (
+        <li>
+          Cart exceeds weight limit of {TRUCK_LIMITS.maxTotalWeightKg.toLocaleString()} kg.
+        </li>
+      )}
+      {hasMOQIssue && (
+        <li>
+          Some items are below the minimum order. Please increase quantities:
+          <ul className="list-disc ml-6 mt-1">
+            {belowMOQ.map((ci, idx) => (
+              <li key={idx}>
+                {ci.item.product_name}: min {getMOQ(ci.item)}, current {ci.quantity}
+              </li>
+            ))}
+          </ul>
+        </li>
+      )}
+    </ul>
+    <div className="mt-1">Please resolve these to continue.</div>
+  </div>
+)}
+
 
               {sharedCart.length === 0 ? (
                 <p className="text-gray-500 text-center py-10">

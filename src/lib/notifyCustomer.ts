@@ -11,7 +11,8 @@ type AdminNotifType =
   | "delivery_scheduled"
   | "delivery_to_ship"
   | "delivery_to_receive"
-  | "delivery_delivered";
+  | "delivery_delivered"
+  | "collection_notice";
 
 export async function notifyCustomer(args: {
   recipientEmail: string;
@@ -25,19 +26,21 @@ export async function notifyCustomer(args: {
   metadata?: Record<string, any> | null;
   actorEmail: string; // admin email
 }) {
-  const { error } = await supabaseAdmin.from("system_notifications").insert([{
-    type: args.type,
-    title: args.title,
-    message: args.message,
-    href: args.href ?? null,
-    order_id: args.orderId ?? null,
-    transaction_code: args.transactionCode ?? null,
-    recipient_email: args.recipientEmail,
-    recipient_name: args.recipientName ?? null,
-    actor_email: args.actorEmail,
-    actor_role: "admin",
-    source: "admin",
-    metadata: args.metadata ?? null,
-  }]);
+  const { error } = await supabaseAdmin.from("system_notifications").insert([
+    {
+      type: args.type,
+      title: args.title,
+      message: args.message,
+      href: args.href ?? null,
+      order_id: args.orderId ?? null,
+      transaction_code: args.transactionCode ?? null,
+      recipient_email: args.recipientEmail,
+      recipient_name: args.recipientName ?? null,
+      actor_email: args.actorEmail,
+      actor_role: "admin",
+      source: "admin",
+      metadata: args.metadata ?? null,
+    },
+  ]);
   if (error) throw error;
 }

@@ -84,6 +84,22 @@ const normalizeReturns = (rows: any[]): ReturnRow[] =>
     })),
   }));
 
+/* ---------------------- Unit helpers (box vs piece) ---------------------- */
+const isBoxUnit = (u?: string | null) => {
+  if (!u) return false;
+  const s = String(u).toLowerCase();
+  return /(box|case|carton|pack|bundle)/i.test(s);
+};
+
+// Clamp a value to the nearest valid multiple in [min..max] with given step.
+function clampToStep(n: number, min: number, max: number, step: number) {
+  if (!Number.isFinite(n)) n = min;
+  n = Math.floor(n);
+  if (step <= 1) return Math.max(min, Math.min(max, n));
+  const snapped = Math.round(n / step) * step;
+  return Math.max(min, Math.min(max, snapped));
+}
+
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
   id: number; // order_items.id is integer
@@ -95,6 +111,8 @@ type ItemRow = {
     category?: string | null;
     subcategory?: string | null;
     status?: string | null;
+    unit?: string | null;            // <-- added
+    pieces_per_unit?: number | null; // <-- added
   } | null;
 };
 
@@ -232,38 +250,39 @@ export default function CustomerReturnsPage() {
           return;
         }
 
-        const { data: customers, error } = await supabase
-          .from("customers")
-          .select(
-            `
-            id,
-            code,
-            email,
-            name,
-            phone,
-            address,
-            date,
-            orders (
-              id,
-              status,
-              truck_delivery_id,
-              order_items (
-                id,
-                quantity,
-                price,
-                inventory_id,
-                inventory:inventory_id (
-                  product_name,
-                  category,
-                  subcategory,
-                  status
-                )
-              )
-            )
-          `
-          )
-          .eq("email", email)
-          .order("date", { ascending: false });
+const { data: customers, error } = await supabase
+  .from("customers")
+  .select(`
+    id,
+    code,
+    email,
+    name,
+    phone,
+    address,
+    date,
+    orders (
+      id,
+      status,
+      truck_delivery_id,
+      order_items (
+        id,
+        quantity,
+        price,
+        inventory_id,
+        inventory:inventory_id (
+          product_name,
+          category,
+          subcategory,
+          status,
+          unit,
+          pieces_per_unit
+        )
+      )
+    )
+  `)
+  .eq("email", email)
+  .order("date", { ascending: false });
+
 
         if (error || !customers) {
           setTxns([]);
@@ -505,7 +524,14 @@ export default function CustomerReturnsPage() {
   }) => {
     setSel(row);
     setReason("Damaged/Defective");
-    setQty(1);
+    // Initialize qty respecting step/multiples (computed in the field too)
+    const unit = row.item?.inventory?.unit ?? null;
+    const ppu = Math.max(1, Number(row.item?.inventory?.pieces_per_unit) || 1);
+    const soldByBox = isBoxUnit(unit);
+    const remaining = Math.max(1, Number(row.item?.quantity) || 1);
+    const step = soldByBox && ppu > 1 ? ppu : 1;
+    const maxQty = soldByBox && ppu > 1 ? Math.floor(remaining / ppu) * ppu : remaining;
+    setQty(Math.min(maxQty, step));
     setNote("");
     setFiles(null);
 
@@ -532,15 +558,31 @@ export default function CustomerReturnsPage() {
       return;
     }
 
-    const maxQty = sel.item.quantity ?? 1;
     const q = Number(qty) || 0;
+
+    // Strengthened validation with box/step logic
+    const unit = sel.item?.inventory?.unit ?? null;
+    const ppu = Math.max(1, Number(sel.item?.inventory?.pieces_per_unit) || 1);
+    const soldByBox = isBoxUnit(unit);
+
+    const remaining = Math.max(1, Number(sel.item?.quantity) || 1);
+    const step = soldByBox && ppu > 1 ? ppu : 1;
+    const maxQty = soldByBox && ppu > 1 ? Math.floor(remaining / ppu) * ppu : remaining;
 
     if (!reason) {
       toast.error("Please select a reason for the return.");
       return;
     }
-    if (q < 1 || q > maxQty) {
-      toast.error(`Quantity must be between 1 and ${maxQty}.`);
+    if (q < step || q > maxQty) {
+      toast.error(`Quantity must be between ${step} and ${maxQty}.`);
+      return;
+    }
+    if (q % step !== 0) {
+      if (soldByBox && ppu > 1) {
+        toast.error(`Please return in full boxes of ${ppu} pieces (multiples only).`);
+      } else {
+        toast.error(`Quantity must follow the required step of ${step}.`);
+      }
       return;
     }
     if (!note || !note.trim()) {
@@ -787,6 +829,11 @@ export default function CustomerReturnsPage() {
                             <tr key={item.id} className="border-t">
                               <td className="py-2 px-3">
                                 {item.inventory?.product_name ?? "—"}
+                                {item.inventory?.unit ? (
+                                  <span className="ml-2 text-xs text-gray-500">
+                                    ({String(item.inventory.unit)})
+                                  </span>
+                                ) : null}
                               </td>
                               <td className="py-2 px-3">{formatPH(txn.date)}</td>
                               <td className="py-2 px-3">{item.quantity}</td>
@@ -876,6 +923,11 @@ export default function CustomerReturnsPage() {
             <h3 className="text-xl font-semibold">Return / Report issue</h3>
             <p className="text-sm text-gray-600 mt-1">
               {sel.item.inventory?.product_name}
+              {sel.item.inventory?.unit ? (
+                <span className="ml-2 text-xs text-gray-500">
+                  ({String(sel.item.inventory.unit)})
+                </span>
+              ) : null}
             </p>
 
             <div className="mt-4 space-y-3">
@@ -899,28 +951,75 @@ export default function CustomerReturnsPage() {
 
               {/* Qty */}
               <div>
-                <label className="block text-sm mb-1">
-                  Quantity (max {sel.item.quantity}){" "}
-                  <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={sel.item.quantity}
-                  value={qty}
-                  onChange={(e) =>
-                    setQty(
-                      Math.max(
-                        1,
-                        Math.min(
-                          sel.item!.quantity,
-                          Number(e.target.value) || 1
-                        )
-                      )
-                    )
-                  }
-                  className="border px-3 py-2 rounded w-full"
-                />
+                {(() => {
+                  const unit = sel.item?.inventory?.unit ?? null;
+                  const ppu = Math.max(
+                    1,
+                    Number(sel.item?.inventory?.pieces_per_unit) || 1
+                  );
+                  const soldByBox = isBoxUnit(unit);
+
+                  // Remaining available to return
+                  const remaining = Math.max(
+                    1,
+                    Number(sel.item?.quantity) || 1
+                  );
+
+                  // Step/max with box logic
+                  const step = soldByBox && ppu > 1 ? ppu : 1;
+                  const maxQty =
+                    soldByBox && ppu > 1
+                      ? Math.floor(remaining / ppu) * ppu
+                      : remaining;
+
+                  const unitLabel = soldByBox
+                    ? ppu > 1
+                      ? `pieces (in multiples of ${ppu})`
+                      : "boxes"
+                    : "pieces";
+
+                  return (
+                    <>
+                      <label className="block text-sm mb-1">
+                        Quantity (max {maxQty} {unitLabel}){" "}
+                        <span className="text-red-500">*</span>
+                      </label>
+
+                      <input
+                        type="number"
+                        min={step}
+                        step={step}
+                        max={maxQty}
+                        value={qty}
+                        onChange={(e) => {
+                          const raw = Number(e.target.value) || step;
+                          const clamped = clampToStep(
+                            raw,
+                            step,
+                            maxQty,
+                            step
+                          );
+                          setQty(clamped);
+                        }}
+                        className="border px-3 py-2 rounded w-full"
+                      />
+
+                      {/* Helper line showing how many boxes that equals (if applicable) */}
+                      {soldByBox && ppu > 1 ? (
+                        <p className="text-xs text-gray-500 mt-1">
+                          You’re returning <b>{Math.floor(qty / ppu)}</b> box
+                          {Math.floor(qty / ppu) === 1 ? "" : "es"} ({ppu} pcs
+                          per box).
+                        </p>
+                      ) : soldByBox ? (
+                        <p className="text-xs text-gray-500 mt-1">
+                          You’re returning <b>{qty}</b> box
+                          {qty === 1 ? "" : "es"}.
+                        </p>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </div>
 
               {/* Notes */}
@@ -1095,7 +1194,6 @@ export default function CustomerReturnsPage() {
             <div className="flex justify-end gap-2 mt-6">
               <button
                 onClick={() => {
-                  // If they haven't checked agree, keep it open
                   if (!policyAgreed) {
                     toast.error("Please agree to the policy to continue.");
                     return;
