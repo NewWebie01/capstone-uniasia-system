@@ -79,6 +79,29 @@ export default function InventoryPage() {
   const [saving, setSaving] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
 
+  // Manual low-stock email sender
+const [sendingLowStock, setSendingLowStock] = useState(false);
+
+async function triggerLowStockEmail() {
+  try {
+    setSendingLowStock(true);
+    const res = await fetch("/api/alerts/low-stock/run", { method: "POST" });
+    const j = await res.json();
+    if (!res.ok || !j?.ok) {
+      toast.error(`Low-stock email failed: ${j?.reason || j?.error || "Unknown error"}`);
+      return;
+    }
+    if ((j.count || 0) === 0) {
+      toast.info("No low/zero stock items found.");
+    } else {
+      toast.success(`Low-stock email sent. Included ${j.count} item(s).`);
+    }
+  } catch (e: any) {
+    toast.error(e?.message || "Failed to send low-stock email.");
+  } finally {
+    setSendingLowStock(false);
+  }
+}
   const [renameFieldType, setRenameFieldType] = useState<
     "category" | "subcategory" | "unit" | null
   >(null);
@@ -397,56 +420,6 @@ export default function InventoryPage() {
     };
   }, []);
 
-  /* ---------------------- Low stock notifier (client-side) ----------------------
-     Sends to /api/alerts/low-stock for items with stock_level Low/Critical/Out of Stock.
-     De-dupe per (sku + level) for 24h using localStorage.
-  ----------------------------------------------------------------------------- */
-  useEffect(() => {
-    if (!items || items.length === 0) return;
-    const SHOULD_ALERT = new Set(["Low", "Critical", "Out of Stock"]);
-    const KEY = "lowStockSentMap";
-    const DAY = 24 * 60 * 60 * 1000;
-    const now = Date.now();
-
-    const sentMap: Record<string, number> = JSON.parse(
-      typeof window !== "undefined" ? localStorage.getItem(KEY) || "{}" : "{}"
-    );
-
-    (async () => {
-      for (const it of items) {
-        const lvl = it.stock_level || it.status || "In Stock";
-        if (!SHOULD_ALERT.has(lvl)) continue;
-
-        const uniq = `${it.sku || it.id}|${lvl}`;
-        const last = sentMap[uniq] || 0;
-        if (now - last < DAY) continue; // already notified in the last 24h
-
-        try {
-          const res = await fetch("/api/alerts/low-stock", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sku: it.sku,
-              productName: it.product_name,
-              quantity: it.quantity,
-              level: lvl,
-            }),
-          });
-          const json = await res.json();
-          if (json?.ok) {
-            sentMap[uniq] = now;
-            localStorage.setItem(KEY, JSON.stringify(sentMap));
-            // Optional toast so you know it's working:
-            // toast.success(`Low-stock alert sent: ${it.product_name} (${lvl})`);
-          } else {
-            console.warn("Low-stock alert error:", json?.error);
-          }
-        } catch (e) {
-          console.error("Low-stock alert request failed:", e);
-        }
-      }
-    })();
-  }, [items]);
 
   /* ------------------------------ Uploads -------------------------------- */
   const handleImageSelect = (file: File | null) => {
@@ -677,47 +650,56 @@ export default function InventoryPage() {
           Manage and view all inventory items, categories, and stock levels.
         </p>
 
-        <div className="flex gap-4 mb-4">
-          <input
-            className="border px-4 py-2 w-full max-w-md rounded"
-            placeholder="Search by product name"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-          <button
-            className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
-            onClick={() => {
-              setShowForm(true);
-              setEditingItemId(null);
-              setNewItem({
-                sku: "",
-                product_name: "",
-                category: "",
-                quantity: 0,
-                subcategory: "",
-                unit: "",
-                unit_price: 0,
-                cost_price: 0,
-                markup_percent: 50,
-                amount: 0,
-                profit: 0,
-                date_created: new Date().toISOString(),
-                status: "",
-                image_url: null,
-                weight_per_piece_kg: null,
-                pieces_per_unit: null,
-                total_weight_kg: null,
-                expiration_date: null,
-                ceiling_qty: null,
-                stock_level: "In Stock",
-              });
-              setImageFile(null);
-              setImagePreview(null);
-            }}
-          >
-            Add New Item
-          </button>
-        </div>
+        <div className="flex flex-wrap gap-4 mb-4 items-center">
+  <input
+    className="border px-4 py-2 w-full sm:max-w-md rounded"
+    placeholder="Search by product name"
+    value={searchQuery}
+    onChange={(e) => setSearchQuery(e.target.value)}
+  />
+
+  <button
+    onClick={triggerLowStockEmail}
+    disabled={sendingLowStock}
+    className="px-4 py-2 rounded bg-black text-white hover:bg-blue-700 disabled:opacity-60"
+  >
+    {sendingLowStock ? "Sending..." : "Send Low-Stock Alert"}
+  </button>
+
+  <button
+    className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
+    onClick={() => {
+      setShowForm(true);
+      setEditingItemId(null);
+      setNewItem({
+        sku: "",
+        product_name: "",
+        category: "",
+        quantity: 0,
+        subcategory: "",
+        unit: "",
+        unit_price: 0,
+        cost_price: 0,
+        markup_percent: 50,
+        amount: 0,
+        profit: 0,
+        date_created: new Date().toISOString(),
+        status: "",
+        image_url: null,
+        weight_per_piece_kg: null,
+        pieces_per_unit: null,
+        total_weight_kg: null,
+        expiration_date: null,
+        ceiling_qty: null,
+        stock_level: "In Stock",
+      });
+      setImageFile(null);
+      setImagePreview(null);
+    }}
+  >
+    Add New Item
+  </button>
+</div>
 
         <div className="overflow-auto rounded-lg shadow">
           <table className="min-w-full bg-white text-sm">

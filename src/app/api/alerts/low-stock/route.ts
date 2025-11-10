@@ -1,26 +1,18 @@
 // src/app/api/alerts/low-stock/route.ts
-import { NextRequest } from "next/server";
-import { notifyAdminsLowStock } from "@/lib/notify-admins";
+import { NextResponse } from "next/server";
+import notifyAdmins, { type LowStockItem } from "@/lib/notify-admins";
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   try {
-    const { productName, quantity, level, sku } = await req.json();
+    const payload = await req.json().catch(() => ({}));
+    const incoming = Array.isArray(payload?.items) ? payload.items : [];
+    const items: LowStockItem[] = incoming.filter((x: any) => x && typeof x === "object");
 
-    if (!productName || quantity === undefined) {
-      return Response.json(
-        { ok: false, error: "Missing productName or quantity" },
-        { status: 400 }
-      );
-    }
+    const result = await notifyAdmins(items);
+    if (!result.ok) return NextResponse.json({ ok: false, reason: result.reason ?? "unknown" }, { status: 400 });
 
-    const result = await notifyAdminsLowStock(
-      String(productName),
-      Number(quantity),
-      level,
-      sku
-    );
-    return Response.json(result, { status: result.ok ? 200 : 400 });
-  } catch (err: any) {
-    return Response.json({ ok: false, error: err?.message || "Unknown error" }, { status: 500 });
+    return NextResponse.json({ ok: true, sent: result.sent });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? "Unexpected error" }, { status: 500 });
   }
 }

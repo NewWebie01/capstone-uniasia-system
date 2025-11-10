@@ -4,92 +4,170 @@
 import { Resend } from "resend";
 import { createClient } from "@supabase/supabase-js";
 
-const resendApiKey = process.env.RESEND_API_KEY;
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
+/* ------------------------------- Types ------------------------------- */
+export type LowStockItem = { sku?: string; name?: string; qty?: number };
 
-// Use this until your domain is verified.
-// After verifying uniasia.shop in Resend, set RESEND_FROM to "no-reply@uniasia.shop".
-const DEFAULT_FROM = "onboarding@resend.dev";
-const RESEND_FROM = (process.env.RESEND_FROM || DEFAULT_FROM).trim();
+/* ----------------------------- Env config ---------------------------- */
+const resend = new Resend(process.env.RESEND_API_KEY!);
+const fromEmail = process.env.RESEND_FROM ?? "noreply@uniasia.shop";
 
-const resend = resendApiKey ? new Resend(resendApiKey) : null;
-const supabase =
-  supabaseUrl && serviceRole ? createClient(supabaseUrl, serviceRole) : null;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const ADMIN_EMAILS = process.env.ADMIN_EMAILS || ""; // comma-separated list (optional)
 
-console.log("[notify] RESEND_API_KEY set:", !!resendApiKey);
-console.log("[notify] SUPABASE URL set:", !!supabaseUrl);
-console.log("[notify] SERVICE_ROLE set:", !!serviceRole);
-console.log("[notify] FROM:", RESEND_FROM);
+/*  Supabase admin client (service role; no session persistence needed)  */
+const db = createClient(supabaseUrl, serviceRole, { auth: { persistSession: false } });
 
-/**
- * Emails all admins when an item hits low stock.
- * Admin emails are read from `account_requests` where role = 'admin'.
- * If none are found, falls back to ADMIN_EMAILS env (comma-separated).
- */
-export async function notifyAdminsLowStock(productName: string, quantity: number) {
-  if (!supabase) {
-    console.error("[notify] Supabase server client not configured");
-    return { ok: false, error: "Supabase server client not configured" };
+/* ----------------------------- Utilities ----------------------------- */
+const isEmail = (s?: string | null) => !!s && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+const uniq = <T,>(arr: T[]) => Array.from(new Set(arr));
+
+function buildHtml(rows: string) {
+  return `
+    <div style="font-family: system-ui, Arial, sans-serif">
+      <h2 style="margin:0 0 12px">Low Stock Alert</h2>
+      <p style="margin:0 0 12px">The following items are at low or zero stock:</p>
+      <table cellpadding="6" cellspacing="0" style="border-collapse:collapse;min-width:420px">
+        <thead>
+          <tr>
+            <th style="border:1px solid #ddd;text-align:left">SKU</th>
+            <th style="border:1px solid #ddd;text-align:left">Product</th>
+            <th style="border:1px solid #ddd;text-align:right">Qty</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p style="color:#888;margin-top:16px">This is an automated email from UniAsia Inventory.</p>
+    </div>
+  `.trim();
+}
+
+function rowsFrom(items: LowStockItem[]) {
+  const safe = (Array.isArray(items) ? items : []).filter(
+    (x) => x && typeof x === "object"
+  ) as LowStockItem[];
+
+  if (!safe.length) {
+    return `<tr><td colspan="3" style="border:1px solid #ddd;color:#888">No detail</td></tr>`;
   }
-  if (!resend) {
-    console.error("[notify] RESEND_API_KEY missing");
-    return { ok: false, error: "RESEND_API_KEY missing" };
-  }
 
-  // 1) Fetch admin emails from DB
-  const { data: admins, error: qErr } = await supabase
-    .from("account_requests")
-    .select("email")
-    .eq("role", "admin");
+  return safe
+    .map((it) => {
+      const sku = (it.sku ?? "").toString();
+      const name = (it.name ?? "").toString();
+      const qty = Number.isFinite(it.qty) ? Number(it.qty!) : 0;
+      return `
+        <tr>
+          <td style="border:1px solid #ddd">${sku}</td>
+          <td style="border:1px solid #ddd">${name}</td>
+          <td style="border:1px solid #ddd;text-align:right">${qty}</td>
+        </tr>
+      `;
+    })
+    .join("");
+}
 
-  if (qErr) {
-    console.error("[notify] Supabase query error:", qErr);
-    return { ok: false, error: "Supabase query error", detail: qErr.message };
-  }
+/* ---------------- Collect all admin recipient emails (multi-source) ---------------- */
+async function getAdminRecipients(): Promise<string[]> {
+  const found: string[] = [];
 
-  let recipients = (admins ?? []).map((a: any) => a.email).filter(Boolean);
-
-  // 2) Fallback to env list if table is empty
-  if (!recipients.length) {
-    const fallback = (process.env.ADMIN_EMAILS || "")
-      .split(",")
-      .map((e) => e.trim())
-      .filter(Boolean);
-    if (fallback.length) {
-      console.warn("[notify] No admin emails in table; using ADMIN_EMAILS fallback.");
-      recipients = fallback;
+  /* 1) From ENV static list (optional) */
+  if (ADMIN_EMAILS) {
+    for (const raw of ADMIN_EMAILS.split(",").map((s) => s.trim())) {
+      if (isEmail(raw)) found.push(raw.toLowerCase());
     }
   }
 
-  if (!recipients.length) {
-    console.error("[notify] No admin emails found anywhere.");
-    return { ok: false, error: "No admin emails found" };
-  }
-
-  // 3) Send email via Resend
+  /* 2) From optional SQL view (public.v_admin_emails) if you created it */
   try {
-    const { data, error: sendErr } = await resend.emails.send({
-      from: `UniAsia Hardware <${process.env.RESEND_FROM!}>`,
-      to: recipients,
-      subject: `Low Stock: ${productName}`,
-      html: `
-        <h2 style="font-family:sans-serif;margin:0 0 8px">Low Stock Notification</h2>
-        <p style="font-family:sans-serif;margin:4px 0">The item <strong>${productName}</strong> is running low.</p>
-        <p style="font-family:sans-serif;margin:4px 0">Remaining quantity: <strong>${quantity}</strong></p>
-        <p style="font-family:sans-serif;margin:12px 0">Please check the inventory dashboard for details.</p>
-      `,
-    });
-
-    if (sendErr) {
-      console.error("[notify] Resend send error:", sendErr);
-      return { ok: false, error: "Send error", detail: sendErr.message };
+    const { data, error } = await db.from("v_admin_emails").select("email");
+    if (!error && data?.length) {
+      for (const r of data) if (isEmail(r.email)) found.push(r.email.toLowerCase());
     }
-
-    console.log(`[notify] Sent to ${recipients.length} recipient(s).`);
-    return { ok: true, data, recipients: recipients.length };
-  } catch (err: any) {
-    console.error("[notify] Unhandled Resend exception:", err);
-    return { ok: false, error: "Send error", detail: err?.message };
+  } catch {
+    /* ignore if view doesn't exist */
   }
+
+  /* 3) From your own public tables, if present */
+  try {
+    const { data } = await db.from("profiles").select("email, role").eq("role", "admin");
+    if (data?.length) {
+      for (const r of data) if (isEmail(r.email)) found.push(r.email.toLowerCase());
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const { data } = await db.from("users").select("email, role").eq("role", "admin");
+    if (data?.length) {
+      for (const r of data) if (isEmail(r.email)) found.push(r.email.toLowerCase());
+    }
+  } catch { /* ignore */ }
+
+  /* 4) From Auth — ALL confirmed users whose user_metadata.role === "admin" (paginated) */
+  try {
+    let page = 1;
+    const perPage = 1000; // plenty
+    // loop until fewer than perPage returned
+    // @ts-ignore - types allow page/perPage in supabase-js v2
+    for (;;) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      const { data, error } = await db.auth.admin.listUsers({ page, perPage });
+      if (error) break;
+
+      const users = (data?.users ?? []) as unknown as Array<{
+        email?: string | null;
+        email_confirmed_at?: string | null;
+        user_metadata?: Record<string, any>;
+        app_metadata?: Record<string, any>;
+      }>;
+
+      for (const u of users) {
+        const role =
+          (u.user_metadata && u.user_metadata.role) ??
+          (u.app_metadata && (u.app_metadata as any).role);
+        if (role === "admin" && isEmail(u.email) && !!u.email_confirmed_at) {
+          found.push(u.email!.toLowerCase());
+        }
+      }
+
+      if (!data || (data.users?.length ?? 0) < perPage) break;
+      page += 1;
+    }
+  } catch {
+    /* ignore if Auth admin not accessible */
+  }
+
+  return uniq(found);
+}
+
+/* ------------------------------ Main sender ------------------------------ */
+export default async function notifyAdmins(items: LowStockItem[]) {
+  const normalized = (Array.isArray(items) ? items : []).filter(
+    (x) => x && typeof x === "object"
+  ) as LowStockItem[];
+
+  const to = await getAdminRecipients();
+
+  if (!to.length) {
+    console.log(
+      "[notify] No admin recipients found. Set ADMIN_EMAILS or ensure admins exist (Auth user_metadata.role = 'admin' and email confirmed)."
+    );
+    return { ok: false as const, sent: 0, reason: "no_recipients" as const };
+  }
+
+  const html = buildHtml(rowsFrom(normalized));
+
+  const { error } = await resend.emails.send({
+    from: `UniAsia Alerts <${fromEmail}>`,
+    to,
+    subject: "Low Stock Alert",
+    html,
+  });
+
+  if (error) {
+    return { ok: false as const, sent: 0, reason: error.message ?? ("send_error" as const) };
+  }
+
+  console.log("[notify] Email sent to:", to.join(", "));
+  return { ok: true as const, sent: to.length };
 }
