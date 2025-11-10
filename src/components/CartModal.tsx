@@ -1,93 +1,149 @@
-// src/components/CartModal.tsx
+// src/components/AddToCartModal.tsx
 "use client";
-import React from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+
+import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { useCart } from "../context/CartContext";
+import { InventoryItem, useCart } from "@/context/CartContext";
+import { useRouter } from "next/navigation";            // ← NEW
+import supabase from "@/config/supabaseClient";         // ← NEW
 
-export default function CartModal({ onClose }: { onClose?: () => void }) {
-  const { cart, updateQty, removeItem, clearCart, cartCount, cartTotal } = useCart();
-  const router = useRouter();
+type Props = {
+  item: InventoryItem | null;
+  onClose: () => void;
+  initialQty?: number;
+};
 
-  const handleCheckout = () => {
-    // go to final checkout page (you already have /customer/checkout)
-    router.push("/customer/checkout");
-    if (onClose) onClose();
+const MAX_QTY = 1000;
+const clamp = (n: number) => Math.max(1, Math.min(MAX_QTY, Math.floor(n || 1)));
+
+function formatPeso(n: number) {
+  return (Number(n) || 0).toLocaleString("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    minimumFractionDigits: 2,
+  });
+}
+
+export default function AddToCartModal({ item, onClose, initialQty = 1 }: Props) {
+  const router = useRouter();                             // ← NEW
+  const { addItem } = useCart();
+  const [qty, setQty] = useState<number>(clamp(initialQty));
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => { setQty(clamp(initialQty)); }, [initialQty]);
+
+  if (!item) return null;
+
+  const availableQty = Number(item.quantity ?? 0);
+  const unitPrice = Number(item.unit_price ?? 0);
+
+  const canAdd = () => {
+    if (availableQty > 0 && qty > availableQty) return false;
+    if (qty < 1 || qty > MAX_QTY) return false;
+    return true;
   };
 
-  if (!cart || cart.length === 0) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
-        <div className="bg-white rounded-lg w-full max-w-lg p-6 shadow">
-          <div className="text-center">
-            <div className="text-lg font-semibold mb-2">Cart</div>
-            <div className="text-sm text-gray-500">Your cart is empty.</div>
-            <div className="mt-4 flex justify-center gap-2">
-              <Link href="/customer/product-catalog" className="px-4 py-2 bg-[#181918] text-white rounded">Shop Products</Link>
-              <button onClick={() => onClose?.()} className="px-4 py-2 border rounded">Close</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+  async function handleAdd() {
+    if (!item) return toast.error("No item selected.");
+
+    // ↓ NEW: require login
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      // After login, send them back to the catalog (you can switch this to /customer/checkout if you prefer)
+      const next = "/customer/product-catalog";
+      router.push(`/login?next=${encodeURIComponent(next)}`);
+      onClose();
+      return;
+    }
+
+    if (qty > MAX_QTY) {
+      setQty(MAX_QTY);
+      toast.error(`Maximum ${MAX_QTY} per item.`);
+      return;
+    }
+    if (availableQty > 0 && qty > availableQty) {
+      toast.error("Requested quantity exceeds available stock.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      addItem(item, qty);
+      toast.success("Item added to cart.");
+      onClose();
+    } catch (err) {
+      console.error("Add to cart failed:", err);
+      toast.error("Failed to add to cart. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-      <div className="bg-white rounded-2xl w-full max-w-4xl p-6 shadow-2xl">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold">Your Cart ({cartCount})</h3>
-          <div className="flex items-center gap-2">
-            <button onClick={() => { clearCart(); toast.success("Cart cleared"); }} className="text-sm px-3 py-1 border rounded">Clear</button>
-            <button onClick={() => onClose?.()} className="text-sm px-3 py-1 border rounded">Close</button>
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl ring-1 ring-black/5">
+        <div className="flex items-start justify-between">
+          <h3 className="text-lg font-semibold">{item.product_name}</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-black" aria-label="Close">✕</button>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-3">
+          <div className="flex items-center gap-4">
+            <div className="w-28 h-20 bg-gray-100 flex items-center justify-center overflow-hidden rounded">
+              {item.image_url ? (
+                <img src={item.image_url} alt={item.product_name} className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-sm text-gray-400">No Image</span>
+              )}
+            </div>
+
+            <div className="flex-1">
+              <div className="text-sm text-gray-500">
+                {item.category ?? "—"} • {item.subcategory ?? "General"}
+              </div>
+
+              <div className="font-semibold mt-1">{formatPeso(unitPrice)}</div>
+
+              <div className={`text-xs mt-1 ${ (availableQty ?? 0) <= 0 ? "text-red-500" : "text-green-600" }`}>
+                {item.status ?? (availableQty <= 0 ? "Out of stock" : "In Stock")}
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div className="overflow-auto max-h-[60vh]">
-          <table className="w-full text-sm">
-            <thead className="text-left text-gray-600">
-              <tr>
-                <th className="py-2">Product</th>
-                <th>Price</th>
-                <th>Qty</th>
-                <th>Line</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {cart.map((ci) => (
-                <tr key={ci.item.id} className="border-t">
-                  <td className="py-2">
-                    <div className="font-medium">{ci.item.product_name}</div>
-                    <div className="text-xs text-gray-500">{ci.item.category}</div>
-                  </td>
-                  <td className="py-2">{Number(ci.item.unit_price || 0).toLocaleString("en-PH", { style: "currency", currency: "PHP" })}</td>
-                  <td className="py-2">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => updateQty(ci.item.id, Math.max(1, ci.quantity - 1))} className="px-2 py-1 border rounded">−</button>
-                      <input value={ci.quantity} onChange={(e) => updateQty(ci.item.id, Math.max(1, Number(e.target.value) || 1))} className="w-16 text-center border rounded px-2 py-1" />
-                      <button onClick={() => updateQty(ci.item.id, ci.quantity + 1)} className="px-2 py-1 border rounded">+</button>
-                    </div>
-                  </td>
-                  <td className="py-2 font-medium">{Number(ci.item.unit_price || 0 * ci.quantity).toLocaleString("en-PH", { style: "currency", currency: "PHP" })}</td>
-                  <td className="py-2">
-                    <button onClick={() => removeItem(ci.item.id)} className="text-sm text-red-600">Remove</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+          <label className="text-sm">Quantity</label>
+          <div className="flex items-center gap-2">
+            <button className="px-3 py-1 border rounded" onClick={() => setQty((s) => clamp(s - 1))} aria-label="Decrease">−</button>
+            <input
+              type="number"
+              value={qty}
+              min={1}
+              max={MAX_QTY}
+              onChange={(e) => {
+                const v = Number(e.target.value || 1);
+                setQty(clamp(Number.isFinite(v) ? v : 1));
+              }}
+              className="w-24 border rounded px-2 py-1 text-center"
+            />
+            <button className="px-3 py-1 border rounded" onClick={() => setQty((s) => clamp(s + 1))} aria-label="Increase">+</button>
+            <div className="text-xs text-gray-500 ml-auto">Max {MAX_QTY} per item</div>
+          </div>
 
-        <div className="mt-4 flex items-center justify-between">
-          <div className="text-sm text-gray-600">Estimated total</div>
-          <div className="text-lg font-semibold">{Number(cartTotal || 0).toLocaleString("en-PH", { style: "currency", currency: "PHP" })}</div>
-        </div>
+          {availableQty > 0 && (
+            <div className="text-xs text-gray-500">
+              Available: <span className="font-medium">{availableQty}</span>
+            </div>
+          )}
 
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={() => router.push("/customer/product-catalog")} className="px-4 py-2 border rounded">Continue Shopping</button>
-          <button onClick={handleCheckout} className="px-4 py-2 rounded bg-[#ffba20] text-black">Proceed to Checkout</button>
+          <div className="flex justify-end gap-2 mt-4">
+            <button onClick={onClose} className="px-4 py-2 rounded border bg-white hover:bg-gray-50">Cancel</button>
+            <button
+              onClick={handleAdd}
+              disabled={loading || !canAdd()}
+              className={`px-4 py-2 rounded ${loading || !canAdd() ? "bg-gray-300 text-gray-600 cursor-not-allowed" : "bg-[#ffba20] text-black"}`}
+            >
+              {loading ? "Adding..." : "Add to Cart"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

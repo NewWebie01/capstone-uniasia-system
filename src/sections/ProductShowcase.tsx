@@ -1,3 +1,4 @@
+// src/components/ProductShowcase.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -21,6 +22,7 @@ export function ProductShowcase() {
   const [selected, setSelected] = useState<InventoryItem | null>(null);
   const router = useRouter();
 
+  // Load sample products
   useEffect(() => {
     const fetchProducts = async () => {
       setLoading(true);
@@ -40,6 +42,7 @@ export function ProductShowcase() {
     fetchProducts();
   }, []);
 
+  // Close modal with Esc
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape") setSelected(null);
@@ -48,9 +51,19 @@ export function ProductShowcase() {
     return () => document.removeEventListener("keydown", onEsc);
   }, [selected]);
 
-  const handleAddToCart = (item: InventoryItem) => {
-    toast.info("Please create an account to add items to your cart.");
-    router.push(`/account_creation?product=${item.id}`);
+  /** Handle Add to Cart — if not logged in → redirect to login */
+  const handleAddToCart = async (item: InventoryItem) => {
+    const { data } = await supabase.auth.getSession();
+    const isLoggedIn = !!data?.session;
+
+    if (!isLoggedIn) {
+      toast.info("Please log in to add items to your cart.");
+      router.push("/login?next=/customer/checkout");
+      return;
+    }
+
+    // If logged in, you can later replace this with your modal open logic
+    toast.success(`${item.product_name} added to cart.`);
   };
 
   return (
@@ -73,6 +86,7 @@ export function ProductShowcase() {
                 <div>
                   <div className="relative w-full h-40 bg-gray-100 overflow-hidden">
                     {item.image_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={item.image_url}
                         alt={item.product_name}
@@ -125,11 +139,10 @@ export function ProductShowcase() {
         )}
       </div>
 
-      {/* Modal */}
+      {/* Modal for viewing item details */}
       <AnimatePresence>
         {selected && (
           <>
-            {/* Backdrop */}
             <motion.div
               className="fixed inset-0 bg-black/50 z-40"
               initial={{ opacity: 0 }}
@@ -137,7 +150,6 @@ export function ProductShowcase() {
               exit={{ opacity: 0 }}
               onClick={() => setSelected(null)}
             />
-            {/* Panel */}
             <motion.div
               className="fixed inset-0 z-50 flex items-center justify-center p-4"
               initial={{ opacity: 0, scale: 0.98, y: 10 }}
@@ -151,6 +163,7 @@ export function ProductShowcase() {
                   {/* Image side */}
                   <div className="relative bg-gray-100">
                     {selected.image_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={selected.image_url}
                         alt={selected.product_name}
@@ -165,7 +178,6 @@ export function ProductShowcase() {
                       onClick={() => setSelected(null)}
                       className="absolute top-3 right-3 text-white/90 hover:text-white bg-black/40 hover:bg-black/60 transition rounded-full w-8 h-8 flex items-center justify-center"
                       aria-label="Close"
-                      title="Close"
                     >
                       ✕
                     </button>
@@ -213,7 +225,7 @@ export function ProductShowcase() {
                     </div>
 
                     <p className="mt-3 text-xs text-gray-400">
-                      * You’ll be asked to create an account to proceed.
+                      * Please log in to proceed.
                     </p>
                   </div>
                 </div>

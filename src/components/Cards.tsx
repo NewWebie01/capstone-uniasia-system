@@ -11,23 +11,45 @@ import {
 } from "react-icons/fa";
 import supabase from "@/config/supabaseClient";
 
-// Types
+/* =========================
+   TYPES
+========================= */
 type InventoryItem = {
   id: number;
   product_name: string;
   quantity: number;
   expiration_date?: string | null;
+  stock_level?: string | null; // NEW: use DB trigger-calculated level
+  status?: string | null;      // fallback if stock_level is null
 };
 type Delivery = { id: number; destination: string; status?: string | null };
 type Customer = { id: number; name: string; customer_type?: string | null };
 
-// Add "expNotify" to ModalType
-type ModalType = "outOfStock" | "deliveries" | "customers" | "expNotify" | null;
+type MovingProduct = {
+  id: number;
+  sku: string;
+  product_name: string;
+  category: string;
+  subcategory: string;
+  unit: string;
+  current_stock: number;
+  units_90d: number;
+  est_days_of_cover: number | null;
+  pr_units_velocity: number;
+};
+
+type ModalType =
+  | "atRisk"     // renamed from "outOfStock": now includes Low/Critical/Out & zero-qty
+  | "deliveries"
+  | "customers"
+  | "expNotify"
+  | "moving"
+  | null;
 
 const pluralize = (n: number, one: string, many: string) =>
   `${n} ${n === 1 ? one : many}`;
 
-// --- helper to match Bargraph's default "Monthly" window (last 6 months, including current) ---
+/* Match Bargraph's default "Monthly" window (last 6 months incl current) */
 function getMonthlyStartISO(): string {
   const now = new Date();
   const earliest = new Date(now.getFullYear(), now.getMonth() - 5, 1);
@@ -38,16 +60,16 @@ function getMonthlyStartISO(): string {
 
 const Cards: React.FC = () => {
   const [totalSales, setTotalSales] = useState<number | null>(null);
-  const [outOfStockItems, setOutOfStockItems] = useState<InventoryItem[] | null>(null);
+  const [atRiskItems, setAtRiskItems] = useState<InventoryItem[] | null>(null); // <- renamed
   const [ongoingDeliveries, setOngoingDeliveries] = useState<Delivery[] | null>(null);
   const [existingCustomers, setExistingCustomers] = useState<Customer[] | null>(null);
   const [expiringSoon, setExpiringSoon] = useState<InventoryItem[] | null>(null);
-
+  const [movingProducts, setMovingProducts] = useState<MovingProduct[]>([]);
   const [modal, setModal] = useState<ModalType>(null);
 
   const monthlyStartISO = useMemo(() => getMonthlyStartISO(), []);
 
-  // --- Loaders ---
+  /* -------------------- Loaders -------------------- */
   async function loadTotalSales() {
     const { data, error } = await supabase
       .from("payments")
@@ -63,18 +85,18 @@ const Cards: React.FC = () => {
     }
 
     const sum =
-      (data ?? []).reduce((acc, r: any) => acc + (Number(r.amount) || 0), 0) || 0;
+      (data ?? []).reduce((acc: number, r: any) => acc + (Number(r.amount) || 0), 0) || 0;
     setTotalSales(sum);
   }
 
   async function loadLists() {
     try {
       const [invRes, delivRes, custRes] = await Promise.all([
+        // include stock_level + status for filtering
         supabase
           .from("inventory")
-          .select("id, product_name, quantity, expiration_date")
+          .select("id, product_name, quantity, expiration_date, stock_level, status")
           .order("product_name", { ascending: true }),
-        // 🔧 FIX: your logistics uses "To Ship" for ongoing — not "Ongoing"
         supabase
           .from("truck_deliveries")
           .select("id, destination, status")
@@ -88,15 +110,18 @@ const Cards: React.FC = () => {
       ]);
 
       if (!invRes.error && invRes.data) {
-        setOutOfStockItems(
-          (invRes.data as InventoryItem[]).filter((i) => (i.quantity || 0) === 0)
-        );
+        const LOW_SET = new Set(["Low", "Critical", "Out of Stock"]);
+        const list = (invRes.data as InventoryItem[]).filter((i) => {
+          const lvl = (i.stock_level || i.status || "").trim();
+          const isZero = (i.quantity || 0) === 0;
+          return LOW_SET.has(lvl) || isZero;
+        });
+        setAtRiskItems(list);
 
-        // ExpNotify: Items expiring in next 7 days (inclusive)
+        // Expiring in next 7 days
         const DAYS_AHEAD = 7;
         const today = new Date();
         const until = new Date(Date.now() + DAYS_AHEAD * 86400000);
-
         const start = new Date(today);
         start.setHours(0, 0, 0, 0);
         const end = new Date(until);
@@ -130,26 +155,37 @@ const Cards: React.FC = () => {
     }
   }
 
-  // Initial load
+  async function loadMovingProducts() {
+    const { data, error } = await supabase
+      .from("v_fast_moving_products")
+      .select("*")
+      .order("units_90d", { ascending: false });
+    if (error) {
+      console.error("Moving products load error:", error);
+      setMovingProducts([]);
+      return;
+    }
+    setMovingProducts((data as MovingProduct[]) ?? []);
+  }
+
+  /* -------------------- Initial load -------------------- */
   useEffect(() => {
     loadTotalSales();
     loadLists();
+    loadMovingProducts();
   }, [monthlyStartISO]);
 
-  // Realtime refresh for payments totals (like Bargraph)
+  /* ----- Realtime refresh: payments totals ----- */
   useEffect(() => {
     const ch = supabase.channel("cards-payments-rt");
-
     ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "payments" },
       (payload: any) => {
         const statusOf = (row: any): string =>
           typeof row?.status === "string" ? row.status.toLowerCase() : "";
-
         const newStatus = statusOf(payload.new);
         const oldStatus = statusOf(payload.old);
-
         if (
           payload.eventType === "INSERT" ||
           payload.eventType === "DELETE" ||
@@ -160,24 +196,21 @@ const Cards: React.FC = () => {
         }
       }
     );
-
     ch.subscribe();
     return () => {
       supabase.removeChannel(ch);
     };
   }, [monthlyStartISO]);
 
-  // 🔄 Realtime refresh for "To Ship" deliveries shown on the card
+  /* ----- Realtime refresh: deliveries (To Ship) & at-risk (inventory) ----- */
   useEffect(() => {
-    const ch = supabase.channel("cards-deliveries-rt");
-    ch.on(
+    const chDel = supabase.channel("cards-deliveries-rt");
+    chDel.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "truck_deliveries" },
       (payload: any) => {
         const statusNew = payload?.new?.status as string | undefined;
         const statusOld = payload?.old?.status as string | undefined;
-
-        // If a row becomes or stops being "To Ship", refresh the list
         if (
           statusNew === "To Ship" ||
           statusOld === "To Ship" ||
@@ -188,12 +221,23 @@ const Cards: React.FC = () => {
         }
       }
     );
-    ch.subscribe();
+    chDel.subscribe();
+
+    const chInv = supabase.channel("cards-inventory-rt");
+    chInv.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "inventory" },
+      () => loadLists()
+    );
+    chInv.subscribe();
+
     return () => {
-      supabase.removeChannel(ch);
+      supabase.removeChannel(chDel);
+      supabase.removeChannel(chInv);
     };
   }, []);
 
+  /* -------------------- Helpers -------------------- */
   const currencyPH = (val: number | null) =>
     val === null
       ? "…"
@@ -214,10 +258,13 @@ const Cards: React.FC = () => {
       "bg-white p-5 rounded-xl shadow-sm overflow-hidden cursor-pointer hover:shadow-md transition-shadow",
   });
 
+  /* =========================
+     RENDER
+  ========================== */
   return (
     <>
-      <div className="grid grid-cols-5 gap-4 mb-6 w-full overflow-x-auto">
-        {/* Total Sales (now mirrors Bargraph source/filters: payments.received in last 6 months) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6 w-full overflow-x-auto">
+        {/* Total Sales */}
         <div className="bg-white p-5 rounded-xl shadow-sm flex items-start gap-4 overflow-hidden">
           <FaDollarSign className="text-3xl text-green-600 mt-1" />
           <div className="leading-tight">
@@ -231,23 +278,25 @@ const Cards: React.FC = () => {
           </div>
         </div>
 
-        {/* Out of Stock (clickable -> modal) */}
-        <div {...cardButtonProps("outOfStock")}>
+        {/* At-Risk Stock (Low / Critical / Out of Stock / zero-qty) */}
+        <div {...cardButtonProps("atRisk")}>
           <div className="flex items-center gap-4 mb-2">
             <FaExclamationTriangle className="text-3xl text-red-500" />
             <div className="leading-tight">
-              <div className="font-semibold text-base md:text-lg">Out of Stock</div>
+              <div className="font-semibold text-base md:text-lg">
+                Low / Critical / Out
+              </div>
               <div className="text-sm md:text-base text-gray-600">
-                {outOfStockItems === null
+                {atRiskItems === null
                   ? "Loading…"
-                  : pluralize(outOfStockItems.length, "item", "items")}
+                  : pluralize(atRiskItems.length, "item", "items")}
               </div>
             </div>
           </div>
           <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
         </div>
 
-        {/* Ongoing Deliveries (clickable -> modal) */}
+        {/* Ongoing Deliveries */}
         <div {...cardButtonProps("deliveries")}>
           <div className="flex items-center gap-4 mb-2">
             <FaTruck className="text-3xl text-yellow-600" />
@@ -263,7 +312,7 @@ const Cards: React.FC = () => {
           <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
         </div>
 
-        {/* Existing Customers (clickable -> modal) */}
+        {/* Existing Customers */}
         <div {...cardButtonProps("customers")}>
           <div className="flex items-center gap-4 mb-2">
             <FaUserFriends className="text-3xl text-[#ffba20]" />
@@ -279,7 +328,7 @@ const Cards: React.FC = () => {
           <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
         </div>
 
-        {/* ExpNotify (clickable -> modal) */}
+        {/* Expiring Soon */}
         <div {...cardButtonProps("expNotify")}>
           <div className="flex items-center gap-4 mb-2">
             <FaClock className="text-3xl text-yellow-500" />
@@ -295,29 +344,60 @@ const Cards: React.FC = () => {
           </div>
           <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
         </div>
+
+        {/* Moving Products Report */}
+        <div {...cardButtonProps("moving")}>
+          <div className="flex items-center gap-4 mb-2">
+            <FaTruck className="text-3xl text-blue-600" />
+            <div className="leading-tight">
+              <div className="font-semibold text-base md:text-lg">Moving Products</div>
+              {movingProducts.length > 0 ? (
+                <>
+                  <div className="text-sm md:text-base text-gray-600 font-semibold truncate">
+                    {movingProducts[0].product_name}
+                  </div>
+                  <div className="text-xs md:text-sm text-gray-500">
+                    Sold (90d): <b>{movingProducts[0].units_90d.toLocaleString()}</b>
+                  </div>
+                </>
+              ) : (
+                <div className="text-sm md:text-base text-gray-600">No data</div>
+              )}
+            </div>
+          </div>
+          <div className="text-xs md:text-sm text-gray-400">Click to view report</div>
+        </div>
       </div>
 
       {/* Modal */}
       {modal && (
         <Modal onClose={() => setModal(null)} title={modalTitle(modal)}>
-          {modal === "outOfStock" && (
+          {modal === "atRisk" && (
             <ListSection
-              emptyText="No out-of-stock items."
-              items={outOfStockItems?.map((i) => i.product_name) ?? []}
+              emptyText="No Low/Critical/Out-of-Stock items."
+              items={
+                atRiskItems?.map((i) => {
+                  const lvl = (i.stock_level || i.status || "").trim() || "—";
+                  return `${i.product_name} — ${lvl}`;
+                }) ?? []
+              }
             />
           )}
+
           {modal === "deliveries" && (
             <ListSection
               emptyText="No ongoing deliveries."
               items={ongoingDeliveries?.map((d) => d.destination) ?? []}
             />
           )}
+
           {modal === "customers" && (
             <ListSection
               emptyText="No existing customers."
               items={existingCustomers?.map((c) => c.name) ?? []}
             />
           )}
+
           {modal === "expNotify" && (
             <ListSection
               emptyText="No items expiring in 7 days."
@@ -336,6 +416,59 @@ const Cards: React.FC = () => {
               }
             />
           )}
+
+          {modal === "moving" && (
+            <div className="overflow-x-auto">
+              <table className="min-w-[900px] w-full text-sm border rounded-xl shadow">
+                <thead>
+                  <tr className="bg-[#ffba20] text-black text-left font-bold text-base border-b">
+                    <th className="py-2 px-3">#</th>
+                    <th className="py-2 px-3">Product</th>
+                    <th className="py-2 px-3">Category</th>
+                    <th className="py-2 px-3">Subcategory</th>
+                    <th className="py-2 px-3 text-right">Sold (90d)</th>
+                    <th className="py-2 px-3 text-right">Stock Left</th>
+                    <th className="py-2 px-3 text-right">Days of Cover</th>
+                    <th className="py-2 px-3 text-right">Velocity (units/day)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {movingProducts.length === 0 ? (
+                    <tr>
+                      <td className="py-3 px-3 text-gray-500" colSpan={8}>
+                        No data
+                      </td>
+                    </tr>
+                  ) : (
+                    movingProducts.map((prod, idx) => (
+                      <tr key={prod.id} className="border-b hover:bg-gray-50/80">
+                        <td className="py-2 px-3 font-semibold text-center">{idx + 1}</td>
+                        <td className="py-2 px-3 font-bold">{prod.product_name}</td>
+                        <td className="py-2 px-3">{prod.category}</td>
+                        <td className="py-2 px-3">{prod.subcategory}</td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.units_90d?.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.current_stock?.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.est_days_of_cover ? prod.est_days_of_cover.toFixed(1) : "-"}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.pr_units_velocity?.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+              <div className="text-xs text-gray-500 mt-4">
+                <b>Days of Cover</b> = Stock Left ÷ average daily sales (last 90 days).
+                Highest rows are “fast”; lowest rows are “slow”.
+              </div>
+            </div>
+          )}
         </Modal>
       )}
     </>
@@ -346,14 +479,16 @@ const Cards: React.FC = () => {
 
 function modalTitle(type: ModalType) {
   switch (type) {
-    case "outOfStock":
-      return "Out of Stock Items";
+    case "atRisk":
+      return "Low / Critical / Out-of-Stock Items";
     case "deliveries":
       return "Ongoing Deliveries";
     case "customers":
       return "Existing Customers";
     case "expNotify":
       return "Expiring Soon (Next 7 Days)";
+    case "moving":
+      return "Moving Products Report (Last 90 Days)";
     default:
       return "";
   }
@@ -376,7 +511,7 @@ const Modal: React.FC<{
       onClick={onClose}
     >
       <div
-        className="bg-white w-full max-w-2xl rounded-xl shadow-lg p-6"
+        className="bg-white w-full max-w-5xl rounded-xl shadow-lg p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between mb-4">
@@ -388,7 +523,7 @@ const Modal: React.FC<{
             Close
           </button>
         </div>
-        <div className="max-h-[60vh] overflow-y-auto">{children}</div>
+        <div className="max-h-[70vh] overflow-y-auto">{children}</div>
       </div>
     </div>
   );
