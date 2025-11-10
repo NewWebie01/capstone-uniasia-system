@@ -284,7 +284,7 @@ const Cards: React.FC = () => {
             <FaExclamationTriangle className="text-3xl text-red-500" />
             <div className="leading-tight">
               <div className="font-semibold text-base md:text-lg">
-                Low / Critical / Out
+                Low / Critical / Out of Stock Items
               </div>
               <div className="text-sm md:text-base text-gray-600">
                 {atRiskItems === null
