@@ -6,9 +6,9 @@ import ChartFill from "@/assets/Chart_fill.png";
 import Logistics from "@/assets/logistics.png";
 import Sales from "@/assets/Sales.png";
 import LogoutIcon from "@/assets/power-button.png";
-import { History, ReceiptText } from "lucide-react";
+import { ReceiptText } from "lucide-react";
 import { FaHistory } from "react-icons/fa";
-import { UserPlus, Boxes, FileText, Receipt, RotateCcw } from "lucide-react";
+import { Boxes, FileText, Receipt, RotateCcw } from "lucide-react";
 
 import Image, { StaticImageData } from "next/image";
 import NavLink from "@/components/NavLink";
@@ -26,7 +26,7 @@ type MenuItem = {
   icon?: React.ComponentType<{ className?: string }>;
 };
 
-// --- Master Menu List
+// --- Master Menu List (Account Request removed)
 const Menus: MenuItem[] = [
   { title: "Dashboard", src: ChartFill, href: "/dashboard" },
   { title: "Inventory", icon: Boxes, href: "/inventory" },
@@ -38,11 +38,10 @@ const Menus: MenuItem[] = [
   { title: "Returns", icon: RotateCcw, href: "/returns" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
-  { title: "Account Request", icon: UserPlus, href: "/account-request" },
   { title: "Backup", icon: RotateCcw, href: "/backups" },
 ];
 
-// --- Which roles can see which menu titles
+// --- Which roles can see which menu titles (Account Request removed)
 const ROLE_MENUS: Record<string, string[]> = {
   admin: [
     "Dashboard",
@@ -55,14 +54,12 @@ const ROLE_MENUS: Record<string, string[]> = {
     "Returns",
     "Transaction History",
     "Activity Log",
-    "Account Request",
     "Backup",
   ],
   cashier: ["Sales", "Invoice", "Payments", "Returns", "Transaction History"],
   warehouse: ["Inventory"],
   trucker: ["Truck Delivery", "Delivered"],
   supervisor: [
-    // Example: show some of admin + cashier, customize as needed
     "Dashboard",
     "Inventory",
     "Truck Delivery",
@@ -207,7 +204,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
                   [
                     "Activity Log",
                     "Account Creation",
-                    "Account Request",
                     "Purchase",
                     "Inventory",
                     "Invoice",
