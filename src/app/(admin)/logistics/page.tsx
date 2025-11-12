@@ -708,32 +708,48 @@ export default function TruckDeliveryPage() {
     });
   };
   // SHIPPING FEE HANDLER
-  const handleShippingFeeChange = async (deliveryId: number, value: number) => {
-    // 1) Persist to DB
-    const { error } = await supabase
-      .from("truck_deliveries")
-      .update({ shipping_fee: value })
-      .eq("id", deliveryId);
+// SHIPPING FEE HANDLER (syncs truck + all attached invoices)
+const handleShippingFeeChange = async (deliveryId: number, value: number) => {
+  // 1) Persist to the truck
+  const { error: updTruckErr } = await supabase
+    .from("truck_deliveries")
+    .update({ shipping_fee: value })
+    .eq("id", deliveryId);
 
-    if (error) {
-      toast.error("Failed to update Shipping Fee");
-      console.error("Shipping fee update error:", error);
-      return;
-    }
+  if (updTruckErr) {
+    toast.error("Failed to update Shipping Fee on truck");
+    console.error("Shipping fee update error:", updTruckErr);
+    return;
+  }
 
-    // 2) Optimistically update local state
-    setDeliveries((prev) =>
-      prev.map((d) => (d.id === deliveryId ? { ...d, shipping_fee: value } : d))
+  // 2) Persist to ALL invoices (orders) assigned to this truck
+  const { error: updOrdersErr } = await supabase
+    .from("orders")
+    .update({ shipping_fee: value })
+    .eq("truck_delivery_id", String(deliveryId));
+
+  if (updOrdersErr) {
+    // truck already updated; warn that invoices didn’t sync (RLS or network)
+    toast.warning(
+      "Truck updated, but syncing to invoices failed. Please refresh or check RLS."
     );
+    console.error("Sync shipping_fee to orders failed:", updOrdersErr);
+  } else {
+    toast.success("Shipping Fee updated and synced to invoices");
+  }
 
-    toast.success("Shipping Fee updated");
+  // 3) Optimistically update local state
+  setDeliveries((prev) =>
+    prev.map((d) => (d.id === deliveryId ? { ...d, shipping_fee: value } : d))
+  );
 
-    // 3) Activity log (optional but nice)
-    await logActivity("Updated Shipping Fee", {
-      delivery_id: deliveryId,
-      shipping_fee: value,
-    });
-  };
+  // 4) Activity log
+  await logActivity("Updated Shipping Fee", {
+    delivery_id: deliveryId,
+    shipping_fee: value,
+  });
+};
+
 
   /** Update eta_date (Estimated Arrival for Ongoing) */
   /** Update eta_date (Estimated Arrival) AND email customers for cheque collection */
