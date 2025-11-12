@@ -7,7 +7,9 @@ import { toast } from "sonner";
 import { Upload, FileImage, Minus, Plus } from "lucide-react";
 
 /* ----------------------------- Config ----------------------------- */
-const DEPOSIT_BUCKET = "payments-deposit-slips";
+// was: const DEPOSIT_BUCKET = "payments-deposit-slips";
+const DEPOSIT_BUCKET = "payments-cheques";
+
 
 /* ----------------------------- Money ------------------------------ */
 const formatCurrency = (n: number) =>
@@ -32,6 +34,20 @@ const todayLocalISO = () => {
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 10); // YYYY-MM-DD
 };
+
+// Parse "YYYY-MM-DD" as a *local* midnight Date (no UTC shift)
+const parseLocalDate = (isoDate: string) => {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+};
+
+// Start-of-today in *local* time
+const startOfTodayLocal = () => {
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return t;
+};
+
 
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
@@ -1020,15 +1036,15 @@ export default function CustomerPaymentsPage() {
       return;
     }
 
-    // Disallow past deposit dates (same rule as before for cheque)
-    if (!isCash && depositDate) {
-      const min = new Date(todayLocalISO());
-      const chosen = new Date(depositDate + "T00:00:00");
-      if (chosen < min) {
-        toast.error("Deposit date cannot be in the past.");
-        return;
-      }
-    }
+// Disallow *past* deposit dates; allow today
+if (!isCash && depositDate) {
+  const chosen = parseLocalDate(depositDate);
+  if (chosen < startOfTodayLocal()) {
+    toast.error("Deposit date cannot be in the past.");
+    return;
+  }
+}
+
 
     setSubmitting(true);
     try {
@@ -1488,11 +1504,11 @@ export default function CustomerPaymentsPage() {
               <label className="text-xs text-gray-600">
                 Deposit Date {isCash ? "(optional)" : "*"}
               </label>
-              <input
-                type="date"
-                value={depositDate}
-                onChange={(e) => setDepositDate(e.target.value)}
-                min={todayLocalISO()}
+<input
+  type="date"
+  value={depositDate}
+  onChange={(e) => setDepositDate(e.target.value)}
+  min={todayLocalISO()}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 required={!isCash}
               />

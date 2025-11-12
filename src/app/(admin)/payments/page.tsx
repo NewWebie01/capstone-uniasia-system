@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { CheckCircle2, XCircle, FileImage, Search, Loader2, Upload } from "lucide-react";
+import { CheckCircle2, XCircle, FileImage, Search, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -13,9 +13,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-
-/* ----------------------------- Config ----------------------------- */
-const BUCKET = "payments-deposit-slips";
 
 /* ----------------------------- Formatters ----------------------------- */
 const formatCurrency = (n: number) =>
@@ -27,7 +24,7 @@ const formatCurrency = (n: number) =>
 
 const formatPH = (
   d?: string | number | Date | null,
-  opts: "date" | "datetime" = "date"
+  opts: "date" | "datetime" = "datetime"
 ) =>
   d
     ? new Intl.DateTimeFormat("en-PH", {
@@ -73,12 +70,12 @@ async function logActivity(action: string, details: any = {}) {
 type PaymentRow = {
   id: string;
   customer_id: string;
-  order_id: string | null;
+  order_id: string;
   amount: number;
-  method: string | null;        // "Deposit Slip" | "Cash" | legacy "Cheque"
-  cheque_number: string | null; // used for slip #
+  method: string | null;        // "Cash" | "Deposit Slip" | legacy "Cheque"
+  cheque_number: string | null; // kept for compatibility (now “slip #”)
   bank_name: string | null;
-  cheque_date: string | null;   // deposit date
+  cheque_date: string | null;   // kept for compatibility (now “deposit date”)
   image_url: string | null;
   created_at: string | null;
   status?: string | null;       // 'pending' | 'received' | 'rejected'
@@ -88,9 +85,9 @@ type PaymentRow = {
 
 type CustomerLite = {
   id: string;
-  code: string | null; // TXN / customer code
+  code: string | null; // TXN
   name: string | null;
-  email: string | null; // lowercase
+  email: string | null; // stored lowercase
 };
 
 /* ---------------- Helpers ---------------- */
@@ -136,7 +133,9 @@ export default function AdminPaymentsPage() {
   // image modal
   const [imgOpen, setImgOpen] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [imgMeta, setImgMeta] = useState<{ slip?: string | null; bank?: string | null } | null>(null);
+  const [imgMeta, setImgMeta] = useState<{ slip?: string | null; bank?: string | null } | null>(
+    null
+  );
 
   // confirmation modal
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -148,16 +147,6 @@ export default function AdminPaymentsPage() {
 
   // prevent double-submit on the confirm modal
   const [confirmBusy, setConfirmBusy] = useState(false);
-
-  // -------- New Deposit Slip modal state --------
-  const [newOpen, setNewOpen] = useState(false);
-  const [newBusy, setNewBusy] = useState(false);
-  const [selCustomerId, setSelCustomerId] = useState<string>("");
-  const [amount, setAmount] = useState<string>("");
-  const [bank, setBank] = useState<string>("");
-  const [slip, setSlip] = useState<string>("");
-  const [depDate, setDepDate] = useState<string>(""); // yyyy-mm-dd
-  const [file, setFile] = useState<File | null>(null);
 
   /* ------------------------------ Load data ------------------------------ */
   useEffect(() => {
@@ -175,6 +164,7 @@ export default function AdminPaymentsPage() {
           .order("date", { ascending: false });
         if (cErr) throw cErr;
 
+        // store emails lowercased for exact match with customer bell
         setCustomers(
           (custs ?? []).map((c: any) => ({
             id: String(c.id),
@@ -225,46 +215,6 @@ export default function AdminPaymentsPage() {
       supabase.removeChannel(channel);
     };
   }, []);
-
-  /* ------------------ Autofill Amount from latest TXN ------------------ */
-  useEffect(() => {
-    if (!selCustomerId) return;
-
-    (async () => {
-      try {
-        // Latest order for this customer
-        const { data: order, error: oErr } = await supabase
-          .from("orders")
-          .select("id, grand_total, created_at, status")
-          .eq("customer_id", selCustomerId)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (oErr || !order) {
-          setAmount("");
-          return;
-        }
-
-        // Sum of RECEIVED payments for that order
-        const { data: pays, error: pErr } = await supabase
-          .from("payments")
-          .select("amount")
-          .eq("order_id", order.id)
-          .eq("status", "received");
-
-        const paid = pErr ? 0 : (pays ?? []).reduce((sum, r: any) => sum + Number(r.amount || 0), 0);
-        const remaining = Math.max(0, Number(order.grand_total || 0) - paid);
-
-        setAmount(
-          (remaining > 0 ? remaining : Number(order.grand_total || 0)).toFixed(2)
-        );
-      } catch (e) {
-        console.error(e);
-        // leave manual
-      }
-    })();
-  }, [selCustomerId]);
 
   /* ------------------------------ Derived ------------------------------- */
   const customerById = useMemo(() => {
@@ -338,99 +288,10 @@ export default function AdminPaymentsPage() {
     }
   }
 
-  /* ------------------------------ Create Payment (Upload) ------------------------------- */
-  function resetNewForm() {
-    setSelCustomerId("");
-    setAmount("");
-    setBank("");
-    setSlip("");
-    setDepDate("");
-    setFile(null);
-  }
-
-  async function handleCreatePayment() {
-    if (!selCustomerId) {
-      toast.error("Select a customer.");
-      return;
-    }
-    const amt = Number(amount);
-    if (!amt || amt <= 0) {
-      toast.error("Enter a valid amount.");
-      return;
-    }
-    if (!bank.trim()) {
-      toast.error("Enter bank name.");
-      return;
-    }
-    if (!slip.trim()) {
-      toast.error("Enter slip number.");
-      return;
-    }
-    if (!depDate) {
-      toast.error("Choose deposit date.");
-      return;
-    }
-    if (!file) {
-      toast.error("Attach an image of the deposit slip.");
-      return;
-    }
-
-    setNewBusy(true);
-    try {
-      // 1) Upload to Storage
-      const ext = file.name.split(".").pop() || "jpg";
-      const key = `slips/${selCustomerId}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-
-      const { error: upErr } = await supabase.storage.from(BUCKET).upload(key, file, {
-        cacheControl: "3600",
-        upsert: false,
-        contentType: file.type || "image/jpeg",
-      });
-      if (upErr) throw upErr;
-
-      // 2) Get public URL
-      const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(key);
-      const imageUrl = pub?.publicUrl || null;
-
-      // 3) Insert pending payment (no order_id; your RPC will handle application)
-      const payload = {
-        customer_id: selCustomerId,
-        order_id: null,
-        amount: amt,
-        method: "Deposit Slip",
-        bank_name: bank.trim(),
-        cheque_number: slip.trim(), // using legacy column
-        cheque_date: new Date(depDate).toISOString(),
-        image_url: imageUrl,
-        status: "pending" as const,
-        created_at: new Date().toISOString(),
-      };
-
-      const { data: inserted, error: insErr } = await supabase
-        .from("payments")
-        .insert(payload)
-        .select("id")
-        .maybeSingle();
-      if (insErr) throw insErr;
-
-      toast.success("Deposit slip uploaded. Payment is now pending.");
-      await logActivity("Upload Deposit Slip", { ...payload, id: inserted?.id });
-
-      setNewOpen(false);
-      resetNewForm();
-      // Realtime will add the new row to the table
-    } catch (e: any) {
-      console.error(e);
-      toast.error(e?.message || "Failed to upload deposit slip.");
-    } finally {
-      setNewBusy(false);
-    }
-  }
-
-  /* ------------------------------ Actions (Confirm) ------------------------------- */
+  /* ------------------------------ Actions ------------------------------- */
   async function handleConfirm() {
     if (!targetRow || !confirmType) return;
-    if (confirmBusy) return;
+    if (confirmBusy) return; // guard
     setConfirmBusy(true);
 
     // lock the row immediately => both buttons disable
@@ -459,8 +320,10 @@ export default function AdminPaymentsPage() {
 
         toast.success("Payment received and applied to installments.");
 
+        // 🔔 Notify the customer via API (service role insert)
         await createCustomerNotifPaymentReceived(targetRow.id, meEmail);
-        // optional email:
+
+        // (optional) email:
         // await notifyCustomerByEmail(targetRow.id, "receive");
       } else if (confirmType === "reject") {
         const { data: updated, error } = await supabase
@@ -482,12 +345,13 @@ export default function AdminPaymentsPage() {
         );
 
         toast.success("Payment rejected.");
-        // optional email:
+        // (optional) email:
         // await notifyCustomerByEmail(targetRow.id, "reject");
       }
     } catch (err: any) {
       console.error(err);
       toast.error(err?.message || "Action failed.");
+      // rollback row lock if DB action failed
       setLocked((prev) => {
         const next = new Set(prev);
         if (targetRow) next.delete(targetRow.id);
@@ -508,23 +372,10 @@ export default function AdminPaymentsPage() {
   return (
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-7xl px-6 py-6">
-        {/* Header with button moved under, left-aligned */}
-        <div>
+        <div className="flex items-center gap-3">
           <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payments</h1>
-          <div className="mt-3">
-            <button
-              type="button"
-              onClick={() => setNewOpen(true)}
-              className="inline-flex items-center gap-2 rounded-lg bg-[#ffba20] px-3 py-2 text-sm font-bold text-black hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]/60 w-fit"
-              title="Upload a new deposit slip"
-            >
-              <Upload className="h-4 w-4" />
-              New Deposit Slip
-            </button>
-          </div>
         </div>
-
-        <p className="text-sm text-gray-600 mt-3">
+        <p className="text-sm text-gray-600 mt-1">
           Review submitted <b>deposit slips</b>. Mark as <b>Received</b> to post the payment and deduct it from
           the customer’s balance.
         </p>
@@ -617,10 +468,11 @@ export default function AdminPaymentsPage() {
                   );
 
                   const disableAll = locked.has(p.id) || s !== "pending";
+                  const dispMethod = displayMethod(p.method); // available if needed
 
                   return (
                     <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
-                      {/* Date only */}
+                      {/* ⬇️ Date only (no time) */}
                       <td className="py-2.5 px-3 whitespace-nowrap">{formatPH(p.created_at, "date")}</td>
 
                       <td className="py-2.5 px-3">
@@ -765,6 +617,7 @@ export default function AdminPaymentsPage() {
             >
               Cancel
             </button>
+            {/* UniAsia yellow button w/ black bold text */}
             <button
               type="button"
               onClick={handleConfirm}
@@ -807,128 +660,6 @@ export default function AdminPaymentsPage() {
               className="px-4 py-2 rounded border hover:bg-gray-50"
             >
               Close
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* New Deposit Slip modal */}
-      <Dialog open={newOpen} onOpenChange={(o) => { setNewOpen(o); if (!o) resetNewForm(); }}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Upload Deposit Slip</DialogTitle>
-            <DialogDescription>
-              Create a new pending payment by uploading a customer’s bank deposit slip.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-3">
-            {/* Customer */}
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <label className="text-sm text-gray-600">Customer</label>
-              <div className="col-span-2">
-                <select
-                  value={selCustomerId}
-                  onChange={(e) => setSelCustomerId(e.target.value)}
-                  className="w-full rounded border px-3 py-2"
-                >
-                  <option value="">— Select customer —</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {(c.code ? `${c.code} — ` : "") + (c.name || c.email || c.id)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Amount (auto-filled from latest TXN) */}
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <label className="text-sm text-gray-600">Amount</label>
-              <div className="col-span-2">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.00"
-                  className="w-full rounded border px-3 py-2"
-                />
-                <p className="mt-1 text-xs text-gray-500">Auto-filled from latest TXN (remaining balance if available).</p>
-              </div>
-            </div>
-
-            {/* Bank */}
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <label className="text-sm text-gray-600">Bank</label>
-              <div className="col-span-2">
-                <input
-                  value={bank}
-                  onChange={(e) => setBank(e.target.value)}
-                  placeholder="e.g., BDO, BPI"
-                  className="w-full rounded border px-3 py-2"
-                />
-              </div>
-            </div>
-
-            {/* Slip # */}
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <label className="text-sm text-gray-600">Slip #</label>
-              <div className="col-span-2">
-                <input
-                  value={slip}
-                  onChange={(e) => setSlip(e.target.value)}
-                  placeholder="Deposit slip reference number"
-                  className="w-full rounded border px-3 py-2"
-                />
-              </div>
-            </div>
-
-            {/* Deposit Date */}
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <label className="text-sm text-gray-600">Deposit Date</label>
-              <div className="col-span-2">
-                <input
-                  type="date"
-                  value={depDate}
-                  onChange={(e) => setDepDate(e.target.value)}
-                  className="w-full rounded border px-3 py-2"
-                />
-              </div>
-            </div>
-
-            {/* Image */}
-            <div className="grid grid-cols-3 gap-2 items-center">
-              <label className="text-sm text-gray-600">Image</label>
-              <div className="col-span-2">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                  className="w-full rounded border px-3 py-2 file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-3 file:py-2"
-                />
-                <p className="mt-1 text-xs text-gray-500">Accepted: JPG/PNG/WebP. Max ~5–10MB (per project limits).</p>
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter className="mt-4">
-            <button
-              type="button"
-              onClick={() => { setNewOpen(false); resetNewForm(); }}
-              className="px-4 py-2 rounded border hover:bg-gray-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleCreatePayment}
-              disabled={newBusy}
-              className="ml-2 px-4 py-2 rounded bg-[#ffba20] text-black font-bold text-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]/60 disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {newBusy ? "Uploading…" : "Upload"}
             </button>
           </DialogFooter>
         </DialogContent>

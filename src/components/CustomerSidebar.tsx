@@ -52,15 +52,15 @@ const Menus: MenuItem[] = [
   // My orders
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
 
-  // // Payments
-  // { title: "Payments", href: "/customer/payments", icon: ReceiptText },
+  // Payments
+  { title: "Payments", href: "/customer/payments", icon: ReceiptText },
 
-  // // Payment History
-  // {
-  //   title: "Payment History",
-  //   href: "/customer/payments/history",
-  //   icon: History,
-  // },
+  // Payment History
+  {
+    title: "Payment History",
+    href: "/customer/payments/history",
+    icon: History,
+  },
 
   // Returns flows
   { title: "Returns / Issues", href: "/customer/returns", icon: RotateCcw },
