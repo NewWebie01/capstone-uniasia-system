@@ -1057,7 +1057,7 @@ export default function CustomerPaymentsPage() {
       }
 
       toast.success(
-        ` ${isCash ? "Cash" : "Deposit"} payment submitted. Awaiting admin verification.`
+        ` ${isCash ? "Cash" : "Deposit"} payment submitted. Awaiting Customer Approval.`
       );
       setSelectedTxnCode("");
       setAmount("");
