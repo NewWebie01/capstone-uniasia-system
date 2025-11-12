@@ -171,3 +171,15 @@ export default async function notifyAdmins(items: LowStockItem[]) {
   console.log("[notify] Email sent to:", to.join(", "));
   return { ok: true as const, sent: to.length };
 }
+
+export async function notifyAdminsLowStock(payload: {
+  sku: string;
+  product_name: string;
+  quantity: number;
+  threshold: number;
+}) {
+  // reuse the default sender
+  return await notifyAdmins([
+    { sku: payload.sku, name: payload.product_name, qty: payload.quantity },
+  ]);
+}
