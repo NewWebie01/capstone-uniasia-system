@@ -19,7 +19,7 @@ type InventoryItem = {
   product_name: string;
   quantity: number;
   expiration_date?: string | null;
-  stock_level?: string | null; // NEW: use DB trigger-calculated level
+  stock_level?: string | null; // DB trigger-calculated level
   status?: string | null;      // fallback if stock_level is null
 };
 type Delivery = { id: number; destination: string; status?: string | null };
@@ -39,7 +39,7 @@ type MovingProduct = {
 };
 
 type ModalType =
-  | "atRisk"     // renamed from "outOfStock": now includes Low/Critical/Out & zero-qty
+  | "atRisk"
   | "deliveries"
   | "customers"
   | "expNotify"
@@ -60,10 +60,13 @@ function getMonthlyStartISO(): string {
 
 const Cards: React.FC = () => {
   const [totalSales, setTotalSales] = useState<number | null>(null);
-  const [atRiskItems, setAtRiskItems] = useState<InventoryItem[] | null>(null); // <- renamed
+  const [atRiskItems, setAtRiskItems] = useState<InventoryItem[] | null>(null);
   const [ongoingDeliveries, setOngoingDeliveries] = useState<Delivery[] | null>(null);
   const [existingCustomers, setExistingCustomers] = useState<Customer[] | null>(null);
+
+  // Expiring within 30 days
   const [expiringSoon, setExpiringSoon] = useState<InventoryItem[] | null>(null);
+
   const [movingProducts, setMovingProducts] = useState<MovingProduct[]>([]);
   const [modal, setModal] = useState<ModalType>(null);
 
@@ -83,7 +86,6 @@ const Cards: React.FC = () => {
       setTotalSales(0);
       return;
     }
-
     const sum =
       (data ?? []).reduce((acc: number, r: any) => acc + (Number(r.amount) || 0), 0) || 0;
     setTotalSales(sum);
@@ -92,7 +94,6 @@ const Cards: React.FC = () => {
   async function loadLists() {
     try {
       const [invRes, delivRes, custRes] = await Promise.all([
-        // include stock_level + status for filtering
         supabase
           .from("inventory")
           .select("id, product_name, quantity, expiration_date, stock_level, status")
@@ -110,22 +111,21 @@ const Cards: React.FC = () => {
       ]);
 
       if (!invRes.error && invRes.data) {
+        // Low / Critical / Out-of-Stock OR zero qty
         const LOW_SET = new Set(["Low", "Critical", "Out of Stock"]);
-        const list = (invRes.data as InventoryItem[]).filter((i) => {
+        const atRisk = (invRes.data as InventoryItem[]).filter((i) => {
           const lvl = (i.stock_level || i.status || "").trim();
           const isZero = (i.quantity || 0) === 0;
           return LOW_SET.has(lvl) || isZero;
         });
-        setAtRiskItems(list);
+        setAtRiskItems(atRisk);
 
-        // Expiring in next 7 days
-        const DAYS_AHEAD = 7;
-        const today = new Date();
-        const until = new Date(Date.now() + DAYS_AHEAD * 86400000);
-        const start = new Date(today);
+        // Expiring in the next 30 days (inclusive)
+        const DAYS_AHEAD = 30;
+        const start = new Date();
         start.setHours(0, 0, 0, 0);
-        const end = new Date(until);
-        end.setHours(0, 0, 0, 0);
+        const end = new Date(Date.now() + DAYS_AHEAD * 86400000);
+        end.setHours(23, 59, 59, 999);
 
         setExpiringSoon(
           (invRes.data as InventoryItem[]).filter((i) => {
@@ -202,7 +202,7 @@ const Cards: React.FC = () => {
     };
   }, [monthlyStartISO]);
 
-  /* ----- Realtime refresh: deliveries (To Ship) & at-risk (inventory) ----- */
+  /* ----- Realtime refresh: deliveries & inventory ----- */
   useEffect(() => {
     const chDel = supabase.channel("cards-deliveries-rt");
     chDel.on(
@@ -278,7 +278,7 @@ const Cards: React.FC = () => {
           </div>
         </div>
 
-        {/* At-Risk Stock (Low / Critical / Out of Stock / zero-qty) */}
+        {/* At-Risk Stock */}
         <div {...cardButtonProps("atRisk")}>
           <div className="flex items-center gap-4 mb-2">
             <FaExclamationTriangle className="text-3xl text-red-500" />
@@ -328,7 +328,7 @@ const Cards: React.FC = () => {
           <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
         </div>
 
-        {/* Expiring Soon */}
+        {/* Expiring Soon (30 days) */}
         <div {...cardButtonProps("expNotify")}>
           <div className="flex items-center gap-4 mb-2">
             <FaClock className="text-3xl text-yellow-500" />
@@ -339,7 +339,7 @@ const Cards: React.FC = () => {
                   ? pluralize(expiringSoon.length, "item", "items")
                   : "Loading…"}
               </div>
-              <div className="text-xs md:text-sm text-gray-400">(7 days)</div>
+              <div className="text-xs md:text-sm text-gray-400">(30 days)</div>
             </div>
           </div>
           <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
@@ -400,7 +400,7 @@ const Cards: React.FC = () => {
 
           {modal === "expNotify" && (
             <ListSection
-              emptyText="No items expiring in 7 days."
+              emptyText="No items expiring in 30 days."
               items={
                 Array.isArray(expiringSoon)
                   ? expiringSoon.map((i) =>
@@ -486,7 +486,7 @@ function modalTitle(type: ModalType) {
     case "customers":
       return "Existing Customers";
     case "expNotify":
-      return "Expiring Soon (Next 7 Days)";
+      return "Expiring Soon (Next 30 Days)";
     case "moving":
       return "Moving Products Report (Last 90 Days)";
     default:

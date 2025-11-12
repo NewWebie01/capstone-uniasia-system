@@ -23,7 +23,7 @@ type NotificationRow = {
   type: string;
   title: string | null;
   message: string | null;
-  related_id: string | null; // order_id / payment_id / item_id / etc
+  related_id: string | null; // order_id / return_id / account_request_id / item_id / etc
   is_read: boolean;
   created_at: string;
   user_email?: string | null;
@@ -72,14 +72,12 @@ type OrderFull = {
 };
 
 /* ----------------------------- Config ----------------------------- */
-/** Remove "order_completed" so it won't show in the bell */
+/** Removed payment-related types (payment, payment_received) */
 const VISIBLE_TYPES = new Set([
   "order",
   "order_created",
   // "order_completed", // intentionally hidden
   "order_approved",
-  "payment",
-  "payment_received",
   "return_created",
   "account_request_submitted",
   "expiration",
@@ -92,8 +90,6 @@ const TYPE_PRIORITY: Record<string, number> = {
   order: 3,
   order_created: 2,
   order_approved: 2,
-  payment_received: 3,
-  payment: 2,
   return_created: 3,
   account_request_submitted: 3,
   expiration: 1,
@@ -103,7 +99,6 @@ const TYPE_PRIORITY: Record<string, number> = {
 };
 
 /* ----------------------------- PH time helpers ----------------------------- */
-/** yyyy-mm-dd for grouping using PH day boundaries */
 function dayKeyPH(input: string | Date) {
   const d = input instanceof Date ? input : parseDbDate(input);
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -116,7 +111,6 @@ function dayKeyPH(input: string | Date) {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-/** Add N days and return PH yyyy-mm-dd (for expiring scan bounds) */
 function addDaysPHISO(date: Date, days: number) {
   const d = new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
   return formatPHISODate(d); // uses Asia/Manila internally
@@ -133,14 +127,6 @@ function kindMeta(type?: string) {
         label: "Order",
         badgeClass: "bg-blue-50 text-blue-700 ring-1 ring-blue-200",
         cardBorderClass: "border-l-4 border-blue-400",
-      };
-    case "payment":
-    case "payment_received":
-      return {
-        icon: "",
-        label: "Payment",
-        badgeClass: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200",
-        cardBorderClass: "border-l-4 border-emerald-400",
       };
     case "return_created":
       return {
@@ -184,7 +170,6 @@ function kindMeta(type?: string) {
 
 function canonicalKeyFromSystemRow(r: any): string {
   if (r.order_id) return `order:${r.order_id}`;
-  if (r.metadata?.payment_id) return `payment:${String(r.metadata.payment_id)}`;
   if (r.metadata?.return_id) return `return:${String(r.metadata.return_id)}`;
   if (r.metadata?.account_request_id)
     return `account:${String(r.metadata.account_request_id)}`;
@@ -196,7 +181,6 @@ function normalizeSystemRow(r: any): NotificationRow {
   let related_id: string | null = null;
   if (r.order_id) related_id = String(r.order_id);
   else if (r.item_id) related_id = String(r.item_id);
-  else if (r.metadata?.payment_id) related_id = String(r.metadata.payment_id);
   else if (r.metadata?.return_id) related_id = String(r.metadata.return_id);
   else if (r.metadata?.account_request_id)
     related_id = String(r.metadata.account_request_id);
@@ -342,7 +326,7 @@ export default function NotificationBell() {
     })();
   }, [supabase]);
 
-  /* ---------- Realtime + toasts ---------- */
+  /* ---------- Realtime + toasts (no payment branches now) ---------- */
   useEffect(() => {
     const channel = supabase.channel("system_notifications_realtime");
     channel.on(
@@ -373,30 +357,6 @@ export default function NotificationBell() {
                     const full = await fetchOrderFull(supabase, n.related_id);
                     setOrderModalData(full);
                     setOrderModalLoading(false);
-                  }
-                },
-              },
-            });
-          } else if (key.startsWith("payment:")) {
-            toast.success(n.title ?? "Payment Received", {
-              description: n.message ?? undefined,
-              action: {
-                label: "Payments",
-                onClick: async () => {
-                  try {
-                    if (n.related_id)
-                      sessionStorage.setItem(
-                        "scroll-to-payment-id",
-                        n.related_id
-                      );
-                  } catch {}
-                  if (pathname === "/payments") {
-                    setTimeout(
-                      () => emit("scroll-to-payment", n.related_id || ""),
-                      50
-                    );
-                  } else {
-                    await router.push("/payments");
                   }
                 },
               },
@@ -501,17 +461,6 @@ export default function NotificationBell() {
       .eq("id", id);
   };
 
-  const goToPayments = async (paymentId: string) => {
-    try {
-      sessionStorage.setItem("scroll-to-payment-id", paymentId);
-    } catch {}
-    if (pathname === "/payments") {
-      setTimeout(() => emit("scroll-to-payment", paymentId), 50);
-    } else {
-      await router.push("/payments");
-    }
-  };
-
   const handleClickNotification = async (n: NotificationRow) => {
     await markOneRead(n.id);
 
@@ -523,12 +472,6 @@ export default function NotificationBell() {
       const full = await fetchOrderFull(supabase, n.related_id);
       setOrderModalData(full);
       setOrderModalLoading(false);
-      return;
-    }
-
-    if (t.startsWith("payment") && n.related_id) {
-      await goToPayments(n.related_id);
-      setIsModalOpen(false);
       return;
     }
 
@@ -622,8 +565,6 @@ export default function NotificationBell() {
         title={
           n.type.toLowerCase().startsWith("order")
             ? "View Order Details"
-            : n.type.toLowerCase().startsWith("payment")
-            ? "Open Payment"
             : n.type === "return_created"
             ? "Open Returns"
             : n.type === "account_request_submitted"
@@ -648,7 +589,6 @@ export default function NotificationBell() {
         </div>
         <div className={["text-sm", msgClass].join(" ")}>{n.message}</div>
         <div className={["text-xs mt-1", timeClass].join(" ")}>
-          {/* TODO: UPDATED TIME AND DATE */}
           {/* {formatPHTime(n.created_at)} · {formatPHDate(n.created_at)} */}
         </div>
       </li>

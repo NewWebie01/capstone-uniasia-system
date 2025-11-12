@@ -1121,7 +1121,7 @@ export default function CustomerPaymentsPage() {
       if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
 
       toast.success(
-        ` ${isCash ? "Cash" : "Deposit"} payment submitted. Awaiting admin verification.`
+        ` ${isCash ? "Cash" : "Deposit"} payment submitted. Awaiting Customer Approval.`
       );
 
       // reset
