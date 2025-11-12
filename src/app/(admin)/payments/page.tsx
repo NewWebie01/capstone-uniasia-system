@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { Upload, FileImage, Minus, Plus } from "lucide-react";
+import { Upload, FileImage, Minus, Plus, Info } from "lucide-react";
 
 /* ----------------------------- Config ----------------------------- */
 // was: const DEPOSIT_BUCKET = "payments-deposit-slips";
@@ -44,6 +44,16 @@ const startOfTodayLocal = () => {
   const t = new Date();
   t.setHours(0, 0, 0, 0);
   return t;
+};
+
+// Convert a timestamp/ISO into local YYYY-MM-DD (for min= attribute)
+const toLocalYMD = (d?: string | Date | null) => {
+  if (!d) return "";
+  const date = typeof d === "string" ? new Date(d) : d;
+  if (isNaN(date.getTime())) return "";
+  const clone = new Date(date);
+  clone.setMinutes(clone.getMinutes() - clone.getTimezoneOffset());
+  return clone.toISOString().slice(0, 10);
 };
 
 /* ---------------------------------- Types --------------------------------- */
@@ -98,9 +108,9 @@ type PaymentRow = {
   order_id: string | number | null;
   amount: number;
   method: string | null;
-  cheque_number: string | null; // used for deposit reference
+  cheque_number: string | null; // deposit reference
   bank_name: string | null;
-  cheque_date: string | null; // used for deposit date
+  cheque_date: string | null; // deposit date
   image_url: string | null;
   status: string | null;
   created_at: string | null;
@@ -150,6 +160,31 @@ async function fetchShippingFeeForOrder(orderId: string | number): Promise<numbe
   }
 }
 
+/* -------- ETA: orders.truck_delivery_id -> truck_deliveries.eta_date -------- */
+async function fetchEtaForOrder(orderId: string | number): Promise<string | null> {
+  try {
+    const { data: ord } = await supabase
+      .from("orders")
+      .select("truck_delivery_id")
+      .eq("id", orderId)
+      .maybeSingle();
+
+    const deliveryId = ord?.truck_delivery_id;
+    if (!deliveryId) return null;
+
+    const { data: del } = await supabase
+      .from("truck_deliveries")
+      .select("eta_date")
+      .eq("id", deliveryId)
+      .maybeSingle();
+
+    const eta = del?.eta_date ?? null;
+    return eta || null;
+  } catch {
+    return null;
+  }
+}
+
 /* ------------------------------ Component ------------------------------ */
 export default function CustomerPaymentsPage() {
   const [loading, setLoading] = useState(true);
@@ -170,6 +205,9 @@ export default function CustomerPaymentsPage() {
 
   // Shipping fee per order cache
   const [shippingFees, setShippingFees] = useState<Record<string, number>>({});
+
+  // ETA per order cache (order_id -> ISO string or null)
+  const [etaByOrder, setEtaByOrder] = useState<Record<string, string | null>>({});
 
   // order_id -> truck_delivery_id mapping
   const [orderDeliveryMap, setOrderDeliveryMap] = useState<Record<string, string | null>>({});
@@ -193,7 +231,6 @@ export default function CustomerPaymentsPage() {
     (async () => {
       setLoading(true);
       try {
-        // 🚚 Fetch ALL customers and their orders (no email filter)
         const { data: customers, error } = await supabase
           .from("customers")
           .select(
@@ -253,22 +290,33 @@ export default function CustomerPaymentsPage() {
           setPayments([]);
         }
 
-        // Prefetch shipping fees
+        // Prefetch shipping fees **and** ETA for all orders
         const allOrders = txList.flatMap((c) => c.orders ?? []);
         const allIds = Array.from(
           new Set(allOrders.filter((o) => !!o?.id).map((o) => String(o.id)))
         );
 
+        // Fees
         const feeEntries = await Promise.all(
           allIds.map(async (oid) => {
             const fee = await fetchShippingFeeForOrder(oid);
             return [oid, fee] as [string, number];
           })
         );
-
         const feeMap: Record<string, number> = {};
         for (const [oid, fee] of feeEntries) feeMap[oid] = fee;
         setShippingFees(feeMap);
+
+        // ETAs
+        const etaEntries = await Promise.all(
+          allIds.map(async (oid) => {
+            const eta = await fetchEtaForOrder(oid);
+            return [oid, eta] as [string, string | null];
+          })
+        );
+        const etaMap: Record<string, string | null> = {};
+        for (const [oid, eta] of etaEntries) etaMap[oid] = eta ?? null;
+        setEtaByOrder(etaMap);
       } catch (e) {
         console.error(e);
         toast.error("Failed to load data.");
@@ -310,7 +358,7 @@ export default function CustomerPaymentsPage() {
     };
   }, [txns]);
 
-  /* ---- Realtime: truck_deliveries.shipping_fee changes -> refresh fee ------ */
+  /* ---- Realtime: truck_deliveries.shipping_fee/eta changes -> refresh fee & eta ------ */
   useEffect(() => {
     const deliveryIds = Object.values(orderDeliveryMap).filter(
       (v): v is string => typeof v === "string" && v.length > 0
@@ -327,7 +375,7 @@ export default function CustomerPaymentsPage() {
     }
 
     const filter = `id=in.(${inList(deliveryIds)})`;
-    const ch = supabase.channel("realtime-delivery-fee");
+    const ch = supabase.channel("realtime-delivery-fee-eta");
 
     const refreshFee = async (orderId: string | number) => {
       try {
@@ -339,6 +387,16 @@ export default function CustomerPaymentsPage() {
       }
     };
 
+    const refreshEta = async (orderId: string | number) => {
+      try {
+        const eta = await fetchEtaForOrder(orderId);
+        const key = String(orderId);
+        setEtaByOrder((prev) => (prev[key] === (eta ?? null) ? prev : { ...prev, [key]: eta ?? null }));
+      } catch (e) {
+        console.error("refreshEta (deliveries) failed:", e);
+      }
+    };
+
     ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "truck_deliveries", filter },
@@ -347,6 +405,7 @@ export default function CustomerPaymentsPage() {
         if (delId && deliveryToOrders.has(delId)) {
           for (const orderId of deliveryToOrders.get(delId) ?? []) {
             refreshFee(orderId);
+            refreshEta(orderId);
           }
         }
       }
@@ -468,7 +527,7 @@ export default function CustomerPaymentsPage() {
     })();
   }, [txns]);
 
-  /* ---------------- Realtime: orders -> refresh fee on any update ----------- */
+  /* ---------------- Realtime: orders -> refresh fee & eta on any update ----------- */
   useEffect(() => {
     const orderIds = txns
       .flatMap((c) =>
@@ -480,7 +539,7 @@ export default function CustomerPaymentsPage() {
     if (!orderIds.length) return;
 
     const filter = `id=in.(${inList(orderIds)})`;
-    const ch = supabase.channel("realtime-orders-fee");
+    const ch = supabase.channel("realtime-orders-fee-eta");
 
     const refreshFee = async (orderId: string | number) => {
       try {
@@ -492,12 +551,25 @@ export default function CustomerPaymentsPage() {
       }
     };
 
+    const refreshEta = async (orderId: string | number) => {
+      try {
+        const eta = await fetchEtaForOrder(orderId);
+        const key = String(orderId);
+        setEtaByOrder((prev) => (prev[key] === (eta ?? null) ? prev : { ...prev, [key]: eta ?? null }));
+      } catch (e) {
+        console.error("refreshEta (orders) failed:", e);
+      }
+    };
+
     ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "orders", filter },
       (payload) => {
         const orderId = (payload.new as any)?.id ?? (payload.old as any)?.id ?? null;
-        if (orderId) refreshFee(orderId);
+        if (orderId) {
+          refreshFee(orderId);
+          refreshEta(orderId);
+        }
       }
     );
 
@@ -534,7 +606,7 @@ export default function CustomerPaymentsPage() {
     return m;
   }, [paymentsByOrder]);
 
-  /** Enriched unpaid TXN options with fee; options with fee<=0 are disabled in the UI */
+  /** Enriched unpaid TXN options with fee; options with fee<=0 are kept (to view) but disabled on submit */
   type TxnOption = {
     code: string;
     order: OrderRow;
@@ -543,21 +615,24 @@ export default function CustomerPaymentsPage() {
     customerEmail: string | null;
     balance: number;
     fee: number;
+    hasETA: boolean;
   };
 
   const unpaidTxnOptions: TxnOption[] = useMemo(() => {
     const rows = rawTxnOptions.map(({ order, customerId, code, customerName, customerEmail }) => {
       const orderId = String(order.id);
       const fee = shippingFees[orderId] ?? 0;
+      const etaISO = etaByOrder[orderId] ?? null;
+      const hasETA = !!toLocalYMD(etaISO);
       const totals = computeFromOrder(order, fee);
       const paid = round2(effectivePaidTotalByOrder.get(orderId) || 0);
       const balance = Math.max(round2(totals.finalGrandTotal - paid), 0);
-      return { code, order, customerId, customerName, customerEmail, balance, fee };
+      return { code, order, customerId, customerName, customerEmail, balance, fee, hasETA };
     });
     return rows
       .filter((r) => r.balance > 0.01 && !lockedTxn[r.code])
       .sort((a, b) => b.balance - a.balance);
-  }, [rawTxnOptions, effectivePaidTotalByOrder, shippingFees, lockedTxn]);
+  }, [rawTxnOptions, effectivePaidTotalByOrder, shippingFees, etaByOrder, lockedTxn]);
 
   /* ----------------------------- Realtime installments ----------------------------- */
   useEffect(() => {
@@ -600,17 +675,11 @@ export default function CustomerPaymentsPage() {
     };
   }, [rawTxnOptions, selectedTxnCode]);
 
-  /* ---------- Keep selection valid (reject TXNs without shipping fee) ---------- */
+  /* ---------- Keep selection valid ---------- */
   useEffect(() => {
     if (!selectedTxnCode) return;
     const opt = unpaidTxnOptions.find((t) => t.code === selectedTxnCode);
-    if (!opt) {
-      setSelectedTxnCode("");
-      return;
-    }
-    if ((opt.fee ?? 0) <= 0) {
-      setSelectedTxnCode("");
-    }
+    if (!opt) setSelectedTxnCode("");
   }, [selectedTxnCode, unpaidTxnOptions]);
 
   const selectedPack = useMemo(() => {
@@ -632,6 +701,8 @@ export default function CustomerPaymentsPage() {
       totals,
       paid,
       balance,
+      hasETA: hit.hasETA,
+      feeApplied: fee > 0,
     };
   }, [selectedTxnCode, unpaidTxnOptions, effectivePaidTotalByOrder, shippingFees]);
 
@@ -651,7 +722,7 @@ export default function CustomerPaymentsPage() {
 
   /* ==================== INSTALLMENTS ==================== */
 
-  // 1) Load the schedule rows for the selected order (if any).
+  // 1) Load schedule rows for the selected order (if any).
   useEffect(() => {
     async function fetchInstallmentsForSelected() {
       if (!selectedPack?.order?.id) {
@@ -672,7 +743,6 @@ export default function CustomerPaymentsPage() {
       }
     }
     fetchInstallmentsForSelected();
-    // eslint-disable-next-line
   }, [selectedPack?.order?.id]);
 
   // 2) Unpaid rows by DB
@@ -807,8 +877,7 @@ export default function CustomerPaymentsPage() {
       setAmount(bal > 0 ? bal.toFixed(2) : "");
       setTermMultiplier(1);
     }
-    // eslint-disable-next-line
-  }, [selectedPack?.balance, isCredit, remainingTerms, allTermsPaid]);
+  }, [selectedPack?.balance, isCredit, remainingTerms, allTermsPaid]); // eslint-disable-line
 
   useEffect(() => {
     if (!selectedPack || !isCredit) return;
@@ -918,8 +987,24 @@ export default function CustomerPaymentsPage() {
 
   const exceedsBalance = !!selectedPack && enteredAmount > (selectedPack.balance || 0) + EPS;
 
+  // Whether current selected order has an ETA set
+  const hasETAForSelected = !!(selectedPack?.hasETA);
+
+  // ---------- compute min deposit date = max(today, ETA) ----------
+  const depositMinDate = useMemo(() => {
+    if (!selectedPack?.order?.id) return todayLocalISO();
+    const orderId = String(selectedPack.order.id);
+    const etaISO = etaByOrder[orderId] ?? null;
+    const etaYMD = toLocalYMD(etaISO) || "";
+    const todayYMD = todayLocalISO();
+    if (!etaYMD) return todayYMD;
+    return etaYMD > todayYMD ? etaYMD : todayYMD;
+  }, [selectedPack?.order?.id, etaByOrder]);
+
+  // Form validity now also requires ETA to be present
   const isFormValid =
     !!selectedTxnCode &&
+    hasETAForSelected &&
     isPaymentExact &&
     !exceedsBalance &&
     (isCash ||
@@ -960,17 +1045,31 @@ export default function CustomerPaymentsPage() {
       return;
     }
 
+    // HARD GUARD: require ETA
+    if (!hasETAForSelected) {
+      toast.error("This transaction has no ETA yet. Please set the ETA first before submitting a payment.");
+      return;
+    }
+
     const finalAmount = toNumber(amount);
     if (finalAmount <= 0) {
       toast.error("Please enter a valid amount greater than 0.");
       return;
     }
 
-    // Disallow *past* deposit dates; allow today
+    // Disallow deposit dates earlier than ETA; still allow today if >= ETA
     if (!isCash && depositDate) {
       const chosen = parseLocalDate(depositDate);
-      if (chosen < startOfTodayLocal()) {
-        toast.error("Deposit date cannot be in the past.");
+
+      const orderId = String(selectedPack.order.id);
+      const etaISO = etaByOrder[orderId] ?? null;
+      const etaYMD = toLocalYMD(etaISO) || "";
+      const todayYMD = todayLocalISO();
+      const minYMD = etaYMD && etaYMD > todayYMD ? etaYMD : todayYMD;
+
+      const minDate = parseLocalDate(minYMD);
+      if (chosen < minDate) {
+        toast.error("Deposit date cannot be earlier than the delivery ETA.");
         return;
       }
     }
@@ -979,7 +1078,6 @@ export default function CustomerPaymentsPage() {
     try {
       const justSubmittedCode = selectedPack.code;
 
-      // 🔑 Use the selected TXN’s customer
       const customerId = String(selectedPack.customerId);
       const orderId = String(selectedPack.order.id);
 
@@ -1021,44 +1119,12 @@ export default function CustomerPaymentsPage() {
         .single();
 
       if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
-      const newPaymentId = String(paymentRow?.id);
-
-      // 🔔 Notify admin bell as a PAYMENT event
-      try {
-        const title = "💳 Payment Request";
-        const message = `${selectedPack.customerName || "Customer"} • ${
-          selectedPack.code
-        } • ${formatCurrency(finalAmount)} ${
-          isCash ? "(Cash)" : `(Deposit Ref: ${depositRef || "N/A"})`
-        }`.trim();
-
-        await supabase.from("system_notifications").insert([
-          {
-            type: "payment",
-            title,
-            message,
-            source: "customer",
-            read: false,
-            metadata: {
-              payment_id: newPaymentId,
-              order_id: orderId,
-              customer_id: customerId,
-              txn_code: selectedPack.code,
-              amount: Number(finalAmount.toFixed(2)),
-              method: isCash ? "cash" : "deposit",
-              deposit_reference: depositRef || null,
-              bank_name: bankName || null,
-              deposit_date: depositDate || null,
-            },
-          },
-        ]);
-      } catch (notifyErr) {
-        console.error("system_notifications insert failed:", notifyErr);
-      }
 
       toast.success(
         ` ${isCash ? "Cash" : "Deposit"} payment submitted. Awaiting admin verification.`
       );
+
+      // reset
       setSelectedTxnCode("");
       setAmount("");
       setDepositRef("");
@@ -1118,6 +1184,17 @@ export default function CustomerPaymentsPage() {
             </h2>
           </div>
 
+          {/* If selected has NO ETA, show a hard warning & disable submission */}
+          {!!selectedPack && !selectedPack.hasETA && (
+            <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 text-sm">
+              <Info className="h-4 w-4 mt-0.5" />
+              <div>
+                This transaction has <b>no ETA</b> yet. Please set the delivery ETA first
+                before submitting a payment.
+              </div>
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* TXN selector */}
             <div className="col-span-1">
@@ -1136,11 +1213,6 @@ export default function CustomerPaymentsPage() {
                     setSelectedTxnCode("");
                     return;
                   }
-                  if ((opt.fee ?? 0) <= 0) {
-                    toast.warning("This TXN is waiting for a shipping fee. Please try again later.");
-                    e.currentTarget.value = selectedTxnCode || "";
-                    return;
-                  }
                   if (lockedTxn[val]) {
                     toast.warning(
                       "This TXN already has a submitted payment pending verification."
@@ -1148,19 +1220,27 @@ export default function CustomerPaymentsPage() {
                     e.currentTarget.value = selectedTxnCode || "";
                     return;
                   }
-
                   setSelectedTxnCode(val);
+                  if (!opt.hasETA) {
+                    toast.warning("ETA is not set yet for this TXN. Please set the ETA first.");
+                  }
+                  if ((opt.fee ?? 0) <= 0) {
+                    toast.warning("Shipping fee is not applied yet. Payment submission is disabled.");
+                  }
                 }}
                 required
               >
                 <option value="">— Choose a TXN —</option>
-                {unpaidTxnOptions.map(({ code, fee, customerName }, i) => {
+                {unpaidTxnOptions.map(({ code, fee, hasETA, customerName }, i) => {
                   const isLocked = !!lockedTxn[code];
                   const waitingFee = (fee ?? 0) <= 0;
+                  const waitingETA = !hasETA;
                   return (
-                    <option key={`${code}-${i}`} value={code} disabled={waitingFee || isLocked}>
+                    <option key={`${code}-${i}`} value={code} disabled={isLocked}>
                       {code} — {customerName}
-                      {waitingFee ? " (Waiting for shipping fee)" : isLocked ? " (Pending payment)" : ""}
+                      {waitingETA ? " (Waiting for ETA)" : ""}
+                      {waitingFee ? " (Waiting for shipping fee)" : ""}
+                      {isLocked ? " (Pending payment)" : ""}
                     </option>
                   );
                 })}
@@ -1388,6 +1468,7 @@ export default function CustomerPaymentsPage() {
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 placeholder="e.g., 00012345678901234567"
                 required={!isCash}
+                disabled={!!selectedPack && !selectedPack.hasETA}
               />
               <div className="mt-1 text-[11px] text-gray-500">
                 Up to 20 digits. Letters or symbols are not allowed.
@@ -1405,6 +1486,7 @@ export default function CustomerPaymentsPage() {
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 placeholder="e.g., BPI / BDO / Metrobank"
                 required={!isCash}
+                disabled={!!selectedPack && !selectedPack.hasETA}
               />
             </div>
 
@@ -1416,10 +1498,20 @@ export default function CustomerPaymentsPage() {
                 type="date"
                 value={depositDate}
                 onChange={(e) => setDepositDate(e.target.value)}
-                min={todayLocalISO()}
+                min={depositMinDate}
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 required={!isCash}
+                disabled={!!selectedPack && !selectedPack.hasETA}
               />
+              {!!selectedPack?.order?.id && (() => {
+                const etaISO = etaByOrder[String(selectedPack.order.id)] ?? null;
+                const etaYMD = toLocalYMD(etaISO);
+                return etaYMD ? (
+                  <div className="mt-1 text-[11px] text-gray-500">
+                    Earliest allowed date is the delivery ETA: <b>{etaYMD}</b>.
+                  </div>
+                ) : null;
+              })()}
             </div>
 
             <div className="col-span-1">
@@ -1436,6 +1528,7 @@ export default function CustomerPaymentsPage() {
                     className="hidden"
                     onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                     required={!isCash}
+                    disabled={!!selectedPack && !selectedPack.hasETA}
                   />
                 </label>
                 <span className="text-xs text-gray-600">
@@ -1463,7 +1556,15 @@ export default function CustomerPaymentsPage() {
               <button
                 type="submit"
                 disabled={!isFormValid || submitting}
-                title={!isFormValid ? "Please complete all fields" : ""}
+                title={
+                  !selectedPack
+                    ? "Please choose a TXN"
+                    : !selectedPack.hasETA
+                    ? "Set ETA first before submitting a payment"
+                    : !isFormValid
+                    ? "Please complete all required fields"
+                    : ""
+                }
                 className="inline-flex items-center gap-2 px-4 py-2 rounded bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {submitting ? "Submitting…" : "Submit Payment"}

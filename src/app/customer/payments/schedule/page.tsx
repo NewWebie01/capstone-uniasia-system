@@ -13,9 +13,19 @@ const peso = (n: number) =>
   });
 
 /* ----------------------------- Dates ------------------------------ */
-// Local YYYY-MM-DD for <input type="date"> and comparisons
-const todayLocalISO = () => {
-  const d = new Date();
+const startOfTodayLocal = () => {
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return t;
+};
+
+// Normalize any date-like value to local YYYY-MM-DD
+const toYYYYMMDD = (val?: string | null) => {
+  if (!val) return "";
+  const d = new Date(val);
+  if (isNaN(d.getTime())) {
+    return String(val).slice(0, 10);
+  }
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 10);
 };
@@ -25,18 +35,10 @@ const parseLocalDate = (isoDate: string) => {
   return new Date(y || 1970, (m || 1) - 1, d || 1, 0, 0, 0, 0);
 };
 
-const startOfTodayLocal = () => {
-  const t = new Date();
-  t.setHours(0, 0, 0, 0);
-  return t;
-};
-
 /* ----------------------------- Utils ------------------------------ */
-const round2 = (n: number) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const round2 = (n: number) =>
+  Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const EPS = 0.000001;
-
-const inList = (vals: (string | number)[]) =>
-  vals.map((v) => (typeof v === "string" ? `"${v}"` : String(v))).join(",");
 
 /* ---------------------------------- Types --------------------------------- */
 type OrderItemRow = {
@@ -75,14 +77,16 @@ type InstallmentRow = {
   id?: string;
   order_id: string;
   term_no: number;
-  due_date: string; // YYYY-MM-DD
+  due_date: string; // original schedule (not shown if no ETA)
   amount_due: number;
   amount_paid?: number | null;
   status?: string | null; // "paid" | "pending"
 };
 
 /* -------- Shipping fee: orders.truck_delivery_id -> truck_deliveries.shipping_fee -------- */
-async function fetchShippingFeeForOrder(orderId: string | number): Promise<number> {
+async function fetchShippingFeeForOrder(
+  orderId: string | number
+): Promise<number> {
   try {
     const { data: ord } = await supabase
       .from("orders")
@@ -106,6 +110,24 @@ async function fetchShippingFeeForOrder(orderId: string | number): Promise<numbe
   }
 }
 
+/* -------- ETA: orders.truck_delivery_id -> truck_deliveries.eta_date -------- */
+async function fetchEtaForDelivery(
+  deliveryId?: string | null
+): Promise<string | null> {
+  if (!deliveryId) return null;
+  try {
+    const { data, error } = await supabase
+      .from("truck_deliveries")
+      .select("eta_date")
+      .eq("id", deliveryId)
+      .maybeSingle();
+    if (error) throw error;
+    return data?.eta_date ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /* ------------------------------ Component ------------------------------ */
 export default function PaymentSchedulePage() {
   const [loading, setLoading] = useState(true);
@@ -117,14 +139,27 @@ export default function PaymentSchedulePage() {
 
   // order_id -> shippingFee cache
   const [shippingFees, setShippingFees] = useState<Record<string, number>>({});
+  // 🚚 selected order's ETA (we’ll use this as the “Due Date”)
+  const [orderEtaDate, setOrderEtaDate] = useState<string | null>(null);
+
   const paymentsSubKey = useRef<string>("");
 
-  /* ------------------------------- Fetch customers + completed orders ------------------------------- */
+  /* ---------------------- Fetch current user + their TXNs only ---------------------- */
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        // Load ALL customers with their orders (filter to completed later)
+        const { data: auth } = await supabase.auth.getUser();
+        const userEmail = auth?.user?.email || null;
+
+        if (!userEmail) {
+          setTxns([]);
+          setLoading(false);
+          toast.info("Please sign in to view your payment schedule.");
+          return;
+        }
+
+        // Fetch ONLY this customer's record(s) by email
         const { data: customers, error } = await supabase
           .from("customers")
           .select(
@@ -135,6 +170,7 @@ export default function PaymentSchedulePage() {
             )
           `
           )
+          .eq("email", userEmail)
           .order("id", { ascending: false });
 
         if (error) throw error;
@@ -142,21 +178,26 @@ export default function PaymentSchedulePage() {
         const list = (customers as CustomerTx[]) || [];
         setTxns(list);
 
-        // Prefetch shipping fees for completed orders
-        const allCompletedOrders = list
+        // Prefetch shipping fees for this user's completed orders
+        const completedOrders = list
           .flatMap((c) => c.orders ?? [])
           .filter((o) => (o.status || "").toLowerCase() === "completed");
 
-        const allOrderIds = Array.from(new Set(allCompletedOrders.map((o) => String(o.id))));
+        const allOrderIds = Array.from(
+          new Set(completedOrders.map((o) => String(o.id)))
+        );
         const entries = await Promise.all(
-          allOrderIds.map(async (oid) => [oid, await fetchShippingFeeForOrder(oid)] as [string, number])
+          allOrderIds.map(
+            async (oid) =>
+              [oid, await fetchShippingFeeForOrder(oid)] as [string, number]
+          )
         );
         const map: Record<string, number> = {};
         for (const [oid, fee] of entries) map[oid] = fee;
         setShippingFees(map);
       } catch (e) {
         console.error(e);
-        toast.error("Failed to load payment schedules.");
+        toast.error("Failed to load your payment schedules.");
       } finally {
         setLoading(false);
       }
@@ -176,7 +217,9 @@ export default function PaymentSchedulePage() {
 
     for (const c of txns) {
       const code = c.code ?? "";
-      const completed = (c.orders ?? []).find((o) => (o.status || "").toLowerCase() === "completed");
+      const completed = (c.orders ?? []).find(
+        (o) => (o.status || "").toLowerCase() === "completed"
+      );
       if (code && completed) {
         out.push({
           code,
@@ -194,8 +237,7 @@ export default function PaymentSchedulePage() {
 
   const selectedPack = useMemo(() => {
     if (!selectedTxnCode) return null;
-    const hit = txnOptions.find((t) => t.code === selectedTxnCode) || null;
-    return hit;
+    return txnOptions.find((t) => t.code === selectedTxnCode) || null;
   }, [txnOptions, selectedTxnCode]);
 
   /* ----------------------------- Load schedule rows for selected order ----------------------------- */
@@ -209,7 +251,9 @@ export default function PaymentSchedulePage() {
         setLoadingInstallments(true);
         const { data, error } = await supabase
           .from("order_installments")
-          .select("id, order_id, term_no, due_date, amount_due, amount_paid, status")
+          .select(
+            "id, order_id, term_no, due_date, amount_due, amount_paid, status"
+          )
           .eq("order_id", String(selectedPack.order.id))
           .order("term_no", { ascending: true });
 
@@ -224,30 +268,48 @@ export default function PaymentSchedulePage() {
     })();
   }, [selectedPack?.order?.id]);
 
+  /* ----------------------------- Fetch ETA for the selected order's delivery ----------------------------- */
+  useEffect(() => {
+    (async () => {
+      const deliveryId = selectedPack?.order?.truck_delivery_id ?? null;
+      const eta = await fetchEtaForDelivery(deliveryId || null);
+      setOrderEtaDate(eta ? toYYYYMMDD(eta) : null);
+    })();
+  }, [selectedPack?.order?.truck_delivery_id]);
+
   /* ----------------------------- Realtime: order_installments & payments ----------------------------- */
   useEffect(() => {
     const orderId = selectedPack?.order?.id ? String(selectedPack.order.id) : "";
     if (!orderId) return;
 
     const ch = supabase.channel("realtime-installments-view");
+
+    const refresh = async () => {
+      try {
+        const { data } = await supabase
+          .from("order_installments")
+          .select(
+            "id, order_id, term_no, due_date, amount_due, amount_paid, status"
+          )
+          .eq("order_id", orderId)
+          .order("term_no", { ascending: true });
+        setInstallments((data as InstallmentRow[]) || []);
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
     ch.on(
       "postgres_changes",
-      { event: "*", schema: "public", table: "order_installments", filter: `order_id=eq.${orderId}` },
-      async () => {
-        try {
-          const { data } = await supabase
-            .from("order_installments")
-            .select("id, order_id, term_no, due_date, amount_due, amount_paid, status")
-            .eq("order_id", orderId)
-            .order("term_no", { ascending: true });
-          setInstallments((data as InstallmentRow[]) || []);
-        } catch (e) {
-          console.error(e);
-        }
-      }
+      {
+        event: "*",
+        schema: "public",
+        table: "order_installments",
+        filter: `order_id=eq.${orderId}`,
+      },
+      refresh
     );
 
-    // If admins update shipping fee or payments update amounts, the backend might adjust installments
     // Also listen to payments by this order to refresh
     const payKey = `payments:${orderId}`;
     if (paymentsSubKey.current !== payKey) paymentsSubKey.current = payKey;
@@ -255,18 +317,7 @@ export default function PaymentSchedulePage() {
     ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "payments", filter: `order_id=eq.${orderId}` },
-      async () => {
-        try {
-          const { data } = await supabase
-            .from("order_installments")
-            .select("id, order_id, term_no, due_date, amount_due, amount_paid, status")
-            .eq("order_id", orderId)
-            .order("term_no", { ascending: true });
-          setInstallments((data as InstallmentRow[]) || []);
-        } catch (e) {
-          console.error(e);
-        }
-      }
+      refresh
     );
 
     ch.subscribe();
@@ -283,40 +334,58 @@ export default function PaymentSchedulePage() {
 
   // Sum from rows
   const totals = useMemo(() => {
-    const due = round2(installments.reduce((s, r) => s + Number(r.amount_due || 0), 0));
-    const paid = round2(installments.reduce((s, r) => s + Number(r.amount_paid || 0), 0));
+    const due = round2(
+      installments.reduce((s, r) => s + Number(r.amount_due || 0), 0)
+    );
+    const paid = round2(
+      installments.reduce((s, r) => s + Number(r.amount_paid || 0), 0)
+    );
     const remaining = Math.max(0, round2(due - paid));
     return { due, paid, remaining };
   }, [installments]);
 
+  // Use ETA (if available) as the effective due date for display
+  const etaDisplay = useMemo(() => orderEtaDate || "", [orderEtaDate]);
+  const hasETA = !!etaDisplay;
+
+  // Next unpaid (no date shown if no ETA)
   const nextUnpaid = useMemo(() => {
-    const today0 = startOfTodayLocal();
     const sorted = [...installments].sort((a, b) => a.term_no - b.term_no);
     for (const r of sorted) {
       const amtDue = Number(r.amount_due || 0);
       const amtPaid = Number(r.amount_paid || 0);
-      const isPaid = (r.status || "").toLowerCase() === "paid" || amtPaid + EPS >= amtDue;
+      const isPaid =
+        (r.status || "").toLowerCase() === "paid" ||
+        amtPaid + EPS >= amtDue;
 
       if (!isPaid) {
-        const d = parseLocalDate(r.due_date);
-        const isOverdue = d < today0;
-        return { ...r, isOverdue };
+        if (!hasETA) {
+          return { ...r, due_date: "", isOverdue: false };
+        }
+        const d = parseLocalDate(etaDisplay);
+        const isOverdue = d < startOfTodayLocal();
+        return { ...r, due_date: etaDisplay, isOverdue };
       }
     }
     return null;
-  }, [installments]);
+  }, [installments, hasETA, etaDisplay]);
 
-  const badge = (r: InstallmentRow) => {
-    const amtDue = Number(r.amount_due || 0);
-    const amtPaid = Number(r.amount_paid || 0);
-    const isPaid = (r.status || "").toLowerCase() === "paid" || amtPaid + EPS >= amtDue;
+  const badge = (isPaid: boolean, effectiveISO?: string) => {
     if (isPaid)
       return (
         <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
           Paid
         </span>
       );
-    const isOverdue = parseLocalDate(r.due_date) < startOfTodayLocal();
+    // If no ETA (no effective date), show Pending without overdue logic
+    if (!effectiveISO) {
+      return (
+        <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+          Pending
+        </span>
+      );
+    }
+    const isOverdue = parseLocalDate(effectiveISO) < startOfTodayLocal();
     if (isOverdue)
       return (
         <span className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-800">
@@ -334,10 +403,13 @@ export default function PaymentSchedulePage() {
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
         <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payment Schedule</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
+            Payment Schedule
+          </h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          View your <b>installment plan</b> per Transaction Code (TXN). Status updates in real time.
+          View your <b>installment plan</b> per Transaction Code (TXN). Status
+          updates in real time.
         </p>
 
         {/* Selector */}
@@ -365,7 +437,9 @@ export default function PaymentSchedulePage() {
                 {selectedPack.customerEmail ? (
                   <>
                     <span className="opacity-50">•</span>
-                    <span className="text-gray-500">{selectedPack.customerEmail}</span>
+                    <span className="text-gray-500">
+                      {selectedPack.customerEmail}
+                    </span>
                   </>
                 ) : null}
               </span>
@@ -377,7 +451,9 @@ export default function PaymentSchedulePage() {
         {selectedPack && (
           <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="rounded-xl border border-gray-200 bg-white p-4">
-              <div className="text-xs text-gray-500">Grand Total (incl. shipping)</div>
+              <div className="text-xs text-gray-500">
+                Grand Total (incl. shipping)
+              </div>
               <div className="text-2xl font-bold text-green-700 mt-1">
                 {peso(
                   round2(
@@ -388,16 +464,20 @@ export default function PaymentSchedulePage() {
               </div>
               {orderShippingFee > 0 && (
                 <div className="text-[11px] text-gray-500 mt-1">
-                  Shipping fee: <b>{peso(orderShippingFee)}</b> (distributed across terms)
+                  Shipping fee: <b>{peso(orderShippingFee)}</b> (distributed
+                  across terms)
                 </div>
               )}
             </div>
 
             <div className="rounded-xl border border-gray-200 bg-white p-4">
               <div className="text-xs text-gray-500">Paid</div>
-              <div className="text-2xl font-bold text-blue-700 mt-1">{peso(totals.paid)}</div>
+              <div className="text-2xl font-bold text-blue-700 mt-1">
+                {peso(totals.paid)}
+              </div>
               <div className="text-[11px] text-gray-500 mt-1">
-                Remaining: <b className="text-amber-700">{peso(totals.remaining)}</b>
+                Remaining:{" "}
+                <b className="text-amber-700">{peso(totals.remaining)}</b>
               </div>
             </div>
 
@@ -406,15 +486,31 @@ export default function PaymentSchedulePage() {
               {nextUnpaid ? (
                 <div className="mt-1">
                   <div className="text-lg font-semibold">
-                    Term #{nextUnpaid.term_no} — {nextUnpaid.due_date}
+                    Term #{nextUnpaid.term_no}
+                    {/* ❌ No date shown if no ETA */}
+                    {hasETA ? ` — ${etaDisplay}` : ""}
                   </div>
                   <div className="text-sm text-gray-700">
-                    Amount due: <b>{peso(Number(nextUnpaid.amount_due || 0))}</b>
+                    Amount due:{" "}
+                    <b>{peso(Number(nextUnpaid.amount_due || 0))}</b>
                   </div>
-                  <div className="mt-1">{badge(nextUnpaid)}</div>
+                  <div className="mt-1">
+                    {badge(
+                      (nextUnpaid.status || "").toLowerCase() === "paid" ||
+                        Number(nextUnpaid.amount_paid || 0) + EPS >=
+                          Number(nextUnpaid.amount_due || 0),
+                      hasETA ? etaDisplay : undefined
+                    )}
+                  </div>
                 </div>
               ) : (
-                <div className="text-lg font-semibold mt-1">All terms paid 🎉</div>
+                <div className="text-lg font-semibold mt-1">All terms paid</div>
+              )}
+              {!hasETA && nextUnpaid && (
+                <div className="text-[11px] text-gray-500 mt-1">
+                  ETA not set yet. Due date will appear once your delivery ETA
+                  is available.
+                </div>
               )}
             </div>
           </div>
@@ -425,12 +521,16 @@ export default function PaymentSchedulePage() {
           <div className="mt-6 rounded-xl bg-white border border-gray-200 overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200">
               <h2 className="text-lg font-semibold">
-                Installment Schedule — <span className="font-mono">{selectedPack.code}</span>
+                Installment Schedule —{" "}
+                <span className="font-mono">{selectedPack.code}</span>
               </h2>
               <div className="text-xs text-gray-500">
                 {selectedPack.paymentType?.toLowerCase() === "credit"
                   ? "Credit terms detected."
                   : "Payment plan available."}{" "}
+                {hasETA
+                  ? "Using delivery ETA as your due date."
+                  : "Due dates will appear once ETA is set."}{" "}
                 Updates automatically when a payment is received.
               </div>
             </div>
@@ -438,19 +538,33 @@ export default function PaymentSchedulePage() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm align-middle">
                 <thead>
-                  <tr className="text-black uppercase tracking-wider text-[11px]" style={{ background: "#ffba20" }}>
+                  <tr
+                    className="text-black uppercase tracking-wider text-[11px]"
+                    style={{ background: "#ffba20" }}
+                  >
                     <th className="py-2.5 px-3 text-center font-bold">Term #</th>
-                    <th className="py-2.5 px-3 text-center font-bold">Due Date</th>
-                    <th className="py-2.5 px-3 text-center font-bold">Amount Due</th>
-                    <th className="py-2.5 px-3 text-center font-bold">Amount Paid</th>
-                    <th className="py-2.5 px-3 text-center font-bold">Remaining</th>
+                    {/* ❌ Hide Due Date column when no ETA */}
+                    {hasETA && (
+                      <th className="py-2.5 px-3 text-center font-bold">
+                        Due Date
+                      </th>
+                    )}
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      Amount Due
+                    </th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      Amount Paid
+                    </th>
+                    <th className="py-2.5 px-3 text-center font-bold">
+                      Remaining
+                    </th>
                     <th className="py-2.5 px-3 text-center font-bold">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loadingInstallments ? (
                     <tr>
-                      <td colSpan={6} className="text-center py-8 text-neutral-400">
+                      <td colSpan={hasETA ? 6 : 5} className="text-center py-8 text-neutral-400">
                         Loading schedule…
                       </td>
                     </tr>
@@ -459,27 +573,58 @@ export default function PaymentSchedulePage() {
                       const amtDue = Number(r.amount_due || 0);
                       const amtPaid = Number(r.amount_paid || 0);
                       const remain = Math.max(0, round2(amtDue - amtPaid));
-                      const overdue = parseLocalDate(r.due_date) < startOfTodayLocal();
-                      const paid = (r.status || "").toLowerCase() === "paid" || amtPaid + EPS >= amtDue;
+                      const paid =
+                        (r.status || "").toLowerCase() === "paid" ||
+                        amtPaid + EPS >= amtDue;
+
+                      // Only compute overdue if ETA exists
+                      const showDate = hasETA ? etaDisplay : undefined;
+                      const isOver =
+                        !!showDate &&
+                        parseLocalDate(showDate) < startOfTodayLocal();
 
                       return (
-                        <tr key={r.id || `${r.order_id}-${r.term_no}-${idx}`} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>
-                          <td className="py-2.5 px-3 text-center font-mono">{r.term_no}</td>
-                          <td className="py-2.5 px-3 text-center">
-                            <span className={overdue && !paid ? "text-rose-600 font-semibold" : ""}>
-                              {r.due_date}
-                            </span>
+                        <tr
+                          key={r.id || `${r.order_id}-${r.term_no}-${idx}`}
+                          className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
+                        >
+                          <td className="py-2.5 px-3 text-center font-mono">
+                            {r.term_no}
                           </td>
-                          <td className="py-2.5 px-3 text-center font-mono">{peso(amtDue)}</td>
-                          <td className="py-2.5 px-3 text-center font-mono">{peso(amtPaid)}</td>
-                          <td className="py-2.5 px-3 text-center font-mono">{peso(remain)}</td>
-                          <td className="py-2.5 px-3 text-center">{badge(r)}</td>
+
+                          {/* Due Date cell only when ETA exists */}
+                          {hasETA && (
+                            <td className="py-2.5 px-3 text-center">
+                              <span
+                                className={
+                                  !paid && isOver
+                                    ? "text-rose-600 font-semibold"
+                                    : ""
+                                }
+                              >
+                                {etaDisplay}
+                              </span>
+                            </td>
+                          )}
+
+                          <td className="py-2.5 px-3 text-center font-mono">
+                            {peso(amtDue)}
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-mono">
+                            {peso(amtPaid)}
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-mono">
+                            {peso(remain)}
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                            {badge(paid, showDate)}
+                          </td>
                         </tr>
                       );
                     })
                   ) : (
                     <tr>
-                      <td colSpan={6} className="text-center py-8 text-neutral-400">
+                      <td colSpan={hasETA ? 6 : 5} className="text-center py-8 text-neutral-400">
                         No schedule found for this TXN.
                       </td>
                     </tr>
@@ -497,11 +642,15 @@ export default function PaymentSchedulePage() {
                 </div>
                 <div className="text-sm">
                   <div className="text-gray-500">Total Paid</div>
-                  <div className="font-bold text-blue-700">{peso(totals.paid)}</div>
+                  <div className="font-bold text-blue-700">
+                    {peso(totals.paid)}
+                  </div>
                 </div>
                 <div className="text-sm">
                   <div className="text-gray-500">Remaining Balance</div>
-                  <div className="font-bold text-amber-700">{peso(totals.remaining)}</div>
+                  <div className="font-bold text-amber-700">
+                    {peso(totals.remaining)}
+                  </div>
                 </div>
               </div>
             )}
@@ -510,7 +659,7 @@ export default function PaymentSchedulePage() {
 
         {!loading && !txnOptions.length && (
           <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            No completed TXNs found yet.
+            No completed TXNs found for your account yet.
           </div>
         )}
       </div>

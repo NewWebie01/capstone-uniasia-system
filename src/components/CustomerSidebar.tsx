@@ -49,12 +49,13 @@ const Menus: MenuItem[] = [
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
 
   // NEW: Payment Schedule
+  { title: "Payments", href: "/customer/payments/history", icon: ReceiptText },
   { title: "Payment Schedule", href: "/customer/payments/schedule", icon: ReceiptText },
 
   // (optional) keep the uploader page hidden or re-enable if you want:
   // { title: "Payments", href: "/customer/payments", icon: ReceiptText },
 
-  { title: "Payment History", href: "/customer/payments/history", icon: History },
+  
 
   { title: "Returns / Issues", href: "/customer/returns", icon: RotateCcw },
   { title: "Return Status", href: "/customer/returns/status", icon: BadgeCheck },
