@@ -1,7 +1,7 @@
 // src/components/ProductShowcase.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import supabase from "@/config/supabaseClient";
 import { motion, AnimatePresence } from "framer-motion";
@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 type InventoryItem = {
   id: number;
+  sku?: string | null; // 👈 added so we can look up gallery by SKU
   product_name: string;
   category: string;
   subcategory: string;
@@ -16,10 +17,45 @@ type InventoryItem = {
   image_url?: string | null;
 };
 
+/* --------------------------- Gallery helpers --------------------------- */
+const BUCKET = "inventory-images";
+const MAX_GALLERY = 5;
+
+const safeSlug = (s: string) =>
+  (s || "item").trim().replace(/\s+/g, "-").toLowerCase();
+
+async function listGalleryUrls(
+  skuOrName: string,
+  primary?: string | null
+): Promise<string[]> {
+  const folder = safeSlug(skuOrName);
+  const { data, error } = await supabase.storage.from(BUCKET).list(folder, {
+    limit: 50,
+    sortBy: { column: "name", order: "asc" },
+  });
+  if (error) {
+    console.warn("listGalleryUrls error:", error.message);
+  }
+  const fileUrls =
+    data?.map((f) => {
+      const { data } = supabase.storage
+        .from(BUCKET)
+        .getPublicUrl(`${folder}/${f.name}`);
+      return data.publicUrl;
+    }) || [];
+
+  const all = [...(primary ? [primary] : []), ...fileUrls];
+  return Array.from(new Set(all)).slice(0, MAX_GALLERY);
+}
+
 export function ProductShowcase() {
   const [products, setProducts] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+
   const [selected, setSelected] = useState<InventoryItem | null>(null);
+  const [modalImages, setModalImages] = useState<string[]>([]);
+  const [modalIndex, setModalIndex] = useState(0);
+
   const router = useRouter();
 
   // Load products (limit to 10 => 2 rows x 5 cols on md+)
@@ -28,14 +64,14 @@ export function ProductShowcase() {
       setLoading(true);
       const { data, error } = await supabase
         .from("inventory")
-        .select("id, product_name, category, subcategory, unit_price, image_url")
+        .select("id, sku, product_name, category, subcategory, unit_price, image_url")
         .limit(10);
 
       if (error) {
         console.error(error);
         toast.error("Failed to load products");
       } else {
-        setProducts(data || []);
+        setProducts((data as any) || []);
       }
       setLoading(false);
     };
@@ -45,15 +81,32 @@ export function ProductShowcase() {
   // Close modal with Esc
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelected(null);
+      if (e.key === "Escape") closeModal();
     };
     if (selected) document.addEventListener("keydown", onEsc);
     return () => document.removeEventListener("keydown", onEsc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
+
+  const openModal = useCallback(async (item: InventoryItem) => {
+    setSelected(item);
+    // Load gallery images (primary first, then bucket files)
+    const imgs = await listGalleryUrls(
+      (item.sku || item.product_name || "").toString(),
+      item.image_url
+    );
+    setModalImages(imgs);
+    setModalIndex(0);
+  }, []);
+
+  const closeModal = () => {
+    setSelected(null);
+    setModalImages([]);
+    setModalIndex(0);
+  };
 
   /** Handle Add to Cart — always go to Login (no cart add) */
   const handleAddToCart = (item: InventoryItem) => {
-    // Optional: gentle nudge before redirect
     toast.info("Please log in to continue.");
     router.push("/login?next=/customer/checkout");
   };
@@ -74,7 +127,7 @@ export function ProductShowcase() {
                 transition={{ delay: index * 0.05 }}
                 whileHover={{ y: -4 }}
                 className="group bg-white rounded-lg shadow hover:shadow-lg overflow-hidden border border-gray-100 flex flex-col justify-between cursor-pointer"
-                onClick={() => setSelected(item)}
+                onClick={() => openModal(item)}
               >
                 <div>
                   <div className="relative w-full h-40 bg-gray-100 overflow-hidden">
@@ -132,7 +185,7 @@ export function ProductShowcase() {
         )}
       </div>
 
-      {/* Modal for viewing item details */}
+      {/* Modal with image gallery */}
       <AnimatePresence>
         {selected && (
           <>
@@ -141,7 +194,7 @@ export function ProductShowcase() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setSelected(null)}
+              onClick={closeModal}
             />
             <motion.div
               className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -153,36 +206,98 @@ export function ProductShowcase() {
             >
               <div className="w-full max-w-3xl bg-white rounded-xl shadow-2xl overflow-hidden">
                 <div className="grid md:grid-cols-2">
-                  {/* Image side */}
-                  <div className="relative bg-gray-100">
-                    {selected.image_url ? (
+                  {/* Left: Product Slideshow */}
+                  <div className="bg-gray-50 p-4 flex flex-col items-center justify-center">
+                    {modalImages.length > 0 ? (
+                      <div className="w-full">
+                        {/* Stage */}
+                        <div className="relative w-full h-64 md:h-72 bg-white rounded-lg overflow-hidden flex items-center justify-center border">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={modalImages[modalIndex]}
+                            alt={`${selected.product_name} ${modalIndex + 1}`}
+                            className="max-h-full max-w-full object-contain"
+                          />
+                          {modalImages.length > 1 && (
+                            <>
+                              <button
+                                className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
+                                onClick={() =>
+                                  setModalIndex(
+                                    (i) =>
+                                      (i - 1 + modalImages.length) % modalImages.length
+                                  )
+                                }
+                                title="Previous"
+                              >
+                                ‹
+                              </button>
+                              <button
+                                className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
+                                onClick={() =>
+                                  setModalIndex((i) => (i + 1) % modalImages.length)
+                                }
+                                title="Next"
+                              >
+                                ›
+                              </button>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Thumbs */}
+                        {modalImages.length > 1 && (
+                          <div className="mt-3 flex gap-2 overflow-x-auto">
+                            {modalImages.map((u, idx) => (
+                              <button
+                                key={u + idx}
+                                className={`h-12 w-16 flex-shrink-0 border rounded overflow-hidden ${
+                                  idx === modalIndex ? "ring-2 ring-[#ffba20]" : ""
+                                }`}
+                                onClick={() => setModalIndex(idx)}
+                                title={`Image ${idx + 1}`}
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={u}
+                                  alt={`thumb-${idx + 1}`}
+                                  className="h-full w-full object-cover"
+                                />
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : selected?.image_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={selected.image_url}
                         alt={selected.product_name}
-                        className="h-64 md:h-full w-full object-cover"
+                        className="w-full h-full object-contain max-h-[400px]"
                       />
                     ) : (
-                      <div className="h-64 md:h-full w-full flex items-center justify-center text-gray-400">
-                        No Image
+                      <div className="w-full h-[300px] flex items-center justify-center text-gray-400 text-sm">
+                        No Image Available
                       </div>
                     )}
-                    <button
-                      onClick={() => setSelected(null)}
-                      className="absolute top-3 right-3 text-white/90 hover:text-white bg-black/40 hover:bg-black/60 transition rounded-full w-8 h-8 flex items-center justify-center"
-                      aria-label="Close"
-                    >
-                      ✕
-                    </button>
                   </div>
 
-                  {/* Details side */}
-                  <div className="p-5 md:p-6">
-                    <h3 className="text-lg md:text-xl font-semibold text-gray-900">
-                      {selected.product_name}
-                    </h3>
+                  {/* Right: Details */}
+                  <div className="p-5 md:p-6 flex flex-col">
+                    <div className="flex justify-between items-start">
+                      <h3 className="text-lg md:text-xl font-semibold text-gray-900">
+                        {selected.product_name}
+                      </h3>
+                      <button
+                        onClick={closeModal}
+                        className="text-gray-500 hover:text-gray-700"
+                        aria-label="Close"
+                      >
+                        ✕
+                      </button>
+                    </div>
 
-                    <div className="mt-2 text-sm text-gray-600 space-y-1">
+                    <div className="mt-2 text-sm text-gray-600">
                       <p>
                         <span className="font-medium text-gray-700">Category:</span>{" "}
                         {selected.category}
@@ -204,7 +319,7 @@ export function ProductShowcase() {
 
                     <div className="mt-6 grid grid-cols-2 gap-3">
                       <button
-                        onClick={() => setSelected(null)}
+                        onClick={closeModal}
                         className="border border-gray-300 text-gray-700 hover:bg-gray-50 rounded-md py-2 font-medium"
                       >
                         Close
