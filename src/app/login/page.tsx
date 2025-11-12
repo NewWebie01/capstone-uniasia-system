@@ -6,6 +6,7 @@ import { DM_Sans } from "next/font/google";
 import "@/styles/globals.css";
 import splashImage from "@/assets/tools-log-in-splash.jpg";
 import Image from "next/image";
+import Link from "next/link";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
 import { motion, AnimatePresence } from "framer-motion";
@@ -270,12 +271,12 @@ export default function LoginPage() {
                     transition={{ duration: 0.2 }}
                     className="absolute right-0 top-10 w-48 bg-white rounded-lg shadow-lg z-50 md:hidden"
                   >
-                    <a
+                    <Link
                       href="/"
                       className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-[#ffba20] transition"
                     >
                       ← Back to Home
-                    </a>
+                    </Link>
                   </motion.div>
                 )}
               </AnimatePresence>
