@@ -53,7 +53,7 @@ const Menus: MenuItem[] = [
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
 
   // Payments
-  { title: "Payments", href: "/customer/payments", icon: ReceiptText },
+  // { title: "Payments", href: "/customer/payments", icon: ReceiptText },
 
   // Payment History
   {

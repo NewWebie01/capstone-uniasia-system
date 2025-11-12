@@ -35,6 +35,7 @@ const Menus: MenuItem[] = [
   { title: "Sales", src: Sales, href: "/sales" },
   { title: "Invoice", icon: FileText, href: "/invoice" },
   { title: "Payments", icon: ReceiptText, href: "/payments" },
+{ title: "Payments History", icon: ReceiptText, href: "/payments/history" },
   { title: "Returns", icon: RotateCcw, href: "/returns" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
@@ -51,6 +52,7 @@ const ROLE_MENUS: Record<string, string[]> = {
     "Sales",
     "Invoice",
     "Payments",
+    "Payments History", // NEW
     "Returns",
     "Transaction History",
     "Activity Log",
@@ -210,6 +212,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
                     "Transaction History",
                     "Returns",
                     "Payments",
+                    "Payments History",
                   ].includes(menu.title)
                     ? "text-[#ffba20]"
                     : "text-black"

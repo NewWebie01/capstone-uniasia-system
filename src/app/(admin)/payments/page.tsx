@@ -1,20 +1,16 @@
-// src/app/admin/payments/page.tsx
+// src/app/customer/payments/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
-import { CheckCircle2, XCircle, FileImage, Search, Loader2 } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { Upload, FileImage, Minus, Plus } from "lucide-react";
 
-/* ----------------------------- Formatters ----------------------------- */
+/* ----------------------------- Config ----------------------------- */
+// was: const DEPOSIT_BUCKET = "payments-deposit-slips";
+const DEPOSIT_BUCKET = "payments-cheques";
+
+/* ----------------------------- Money ------------------------------ */
 const formatCurrency = (n: number) =>
   (Number(n) || 0).toLocaleString("en-PH", {
     style: "currency",
@@ -22,191 +18,289 @@ const formatCurrency = (n: number) =>
     minimumFractionDigits: 2,
   });
 
-const formatPH = (
-  d?: string | number | Date | null,
-  opts: "date" | "datetime" = "datetime"
-) =>
-  d
-    ? new Intl.DateTimeFormat("en-PH", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        ...(opts === "datetime" ? { hour: "numeric", minute: "2-digit", hour12: true } : {}),
-        timeZone: "Asia/Manila",
-      }).format(new Date(d))
-    : "—";
+/* ----------------------------- Utils ------------------------------ */
+const EPS = 0.000001;
+const toNumber = (v: string | number): number =>
+  typeof v === "number" ? v : Number(String(v).replace(/[^\d.]/g, "")) || 0;
 
-/* -------------------- Activity Logger -------------------- */
-async function logActivity(action: string, details: any = {}) {
-  try {
-    const { data } = await supabase.auth.getUser();
-    const email = data?.user?.email || "";
+const round2 = (n: number) =>
+  Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
-    let userRole = "admin";
-    if (email) {
-      const { data: userRow } = await supabase
-        .from("users")
-        .select("role")
-        .eq("email", email)
-        .maybeSingle();
-      if (userRow?.role) userRole = userRow.role;
-    }
+// Local YYYY-MM-DD for <input type="date">
+const todayLocalISO = () => {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+};
 
-    await supabase.from("activity_logs").insert([
-      {
-        user_email: email,
-        user_role: userRole,
-        action,
-        details,
-        created_at: new Date().toISOString(),
-      },
-    ]);
-  } catch (e) {
-    console.error("logActivity failed:", e);
-  }
-}
+// Parse "YYYY-MM-DD" as local date (no UTC shift)
+const parseLocalDate = (isoDate: string) => {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+};
+
+// Start-of-today in local time
+const startOfTodayLocal = () => {
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return t;
+};
 
 /* ---------------------------------- Types --------------------------------- */
+type ItemRow = {
+  quantity: number;
+  price: number;
+  discount_percent?: number | null;
+  inventory?: {
+    product_name?: string | null;
+    category?: string | null;
+    subcategory?: string | null;
+    status?: string | null;
+    unit?: string | null;
+    unit_price?: number | null;
+    quantity?: number | null;
+  } | null;
+};
+
+type OrderRow = {
+  id: string | number;
+  total_amount: number | null;
+  status: string | null;
+  truck_delivery_id?: string | null;
+  grand_total_with_interest?: number | null;
+  sales_tax?: number | null;
+  interest_percent?: number | null;
+  per_term_amount?: number | null; // base per-term (without shipping)
+  shipping_fee?: number | null;
+  paid_amount?: number | null;
+  balance?: number | null;
+  terms?: string | null;
+  payment_terms?: number | null; // total months/terms
+  order_items?: ItemRow[];
+};
+
+type CustomerTx = {
+  id: string | number;
+  name: string | null;
+  code: string | null; // TXN code
+  contact_person?: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  date: string | null;
+  payment_type?: string | null;
+  orders?: OrderRow[];
+};
+
 type PaymentRow = {
   id: string;
-  customer_id: string;
-  order_id: string;
+  customer_id: string | number;
+  order_id: string | number | null;
   amount: number;
-  method: string | null;        // "Cash" | "Deposit Slip" | legacy "Cheque"
-  cheque_number: string | null; // kept for compatibility (now “slip #”)
+  method: string | null;
+  cheque_number: string | null; // used for deposit reference
   bank_name: string | null;
-  cheque_date: string | null;   // kept for compatibility (now “deposit date”)
+  cheque_date: string | null; // used for deposit date
   image_url: string | null;
+  status: string | null;
   created_at: string | null;
-  status?: string | null;       // 'pending' | 'received' | 'rejected'
-  received_at?: string | null;
-  received_by?: string | null;
 };
 
-type CustomerLite = {
-  id: string;
-  code: string | null; // TXN
-  name: string | null;
-  email: string | null; // stored lowercase
+type InstallmentRow = {
+  id?: string;
+  order_id: string;
+  term_no: number;
+  due_date: string;
+  amount_due: number;
+  amount_paid?: number | null;
+  status?: string | null;
 };
 
-/* ---------------- Helpers ---------------- */
-function displayMethod(method?: string | null) {
-  const m = (method || "").trim();
-  if (/^cheque$/i.test(m)) return "Deposit Slip"; // map legacy term
-  return m || "—";
-}
+/* ------------------------------ Helpers ------------------------------ */
+const inList = (vals: (string | number)[]) =>
+  vals.map((v) => (typeof v === "string" ? `"${v}"` : String(v))).join(",");
 
-/* ---------------- Customer notifications (to Customer) via API ---------------- */
-async function createCustomerNotifPaymentReceived(paymentId: string, adminEmail: string | null) {
+const isReceived = (p: PaymentRow) =>
+  (p?.status || "").toLowerCase() === "received";
+const isPending = (p: PaymentRow) =>
+  (p?.status || "").toLowerCase() === "pending";
+
+/* -------- Shipping fee: orders.truck_delivery_id -> truck_deliveries.shipping_fee -------- */
+async function fetchShippingFeeForOrder(orderId: string | number): Promise<number> {
   try {
-    const res = await fetch("/api/customer-notifications/payment-received", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paymentId, adminEmail }),
-    });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      throw new Error(j?.error || "API failed");
-    }
-  } catch (e: any) {
-    console.error("[notif] API error:", e?.message || e);
-    toast.error(`Couldn't create customer notification: ${e?.message || "API error"}`);
+    const { data: ord } = await supabase
+      .from("orders")
+      .select("truck_delivery_id")
+      .eq("id", orderId)
+      .maybeSingle();
+
+    const deliveryId = ord?.truck_delivery_id;
+    if (!deliveryId) return 0;
+
+    const { data: del } = await supabase
+      .from("truck_deliveries")
+      .select("shipping_fee")
+      .eq("id", deliveryId)
+      .maybeSingle();
+
+    const fee = Number(del?.shipping_fee ?? 0);
+    return Number.isFinite(fee) ? fee : 0;
+  } catch {
+    return 0;
   }
 }
 
-export default function AdminPaymentsPage() {
+/* ------------------------------ Component ------------------------------ */
+export default function CustomerPaymentsPage() {
   const [loading, setLoading] = useState(true);
-  const [meEmail, setMeEmail] = useState<string | null>(null);
 
-  const [customers, setCustomers] = useState<CustomerLite[]>([]);
+  const [txns, setTxns] = useState<CustomerTx[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
+  const paymentsSubKey = useRef<string>("");
 
-  // filters
-  const [q, setQ] = useState("");
-  const [status, setStatus] = useState<"all" | "pending" | "received" | "rejected">("pending");
+  const [selectedTxnCode, setSelectedTxnCode] = useState<string>("");
 
-  // pagination (client-side)
-  const [page, setPage] = useState(1);
-  const pageSize = 10;
+  // Upload form state
+  const [amount, setAmount] = useState<string>(""); // LOCKED display
+  const [depositRef, setDepositRef] = useState(""); // replaces chequeNumber
+  const [bankName, setBankName] = useState("");
+  const [depositDate, setDepositDate] = useState<string>("");
+  const [file, setFile] = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  // image modal
-  const [imgOpen, setImgOpen] = useState(false);
-  const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [imgMeta, setImgMeta] = useState<{ slip?: string | null; bank?: string | null } | null>(
-    null
-  );
+  // Shipping fee per order cache
+  const [shippingFees, setShippingFees] = useState<Record<string, number>>({});
 
-  // confirmation modal
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmType, setConfirmType] = useState<"receive" | "reject" | null>(null);
-  const [targetRow, setTargetRow] = useState<PaymentRow | null>(null);
+  // order_id -> truck_delivery_id mapping
+  const [orderDeliveryMap, setOrderDeliveryMap] = useState<Record<string, string | null>>({});
 
-  // row-level lock so BOTH buttons disable after confirming
-  const [locked, setLocked] = useState<Set<string>>(new Set());
+  // Installments
+  const [installments, setInstallments] = useState<InstallmentRow[]>([]);
+  const [loadingInstallments, setLoadingInstallments] = useState(false);
 
-  // prevent double-submit on the confirm modal
-  const [confirmBusy, setConfirmBusy] = useState(false);
+  // Multiplier for Credit (installments)
+  const [termMultiplier, setTermMultiplier] = useState<number>(1);
 
-  /* ------------------------------ Load data ------------------------------ */
+  // Cash stepper
+  const CASH_STEP = 1000;
+  const MIN_CASH = 0.01;
+
+  // Locally lock TXNs immediately after submit (avoid double submit)
+  const [lockedTxn, setLockedTxn] = useState<Record<string, true>>({});
+
+  /* ------------------------------- Fetch (ALL CUSTOMERS) ------------------------------- */
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        setMeEmail(user?.email ?? null);
-
-        const { data: custs, error: cErr } = await supabase
+        // 🚚 Fetch ALL customers and their orders (no email filter)
+        const { data: customers, error } = await supabase
           .from("customers")
-          .select("id, code, name, email")
+          .select(
+            `
+            id, name, code, contact_person, email, phone, address, date, payment_type,
+            orders (
+              id,
+              total_amount,
+              status,
+              truck_delivery_id,
+              grand_total_with_interest,
+              sales_tax,
+              interest_percent,
+              per_term_amount,
+              shipping_fee,
+              paid_amount,
+              balance,
+              terms,
+              payment_terms,
+              order_items (
+                quantity,
+                price,
+                discount_percent,
+                inventory:inventory_id (
+                  product_name,
+                  category,
+                  subcategory,
+                  status,
+                  unit,
+                  unit_price,
+                  quantity
+                )
+              )
+            )
+          `
+          )
           .order("date", { ascending: false });
-        if (cErr) throw cErr;
 
-        // store emails lowercased for exact match with customer bell
-        setCustomers(
-          (custs ?? []).map((c: any) => ({
-            id: String(c.id),
-            code: c.code ?? null,
-            name: c.name ?? null,
-            email: c.email ? String(c.email).toLowerCase() : null,
-          }))
+        if (error) throw error;
+        const txList = (customers as CustomerTx[]) || [];
+        setTxns(txList);
+
+        // Load payments for these customers
+        const customerIds = txList.map((c) => String(c.id));
+        if (customerIds.length) {
+          const { data: pays, error: pErr } = await supabase
+            .from("payments")
+            .select(
+              "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, status, created_at"
+            )
+            .in("customer_id", customerIds)
+            .order("created_at", { ascending: false });
+
+          if (pErr) throw pErr;
+          setPayments((pays as PaymentRow[]) || []);
+        } else {
+          setPayments([]);
+        }
+
+        // Prefetch shipping fees
+        const allOrders = txList.flatMap((c) => c.orders ?? []);
+        const allIds = Array.from(
+          new Set(allOrders.filter((o) => !!o?.id).map((o) => String(o.id)))
         );
 
-        const { data: pays, error: pErr } = await supabase
-          .from("payments")
-          .select(
-            "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, created_at, status, received_at, received_by"
-          )
-          .order("created_at", { ascending: false });
-        if (pErr) throw pErr;
+        const feeEntries = await Promise.all(
+          allIds.map(async (oid) => {
+            const fee = await fetchShippingFeeForOrder(oid);
+            return [oid, fee] as [string, number];
+          })
+        );
 
-        setPayments((pays ?? []) as PaymentRow[]);
-      } catch (err) {
-        console.error(err);
-        toast.error("Failed to load payments.");
+        const feeMap: Record<string, number> = {};
+        for (const [oid, fee] of feeEntries) feeMap[oid] = fee;
+        setShippingFees(feeMap);
+      } catch (e) {
+        console.error(e);
+        toast.error("Failed to load data.");
       } finally {
         setLoading(false);
       }
     })();
   }, []);
 
-  /* ------------------------------ Realtime ------------------------------ */
+  /* ----------------------------- Realtime payments ----------------------------- */
   useEffect(() => {
-    const channel = supabase.channel("admin-payments-rt");
+    const ids = (txns || []).map((c) => String(c.id));
+    const key = `payments:${ids.join(",")}`;
+    if (!ids.length || paymentsSubKey.current === key) return;
+    paymentsSubKey.current = key;
+
+    const filter = `customer_id=in.(${inList(ids)})`;
+    const channel = supabase.channel("realtime-payments");
     channel.on(
       "postgres_changes",
-      { event: "*", schema: "public", table: "payments" },
+      { event: "*", schema: "public", table: "payments", filter },
       (payload) => {
         if (payload.eventType === "INSERT") {
           setPayments((prev) => [payload.new as PaymentRow, ...prev]);
         } else if (payload.eventType === "UPDATE") {
           setPayments((prev) =>
-            prev.map((p) => (p.id === (payload.new as any).id ? (payload.new as PaymentRow) : p))
+            prev.map((p) =>
+              p.id === (payload.new as any)?.id ? (payload.new as PaymentRow) : p
+            )
           );
         } else if (payload.eventType === "DELETE") {
-          setPayments((prev) => prev.filter((p) => p.id !== (payload.old as any).id));
+          setPayments((prev) => prev.filter((p) => p.id !== (payload.old as any)?.id));
         }
       }
     );
@@ -214,456 +308,1326 @@ export default function AdminPaymentsPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [txns]);
 
-  /* ------------------------------ Derived ------------------------------- */
-  const customerById = useMemo(() => {
-    const m = new Map<string, CustomerLite>();
-    customers.forEach((c) => m.set(String(c.id), c));
-    return m;
-  }, [customers]);
-
-  const filtered = useMemo(() => {
-    const qx = q.trim().toLowerCase();
-    return payments.filter((p) => {
-      if (status !== "all" && (p.status || "pending") !== status) return false;
-      if (!qx) return true;
-
-      const c = customerById.get(String(p.customer_id));
-      const dispMethod = displayMethod(p.method);
-      const hay = [
-        c?.code || "",
-        c?.name || "",
-        c?.email || "",
-        p.bank_name || "",
-        p.cheque_number || "",
-        p.order_id || "",
-        p.amount?.toString?.() || "",
-        dispMethod,
-      ]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(qx);
-    });
-  }, [payments, status, q, customerById]);
-
-  // reset to page 1 whenever filters change
+  /* ---- Realtime: truck_deliveries.shipping_fee changes -> refresh fee ------ */
   useEffect(() => {
-    setPage(1);
-  }, [q, status]);
+    const deliveryIds = Object.values(orderDeliveryMap).filter(
+      (v): v is string => typeof v === "string" && v.length > 0
+    );
+    if (!deliveryIds.length) return;
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const pageStart = (page - 1) * pageSize;
-  const pageEnd = pageStart + pageSize;
-  const paginated = filtered.slice(pageStart, pageEnd);
-
-  /* ------------------------------ Helpers ------------------------------- */
-  function openConfirm(type: "receive" | "reject", row: PaymentRow) {
-    setConfirmType(type);
-    setTargetRow(row);
-    setConfirmOpen(true);
-  }
-
-  function openImage(url: string, meta?: { slip?: string | null; bank?: string | null }) {
-    setImgSrc(url);
-    setImgMeta(meta || null);
-    setImgOpen(true);
-    logActivity("View Payment Deposit Slip", {
-      slip_number: meta?.slip || "",
-      bank_name: meta?.bank || "",
-      image_url: url,
-    });
-  }
-
-  async function notifyCustomerByEmail(paymentId: string, action: "receive" | "reject") {
-    const res = await fetch("/api/send-payment-confirmation", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      body: JSON.stringify({ paymentId, action }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error || "Failed to send email.");
+    const deliveryToOrders = new Map<string, string[]>();
+    for (const [orderId, delId] of Object.entries(orderDeliveryMap)) {
+      if (delId) {
+        const arr = deliveryToOrders.get(delId) ?? [];
+        arr.push(orderId);
+        deliveryToOrders.set(delId, arr);
+      }
     }
+
+    const filter = `id=in.(${inList(deliveryIds)})`;
+    const ch = supabase.channel("realtime-delivery-fee");
+
+    const refreshFee = async (orderId: string | number) => {
+      try {
+        const fee = await fetchShippingFeeForOrder(orderId);
+        const key = String(orderId);
+        setShippingFees((prev) => (prev[key] === fee ? prev : { ...prev, [key]: fee }));
+      } catch (e) {
+        console.error("refreshShippingFee (deliveries) failed:", e);
+      }
+    };
+
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "truck_deliveries", filter },
+      (payload) => {
+        const delId = (payload.new as any)?.id ?? (payload.old as any)?.id ?? null;
+        if (delId && deliveryToOrders.has(delId)) {
+          for (const orderId of deliveryToOrders.get(delId) ?? []) {
+            refreshFee(orderId);
+          }
+        }
+      }
+    );
+
+    ch.subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [orderDeliveryMap]);
+
+  /* --------------------------- Totals --------------------------- */
+  function computeFromOrder(o?: OrderRow | null, extraShippingFee = 0) {
+    const items = o?.order_items ?? [];
+
+    const subtotal = round2(
+      items.reduce((s, it) => {
+        const unitPrice = Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
+        const qty = Number(it.quantity || 0);
+        return s + unitPrice * qty;
+      }, 0)
+    );
+
+    const totalDiscount = round2(
+      items.reduce((s, it) => {
+        const unitPrice = Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
+        const qty = Number(it.quantity || 0);
+        const pct = Number(it.discount_percent ?? 0);
+        return s + (unitPrice * qty * pct) / 100;
+      }, 0)
+    );
+
+    const salesTax = round2(Number(o?.sales_tax ?? 0));
+
+    const computedExclFee = round2(Math.max(subtotal - totalDiscount, 0) + salesTax);
+
+    const grandTotalExclFee =
+      typeof o?.grand_total_with_interest === "number"
+        ? round2(Number(o!.grand_total_with_interest))
+        : computedExclFee;
+
+    const shippingFee = round2(Number(extraShippingFee || 0));
+    const finalGrandTotal = round2(grandTotalExclFee + shippingFee);
+
+    // Include shipping fee into per-term (evenly across payment_terms)
+    const basePerTerm = round2(Number(o?.per_term_amount ?? 0));
+    const terms = Number(o?.payment_terms ?? 0) || 0;
+    const shippingPerTerm = shippingFee > 0 && terms > 0 ? round2(shippingFee / terms) : 0;
+    const perTerm = round2(basePerTerm + shippingPerTerm);
+
+    return {
+      subtotal,
+      totalDiscount,
+      salesTax,
+      grandTotalExclFee,
+      shippingFee,
+      finalGrandTotal,
+      perTerm,
+    };
   }
 
-  /* ------------------------------ Actions ------------------------------- */
-  async function handleConfirm() {
-    if (!targetRow || !confirmType) return;
-    if (confirmBusy) return; // guard
-    setConfirmBusy(true);
-
-    // lock the row immediately => both buttons disable
-    setLocked((prev) => new Set(prev).add(targetRow.id));
-
-    try {
-      if (confirmType === "receive") {
-        const { error: rpcErr } = await supabase.rpc("receive_payment_and_apply", {
-          p_payment_id: targetRow.id,
-          p_admin_email: meEmail,
+  /* Txn options (completed orders only) + who owns it */
+  const rawTxnOptions = useMemo(() => {
+    const out: {
+      code: string;
+      order: OrderRow;
+      customerId: string;
+      customerName: string;
+      customerEmail: string | null;
+    }[] = [];
+    for (const c of txns) {
+      const code = c.code ?? "";
+      const completed = (c.orders ?? []).find(
+        (o) => (o.status || "").toLowerCase() === "completed"
+      );
+      if (code && completed)
+        out.push({
+          code,
+          order: completed,
+          customerId: String(c.id),
+          customerName: (c.name || "").trim() || "Unknown",
+          customerEmail: c.email || null,
         });
-        if (rpcErr) throw rpcErr;
+    }
+    return out;
+  }, [txns]);
 
-        setPayments((prev) =>
-          prev.map((p) =>
-            p.id === targetRow.id
-              ? {
-                  ...p,
-                  status: "received",
-                  received_at: new Date().toISOString(),
-                  received_by: meEmail,
-                }
-              : p
-          )
-        );
+  /* ---------------- Prefetch & track order->delivery mapping ---------------- */
+  useEffect(() => {
+    const orderIds = txns
+      .flatMap((c) =>
+        (c.orders ?? [])
+          .filter((o) => (o.status || "").toLowerCase() === "completed")
+          .map((o) => String(o.id))
+      );
 
-        toast.success("Payment received and applied to installments.");
+    if (!orderIds.length) {
+      setOrderDeliveryMap({});
+      return;
+    }
 
-        // 🔔 Notify the customer via API (service role insert)
-        await createCustomerNotifPaymentReceived(targetRow.id, meEmail);
-
-        // (optional) email:
-        // await notifyCustomerByEmail(targetRow.id, "receive");
-      } else if (confirmType === "reject") {
-        const { data: updated, error } = await supabase
-          .from("payments")
-          .update({ status: "rejected" })
-          .eq("id", targetRow.id)
-          .eq("status", "pending")
-          .select("id")
-          .maybeSingle();
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("id, truck_delivery_id")
+          .in("id", orderIds);
 
         if (error) throw error;
-        if (!updated) {
-          toast.warning("This deposit slip was already processed by someone else.");
-          return;
-        }
 
-        setPayments((prev) =>
-          prev.map((p) => (p.id === targetRow.id ? { ...p, status: "rejected" } : p))
+        const map: Record<string, string | null> = {};
+        for (const row of (data ?? []) as Array<{ id: string | number; truck_delivery_id: string | null }>) {
+          map[String(row.id)] = row.truck_delivery_id ?? null;
+        }
+        setOrderDeliveryMap(map);
+      } catch (e) {
+        console.error("Failed to build orderDeliveryMap:", e);
+      }
+    })();
+  }, [txns]);
+
+  /* ---------------- Realtime: orders -> refresh fee on any update ----------- */
+  useEffect(() => {
+    const orderIds = txns
+      .flatMap((c) =>
+        (c.orders ?? [])
+          .filter((o) => (o.status || "").toLowerCase() === "completed")
+          .map((o) => String(o.id))
+      );
+
+    if (!orderIds.length) return;
+
+    const filter = `id=in.(${inList(orderIds)})`;
+    const ch = supabase.channel("realtime-orders-fee");
+
+    const refreshFee = async (orderId: string | number) => {
+      try {
+        const fee = await fetchShippingFeeForOrder(orderId);
+        const key = String(orderId);
+        setShippingFees((prev) => (prev[key] === fee ? prev : { ...prev, [key]: fee }));
+      } catch (e) {
+        console.error("refreshShippingFee (orders) failed:", e);
+      }
+    };
+
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "orders", filter },
+      (payload) => {
+        const orderId = (payload.new as any)?.id ?? (payload.old as any)?.id ?? null;
+        if (orderId) refreshFee(orderId);
+      }
+    );
+
+    ch.subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [txns]);
+
+  /* ---------- Lookups ---------- */
+  const paymentsByOrder = useMemo(() => {
+    const m = new Map<string, PaymentRow[]>();
+    for (const p of payments) {
+      const k = String(p.order_id ?? "");
+      const arr = m.get(k) || [];
+      arr.push(p);
+      m.set(k, arr);
+    }
+    return m;
+  }, [payments]);
+
+  // Total received + pending cash (so balance drops right after submit cash)
+  const effectivePaidTotalByOrder = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const [orderId, arr] of paymentsByOrder.entries()) {
+      const total = arr.reduce((s, p) => {
+        const amt = Number(p.amount) || 0;
+        const received = isReceived(p);
+        const pendingCash = (p.method || "").toLowerCase() === "cash" && isPending(p);
+        return s + (received || pendingCash ? amt : 0);
+      }, 0);
+      m.set(orderId, total);
+    }
+    return m;
+  }, [paymentsByOrder]);
+
+  /** Enriched unpaid TXN options with fee; options with fee<=0 are disabled in the UI */
+  type TxnOption = {
+    code: string;
+    order: OrderRow;
+    customerId: string;
+    customerName: string;
+    customerEmail: string | null;
+    balance: number;
+    fee: number;
+  };
+
+  const unpaidTxnOptions: TxnOption[] = useMemo(() => {
+    const rows = rawTxnOptions.map(({ order, customerId, code, customerName, customerEmail }) => {
+      const orderId = String(order.id);
+      const fee = shippingFees[orderId] ?? 0;
+      const totals = computeFromOrder(order, fee);
+      const paid = round2(effectivePaidTotalByOrder.get(orderId) || 0);
+      const balance = Math.max(round2(totals.finalGrandTotal - paid), 0);
+      return { code, order, customerId, customerName, customerEmail, balance, fee };
+    });
+    return rows
+      .filter((r) => r.balance > 0.01 && !lockedTxn[r.code])
+      .sort((a, b) => b.balance - a.balance);
+  }, [rawTxnOptions, effectivePaidTotalByOrder, shippingFees, lockedTxn]);
+
+  /* ----------------------------- Realtime installments ----------------------------- */
+  useEffect(() => {
+    const orderIds = rawTxnOptions.map(({ order }) => String(order.id));
+    if (!orderIds.length) return;
+
+    const filter = `order_id=in.(${inList(orderIds)})`;
+    const channel = supabase.channel("realtime-installments");
+
+    channel.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "order_installments", filter },
+      async (payload) => {
+        const changedOrderId = String(
+          ((payload.new as any)?.order_id ?? (payload.old as any)?.order_id ?? "") || ""
         );
 
-        toast.success("Payment rejected.");
-        // (optional) email:
-        // await notifyCustomerByEmail(targetRow.id, "reject");
+        const currentOrderId = rawTxnOptions.find((t) => t.code === selectedTxnCode)?.order?.id;
+
+        if (currentOrderId && String(currentOrderId) === changedOrderId) {
+          try {
+            setLoadingInstallments(true);
+            const { data } = await supabase
+              .from("order_installments")
+              .select("id, order_id, term_no, due_date, amount_due, amount_paid, status")
+              .eq("order_id", changedOrderId)
+              .order("term_no", { ascending: true });
+
+            setInstallments((data as InstallmentRow[]) || []);
+          } finally {
+            setLoadingInstallments(false);
+          }
+        }
       }
-    } catch (err: any) {
-      console.error(err);
-      toast.error(err?.message || "Action failed.");
-      // rollback row lock if DB action failed
-      setLocked((prev) => {
-        const next = new Set(prev);
-        if (targetRow) next.delete(targetRow.id);
-        return next;
-      });
-    } finally {
-      setConfirmBusy(false);
-      setConfirmOpen(false);
-      setTargetRow(null);
-      setConfirmType(null);
+    );
+
+    channel.subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [rawTxnOptions, selectedTxnCode]);
+
+  /* ---------- Keep selection valid (reject TXNs without shipping fee) ---------- */
+  useEffect(() => {
+    if (!selectedTxnCode) return;
+    const opt = unpaidTxnOptions.find((t) => t.code === selectedTxnCode);
+    if (!opt) {
+      setSelectedTxnCode("");
+      return;
+    }
+    if ((opt.fee ?? 0) <= 0) {
+      setSelectedTxnCode("");
+    }
+  }, [selectedTxnCode, unpaidTxnOptions]);
+
+  const selectedPack = useMemo(() => {
+    if (!selectedTxnCode) return null;
+    const hit = unpaidTxnOptions.find((t) => t.code === selectedTxnCode);
+    if (!hit) return null;
+
+    const orderId = String(hit.order.id);
+    const fee = shippingFees[orderId] ?? 0;
+    const totals = computeFromOrder(hit.order, fee);
+    const paid = round2(effectivePaidTotalByOrder.get(orderId) || 0);
+    const balance = Math.max(round2(totals.finalGrandTotal - paid), 0);
+    return {
+      code: selectedTxnCode,
+      customerId: hit.customerId,
+      customerName: hit.customerName,
+      customerEmail: hit.customerEmail,
+      order: hit.order,
+      totals,
+      paid,
+      balance,
+    };
+  }, [selectedTxnCode, unpaidTxnOptions, effectivePaidTotalByOrder, shippingFees]);
+
+  /* -------- Determine method from the selected TXN’s customer -------- */
+  const customerMethodLower = useMemo(() => {
+    if (!selectedTxnCode) return "";
+    const rec = txns.find((t) => t.code === selectedTxnCode);
+    return String(rec?.payment_type ?? "").toLowerCase();
+  }, [txns, selectedTxnCode]);
+
+  const termsStr = String((selectedPack?.order as any)?.terms ?? "").toLowerCase();
+  const perTermAmt = Number(selectedPack?.order?.per_term_amount ?? 0);
+  const looksInstallment = perTermAmt > 0 || /credit|net|month|term|install/.test(termsStr);
+
+  const isCredit = customerMethodLower === "credit" || looksInstallment;
+  const isCash = customerMethodLower === "cash" && !isCredit;
+
+  /* ==================== INSTALLMENTS ==================== */
+
+  // 1) Load the schedule rows for the selected order (if any).
+  useEffect(() => {
+    async function fetchInstallmentsForSelected() {
+      if (!selectedPack?.order?.id) {
+        setInstallments([]);
+        return;
+      }
+      try {
+        setLoadingInstallments(true);
+        const { data } = await supabase
+          .from("order_installments")
+          .select("id, order_id, term_no, due_date, amount_due, amount_paid, status")
+          .eq("order_id", String(selectedPack.order.id))
+          .order("term_no", { ascending: true });
+
+        setInstallments((data as InstallmentRow[]) || []);
+      } finally {
+        setLoadingInstallments(false);
+      }
+    }
+    fetchInstallmentsForSelected();
+    // eslint-disable-next-line
+  }, [selectedPack?.order?.id]);
+
+  // 2) Unpaid rows by DB
+  const unpaidInstallments = useMemo(
+    () => installments.filter((row) => (row.status || "").toLowerCase() !== "paid"),
+    [installments]
+  );
+
+  // 3) All terms paid?
+  const allTermsPaid = installments.length > 0 && unpaidInstallments.length === 0;
+
+  // 4) Equalized logic
+  const remainingBalance = round2(Number(selectedPack?.balance || 0));
+  const remainingTerms = useMemo(() => {
+    if (!selectedPack || !isCredit) return 0;
+    if (allTermsPaid) return remainingBalance > EPS ? 1 : 0;
+    return Math.max(0, unpaidInstallments.length);
+  }, [selectedPack, isCredit, allTermsPaid, unpaidInstallments.length, remainingBalance]);
+
+  // Per-term amount (equal split)
+  const equalizedPerTerm = useMemo(() => {
+    if (!isCredit || !selectedPack) return 0;
+    if (remainingTerms <= 0) return 0;
+    return round2(remainingBalance / remainingTerms);
+  }, [isCredit, selectedPack, remainingTerms, remainingBalance]);
+
+  // 5) Display rows with equalized remaining amounts.
+  const breakdownRows = useMemo<InstallmentRow[]>(() => {
+    if (!selectedPack || !isCredit) return installments;
+
+    // If DB says all paid but we still have a balance → one catch-up row
+    if (remainingTerms === 1 && allTermsPaid && remainingBalance > EPS) {
+      const nextNo = (installments[installments.length - 1]?.term_no ?? 0) + 1;
+      return [
+        ...installments,
+        {
+          id: "__equalized_catchup__",
+          order_id: String(selectedPack.order.id),
+          term_no: nextNo,
+          due_date: todayLocalISO(),
+          amount_due: remainingBalance,
+          amount_paid: 0,
+          status: "pending",
+        },
+      ];
+    }
+
+    if (remainingTerms <= 0) return installments;
+
+    const unpaidRows = installments.filter((r) => (r.status || "").toLowerCase() !== "paid");
+    const unpaidCount = unpaidRows.length;
+
+    const perRemaining = round2(remainingBalance / unpaidCount);
+    const sumFirst = round2(perRemaining * (unpaidCount - 1));
+    const lastRemaining = round2(remainingBalance - sumFirst);
+
+    const targets = [...Array(Math.max(0, unpaidCount - 1)).fill(perRemaining), lastRemaining];
+
+    let i = 0;
+    return installments.map((row) => {
+      const due = round2(Number(row.amount_due || 0));
+      const paid = round2(Number(row.amount_paid || 0));
+      const isPaidRow = paid + EPS >= due;
+
+      if (isPaidRow) return row;
+
+      const targetRemain = targets[i++] ?? 0;
+      const newDue = round2(paid + targetRemain);
+      return { ...row, amount_due: newDue };
+    });
+  }, [installments, isCredit, selectedPack?.order?.id, allTermsPaid, remainingTerms, remainingBalance]);
+
+  // 6) Helpers
+  const equalizedUnpaidAmounts = useMemo(() => {
+    return breakdownRows
+      .filter((r) => (r.status || "").toLowerCase() !== "paid")
+      .map((r) => round2(Math.max(0, Number(r.amount_due || 0) - Number(r.amount_paid || 0))));
+  }, [breakdownRows]);
+
+  const effectiveTermAmount = useMemo(() => {
+    if (!isCredit || remainingTerms <= 0) return 0;
+    return equalizedUnpaidAmounts[0] ?? 0;
+  }, [isCredit, remainingTerms, equalizedUnpaidAmounts]);
+
+  const sumNextKUnpaid = (k: number) => {
+    const slice = equalizedUnpaidAmounts.slice(0, Math.max(0, k));
+    const total = slice.reduce((s, a) => s + a, 0);
+    return round2(total);
+  };
+
+  const totalOfAllUnpaid = useMemo(
+    () => round2(equalizedUnpaidAmounts.reduce((s, a) => s + a, 0)),
+    [equalizedUnpaidAmounts]
+  );
+
+  const getCreditMaxMultiplier = () => {
+    if (!selectedPack || !isCredit) return 1;
+    if (remainingTerms <= 0) return 1;
+
+    let k = 1;
+    while (k <= remainingTerms && sumNextKUnpaid(k) <= remainingBalance + EPS) {
+      k++;
+    }
+    return Math.max(1, Math.min(k - 1, remainingTerms));
+  };
+
+  useEffect(() => {
+    if (!selectedPack) {
+      setAmount("");
+      return;
+    }
+
+    if (isCredit) {
+      if (remainingTerms === 0) {
+        setTermMultiplier(1);
+        setAmount("");
+        return;
+      }
+
+      if (allTermsPaid) {
+        setTermMultiplier(1);
+        setAmount(remainingBalance > 0 ? remainingBalance.toFixed(2) : "");
+        return;
+      }
+
+      const max = getCreditMaxMultiplier();
+      const start = Math.min(1, max) || 1;
+      setTermMultiplier(start);
+      setAmount(sumNextKUnpaid(start).toFixed(2));
+    } else {
+      const bal = Number(selectedPack.balance || 0);
+      setAmount(bal > 0 ? bal.toFixed(2) : "");
+      setTermMultiplier(1);
+    }
+    // eslint-disable-next-line
+  }, [selectedPack?.balance, isCredit, remainingTerms, allTermsPaid]);
+
+  useEffect(() => {
+    if (!selectedPack || !isCredit) return;
+
+    if (remainingTerms === 0) {
+      setTermMultiplier(1);
+      setAmount("");
+      return;
+    }
+
+    if (allTermsPaid) {
+      setTermMultiplier(1);
+      setAmount(remainingBalance > 0 ? remainingBalance.toFixed(2) : "");
+      return;
+    }
+
+    const max = getCreditMaxMultiplier();
+    const k = Math.max(1, Math.min(termMultiplier, max));
+    if (k !== termMultiplier) setTermMultiplier(k);
+    setAmount(sumNextKUnpaid(k).toFixed(2));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [termMultiplier, isCredit, selectedPack?.code, remainingTerms, allTermsPaid]);
+
+  /* ===== Buttons-only update helpers ===== */
+  const applyCreditMultiplier = (mult: number) => {
+    if (!selectedPack || !isCredit) return;
+    const clamped = Math.max(1, Math.min(mult, getCreditMaxMultiplier()));
+    setTermMultiplier(clamped);
+    setAmount(sumNextKUnpaid(clamped).toFixed(2));
+  };
+  const stepMultiplier = (delta: number) => applyCreditMultiplier(termMultiplier + delta);
+
+  const bumpCash = (dir: "inc" | "dec") => {
+    if (!selectedPack || !isCash) return;
+    const bal = Number(selectedPack.balance || 0);
+    const cur = toNumber(amount) || 0;
+    const next =
+      dir === "inc" ? Math.min(cur + CASH_STEP, bal) : Math.max(cur - CASH_STEP, MIN_CASH);
+    setAmount(bal > 0 ? next.toFixed(2) : "");
+  };
+
+  const payInFull = () => {
+    if (!selectedPack) return;
+
+    const bal = round2(Number(selectedPack.balance || 0));
+
+    if (isCash) {
+      setAmount(bal > 0 ? bal.toFixed(2) : "");
+      return;
+    }
+
+    if (remainingTerms <= 0) {
+      setTermMultiplier(1);
+      setAmount("");
+      return;
+    }
+    setTermMultiplier(remainingTerms);
+    setAmount(bal.toFixed(2));
+  };
+
+  const payInHalf = () => {
+    if (!selectedPack) return;
+
+    if (isCash) {
+      const bal = Number(selectedPack.balance || 0);
+      setAmount(Math.max(bal / 2, MIN_CASH).toFixed(2));
+      return;
+    }
+
+    if (remainingTerms <= 0) {
+      setTermMultiplier(1);
+      setAmount("");
+      return;
+    }
+
+    if (allTermsPaid) {
+      const bal = Number(selectedPack.balance || 0);
+      setTermMultiplier(1);
+      setAmount(Math.max(bal / 2, 0).toFixed(2));
+      return;
+    }
+
+    const half = Math.max(1, Math.floor(remainingTerms / 2));
+    applyCreditMultiplier(half);
+  };
+
+  /* --------------------------- Validation flags --------------------------- */
+
+  const enteredAmount = round2(toNumber(amount));
+
+  let matchedK = 0;
+  if (isCredit && remainingTerms > 0 && enteredAmount > 0) {
+    for (let k = 1; k <= remainingTerms; k++) {
+      if (Math.abs(enteredAmount - sumNextKUnpaid(k)) < EPS) {
+        matchedK = k;
+        break;
+      }
     }
   }
 
+  const isExactByTerms = isCredit && matchedK > 0;
+  const isExactByBalance = isCredit && Math.abs(enteredAmount - remainingBalance) < EPS;
+
+  const isPaymentExact = isCash
+    ? enteredAmount > 0 && enteredAmount <= (selectedPack?.balance || 0) + EPS
+    : isExactByTerms || isExactByBalance;
+
+  const exceedsBalance = !!selectedPack && enteredAmount > (selectedPack.balance || 0) + EPS;
+
+  const isFormValid =
+    !!selectedTxnCode &&
+    isPaymentExact &&
+    !exceedsBalance &&
+    (isCash ||
+      (depositRef.trim().length > 0 &&
+        bankName.trim().length > 0 &&
+        depositDate.trim().length > 0 &&
+        !!file));
+
+  /* ------------------------------ Upload logic ----------------------------- */
+  async function uploadDepositSlip(file: File, customerId: string | number, orderId: string | number) {
+    const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+    const safeCust = String(customerId);
+    const safeOrder = String(orderId);
+    const path = `${safeCust}/${safeOrder}/${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}.${ext}`;
+
+    const { error } = await supabase.storage
+      .from(DEPOSIT_BUCKET)
+      .upload(path, file, { cacheControl: "3600", upsert: false });
+
+    if (error) {
+      const msg = (error as any)?.message || "Upload failed";
+      throw new Error(`Storage upload error: ${msg}`);
+    }
+
+    const pub = supabase.storage.from(DEPOSIT_BUCKET).getPublicUrl(path);
+    const publicUrl = pub?.data?.publicUrl ?? null;
+    if (!publicUrl) throw new Error("Could not get public URL for uploaded file.");
+    return publicUrl;
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (!selectedPack?.order?.id || !selectedPack?.customerId) {
+      toast.error("Please complete all fields.");
+      return;
+    }
+
+    const finalAmount = toNumber(amount);
+    if (finalAmount <= 0) {
+      toast.error("Please enter a valid amount greater than 0.");
+      return;
+    }
+
+    // Disallow *past* deposit dates; allow today
+    if (!isCash && depositDate) {
+      const chosen = parseLocalDate(depositDate);
+      if (chosen < startOfTodayLocal()) {
+        toast.error("Deposit date cannot be in the past.");
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      const justSubmittedCode = selectedPack.code;
+
+      // 🔑 Use the selected TXN’s customer
+      const customerId = String(selectedPack.customerId);
+      const orderId = String(selectedPack.order.id);
+
+      let image_url: string | null = null;
+      let insertData: any = {
+        customer_id: customerId,
+        order_id: orderId,
+        amount: Number(finalAmount.toFixed(2)),
+        method: isCash ? "Cash" : "Deposit",
+        cheque_number: null, // deposit reference
+        bank_name: null,
+        cheque_date: null, // deposit date
+        image_url: null,
+        status: "pending",
+      };
+
+      if (!isCash) {
+        if (file) image_url = await uploadDepositSlip(file, customerId, orderId);
+        insertData = {
+          ...insertData,
+          cheque_number: depositRef || null,
+          bank_name: bankName || null,
+          cheque_date: depositDate || null,
+          image_url,
+        };
+      } else {
+        insertData = {
+          ...insertData,
+          cheque_number: depositRef || null,
+          bank_name: bankName || null,
+          cheque_date: depositDate || null,
+        };
+      }
+
+      const { data: paymentRow, error: insertErr } = await supabase
+        .from("payments")
+        .insert(insertData)
+        .select("id, created_at")
+        .single();
+
+      if (insertErr) throw new Error(`DB insert error: ${insertErr.message}`);
+      const newPaymentId = String(paymentRow?.id);
+
+      // 🔔 Notify admin bell as a PAYMENT event
+      try {
+        const title = "💳 Payment Request";
+        const message = `${selectedPack.customerName || "Customer"} • ${
+          selectedPack.code
+        } • ${formatCurrency(finalAmount)} ${
+          isCash ? "(Cash)" : `(Deposit Ref: ${depositRef || "N/A"})`
+        }`.trim();
+
+        await supabase.from("system_notifications").insert([
+          {
+            type: "payment",
+            title,
+            message,
+            source: "customer",
+            read: false,
+            metadata: {
+              payment_id: newPaymentId,
+              order_id: orderId,
+              customer_id: customerId,
+              txn_code: selectedPack.code,
+              amount: Number(finalAmount.toFixed(2)),
+              method: isCash ? "cash" : "deposit",
+              deposit_reference: depositRef || null,
+              bank_name: bankName || null,
+              deposit_date: depositDate || null,
+            },
+          },
+        ]);
+      } catch (notifyErr) {
+        console.error("system_notifications insert failed:", notifyErr);
+      }
+
+      toast.success(
+        ` ${isCash ? "Cash" : "Deposit"} payment submitted. Awaiting admin verification.`
+      );
+      setSelectedTxnCode("");
+      setAmount("");
+      setDepositRef("");
+      setBankName("");
+      setDepositDate("");
+      setFile(null);
+      setTermMultiplier(1);
+      setLockedTxn((prev) => ({ ...prev, [justSubmittedCode]: true }));
+    } catch (err: any) {
+      console.error("Submit failed:", err?.message || err);
+      toast.error(
+        err?.message || `Failed to submit ${isCash ? "cash" : "deposit"} payment.`
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  /* ---------------------- Installment breakdown helpers ---------------------- */
+
+  const paidCount = useMemo(() => {
+    return installments.filter((r) => {
+      const due = round2(Number(r.amount_due || 0));
+      const paid = round2(Number(r.amount_paid || 0));
+      return paid + EPS >= due;
+    }).length;
+  }, [installments]);
+
   /* ---------------------------------- UI ---------------------------------- */
-  const cellNowrap =
-    "sticky top-0 z-10 py-3 px-3 text-left font-bold text-[13px] whitespace-nowrap";
+  const allTxnsWaitingForFee =
+    unpaidTxnOptions.length > 0 && unpaidTxnOptions.every((t) => (t.fee ?? 0) <= 0);
 
   return (
     <div className="min-h-[calc(100vh-80px)]">
-      <div className="mx-auto w-full max-w-7xl px-6 py-6">
+      <div className="mx-auto w-full max-w-6xl px-6 py-6">
         <div className="flex items-center gap-3">
           <h1 className="text-3xl font-bold tracking-tight text-neutral-800">Payments</h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          Review submitted <b>deposit slips</b>. Mark as <b>Received</b> to post the payment and deduct it from
-          the customer’s balance.
+          Upload a <b>deposit slip</b> for your <b>Transaction Code (TXN)</b>. For{" "}
+          <b>Credit</b> customers, balances update automatically after admin verification.
         </p>
 
-        {/* Filters */}
-        <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="relative md:col-span-2">
-            <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-500" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search TXN / name / email / bank / slip # …"
-              className="w-full rounded-lg border border-gray-300 pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
-            />
+        {allTxnsWaitingForFee && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            TXNs are almost ready. Please wait for the <b>shipping fee</b> to be applied
+            before submitting a payment.
           </div>
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value as any)}
-            className="rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
-          >
-            <option value="all">All</option>
-            <option value="pending">Pending</option>
-            <option value="received">Received</option>
-            <option value="rejected">Rejected</option>
-          </select>
-        </div>
+        )}
 
-        {/* Pagination header */}
-        <div className="flex items-center justify-between mt-4">
-          <div className="text-sm text-slate-600">
-            {loading ? "Loading…" : `Showing ${paginated.length} of ${filtered.length} filtered payments`}
+        {/* Upload / Submit Payment */}
+        <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Upload className="h-5 w-5 text-amber-600" />
+            <h2 className="text-lg font-semibold">
+              {isCash ? "Submit Cash Payment" : "Upload Deposit Slip"}
+            </h2>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1 || loading}
-              className="px-3 py-1.5 rounded border disabled:opacity-50"
-            >
-              Prev
-            </button>
-            <span className="text-sm">
-              Page {page} / {totalPages}
-            </span>
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages || loading}
-              className="px-3 py-1.5 rounded border disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        </div>
 
-        {/* Table */}
-        <div className="mt-3 rounded-xl ring-1 ring-gray-200 bg-white overflow-hidden">
-          <div className="w-full overflow-x-auto overscroll-x-contain">
-            <table className="min-w-full bg-white text-sm">
-              <thead className="bg-[#ffba20] text-black text-left">
-                <tr>
-                  <th className={cellNowrap}>Submitted</th>
-                  <th className={cellNowrap}>TXN / Customer</th>
-                  <th className={cellNowrap}>Amount</th>
-                  <th className={cellNowrap}>Bank</th>
-                  <th className={cellNowrap}>Slip #</th>
-                  <th className={cellNowrap}>Deposit Date</th>
-                  <th className={cellNowrap}>Image</th>
-                  <th className={cellNowrap}>Status</th>
-                  <th className={cellNowrap}>Actions</th>
-                </tr>
-              </thead>
+          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* TXN selector */}
+            <div className="col-span-1">
+              <label className="text-xs text-gray-600">Select Transaction (TXN) *</label>
+              <select
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                value={selectedTxnCode}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) {
+                    setSelectedTxnCode("");
+                    return;
+                  }
+                  const opt = unpaidTxnOptions.find((t) => t.code === val);
+                  if (!opt) {
+                    setSelectedTxnCode("");
+                    return;
+                  }
+                  if ((opt.fee ?? 0) <= 0) {
+                    toast.warning("This TXN is waiting for a shipping fee. Please try again later.");
+                    e.currentTarget.value = selectedTxnCode || "";
+                    return;
+                  }
+                  if (lockedTxn[val]) {
+                    toast.warning(
+                      "This TXN already has a submitted payment pending verification."
+                    );
+                    e.currentTarget.value = selectedTxnCode || "";
+                    return;
+                  }
 
-              <tbody className="align-middle">
-                {paginated.map((p, idx) => {
-                  const c = customerById.get(String(p.customer_id));
-                  const code = c?.code || "—";
-                  const s = (p.status || "pending").toLowerCase();
-
-                  const statusBadge = (
-                    <span
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                        s === "received"
-                          ? "bg-green-100 text-green-800"
-                          : s === "rejected"
-                          ? "bg-red-100 text-red-800"
-                          : "bg-yellow-100 text-yellow-900"
-                      }`}
-                    >
-                      {s === "received" ? "Received" : s === "rejected" ? "Rejected" : "Pending"}
-                    </span>
-                  );
-
-                  const disableAll = locked.has(p.id) || s !== "pending";
-                  const dispMethod = displayMethod(p.method); // available if needed
-
+                  setSelectedTxnCode(val);
+                }}
+                required
+              >
+                <option value="">— Choose a TXN —</option>
+                {unpaidTxnOptions.map(({ code, fee, customerName }, i) => {
+                  const isLocked = !!lockedTxn[code];
+                  const waitingFee = (fee ?? 0) <= 0;
                   return (
-                    <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
-                      {/* ⬇️ Date only (no time) */}
-                      <td className="py-2.5 px-3 whitespace-nowrap">{formatPH(p.created_at, "date")}</td>
-
-                      <td className="py-2.5 px-3">
-                        <div className="font-mono truncate">{code}</div>
-                        <div className="text-[11px] text-gray-600 truncate">
-                          {c?.name || "—"} {c?.email ? `• ${c.email}` : ""}
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 font-mono tabular-nums whitespace-nowrap">
-                        {formatCurrency(p.amount)}
-                      </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap truncate">{p.bank_name ?? "—"}</td>
-                      <td className="py-2.5 px-3 whitespace-nowrap truncate">{p.cheque_number ?? "—"}</td>
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        {p.cheque_date ? formatPH(p.cheque_date, "date") : "—"}
-                      </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        {p.image_url ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              openImage(p.image_url!, {
-                                slip: p.cheque_number,
-                                bank: p.bank_name,
-                              })
-                            }
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded border hover:bg-gray-50"
-                          >
-                            <FileImage className="h-4 w-4" />
-                            <span>View</span>
-                          </button>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3">{statusBadge}</td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => openConfirm("receive", p)}
-                            disabled={disableAll}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={disableAll ? "Action not available" : "Mark as Received"}
-                          >
-                            <CheckCircle2 className="h-4 w-4" />
-                            <span>Receive</span>
-                          </button>
-                          <button
-                            onClick={() => openConfirm("reject", p)}
-                            disabled={disableAll}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={disableAll ? "Action not available" : "Reject"}
-                          >
-                            <XCircle className="h-4 w-4" />
-                            <span>Reject</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                    <option key={`${code}-${i}`} value={code} disabled={waitingFee || isLocked}>
+                      {code} — {customerName}
+                      {waitingFee ? " (Waiting for shipping fee)" : isLocked ? " (Pending payment)" : ""}
+                    </option>
                   );
                 })}
+              </select>
 
-                {paginated.length === 0 && (
-                  <tr>
-                    <td colSpan={9} className="py-10 text-center text-neutral-400">
-                      {loading ? (
-                        <span className="inline-flex items-center gap-2">
-                          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-                        </span>
-                      ) : (
-                        "No payments found."
-                      )}
-                    </td>
+              {/* Owner badge (shows after selection) */}
+              {!!selectedPack && (
+                <div className="mt-2 text-xs text-gray-700">
+                  <span className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1">
+                    <span className="font-semibold">Owner:</span>{" "}
+                    <span className="font-medium">{selectedPack.customerName}</span>
+                    {selectedPack.customerEmail ? (
+                      <>
+                        <span className="opacity-50">•</span>
+                        <span className="text-gray-500">{selectedPack.customerEmail}</span>
+                      </>
+                    ) : null}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Selected TXN summary + installment counters */}
+            {!!selectedPack && (
+              <div className="mt-2">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-gray-800">
+                      Remaining balance (incl. shipping):
+                    </span>
+                    <span className="font-bold text-green-700 text-2xl leading-tight">
+                      {formatCurrency(selectedPack.balance)}
+                    </span>
+                    <span className="text-xs text-amber-900/80 mt-1">
+                      TXN: <span className="font-mono">{selectedPack.code}</span> • Owner:{" "}
+                      <span className="font-semibold">{selectedPack.customerName}</span>
+                    </span>
+                  </div>
+
+                  {isCredit && (
+                    <div className="flex items-center gap-3 text-sm md:text-base">
+                      <div>
+                        <span className="font-semibold">Total Monthly Paid:</span>{" "}
+                        <span className="font-bold">{paidCount}</span>
+                      </div>
+                      <span className="opacity-50">•</span>
+                      <div>
+                        <span className="font-semibold">Remaining Months:</span>{" "}
+                        <span className="font-bold">{Math.max(0, remainingTerms)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Amount (LOCKED) + controls */}
+            <div className="col-span-1">
+              <label className="text-xs text-gray-600">Amount *</label>
+              <div className="mt-1">
+                <input
+                  type="text"
+                  value={amount}
+                  readOnly
+                  onKeyDown={(e) => e.preventDefault()}
+                  onWheel={(e) => e.preventDefault()}
+                  className="w-full rounded-lg border px-3 py-2 border-gray-300 bg-gray-50 cursor-not-allowed focus:outline-none"
+                />
+              </div>
+
+              {/* CREDIT controls */}
+              {isCredit && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => stepMultiplier(-1)}
+                    className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                    title="Pay fewer months"
+                    disabled={effectiveTermAmount <= 0 || termMultiplier <= 1}
+                  >
+                    <Minus className="h-4 w-4" />
+                  </button>
+
+                  <div
+                    className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
+                    title={effectiveTermAmount > 0 ? "Number of months to pay" : "Schedule not loaded yet"}
+                  >
+                    × {termMultiplier}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => stepMultiplier(+1)}
+                    className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                    title="Pay more months"
+                    disabled={effectiveTermAmount <= 0 || termMultiplier >= getCreditMaxMultiplier()}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+
+                  <div className="flex gap-2 ml-1">
+                    <button
+                      type="button"
+                      onClick={payInFull}
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
+                      style={{ backgroundColor: "#ffba20" }}
+                      disabled={effectiveTermAmount <= 0 && remainingTerms <= 0}
+                    >
+                      Pay in Full
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={payInHalf}
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
+                      style={{ backgroundColor: "#ffba20" }}
+                      disabled={effectiveTermAmount <= 0 && remainingTerms <= 0}
+                    >
+                      Pay in Half
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* CASH controls */}
+              {isCash && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => bumpCash("dec")}
+                    className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
+                    title={`Decrease ₱${CASH_STEP.toLocaleString()}`}
+                  >
+                    <Minus className="h-4 w-4" />
+                  </button>
+
+                  <div
+                    className="h-10 px-3 inline-flex items-center justify-center rounded-lg border border-amber-400 bg-amber-50 font-semibold text-amber-800"
+                    title="Cash step"
+                  >
+                    ₱{CASH_STEP.toLocaleString()}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => bumpCash("inc")}
+                    className="h-10 w-10 inline-flex items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
+                    title={`Increase ₱${CASH_STEP.toLocaleString()}`}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+
+                  <div className="flex gap-2 ml-1">
+                    <button
+                      type="button"
+                      onClick={payInFull}
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
+                      style={{ backgroundColor: "#ffba20" }}
+                    >
+                      Pay in Full
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={payInHalf}
+                      className="rounded-md px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1"
+                      style={{ backgroundColor: "#ffba20" }}
+                    >
+                      Pay in Half
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Optional hint */}
+              {!isCash && Number(amount) > 0 && (
+                <div className="mt-1 text-xs text-green-700">
+                  {(() => {
+                    const amt = Number(amount) || 0;
+                    const per = effectiveTermAmount;
+                    if (allTermsPaid) {
+                      return (
+                        <>
+                          This payment will settle the <b>remaining balance</b>.
+                        </>
+                      );
+                    }
+                    if (per > 0) {
+                      const k = Math.min(unpaidInstallments.length, Math.floor(amt / per));
+                      const isFullWithLeftover =
+                        Math.abs(amt - (selectedPack?.balance ?? 0)) < EPS &&
+                        totalOfAllUnpaid + EPS < (selectedPack?.balance ?? 0);
+                      return (
+                        <>
+                          This payment will pay off <b>{k}</b> installment{k > 1 ? "s" : ""}.
+                          {isFullWithLeftover && (
+                            <>
+                              {" "}It also settles the <b>remaining shipping/adjustment</b> amount.
+                            </>
+                          )}
+                        </>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
+              )}
+            </div>
+
+            {/* Deposit slip metadata */}
+            <div className="col-span-1">
+              <label className="text-xs text-gray-600">
+                Deposit Reference No. {isCash ? "(optional)" : "*"}
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="\d*"
+                maxLength={20}
+                value={depositRef}
+                onChange={(e) => {
+                  const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 20);
+                  setDepositRef(digitsOnly);
+                }}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                placeholder="e.g., 00012345678901234567"
+                required={!isCash}
+              />
+              <div className="mt-1 text-[11px] text-gray-500">
+                Up to 20 digits. Letters or symbols are not allowed.
+              </div>
+            </div>
+
+            <div className="col-span-1">
+              <label className="text-xs text-gray-600">
+                Bank Name {isCash ? "(optional)" : "*"}
+              </label>
+              <input
+                type="text"
+                value={bankName}
+                onChange={(e) => setBankName(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                placeholder="e.g., BPI / BDO / Metrobank"
+                required={!isCash}
+              />
+            </div>
+
+            <div className="col-span-1">
+              <label className="text-xs text-gray-600">
+                Deposit Date {isCash ? "(optional)" : "*"}
+              </label>
+              <input
+                type="date"
+                value={depositDate}
+                onChange={(e) => setDepositDate(e.target.value)}
+                min={todayLocalISO()}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                required={!isCash}
+              />
+            </div>
+
+            <div className="col-span-1">
+              <label className="text-xs text-gray-600">
+                Deposit Slip File {isCash ? "(optional)" : "*"}
+              </label>
+              <div className="mt-1 flex items-center gap-3">
+                <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 cursor-pointer hover:bg-gray-50">
+                  <FileImage className="h-4 w-4" />
+                  <span className="text-sm">Choose file</span>
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    className="hidden"
+                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                    required={!isCash}
+                  />
+                </label>
+                <span className="text-xs text-gray-600">
+                  {file ? file.name : "No file selected"}
+                </span>
+              </div>
+            </div>
+
+            <div className="col-span-1 md:col-span-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedTxnCode("");
+                  setAmount("");
+                  setDepositRef("");
+                  setBankName("");
+                  setDepositDate("");
+                  setFile(null);
+                  setTermMultiplier(1);
+                }}
+                className="px-4 py-2 border rounded hover:bg-gray-100"
+              >
+                Clear
+              </button>
+              <button
+                type="submit"
+                disabled={!isFormValid || submitting}
+                title={!isFormValid ? "Please complete all fields" : ""}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {submitting ? "Submitting…" : "Submit Payment"}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Items & Totals for selected TXN */}
+        {selectedPack && (
+          <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
+            <h2 className="text-lg font-semibold mb-3">
+              Items for TXN <span className="font-mono">{selectedPack.code}</span>{" "}
+              <span className="text-sm font-normal text-gray-500">
+                — Owner: <span className="font-medium">{selectedPack.customerName}</span>
+                {selectedPack.customerEmail ? ` (${selectedPack.customerEmail})` : ""}
+              </span>
+            </h2>
+            <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
+              <table className="w-full text-sm align-middle">
+                <thead>
+                  <tr
+                    className="text-black uppercase tracking-wider text-[11px]"
+                    style={{ background: "#ffba20" }}
+                  >
+                    <th className="py-2.5 px-3 text-center font-bold">QTY</th>
+                    <th className="py-2.5 px-3 text-center font-bold">UNIT</th>
+                    <th className="py-2.5 px-3 text-left font-bold">ITEM DESCRIPTION</th>
+                    <th className="py-2.5 px-3 text-center font-bold">REMARKS</th>
+                    <th className="py-2.5 px-3 text-center font-bold">UNIT PRICE</th>
+                    <th className="py-2.5 px-3 text-center font-bold">DISCOUNT/ADD (%)</th>
+                    <th className="py-2.5 px-3 text-center font-bold">AMOUNT</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                </thead>
+                <tbody>
+                  {(selectedPack.order.order_items ?? []).map((it, idx) => {
+                    const unit = it.inventory?.unit?.trim() || "pcs";
+                    const desc = it.inventory?.product_name ?? "—";
+                    const unitPrice = Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
+                    const qty = Number(it.quantity || 0);
+                    const amount = qty * unitPrice;
 
-        {/* Pagination footer */}
-        <div className="flex items-center justify-between mt-4">
-          <div className="text-xs text-gray-500">
-            Only <b>Received</b> payments are deducted from customer balances.
+                    const inStockFlag =
+                      typeof it.inventory?.quantity === "number"
+                        ? (it.inventory?.quantity ?? 0) > 0
+                        : (it.inventory?.status || "").toLowerCase().includes("in stock");
+
+                    return (
+                      <tr key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>
+                        <td className="py-2.5 px-3 text-center font-mono">{qty}</td>
+                        <td className="py-2.5 px-3 text-center font-mono">{unit}</td>
+                        <td className="py-2.5 px-3">
+                          <span className="font-semibold">{desc}</span>
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          {inStockFlag ? "✓" : it.inventory?.status ?? "✗"}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
+                          {formatCurrency(unitPrice)}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono whitespace-nowrap">
+                          {typeof it.discount_percent === "number" ? `${it.discount_percent}%` : ""}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono font-bold whitespace-nowrap">
+                          {formatCurrency(amount)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {(selectedPack.order.order_items ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="text-center py-8 text-neutral-400">
+                        No items found.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex flex-row gap-4 mt-5">
+              <div className="w-2/3 text-xs pr-4" />
+              <div className="flex flex-col items-end text-xs mt-1 w-1/3">
+                <table className="text-right w-full">
+                  <tbody>
+                    <tr>
+                      <td className="font-semibold py-0.5">Subtotal (Before Discount):</td>
+                      <td className="pl-2 font-mono">
+                        {formatCurrency(selectedPack.totals.subtotal)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="font-semibold py-0.5">Discount</td>
+                      <td className="pl-2 font-mono">
+                        -{formatCurrency(selectedPack.totals.totalDiscount)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="font-semibold py-0.5">Sales Tax (12%):</td>
+                      <td className="pl-2 font-mono">
+                        {formatCurrency(selectedPack.totals.salesTax)}
+                      </td>
+                    </tr>
+
+                    {(selectedPack.order?.interest_percent ?? 0) > 0 && (
+                      <tr>
+                        <td className="font-semibold py-0.5">
+                          Interest ({selectedPack.order.interest_percent}%):
+                        </td>
+                        <td className="pl-2 font-mono text-blue-700 font-bold">
+                          {formatCurrency(
+                            ((selectedPack.order.interest_percent ?? 0) / 100) *
+                              (selectedPack.totals.subtotal -
+                                selectedPack.totals.totalDiscount +
+                                selectedPack.totals.salesTax)
+                          )}
+                        </td>
+                      </tr>
+                    )}
+
+                    {selectedPack.totals.shippingFee > 0 && (
+                      <tr>
+                        <td className="font-semibold py-0.5">Shipping Fee:</td>
+                        <td className="pl-2 font-mono">
+                          {formatCurrency(selectedPack.totals.shippingFee)}
+                        </td>
+                      </tr>
+                    )}
+
+                    <tr>
+                      <td className="font-bold py-1.5">
+                        Grand Total
+                        {selectedPack.totals.shippingFee > 0 ? " (Incl. Shipping)" : ""}:
+                      </td>
+                      <td className="pl-2 font-bold text-green-700 font-mono">
+                        {formatCurrency(selectedPack.totals.finalGrandTotal)}
+                      </td>
+                    </tr>
+
+                    {selectedPack.totals.perTerm > 0 && (
+                      <tr>
+                        <td className="font-semibold py-0.5">Per Term:</td>
+                        <td className="pl-2 font-bold text-blue-700 font-mono">
+                          {formatCurrency(selectedPack.totals.perTerm)}
+                        </td>
+                      </tr>
+                    )}
+                    <tr>
+                      <td className="font-semibold py-0.5">Paid:</td>
+                      <td className="pl-2 font-mono">{formatCurrency(selectedPack.paid)}</td>
+                    </tr>
+                    <tr>
+                      <td className="font-semibold py-0.5">Remaining Balance:</td>
+                      <td className="pl-2 font-bold text-amber-700 font-mono">
+                        {formatCurrency(selectedPack.balance)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1 || loading}
-              className="px-3 py-1.5 rounded border disabled:opacity-50"
-            >
-              Prev
-            </button>
-            <span className="text-sm">
-              Page {page} / {totalPages}
-            </span>
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages || loading}
-              className="px-3 py-1.5 rounded border disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        </div>
+        )}
       </div>
-
-      {/* Confirm modal */}
-      <Dialog open={confirmOpen} onOpenChange={(o) => setConfirmOpen(o)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {confirmType === "receive" ? "Mark as Received" : "Reject Deposit Slip"}
-            </DialogTitle>
-            <DialogDescription>
-              {confirmType === "receive"
-                ? "This will post the payment and deduct it from the customer’s balance."
-                : "This will mark the deposit slip as rejected and will not deduct any balance."}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="mt-2 rounded border p-3 text-sm">
-            <div className="flex justify-between">
-              <span className="text-gray-600">Amount</span>
-              <span className="font-mono font-semibold">{formatCurrency(targetRow?.amount || 0)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Slip #</span>
-              <span className="font-mono">{targetRow?.cheque_number || "—"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Bank</span>
-              <span>{targetRow?.bank_name || "—"}</span>
-            </div>
-          </div>
-
-          <DialogFooter className="mt-4">
-            <button
-              type="button"
-              onClick={() => setConfirmOpen(false)}
-              className="px-4 py-2 rounded border hover:bg-gray-50"
-            >
-              Cancel
-            </button>
-            {/* UniAsia yellow button w/ black bold text */}
-            <button
-              type="button"
-              onClick={handleConfirm}
-              disabled={confirmBusy}
-              className="ml-2 px-4 py-2 rounded bg-[#ffba20] text-black font-bold text-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#ffba20]/60 disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {confirmBusy
-                ? "Processing…"
-                : confirmType === "receive"
-                ? "Confirm Receive"
-                : "Confirm Reject"}
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Image modal */}
-      <Dialog open={imgOpen} onOpenChange={setImgOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Deposit Slip Image</DialogTitle>
-            <DialogDescription className="text-xs">
-              {imgMeta?.bank ? `Bank: ${imgMeta.bank}` : ""} {imgMeta?.slip ? `• Slip #: ${imgMeta.slip}` : ""}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="rounded-lg overflow-hidden border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={imgSrc || ""}
-              alt="Deposit Slip"
-              className="w-full h-auto object-contain max-h-[70vh] bg-black/5"
-            />
-          </div>
-
-          <DialogFooter>
-            <button
-              type="button"
-              onClick={() => setImgOpen(false)}
-              className="px-4 py-2 rounded border hover:bg-gray-50"
-            >
-              Close
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
