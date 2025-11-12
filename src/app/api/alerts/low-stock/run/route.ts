@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import notifyAdmins, { type LowStockItem } from "@/lib/notify-admins";
 import { createClient } from "@supabase/supabase-js";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 /* --- Supabase admin client --- */
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -9,9 +12,9 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-export async function POST() {
+async function handle() {
   try {
-    // 1️⃣ Pull all items with low, critical, or out-of-stock levels
+    // 1) Pull items with low/critical/out-of-stock
     const { data, error } = await supabase
       .from("inventory")
       .select("sku, product_name, quantity, stock_level")
@@ -25,7 +28,6 @@ export async function POST() {
       qty: r.quantity,
     }));
 
-    // 2️⃣ If none found, respond gracefully
     if (!items.length) {
       return NextResponse.json({
         ok: true,
@@ -35,18 +37,16 @@ export async function POST() {
       });
     }
 
-    // 3️⃣ Send email to all admins
     const result = await notifyAdmins(items);
-
-    return NextResponse.json({
-      ok: true,
-      sent: result.sent,
-      count: items.length,
-    });
+    return NextResponse.json({ ok: result.ok, sent: result.sent, count: items.length });
   } catch (e: any) {
     return NextResponse.json(
-      { ok: false, error: e.message ?? "Failed to trigger low stock alert" },
+      { ok: false, error: e?.message ?? "Failed to trigger low stock alert" },
       { status: 500 }
     );
   }
 }
+
+export async function POST() { return handle(); }
+// Allow Vercel cron via GET
+export async function GET() { return handle(); }
