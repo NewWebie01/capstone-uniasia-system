@@ -45,30 +45,19 @@ const Menus: MenuItem[] = [
     href: "/customer/product-catalog",
     icon: ShoppingBag,
   },
-
-  // Cart / Checkout (moved next to Product Catalog)
   { title: "Cart (Checkout)", href: "/customer/checkout", icon: ShoppingCart },
-
-  // My orders
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
 
-  // Payments
+  // NEW: Payment Schedule
+  { title: "Payment Schedule", href: "/customer/payments/schedule", icon: ReceiptText },
+
+  // (optional) keep the uploader page hidden or re-enable if you want:
   // { title: "Payments", href: "/customer/payments", icon: ReceiptText },
 
-  // Payment History
-  {
-    title: "Payment History",
-    href: "/customer/payments/history",
-    icon: History,
-  },
+  { title: "Payment History", href: "/customer/payments/history", icon: History },
 
-  // Returns flows
   { title: "Returns / Issues", href: "/customer/returns", icon: RotateCcw },
-  {
-    title: "Return Status",
-    href: "/customer/returns/status",
-    icon: BadgeCheck,
-  },
+  { title: "Return Status", href: "/customer/returns/status", icon: BadgeCheck },
 ];
 
 export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
@@ -152,15 +141,16 @@ export default function CustomerSidebar({ open, setOpen }: SidebarProps) {
             const isActive =
               pathname === menu.href || pathname?.startsWith(menu.href + "/");
 
-            const highlightTitles = new Set([
-              "Product catalog",
-              "Cart (Checkout)",
-              "My orders",
-              "Payments",
-              "Payment History",
-              "Returns / Issues",
-              "Return Status",
-            ]);
+const highlightTitles = new Set([
+  "Product catalog",
+  "Cart (Checkout)",
+  "My orders",
+  "Payments",
+  "Payment Schedule",      // ← add this
+  "Payment History",
+  "Returns / Issues",
+  "Return Status",
+]);
 
             const IconOrImage = menu.src ? (
               <Image src={menu.src} alt={menu.title} width={20} height={20} />
