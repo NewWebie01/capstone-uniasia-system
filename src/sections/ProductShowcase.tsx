@@ -22,14 +22,14 @@ export function ProductShowcase() {
   const [selected, setSelected] = useState<InventoryItem | null>(null);
   const router = useRouter();
 
-  // Load sample products
+  // Load products (limit to 10 => 2 rows x 5 cols on md+)
   useEffect(() => {
     const fetchProducts = async () => {
       setLoading(true);
       const { data, error } = await supabase
         .from("inventory")
         .select("id, product_name, category, subcategory, unit_price, image_url")
-        .limit(12);
+        .limit(10);
 
       if (error) {
         console.error(error);
@@ -51,19 +51,11 @@ export function ProductShowcase() {
     return () => document.removeEventListener("keydown", onEsc);
   }, [selected]);
 
-  /** Handle Add to Cart — if not logged in → redirect to login */
-  const handleAddToCart = async (item: InventoryItem) => {
-    const { data } = await supabase.auth.getSession();
-    const isLoggedIn = !!data?.session;
-
-    if (!isLoggedIn) {
-      toast.info("Please log in to add items to your cart.");
-      router.push("/login?next=/customer/checkout");
-      return;
-    }
-
-    // If logged in, you can later replace this with your modal open logic
-    toast.success(`${item.product_name} added to cart.`);
+  /** Handle Add to Cart — always go to Login (no cart add) */
+  const handleAddToCart = (item: InventoryItem) => {
+    // Optional: gentle nudge before redirect
+    toast.info("Please log in to continue.");
+    router.push("/login?next=/customer/checkout");
   };
 
   return (
@@ -72,7 +64,8 @@ export function ProductShowcase() {
         {loading ? (
           <p>Loading products...</p>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+          // 2 columns on mobile, 5 columns on md+ → with 10 items => 2 rows x 5 cols
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-6">
             {products.map((item, index) => (
               <motion.div
                 key={item.id}
