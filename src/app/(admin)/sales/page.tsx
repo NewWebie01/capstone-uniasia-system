@@ -98,6 +98,18 @@ type OrderWithDetails = {
 
 type PickingOrder = { orderId: string; status: "accepted" | "rejected" };
 
+/* ===== Sorting keys for inventory (including virtual "total") ===== */
+type InvSortKey =
+  | "sku"
+  | "product_name"
+  | "category"
+  | "subcategory"
+  | "unit"
+  | "quantity"
+  | "unit_price"
+  | "cost_price"
+  | "total";
+
 function SalesPageContent() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
@@ -141,6 +153,12 @@ function SalesPageContent() {
 
   type Processor = { name: string; email: string; role: string | null };
   const [processor, setProcessor] = useState<Processor | null>(null);
+
+  /* ===== Inventory sorting & pagination state ===== */
+  const [invSortKey, setInvSortKey] = useState<InvSortKey>("product_name");
+  const [invSortDir, setInvSortDir] = useState<"asc" | "desc">("asc");
+  const INV_ROWS_PER_PAGE = 10;
+  const [invPage, setInvPage] = useState(1);
 
   useEffect(() => {
     (async () => {
@@ -345,10 +363,10 @@ function SalesPageContent() {
     () => orders.filter((o) => o.status === "completed").length,
     [orders]
   );
-const displayTotalNoTax = useMemo(
-  () => subtotalBeforeDiscount + totals.interestAmount,
-  [subtotalBeforeDiscount, totals.interestAmount]
-);
+  const displayTotalNoTax = useMemo(
+    () => subtotalBeforeDiscount + totals.interestAmount,
+    [subtotalBeforeDiscount, totals.interestAmount]
+  );
   const pendingOrAccepted = useMemo(
     () => orders.filter((o) => o.status === "pending" || o.status === "accepted"),
     [orders]
@@ -358,6 +376,11 @@ const displayTotalNoTax = useMemo(
     () => orders.filter((o) => o.status === "pending").length,
     [orders]
   );
+
+  // 👉 Reset inventory pager when searching
+  useEffect(() => {
+    setInvPage(1);
+  }, [searchQuery]);
 
   // 👉 Autofill Sales Rep with the customer's name (locked/read-only)
   useEffect(() => {
@@ -498,6 +521,79 @@ const displayTotalNoTax = useMemo(
     poNumber: false,
     repName: false,
   });
+
+  /* ======= Inventory sorting & pagination helpers ======= */
+  const filteredInventory = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((it) => {
+      const hay = `${it.product_name} ${it.sku} ${it.category} ${it.subcategory}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [items, searchQuery]);
+
+  const sortedInventory = useMemo(() => {
+    const arr = [...filteredInventory];
+    const dir = invSortDir === "asc" ? 1 : -1;
+
+    const getVal = (it: InventoryItem, key: InvSortKey): any => {
+      if (key === "total") return (Number(it.unit_price) || 0) * (Number(it.quantity) || 0);
+      if (key === "cost_price") return it.cost_price ?? null;
+      return (it as any)[key];
+    };
+
+    arr.sort((a, b) => {
+      const va = getVal(a, invSortKey);
+      const vb = getVal(b, invSortKey);
+
+      // Handle null/undefined
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1; // nulls last
+      if (vb == null) return -1;
+
+      if (typeof va === "number" && typeof vb === "number") {
+        return (va - vb) * dir;
+      }
+      // compare strings case-insensitively
+      const sa = String(va).toLowerCase();
+      const sb = String(vb).toLowerCase();
+      if (sa < sb) return -1 * dir;
+      if (sa > sb) return 1 * dir;
+      return 0;
+    });
+
+    return arr;
+  }, [filteredInventory, invSortKey, invSortDir]);
+
+  const invTotalRows = sortedInventory.length;
+  const invTotalPages = Math.max(1, Math.ceil(invTotalRows / INV_ROWS_PER_PAGE));
+  const invClampedPage = Math.min(invPage, invTotalPages);
+  const invStart = (invClampedPage - 1) * INV_ROWS_PER_PAGE;
+  const invEnd = Math.min(invStart + INV_ROWS_PER_PAGE, invTotalRows);
+  const pagedInventory = useMemo(
+    () => sortedInventory.slice(invStart, invEnd),
+    [sortedInventory, invStart, invEnd]
+  );
+
+  const toggleInvSort = (key: InvSortKey) => {
+    setInvPage(1); // reset page when sorting changes
+    setInvSortKey((prevKey) => {
+      if (prevKey === key) {
+        // same key → flip direction
+        setInvSortDir((prevDir) => (prevDir === "asc" ? "desc" : "asc"));
+        return prevKey;
+      } else {
+        // new key → default to asc
+        setInvSortDir("asc");
+        return key;
+      }
+    });
+  };
+
+  const sortIcon = (key: InvSortKey) => {
+    if (invSortKey !== key) return "↕";
+    return invSortDir === "asc" ? "▲" : "▼";
+  };
 
   /* ======= Accept / Reject / Complete ======= */
   const handleAcceptOrder = async (order: OrderWithDetails) => {
@@ -794,16 +890,6 @@ const displayTotalNoTax = useMemo(
   };
 
   /* ======= UI ======= */
-  // Derived lists
-  const filteredInventory = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((it) => {
-      const hay = `${it.product_name} ${it.sku} ${it.category} ${it.subcategory}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [items, searchQuery]);
-
   const pagedOrders = useMemo(() => {
     return pendingOrAccepted.slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage);
   }, [pendingOrAccepted, currentPage]);
@@ -967,24 +1053,38 @@ const displayTotalNoTax = useMemo(
         )}
       </AnimatePresence>
 
-      {/* Inventory Table */}
-      <div className="overflow-x-auto rounded-lg shadow mb-6">
+      {/* Inventory Table (with sorting & pagination) */}
+      <div className="overflow-x-auto rounded-lg shadow mb-2">
         <table className="min-w-full bg-white text-sm">
           <thead className="bg-[#ffba20] text-black text-left">
             <tr>
-              <th className="py-2 px-4">SKU</th>
-              <th className="py-2 px-4">Product</th>
-              <th className="py-2 px-4">Category</th>
-              <th className="py-2 px-4">Subcategory</th>
-              <th className="py-2 px-4">Unit</th>
-              <th className="py-2 px-4 text-right">Quantity</th>
-              <th className="py-2 px-4 text-right">Unit Price</th>
-              <th className="py-2 px-4 text-right">Cost Price</th>
-              <th className="py-2 px-4 text-right">Total</th>
+              {[
+                { key: "sku", label: "SKU" },
+                { key: "product_name", label: "Product" },
+                { key: "category", label: "Category" },
+                { key: "subcategory", label: "Subcategory" },
+                { key: "unit", label: "Unit" },
+                { key: "quantity", label: "Quantity", align: "right" },
+                { key: "unit_price", label: "Unit Price", align: "right" },
+                { key: "cost_price", label: "Cost Price", align: "right" },
+                { key: "total", label: "Total", align: "right" },
+              ].map((h) => (
+                <th key={h.key} className={`py-2 px-4 ${h.align === "right" ? "text-right" : ""}`}>
+                  <button
+                    onClick={() => toggleInvSort(h.key as InvSortKey)}
+                    className="inline-flex items-center gap-1 font-semibold hover:opacity-80"
+                    title={`Sort by ${h.label}`}
+                    aria-label={`Sort by ${h.label}`}
+                  >
+                    <span>{h.label}</span>
+                    <span className="text-xs">{sortIcon(h.key as InvSortKey)}</span>
+                  </button>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {filteredInventory.map((it) => (
+            {pagedInventory.map((it) => (
               <tr
                 key={it.id}
                 className={
@@ -1009,8 +1109,49 @@ const displayTotalNoTax = useMemo(
                 </td>
               </tr>
             ))}
+            {pagedInventory.length === 0 && (
+              <tr>
+                <td className="py-4 px-4 text-center text-gray-500" colSpan={9}>
+                  No inventory found.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
+      </div>
+
+      {/* Inventory pagination controls */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-6">
+        <div className="text-sm text-gray-600">
+          Rows {invTotalRows === 0 ? 0 : invStart + 1}–{invEnd} of {invTotalRows}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setInvPage((p) => Math.max(1, p - 1))}
+            disabled={invClampedPage === 1}
+            className={`px-3 py-1.5 rounded ${
+              invClampedPage === 1
+                ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+                : "bg-blue-600 text-white hover:bg-blue-700"
+            }`}
+          >
+            ← Prev
+          </button>
+          <span className="text-sm font-semibold text-gray-700">
+            Page {invClampedPage} of {invTotalPages}
+          </span>
+          <button
+            onClick={() => setInvPage((p) => (p < invTotalPages ? p + 1 : p))}
+            disabled={invClampedPage >= invTotalPages}
+            className={`px-3 py-1.5 rounded ${
+              invClampedPage >= invTotalPages
+                ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+                : "bg-blue-600 text-white hover:bg-blue-700"
+            }`}
+          >
+            Next →
+          </button>
+        </div>
       </div>
 
       {/* Orders List */}
@@ -1131,7 +1272,7 @@ const displayTotalNoTax = useMemo(
           );
         })}
 
-        {/* Pagination */}
+        {/* Orders Pagination */}
         <div className="flex justify-between items-center mt-6">
           <button
             onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
@@ -1435,43 +1576,42 @@ const displayTotalNoTax = useMemo(
                 </div>
 
                 {selectedOrder.customers.payment_type === "Credit" && (
-  <>
-    <div className="flex justify-between">
-      <span>
-        Interest Amount ({totals.effectiveInterestPercent}%):
-        <div className="text-xs text-gray-500">For credit terms</div>
-      </span>
-      <span>{peso(totals.interestAmount)}</span>
-    </div>
+                  <>
+                    <div className="flex justify-between">
+                      <span>
+                        Interest Amount ({totals.effectiveInterestPercent}%):
+                        <div className="text-xs text-gray-500">For credit terms</div>
+                      </span>
+                      <span>{peso(totals.interestAmount)}</span>
+                    </div>
 
-    <div className="flex items-center gap-4">
-      <div className="flex items-center gap-2">
-        <span className="font-medium">Terms (months):</span>
-        <span className="px-2 py-1 rounded bg-gray-100 text-gray-700 font-semibold">
-          {numberOfTerms}
-        </span>
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="font-medium">Interest %:</span>
-        <span className="px-2 py-1 rounded bg-gray-100 text-gray-700 font-semibold">
-          {interestPercent || totals.effectiveInterestPercent}
-        </span>
-      </div>
-    </div>
-  </>
-)}
-
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">Terms (months):</span>
+                        <span className="px-2 py-1 rounded bg-gray-100 text-gray-700 font-semibold">
+                          {numberOfTerms}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">Interest %:</span>
+                        <span className="px-2 py-1 rounded bg-gray-100 text-gray-700 font-semibold">
+                          {interestPercent || totals.effectiveInterestPercent}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 <div className="flex justify-between text-xl font-bold border-t pt-2">
                   <span>
                     TOTAL ORDER AMOUNT:
                     <div className="text-xs text-gray-500">
-  Subtotal + Interest (tax shown above but not included here)
-</div>
+                      Subtotal + Interest (tax shown above but not included here)
+                    </div>
                   </span>
                   <span className="text-green-700">
-  {peso(displayTotalNoTax)}
-</span>
+                    {peso(displayTotalNoTax)}
+                  </span>
                 </div>
 
                 {selectedOrder.customers.payment_type === "Credit" && (
