@@ -106,31 +106,29 @@ async function getAdminRecipients(): Promise<string[]> {
   /* 4) From Auth — ALL confirmed users whose user_metadata.role === "admin" (paginated) */
   try {
     let page = 1;
-    const perPage = 1000; // plenty
-    // loop until fewer than perPage returned
-    // @ts-ignore - types allow page/perPage in supabase-js v2
+    const perPage = 1000;
+
     for (;;) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      const { data, error } = await db.auth.admin.listUsers({ page, perPage });
+      // Note: suppress TS noise by casting; we DO NOT use any ESLint rule comments.
+      const result: any = await db.auth.admin.listUsers({ page, perPage });
+      const { data, error } = result as {
+        data: { users: Array<any> } | null;
+        error: any | null;
+      };
+
       if (error) break;
 
-      const users = (data?.users ?? []) as unknown as Array<{
-        email?: string | null;
-        email_confirmed_at?: string | null;
-        user_metadata?: Record<string, any>;
-        app_metadata?: Record<string, any>;
-      }>;
-
+      const users = data?.users ?? [];
       for (const u of users) {
         const role =
-          (u.user_metadata && u.user_metadata.role) ??
-          (u.app_metadata && (u.app_metadata as any).role);
+          (u?.user_metadata && u.user_metadata.role) ??
+          (u?.app_metadata && u.app_metadata.role);
         if (role === "admin" && isEmail(u.email) && !!u.email_confirmed_at) {
-          found.push(u.email!.toLowerCase());
+          found.push(String(u.email).toLowerCase());
         }
       }
 
-      if (!data || (data.users?.length ?? 0) < perPage) break;
+      if (!data || users.length < perPage) break;
       page += 1;
     }
   } catch {
@@ -172,14 +170,7 @@ export default async function notifyAdmins(items: LowStockItem[]) {
   return { ok: true as const, sent: to.length };
 }
 
-export async function notifyAdminsLowStock(payload: {
-  sku: string;
-  product_name: string;
-  quantity: number;
-  threshold: number;
-}) {
-  // reuse the default sender
-  return await notifyAdmins([
-    { sku: payload.sku, name: payload.product_name, qty: payload.quantity },
-  ]);
+/* Optional named export to support `import { notifyAdminsLowStock } ...` */
+export async function notifyAdminsLowStock(items: LowStockItem[]) {
+  return notifyAdmins(items);
 }
