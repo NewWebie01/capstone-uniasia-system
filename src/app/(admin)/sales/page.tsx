@@ -1,4 +1,6 @@
+// src/app/sales/page.tsx
 "use client";
+
 import { Suspense } from "react";
 import { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -15,6 +17,14 @@ import {
   getPHISOString,
 } from "@/lib/datetimePH";
 
+/* ----------------------------- Helpers ----------------------------- */
+const peso = (n: number) =>
+  (Number(n) || 0).toLocaleString("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    minimumFractionDigits: 2,
+  });
+
 /* =========================
    TYPES
 ========================= */
@@ -27,9 +37,9 @@ type InventoryItem = {
   unit: string;
   quantity: number;
   unit_price: number;
-  cost_price?: number;
+  cost_price?: number | null;
   amount: number;
-  profit?: number;
+  profit?: number | null;
 };
 
 type MovingProduct = {
@@ -58,7 +68,7 @@ type OrderWithDetails = {
     phone: string;
     address: string;
     contact_person?: string;
-    code?: string;
+    code?: string | null;
     area?: string;
     date?: string;
     transaction?: string;
@@ -70,6 +80,7 @@ type OrderWithDetails = {
   order_items: {
     quantity: number;
     price: number;
+    discount_percent?: number | null;
     inventory: {
       id: number;
       sku: string;
@@ -79,8 +90,8 @@ type OrderWithDetails = {
       unit: string;
       quantity: number;
       unit_price: number;
-      cost_price?: number;
-      amount?: number;
+      cost_price?: number | null;
+      amount?: number | null;
     };
   }[];
 };
@@ -122,7 +133,7 @@ function SalesPageContent() {
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [forwarder, setForwarder] = useState("");
 
-  // Activity Logs Modal state (unchanged API – modal UI not included here)
+  // Activity Logs Modal state (API kept for continuity – UI not rendered here)
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
@@ -193,12 +204,15 @@ function SalesPageContent() {
   const [showMovingReport, setShowMovingReport] = useState(false);
 
   const fetchMovingProducts = async () => {
-    // Use the same view, sort by units_90d desc for “fast”; we can show both ends in one table.
     const { data, error } = await supabase
       .from("v_fast_moving_products")
       .select("*")
       .order("units_90d", { ascending: false });
-    if (!error && data) setMovingProducts(data);
+    if (error) {
+      toast.error("Failed to load moving products.");
+      return;
+    }
+    if (data) setMovingProducts(data);
   };
 
   const ordersPerPage = 10;
@@ -284,6 +298,16 @@ function SalesPageContent() {
     interestPercent,
   ]);
 
+  // Block completion if any line has 0 stock or requested qty > stock
+  const hasInsufficientStock = useMemo(() => {
+    if (!selectedOrder) return false;
+    return selectedOrder.order_items.some((item, idx) => {
+      const qtyRequested = editedQuantities[idx] ?? item.quantity;
+      const inStock = Number(item.inventory.quantity || 0);
+      return inStock === 0 || qtyRequested > inStock;
+    });
+  }, [selectedOrder, editedQuantities]);
+
   const computedOrderTotal = totals.subtotalAfterDiscount;
   const salesTaxValue = totals.tax;
   const getGrandTotalWithInterest = () => totals.grandTotal;
@@ -321,27 +345,40 @@ function SalesPageContent() {
     () => orders.filter((o) => o.status === "completed").length,
     [orders]
   );
+const displayTotalNoTax = useMemo(
+  () => subtotalBeforeDiscount + totals.interestAmount,
+  [subtotalBeforeDiscount, totals.interestAmount]
+);
+  const pendingOrAccepted = useMemo(
+    () => orders.filter((o) => o.status === "pending" || o.status === "accepted"),
+    [orders]
+  );
+
   const pendingOrders = useMemo(
     () => orders.filter((o) => o.status === "pending").length,
     [orders]
   );
 
   // 👉 Autofill Sales Rep with the customer's name (locked/read-only)
-useEffect(() => {
-  if (!selectedOrder) return;
-  const customerName = selectedOrder.customers?.name || "";
-  if (customerName) setRepName(customerName);
-}, [selectedOrder, showSalesOrderModal]);
+  useEffect(() => {
+    if (!selectedOrder) return;
+    const customerName = selectedOrder.customers?.name || "";
+    if (customerName) setRepName(customerName);
+  }, [selectedOrder, showSalesOrderModal]);
 
   useEffect(() => {
-  if (showSalesOrderModal && (!repName || !repName.trim()) && processor?.name) {
-    setRepName(nameOnly(processor.name));
-  }
-}, [showSalesOrderModal, processor, repName]);
+    if (showSalesOrderModal && (!repName || !repName.trim()) && processor?.name) {
+      setRepName(nameOnly(processor.name));
+    }
+  }, [showSalesOrderModal, processor, repName]);
 
   /* ======= Data fetches & realtime ======= */
   const fetchItems = async () => {
-    const { data } = await supabase.from("inventory").select("*, profit");
+    const { data, error } = await supabase.from("inventory").select("*, profit");
+    if (error) {
+      toast.error("Failed to load inventory.");
+      return;
+    }
     if (data) setItems(data);
   };
 
@@ -375,6 +412,7 @@ useEffect(() => {
         order_items (
           quantity,
           price,
+          discount_percent,
           inventory:inventory_id (
             id,
             sku,
@@ -391,7 +429,12 @@ useEffect(() => {
       )
       .order("date_created", { ascending: false });
 
-    if (!error && data) {
+    if (error) {
+      toast.error("Failed to load orders.");
+      return;
+    }
+
+    if (data) {
       const formatted = data.map((o: any) => ({
         ...o,
         customers: Array.isArray(o.customers) ? o.customers[0] : o.customers,
@@ -464,7 +507,7 @@ useEffect(() => {
         data: { user },
       } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
-      const userRole = user?.user_metadata?.role || "unknown";
+      const userRole = (user?.user_metadata as any)?.role || "unknown";
       await supabase.from("activity_logs").insert([
         {
           user_email: userEmail,
@@ -498,17 +541,19 @@ useEffect(() => {
 
     setSelectedOrder(order);
     setRepName(order.customers?.name || "");
-    setEditedQuantities(order.order_items.map((item) => item.quantity));
-    setEditedDiscounts(order.order_items.map(() => 0));
+
+    // use saved values from DB
+    setEditedQuantities(order.order_items.map((it) => it.quantity));
+    setEditedDiscounts(order.order_items.map((it) => it.discount_percent ?? 0));
+
     setNumberOfTerms(order.payment_terms || 1);
     setInterestPercent(order.interest_percent || interestFromTerms(order.payment_terms || 1));
 
     setShowSalesOrderModal(true);
     setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(processor?.name || "")));
-
     setPickingStatus((prev) => [...prev, { orderId: order.id, status: "accepted" }]);
 
-    // Notify customer: order approved
+    // Notify customer: order approved (best effort)
     try {
       await fetch("/api/notify-customer", {
         method: "POST",
@@ -536,6 +581,9 @@ useEffect(() => {
 
     // notify
     try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       await fetch("/api/notify-customer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -548,7 +596,7 @@ useEffect(() => {
           href: `/customer?txn=${order.customers.code ?? order.id}`,
           orderId: order.id,
           transactionCode: order.customers.code ?? null,
-          actorEmail: (await supabase.auth.getUser()).data.user?.email ?? "admin@system",
+          actorEmail: user?.email ?? "admin@system",
         }),
       });
     } catch (e) {
@@ -560,7 +608,7 @@ useEffect(() => {
         data: { user },
       } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
-      const userRole = user?.user_metadata?.role || "unknown";
+      const userRole = (user?.user_metadata as any)?.role || "unknown";
       await supabase.from("activity_logs").insert([
         {
           user_email: userEmail,
@@ -586,8 +634,9 @@ useEffect(() => {
     }
     fetchOrders();
   };
-// Keep only letters & spaces, cap to 30 chars
-const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().slice(0, 30);
+
+  // Keep only letters & spaces, cap to 30 chars
+  const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().slice(0, 30);
 
   const handleOrderComplete = async () => {
     if (!selectedOrder || isCompletingOrder) return;
@@ -678,7 +727,7 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
         .eq("id", selectedOrder.id);
       if (doneErr) throw doneErr;
 
-      // notify customer: order completed
+      // notify customer: order completed (best effort)
       try {
         await fetch("/api/notify-customer", {
           method: "POST",
@@ -745,6 +794,22 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
   };
 
   /* ======= UI ======= */
+  // Derived lists
+  const filteredInventory = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((it) => {
+      const hay = `${it.product_name} ${it.sku} ${it.category} ${it.subcategory}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [items, searchQuery]);
+
+  const pagedOrders = useMemo(() => {
+    return pendingOrAccepted.slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage);
+  }, [pendingOrAccepted, currentPage]);
+
+  const totalPages = Math.max(1, Math.ceil(pendingOrAccepted.length / ordersPerPage));
+
   return (
     <div className="p-6">
       {isCompletingOrder && <PageLoader label="Completing order…" />}
@@ -761,7 +826,7 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
 
       <input
         type="text"
-        placeholder="Search products..."
+        placeholder="Search inventory (name, SKU, category, subcategory)…"
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
         className="mb-4 w-full md:w-1/3 px-4 py-2 border rounded"
@@ -919,35 +984,31 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
             </tr>
           </thead>
           <tbody>
-            {items
-              .filter((it) =>
-                it.product_name.toLowerCase().includes(searchQuery.toLowerCase())
-              )
-              .map((it) => (
-                <tr
-                  key={it.id}
-                  className={
-                    "border-b hover:bg-gray-100 " +
-                    (it.quantity === 0 ? "bg-red-100 text-red-700 font-semibold" : "")
-                  }
-                >
-                  <td className="py-2 px-4">{it.sku}</td>
-                  <td className="py-2 px-4">{it.product_name}</td>
-                  <td className="py-2 px-4">{it.category}</td>
-                  <td className="py-2 px-4">{it.subcategory}</td>
-                  <td className="py-2 px-4">{it.unit}</td>
-                  <td className="py-2 px-4 text-right">{it.quantity}</td>
-                  <td className="py-2 px-4 text-right">₱{it.unit_price?.toLocaleString()}</td>
-                  <td className="py-2 px-4 text-right">
-                    {it.cost_price !== undefined && it.cost_price !== null
-                      ? `₱${it.cost_price.toLocaleString()}`
-                      : "—"}
-                  </td>
-                  <td className="py-2 px-4 text-right">
-                    ₱{(it.unit_price * it.quantity).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
+            {filteredInventory.map((it) => (
+              <tr
+                key={it.id}
+                className={
+                  "border-b hover:bg-gray-100 " +
+                  (it.quantity === 0 ? "bg-red-100 text-red-700 font-semibold" : "")
+                }
+              >
+                <td className="py-2 px-4">{it.sku}</td>
+                <td className="py-2 px-4">{it.product_name}</td>
+                <td className="py-2 px-4">{it.category}</td>
+                <td className="py-2 px-4">{it.subcategory}</td>
+                <td className="py-2 px-4">{it.unit}</td>
+                <td className="py-2 px-4 text-right">{it.quantity}</td>
+                <td className="py-2 px-4 text-right">{peso(it.unit_price)}</td>
+                <td className="py-2 px-4 text-right">
+                  {it.cost_price !== undefined && it.cost_price !== null
+                    ? peso(it.cost_price)
+                    : "—"}
+                </td>
+                <td className="py-2 px-4 text-right">
+                  {peso(it.unit_price * it.quantity)}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -955,113 +1016,120 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
       {/* Orders List */}
       <div className="mt-10" id="pending-orders-section" ref={pendingOrdersSectionRef}>
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
-        {orders
-          .filter((o) => o.status === "pending" || o.status === "accepted")
-          .slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage)
-          .map((order) => {
-            const isAccepted = isOrderAccepted(order.id);
-            const isRejected = pickingStatus.some(
-              (p) => p.orderId === order.id && p.status === "rejected"
-            );
-            return (
-              <div
-                key={order.id}
-                id={`order-card-${order.id}`}
-                ref={(el) => {
-                  orderRefs.current[order.id] = el;
-                }}
-                className={`border p-4 mb-4 rounded shadow bg-white text-base transition-all duration-500 ${
-                  isAccepted ? "border-blue-600 border-2" : ""
-                }`}
-              >
-                <div className="flex justify-between items-center mb-2">
-                  <span className="font-bold text-xl">
-                    Transaction ID:{" "}
-                    <span className="text-blue-700">{order.customers.code}</span>
-                  </span>
-                  <span
-                    className={`font-bold px-3 py-1 rounded text-base ml-4 ${
-                      order.customers.payment_type === "Credit"
-                        ? "bg-blue-200 text-blue-800"
-                        : order.customers.payment_type === "Cash"
-                        ? "bg-green-200 text-green-700"
-                        : "bg-orange-200 text-orange-700"
-                    }`}
-                  >
-                    {order.customers.payment_type || "N/A"}
+
+        {pendingOrAccepted.length === 0 && (
+          <div className="text-gray-500 italic mb-6">No pending or accepted orders.</div>
+        )}
+
+        {pagedOrders.map((order) => {
+          const isAccepted = isOrderAccepted(order.id);
+          const isRejected = pickingStatus.some(
+            (p) => p.orderId === order.id && p.status === "rejected"
+          );
+          return (
+            <div
+              key={order.id}
+              id={`order-card-${order.id}`}
+              ref={(el) => {
+                orderRefs.current[order.id] = el;
+              }}
+              className={`border p-4 mb-4 rounded shadow bg-white text-base transition-all duration-500 ${
+                isAccepted ? "border-blue-600 border-2" : ""
+              }`}
+            >
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-bold text-xl">
+                  Transaction ID:{" "}
+                  <span className="text-blue-700">{order.customers.code ?? "—"}</span>
+                </span>
+                <span
+                  className={`font-bold px-3 py-1 rounded text-base ml-4 ${
+                    order.customers.payment_type === "Credit"
+                      ? "bg-blue-200 text-blue-800"
+                      : order.customers.payment_type === "Cash"
+                      ? "bg-green-200 text-green-700"
+                      : "bg-orange-200 text-orange-700"
+                  }`}
+                >
+                  {order.customers.payment_type || "N/A"}
+                </span>
+              </div>
+
+              {isAccepted && (
+                <div className="mb-2 flex items-center">
+                  <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-base font-semibold shadow-sm">
+                    Processing by Admin
                   </span>
                 </div>
-                {isAccepted && (
-                  <div className="mb-2 flex items-center">
-                    <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-base font-semibold shadow-sm">
-                      Processing by Admin
+              )}
+
+              <p className="font-bold">Customer: {order.customers.name}</p>
+              <p>Email: {order.customers.email}</p>
+              <p>Phone: {order.customers.phone}</p>
+              <p>Address: {order.customers.address}</p>
+              <p>Status: {order.status}</p>
+              <p>
+                Order Date &amp; Time: {formatPHDate(order.date_created)}{" "}
+                {formatPHTime(order.date_created)}
+              </p>
+
+              <ul className="mt-2 list-disc list-inside">
+                {order.order_items.map((item, idx) => (
+                  <li key={idx}>
+                    {item.inventory.product_name} - {item.quantity} pcs
+                    <br />
+                    <span className="text-sm text-gray-600">
+                      Ordered: {peso(item.price)} | Now:{" "}
+                      {peso(item.inventory.unit_price)}
                     </span>
-                  </div>
-                )}
-                <p className="font-bold">Customer: {order.customers.name}</p>
-                <p>Email: {order.customers.email}</p>
-                <p>Phone: {order.customers.phone}</p>
-                <p>Address: {order.customers.address}</p>
-                <p>Status: {order.status}</p>
-                <p>
-                  Order Date &amp; Time: {formatPHDate(order.date_created)}{" "}
-                  {formatPHTime(order.date_created)}
-                </p>
-                <ul className="mt-2 list-disc list-inside">
-                  {order.order_items.map((item, idx) => (
-                    <li key={idx}>
-                      {item.inventory.product_name} - {item.quantity} pcs
-                      <br />
-                      <span className="text-sm text-gray-600">
-                        Ordered: ₱{item.price.toFixed(2)} | Now: ₱
-                        {item.inventory.unit_price?.toLocaleString()}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 font-bold text-lg">
-                  Total: ₱{order.total_amount.toLocaleString()}
-                </p>
-                {order.status !== "completed" && order.status !== "rejected" && (
-                  <div className="flex gap-2 mt-2">
-                    {!isAccepted && !isRejected && (
-                      <>
-                        <button
-                          onClick={() => handleAcceptOrder(order)}
-                          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-base"
-                        >
-                          Accept Order
-                        </button>
-                        <button
-                          onClick={() => {
-                            setShowRejectConfirm(true);
-                            setOrderToReject(order);
-                          }}
-                          className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
-                        >
-                          Reject Order
-                        </button>
-                      </>
-                    )}
-                    {isAccepted && (
+                  </li>
+                ))}
+              </ul>
+
+              <p className="mt-2 font-bold text-lg">
+                Total: {peso(order.total_amount)}
+              </p>
+
+              {order.status !== "completed" && order.status !== "rejected" && (
+                <div className="flex gap-2 mt-2">
+                  {!isAccepted && !isRejected && (
+                    <>
+                      <button
+                        onClick={() => handleAcceptOrder(order)}
+                        className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-base"
+                      >
+                        Accept Order
+                      </button>
                       <button
                         onClick={() => {
-                          setPickingStatus((prev) => prev.filter((p) => p.orderId !== order.id));
-                          setEditedQuantities([]);
-                          setEditedDiscounts([]);
-                          setSelectedOrder(null);
-                          setShowSalesOrderModal(false);
+                          setShowRejectConfirm(true);
+                          setOrderToReject(order);
                         }}
-                        className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                        className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-base"
                       >
-                        Cancel
+                        Reject Order
                       </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                    </>
+                  )}
+                  {isAccepted && (
+                    <button
+                      onClick={() => {
+                        setPickingStatus((prev) => prev.filter((p) => p.orderId !== order.id));
+                        setEditedQuantities([]);
+                        setEditedDiscounts([]);
+                        setSelectedOrder(null);
+                        setShowSalesOrderModal(false);
+                      }}
+                      className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
 
         {/* Pagination */}
         <div className="flex justify-between items-center mt-6">
@@ -1077,37 +1145,15 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
             ← Prev
           </button>
           <span className="text-base font-semibold text-gray-700">
-            Page {currentPage} of{" "}
-            {Math.ceil(
-              orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
-                ordersPerPage
-            )}
+            Page {Math.min(currentPage, totalPages)} of {totalPages}
           </span>
           <button
             onClick={() =>
-              setCurrentPage((p) =>
-                p <
-                Math.ceil(
-                  orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
-                    ordersPerPage
-                )
-                  ? p + 1
-                  : p
-              )
+              setCurrentPage((p) => (p < totalPages ? p + 1 : p))
             }
-            disabled={
-              currentPage >=
-              Math.ceil(
-                orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
-                  ordersPerPage
-              )
-            }
+            disabled={currentPage >= totalPages}
             className={`px-4 py-2 rounded ${
-              currentPage >=
-              Math.ceil(
-                orders.filter((o) => o.status === "pending" || o.status === "accepted").length /
-                  ordersPerPage
-              )
+              currentPage >= totalPages
                 ? "bg-gray-300 text-gray-600 cursor-not-allowed"
                 : "bg-blue-600 text-white hover:bg-blue-700"
             }`}
@@ -1117,19 +1163,20 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
         </div>
       </div>
 
-      {/* SALES ORDER MODAL (now includes editable Discount inputs) */}
+      {/* SALES ORDER MODAL */}
       {showSalesOrderModal && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-2xl w-[96vw] h-[94vh] mx-auto flex flex-col gap-6 px-10 py-8 my-4 text-[15px] max-w-none max-h-[94vh] overflow-y-auto mt-16">
             <h2 className="text-3xl font-bold mb-6 tracking-wide text-center text-gray-800">
               SALES ORDER
             </h2>
+
             <div className="flex flex-col md:flex-row md:justify-between mb-2 gap-2">
               <div>
                 <div>
                   <span className="font-medium">Sales Order Number: </span>
                   <span className="text-lg text-blue-700 font-bold">
-                    {selectedOrder.customers.code}
+                    {selectedOrder.customers.code ?? "—"}
                   </span>
                 </div>
                 <div>
@@ -1137,6 +1184,7 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
                   {formatPHISODate(new Date())}
                 </div>
               </div>
+
               <div className="text-right space-y-1">
                 {/* PO Number */}
                 <div className="flex items-baseline gap-2">
@@ -1184,22 +1232,21 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
                 </div>
 
                 {/* Sales Rep Name (autofilled from customer, read-only) */}
-<div>
-  <span className="font-medium">Sales Rep Name: </span>
-  <input
-    type="text"
-    value={repName}
-    readOnly
-    disabled
-    className="border-b outline-none px-1 bg-gray-100 text-gray-700 cursor-not-allowed border-gray-300"
-    style={{ minWidth: 220 }}
-    aria-label="Sales Rep Name (read-only)"
-  />
-  <div className="text-xs text-gray-500 mt-1">
-    Auto-filled from customer name
-  </div>
-</div>
-
+                <div>
+                  <span className="font-medium">Sales Rep Name: </span>
+                  <input
+                    type="text"
+                    value={repName}
+                    readOnly
+                    disabled
+                    className="border-b outline-none px-1 bg-gray-100 text-gray-700 cursor-not-allowed border-gray-300"
+                    style={{ minWidth: 220 }}
+                    aria-label="Sales Rep Name (read-only)"
+                  />
+                  <div className="text-xs text-gray-500 mt-1">
+                    Auto-filled from customer name
+                  </div>
+                </div>
 
                 <div>
                   <span className="font-medium">Payment Terms: </span>
@@ -1232,7 +1279,7 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
               </div>
             </div>
 
-            {/* Item Table – DISCOUNT inputs moved here */}
+            {/* Item Table – Discount inputs */}
             <div className="rounded-xl border mt-3">
               <table className="w-full text-[15px]">
                 <thead className="bg-[#ffba20] text-black">
@@ -1280,11 +1327,11 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
                             <span className="text-green-600">Available</span>
                           )}
                         </td>
-                        <td className="py-1 px-2 text-right">₱{price.toLocaleString()}</td>
+                        <td className="py-1 px-2 text-right">{peso(price)}</td>
                         <td className="py-1 px-2 text-right">
                           {item.inventory.cost_price !== undefined &&
                           item.inventory.cost_price !== null
-                            ? `₱${item.inventory.cost_price.toLocaleString()}`
+                            ? peso(item.inventory.cost_price)
                             : "—"}
                         </td>
                         <td className="py-1 px-2 text-right">
@@ -1324,10 +1371,7 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
                           </div>
                         </td>
                         <td className="py-1 px-2 text-right font-semibold">
-                          ₱
-                          {amount.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                          })}
+                          {peso(amount)}
                         </td>
                       </tr>
                     );
@@ -1345,10 +1389,7 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
                     <div className="text-xs text-gray-500">Sum before tax & discount</div>
                   </span>
                   <span>
-                    ₱
-                    {subtotalBeforeDiscount.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
+                    {peso(subtotalBeforeDiscount)}
                   </span>
                 </div>
 
@@ -1357,12 +1398,7 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
                     Sales Tax (12%):
                     <div className="text-xs text-gray-500">Tax applied to subtotal</div>
                   </span>
-                  <span>
-                    ₱
-                    {salesTaxValue.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
+                  <span>{peso(salesTaxValue)}</span>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -1384,11 +1420,7 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
                     <div className="text-xs text-gray-500">Sum of per-item discounts/adds</div>
                   </span>
                   <span className={totalDiscount !== 0 ? "text-orange-600 font-semibold" : ""}>
-                    {totalDiscount === 0
-                      ? "—"
-                      : `-₱${Math.abs(totalDiscount).toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}`}
+                    {totalDiscount === 0 ? "—" : `-${peso(Math.abs(totalDiscount))}`}
                   </span>
                 </div>
 
@@ -1398,74 +1430,48 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
                     <div className="text-xs text-gray-500">Subtotal after discount & tax</div>
                   </span>
                   <span>
-                    ₱
-                    {(subtotalBeforeDiscount + salesTaxValue - totalDiscount).toLocaleString(
-                      undefined,
-                      { minimumFractionDigits: 2 }
-                    )}
+                    {peso(subtotalBeforeDiscount + salesTaxValue - totalDiscount)}
                   </span>
                 </div>
 
                 {selectedOrder.customers.payment_type === "Credit" && (
-                  <>
-                    <div className="flex justify-between">
-                      <span>
-                        Interest Amount ({totals.effectiveInterestPercent}%):
-                        <div className="text-xs text-gray-500">For credit terms</div>
-                      </span>
-                      <span>
-                        ₱
-                        {totals.interestAmount.toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
+  <>
+    <div className="flex justify-between">
+      <span>
+        Interest Amount ({totals.effectiveInterestPercent}%):
+        <div className="text-xs text-gray-500">For credit terms</div>
+      </span>
+      <span>{peso(totals.interestAmount)}</span>
+    </div>
 
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">Terms (months):</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={48}
-                        value={numberOfTerms}
-                        onChange={(e) => {
-                          const n = Math.max(1, Math.min(48, Number(e.target.value) || 1));
-                          setNumberOfTerms(n);
-                        }}
-                        className="border rounded px-2 py-1 w-20 text-center"
-                      />
-                      <span className="font-medium">Interest %:</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={30}
-                        step={1}
-                        value={interestPercent || totals.effectiveInterestPercent}
-                        onChange={(e) => {
-                          let p = Number(e.target.value);
-                          if (isNaN(p)) p = 0;
-                          p = Math.max(0, Math.min(30, p));
-                          setInterestPercent(p);
-                        }}
-                        className="border rounded px-2 py-1 w-20 text-center"
-                      />
-                    </div>
-                  </>
-                )}
+    <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2">
+        <span className="font-medium">Terms (months):</span>
+        <span className="px-2 py-1 rounded bg-gray-100 text-gray-700 font-semibold">
+          {numberOfTerms}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="font-medium">Interest %:</span>
+        <span className="px-2 py-1 rounded bg-gray-100 text-gray-700 font-semibold">
+          {interestPercent || totals.effectiveInterestPercent}
+        </span>
+      </div>
+    </div>
+  </>
+)}
+
 
                 <div className="flex justify-between text-xl font-bold border-t pt-2">
                   <span>
                     TOTAL ORDER AMOUNT:
                     <div className="text-xs text-gray-500">
-                      Final total (tax, discount &amp; interest)
-                    </div>
+  Subtotal + Interest (tax shown above but not included here)
+</div>
                   </span>
                   <span className="text-green-700">
-                    ₱
-                    {getGrandTotalWithInterest().toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
+  {peso(displayTotalNoTax)}
+</span>
                 </div>
 
                 {selectedOrder.customers.payment_type === "Credit" && (
@@ -1475,10 +1481,7 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
                       <div className="text-xs text-gray-500">Amount per installment/month</div>
                     </span>
                     <span className="font-bold text-blue-700">
-                      ₱
-                      {getPerTermAmount().toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                      })}
+                      {peso(getPerTermAmount())}
                     </span>
                   </div>
                 )}
@@ -1488,8 +1491,20 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
             {/* Action Buttons */}
             <div className="flex justify-center gap-8 mt-6">
               <button
-                className="bg-green-600 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition"
-                onClick={() => setShowFinalConfirm(true)}
+                className={`px-10 py-4 rounded-xl text-lg font-semibold shadow transition
+    ${hasInsufficientStock
+      ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+      : "bg-green-600 text-white hover:bg-green-700"}`}
+                onClick={() => {
+                  if (hasInsufficientStock) {
+                    toast.error("Cannot proceed: at least one item is out of stock or exceeds available stock.");
+                    return;
+                  }
+                  setShowFinalConfirm(true);
+                }}
+                disabled={hasInsufficientStock}
+                aria-disabled={hasInsufficientStock}
+                title={hasInsufficientStock ? "Fix stock issues before confirming." : "Confirm"}
               >
                 Confirm
               </button>
@@ -1521,11 +1536,18 @@ const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().sli
             </div>
             <div className="flex justify-center gap-10 mt-4">
               <button
-                className={`bg-green-600 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow hover:bg-green-700 transition flex items-center justify-center ${
-                  isCompletingOrder ? "opacity-75 cursor-not-allowed" : ""
-                }`}
-                onClick={handleOrderComplete}
-                disabled={isCompletingOrder}
+                className={`px-8 py-3 rounded-xl text-lg font-semibold shadow flex items-center justify-center transition
+    ${isCompletingOrder || hasInsufficientStock
+      ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+      : "bg-green-600 text-white hover:bg-green-700"}`}
+                onClick={() => {
+                  if (hasInsufficientStock) {
+                    toast.error("Cannot proceed: fix stock issues first.");
+                    return;
+                  }
+                  handleOrderComplete();
+                }}
+                disabled={isCompletingOrder || hasInsufficientStock}
                 aria-busy={isCompletingOrder}
               >
                 {isCompletingOrder ? (
