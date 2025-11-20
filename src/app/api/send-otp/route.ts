@@ -2,18 +2,35 @@
 import { NextResponse } from "next/server";
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY!);
+const apiKey = process.env.RESEND_API_KEY;
+const fromAddress = process.env.RESEND_FROM;
+
+const resend = new Resend(apiKey || "");
 
 export async function POST(req: Request) {
-  const { email, otp } = await req.json();
-
-  if (!email || !otp) {
-    return NextResponse.json({ error: "Email and OTP required." }, { status: 400 });
-  }
-
   try {
-    const { error } = await resend.emails.send({
-     from: `UniAsia Hardware <${process.env.RESEND_FROM!}>`,
+    // 1. Validate env vars
+    if (!apiKey || !fromAddress) {
+      console.error("Missing RESEND_API_KEY or RESEND_FROM");
+      return NextResponse.json(
+        { error: "Server is missing RESEND_API_KEY or RESEND_FROM env vars." },
+        { status: 500 }
+      );
+    }
+
+    // 2. Get body
+    const { email, otp } = await req.json();
+
+    if (!email || !otp) {
+      return NextResponse.json(
+        { error: "Email and OTP required." },
+        { status: 400 }
+      );
+    }
+
+    // 3. Send email via Resend
+    const { data, error } = await resend.emails.send({
+      from: `UniAsia Hardware <${fromAddress}>`,
       to: email,
       subject: "Your UniAsia OTP Code",
       html: `
@@ -25,10 +42,22 @@ export async function POST(req: Request) {
         </div>
       `,
     });
-    if (error) return NextResponse.json({ error }, { status: 500 });
 
+    if (error) {
+      console.error("Resend error:", error);
+      return NextResponse.json(
+        { error: (error as any).message ?? "Resend failed" },
+        { status: 500 }
+      );
+    }
+
+    console.log("OTP email sent:", data?.id);
     return NextResponse.json({ success: true });
-  } catch (err) {
-    return NextResponse.json({ error: "Failed to send OTP." }, { status: 500 });
+  } catch (err: any) {
+    console.error("Send-OTP route error:", err);
+    return NextResponse.json(
+      { error: err?.message ?? "Failed to send OTP." },
+      { status: 500 }
+    );
   }
 }
