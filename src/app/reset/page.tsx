@@ -28,16 +28,23 @@ export default function ResetPasswordPage() {
     setError("");
     setIsLoading(true);
 
-    // Directly call Supabase resetPasswordForEmail
+    const origin =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: "https://uniasia.shop/update-password", // Change this to your prod domain if needed!
+      redirectTo: `${origin}/update-password`,
     });
+
     if (error) {
+      console.error("resetPasswordForEmail error:", error);
       setError("Could not send reset email. Please check your email address.");
       setSent(false);
     } else {
       setSent(true);
     }
+
     setIsLoading(false);
   };
 
@@ -51,16 +58,11 @@ export default function ResetPasswordPage() {
         transition={{ duration: 0.6, ease: "easeOut" }}
         className="w-full max-w-md mx-auto bg-white rounded-2xl shadow-2xl flex flex-col items-center py-10 px-7"
       >
-        <Image
-          src={Logo}
-          alt="UNIASIA Logo"
-          width={60}
-          height={60}
-          className="mb-2"
-        />
+        <Image src={Logo} alt="UNIASIA Logo" width={60} height={60} className="mb-2" />
         <h1 className="text-2xl font-bold mb-6 text-[#181918] text-center">
           Reset Password
         </h1>
+
         {sent ? (
           <div className="text-green-600 text-center">
             If this email is registered, a reset link was sent!
@@ -92,6 +94,7 @@ export default function ResetPasswordPage() {
             </motion.button>
           </form>
         )}
+
         <button
           className="mt-5 text-xs underline text-gray-600 hover:text-[#ffba20] transition"
           onClick={() => router.push("/login")}

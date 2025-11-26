@@ -105,6 +105,7 @@ export default function AccountCreationPage() {
     setHasScrolledToBottom(false);
   };
 
+  // 🔧 UPDATED VERSION
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const newErrors: Record<string, string> = {};
@@ -147,23 +148,27 @@ export default function AccountCreationPage() {
         password: formData.password,
         options: {
           data: {
-            full_name: fullName, // shows in Auth "Display name"
+            full_name: fullName,
             name: fullName,
             first_name: formData.first_name.trim(),
             last_name: formData.last_name.trim(),
             contact_number: "+63" + formData.contact_number,
             phone: "+63" + formData.contact_number,
             role: "customer",
-            provider_type: "email", // for quick reference in your UI
+            provider_type: "email",
           },
           emailRedirectTo: `${origin}/auth/callback`,
         },
       });
 
+      // Handle explicit Supabase error first
       if (error) {
         const msg = error.message || "";
         if (/already (registered|exists)/i.test(msg)) {
-          setErrors((p) => ({ ...p, email: "This email is already registered. Please log in instead." }));
+          setErrors((p) => ({
+            ...p,
+            email: "This email is already registered. Please log in instead.",
+          }));
           toast.error("Email already registered.");
         } else {
           toast.error(msg);
@@ -171,26 +176,52 @@ export default function AccountCreationPage() {
         return;
       }
 
+      const user = data.user;
+
+      if (!user) {
+        toast.error("Sign up failed. Please try again.");
+        return;
+      }
+
+      // 🔒 Guard for “obfuscated user” (email already taken)
+      const identities = (user as any).identities as any[] | undefined;
+      if (Array.isArray(identities) && identities.length === 0) {
+        setErrors((p) => ({
+          ...p,
+          email: "This email is already registered. Please log in instead.",
+        }));
+        toast.error("Email already registered.");
+        return;
+      }
+
+      const userId = user.id;
+      if (!userId) {
+        toast.error("Sign up failed. Please try again.");
+        return;
+      }
+
       // 2) Upsert into public.profiles (id = auth user id)
-      const userId = data.user?.id;
-      if (userId) {
-        const { error: upsertErr } = await supabase
-          .from("profiles")
-          .upsert(
-            {
-              id: userId,
-              first_name: formData.first_name.trim(),
-              last_name: formData.last_name.trim(),
-              name: fullName,
-              contact_number: "+63" + formData.contact_number,
-              role: "customer",
-            },
-            { onConflict: "id" }
-          );
-        if (upsertErr) {
-          console.error("profiles upsert error:", upsertErr);
-          toast.error("Profile saving warning: " + (upsertErr?.message ?? JSON.stringify(upsertErr)));
-        }
+      const { error: upsertErr } = await supabase
+        .from("profiles")
+        .upsert(
+          {
+            id: userId,
+            first_name: formData.first_name.trim(),
+            last_name: formData.last_name.trim(),
+            name: fullName,
+            contact_number: "+63" + formData.contact_number,
+            role: "customer",
+            email: formData.email,
+          },
+          { onConflict: "id" }
+        );
+
+      if (upsertErr) {
+        console.error("profiles upsert error:", upsertErr);
+        toast.error(
+          "Profile saving warning: " +
+            (upsertErr?.message ?? JSON.stringify(upsertErr))
+        );
       }
 
       // 3) Show “verify your email” modal
