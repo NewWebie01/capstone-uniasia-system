@@ -77,7 +77,7 @@ type InstallmentRow = {
   id?: string;
   order_id: string;
   term_no: number;
-  due_date: string; // original schedule (not shown if no ETA)
+  due_date: string | null; // original schedule per term
   amount_due: number;
   amount_paid?: number | null;
   status?: string | null; // "paid" | "pending"
@@ -139,7 +139,7 @@ export default function PaymentSchedulePage() {
 
   // order_id -> shippingFee cache
   const [shippingFees, setShippingFees] = useState<Record<string, number>>({});
-  // 🚚 selected order's ETA (we’ll use this as the “Due Date”)
+  // selected order's ETA (used as fallback if a term has no due_date)
   const [orderEtaDate, setOrderEtaDate] = useState<string | null>(null);
 
   const paymentsSubKey = useRef<string>("");
@@ -277,6 +277,14 @@ export default function PaymentSchedulePage() {
     })();
   }, [selectedPack?.order?.truck_delivery_id]);
 
+  /* -------- helper: get per-term effective due date (row.due_date or fallback ETA) -------- */
+  const getEffectiveDueDate = (row: InstallmentRow): string => {
+    const fromRow = toYYYYMMDD(row.due_date);
+    if (fromRow) return fromRow;
+    if (orderEtaDate) return orderEtaDate;
+    return "";
+  };
+
   /* ----------------------------- Realtime: order_installments & payments ----------------------------- */
   useEffect(() => {
     const orderId = selectedPack?.order?.id ? String(selectedPack.order.id) : "";
@@ -316,7 +324,12 @@ export default function PaymentSchedulePage() {
 
     ch.on(
       "postgres_changes",
-      { event: "*", schema: "public", table: "payments", filter: `order_id=eq.${orderId}` },
+      {
+        event: "*",
+        schema: "public",
+        table: "payments",
+        filter: `order_id=eq.${orderId}`,
+      },
       refresh
     );
 
@@ -344,11 +357,7 @@ export default function PaymentSchedulePage() {
     return { due, paid, remaining };
   }, [installments]);
 
-  // Use ETA (if available) as the effective due date for display
-  const etaDisplay = useMemo(() => orderEtaDate || "", [orderEtaDate]);
-  const hasETA = !!etaDisplay;
-
-  // Next unpaid (no date shown if no ETA)
+  // Next unpaid term with its own due date
   const nextUnpaid = useMemo(() => {
     const sorted = [...installments].sort((a, b) => a.term_no - b.term_no);
     for (const r of sorted) {
@@ -359,16 +368,15 @@ export default function PaymentSchedulePage() {
         amtPaid + EPS >= amtDue;
 
       if (!isPaid) {
-        if (!hasETA) {
-          return { ...r, due_date: "", isOverdue: false };
-        }
-        const d = parseLocalDate(etaDisplay);
-        const isOverdue = d < startOfTodayLocal();
-        return { ...r, due_date: etaDisplay, isOverdue };
+        const effDate = getEffectiveDueDate(r);
+        const hasDate = !!effDate;
+        const isOverdue =
+          hasDate && parseLocalDate(effDate) < startOfTodayLocal();
+        return { ...r, effectiveDueDate: effDate, isOverdue };
       }
     }
     return null;
-  }, [installments, hasETA, etaDisplay]);
+  }, [installments, getEffectiveDueDate]);
 
   const badge = (isPaid: boolean, effectiveISO?: string) => {
     if (isPaid)
@@ -377,7 +385,6 @@ export default function PaymentSchedulePage() {
           Paid
         </span>
       );
-    // If no ETA (no effective date), show Pending without overdue logic
     if (!effectiveISO) {
       return (
         <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
@@ -398,6 +405,10 @@ export default function PaymentSchedulePage() {
       </span>
     );
   };
+
+  const hasAnyDueDate = installments.some(
+    (r) => getEffectiveDueDate(r) !== ""
+  );
 
   return (
     <div className="min-h-[calc(100vh-80px)]">
@@ -487,8 +498,9 @@ export default function PaymentSchedulePage() {
                 <div className="mt-1">
                   <div className="text-lg font-semibold">
                     Term #{nextUnpaid.term_no}
-                    {/* ❌ No date shown if no ETA */}
-                    {hasETA ? ` — ${etaDisplay}` : ""}
+                    {nextUnpaid.effectiveDueDate
+                      ? ` — ${nextUnpaid.effectiveDueDate}`
+                      : ""}
                   </div>
                   <div className="text-sm text-gray-700">
                     Amount due:{" "}
@@ -499,18 +511,12 @@ export default function PaymentSchedulePage() {
                       (nextUnpaid.status || "").toLowerCase() === "paid" ||
                         Number(nextUnpaid.amount_paid || 0) + EPS >=
                           Number(nextUnpaid.amount_due || 0),
-                      hasETA ? etaDisplay : undefined
+                      nextUnpaid.effectiveDueDate || undefined
                     )}
                   </div>
                 </div>
               ) : (
                 <div className="text-lg font-semibold mt-1">All terms paid</div>
-              )}
-              {!hasETA && nextUnpaid && (
-                <div className="text-[11px] text-gray-500 mt-1">
-                  ETA not set yet. Due date will appear once your delivery ETA
-                  is available.
-                </div>
               )}
             </div>
           </div>
@@ -528,10 +534,8 @@ export default function PaymentSchedulePage() {
                 {selectedPack.paymentType?.toLowerCase() === "credit"
                   ? "Credit terms detected."
                   : "Payment plan available."}{" "}
-                {hasETA
-                  ? "Using delivery ETA as your due date."
-                  : "Due dates will appear once ETA is set."}{" "}
-                Updates automatically when a payment is received.
+                Showing per-term due dates from your payment schedule. Updates
+                automatically when a payment is received.
               </div>
             </div>
 
@@ -543,8 +547,7 @@ export default function PaymentSchedulePage() {
                     style={{ background: "#ffba20" }}
                   >
                     <th className="py-2.5 px-3 text-center font-bold">Term #</th>
-                    {/* ❌ Hide Due Date column when no ETA */}
-                    {hasETA && (
+                    {hasAnyDueDate && (
                       <th className="py-2.5 px-3 text-center font-bold">
                         Due Date
                       </th>
@@ -564,7 +567,10 @@ export default function PaymentSchedulePage() {
                 <tbody>
                   {loadingInstallments ? (
                     <tr>
-                      <td colSpan={hasETA ? 6 : 5} className="text-center py-8 text-neutral-400">
+                      <td
+                        colSpan={hasAnyDueDate ? 6 : 5}
+                        className="text-center py-8 text-neutral-400"
+                      >
                         Loading schedule…
                       </td>
                     </tr>
@@ -577,11 +583,12 @@ export default function PaymentSchedulePage() {
                         (r.status || "").toLowerCase() === "paid" ||
                         amtPaid + EPS >= amtDue;
 
-                      // Only compute overdue if ETA exists
-                      const showDate = hasETA ? etaDisplay : undefined;
+                      const effDate = getEffectiveDueDate(r);
+                      const hasDate = !!effDate;
                       const isOver =
-                        !!showDate &&
-                        parseLocalDate(showDate) < startOfTodayLocal();
+                        hasDate &&
+                        !paid &&
+                        parseLocalDate(effDate) < startOfTodayLocal();
 
                       return (
                         <tr
@@ -592,18 +599,19 @@ export default function PaymentSchedulePage() {
                             {r.term_no}
                           </td>
 
-                          {/* Due Date cell only when ETA exists */}
-                          {hasETA && (
+                          {hasAnyDueDate && (
                             <td className="py-2.5 px-3 text-center">
-                              <span
-                                className={
-                                  !paid && isOver
-                                    ? "text-rose-600 font-semibold"
-                                    : ""
-                                }
-                              >
-                                {etaDisplay}
-                              </span>
+                              {hasDate ? (
+                                <span
+                                  className={
+                                    isOver ? "text-rose-600 font-semibold" : ""
+                                  }
+                                >
+                                  {effDate}
+                                </span>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
                             </td>
                           )}
 
@@ -617,14 +625,17 @@ export default function PaymentSchedulePage() {
                             {peso(remain)}
                           </td>
                           <td className="py-2.5 px-3 text-center">
-                            {badge(paid, showDate)}
+                            {badge(paid, hasDate ? effDate : undefined)}
                           </td>
                         </tr>
                       );
                     })
                   ) : (
                     <tr>
-                      <td colSpan={hasETA ? 6 : 5} className="text-center py-8 text-neutral-400">
+                      <td
+                        colSpan={hasAnyDueDate ? 6 : 5}
+                        className="text-center py-8 text-neutral-400"
+                      >
                         No schedule found for this TXN.
                       </td>
                     </tr>
