@@ -28,18 +28,25 @@ export default function ResetPasswordPage() {
     setError("");
     setIsLoading(true);
 
+    // Figure out the correct origin:
+    // - on browser: use window.location.origin (localhost or production)
+    // - on server: fall back to NEXT_PUBLIC_SITE_URL or your live domain
     const origin =
       typeof window !== "undefined"
         ? window.location.origin
-        : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+        : process.env.NEXT_PUBLIC_SITE_URL || "https://www.uniasia.shop";
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    const trimmedEmail = email.trim();
+
+    const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
       redirectTo: `${origin}/update-password`,
     });
 
     if (error) {
       console.error("resetPasswordForEmail error:", error);
-      setError("Could not send reset email. Please check your email address.");
+      setError(
+        "Could not send reset email. Please check your email address and try again."
+      );
       setSent(false);
     } else {
       setSent(true);
@@ -58,7 +65,13 @@ export default function ResetPasswordPage() {
         transition={{ duration: 0.6, ease: "easeOut" }}
         className="w-full max-w-md mx-auto bg-white rounded-2xl shadow-2xl flex flex-col items-center py-10 px-7"
       >
-        <Image src={Logo} alt="UNIASIA Logo" width={60} height={60} className="mb-2" />
+        <Image
+          src={Logo}
+          alt="UNIASIA Logo"
+          width={60}
+          height={60}
+          className="mb-2"
+        />
         <h1 className="text-2xl font-bold mb-6 text-[#181918] text-center">
           Reset Password
         </h1>
