@@ -429,28 +429,28 @@ export default function CheckoutPage() {
   }, []);
 
   /* -------- Compute customer type from completed orders by email -------- */
-  const setTypeFromHistory = useCallback(async (email: string) => {
-    const cleanEmail = (email || "").trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes("@")) return;
-    const { count, error } = await supabase
-      .from("orders")
-      .select("id, status, customers!inner(email)", {
-        count: "exact",
-        head: true,
-      })
-      .ilike("customers.email", cleanEmail)
-      .in("status", ["completed"]);
-    if (error) return;
-    const completedCount = count ?? 0;
-    setOrderHistoryCount(completedCount);
-    const type: CustomerInfo["customer_type"] =
-      completedCount > 0 ? "Existing Customer" : "New Customer";
-    setCustomerInfo((prev) => ({
-      ...prev,
-      customer_type: type,
-      payment_type: type === "Existing Customer" ? "Credit" : "Cash",
-    }));
-  }, []);
+const setTypeFromHistory = useCallback(async (email: string) => {
+  const cleanEmail = (email || "").trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes("@")) return;
+  const { count, error } = await supabase
+    .from("orders")
+    .select("id, status, customers!inner(email)", {
+      count: "exact",
+      head: true,
+    })
+    .ilike("customers.email", cleanEmail)
+    .in("status", ["completed"]);
+  if (error) return;
+  const completedCount = count ?? 0;
+  setOrderHistoryCount(completedCount);
+  const type: CustomerInfo["customer_type"] =
+    completedCount > 0 ? "Existing Customer" : "New Customer";
+  setCustomerInfo((prev) => ({
+    ...prev,
+    customer_type: type,
+  }));
+}, []);
+
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -693,13 +693,7 @@ export default function CheckoutPage() {
   }, []); // reads auth inside
 
   /* --------------------------- Payment type logic --------------------------- */
-  useEffect(() => {
-    if (customerInfo.customer_type === "New Customer") {
-      setCustomerInfo((p) => ({ ...p, payment_type: "Cash" }));
-    } else if (customerInfo.customer_type === "Existing Customer") {
-      setCustomerInfo((p) => ({ ...p, payment_type: "Credit" }));
-    }
-  }, [customerInfo.customer_type]);
+
 
   useEffect(() => {
     if (customerInfo.payment_type === "Credit") {
@@ -771,44 +765,44 @@ export default function CheckoutPage() {
   const grandTotal = subtotal + tax + shipping;
 
   /* ------------------------------ Validation ------------------------------ */
-  const missingFields = useMemo(() => {
-    const missing: string[] = [];
-    if (!customerInfo.name?.trim()) missing.push("Customer Name");
-    if (!customerInfo.email?.includes("@")) missing.push("Email");
-    if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
-    if (!customerInfo.phone || !isValidPhone(customerInfo.phone))
-      missing.push("Phone (11 digits)");
-    if (!houseStreet?.trim()) missing.push("House & Street");
-    if (!regionCode) missing.push("Region");
-    if (!isNCR && !provinceCode) missing.push("Province");
-    if (!cityCode) missing.push("City / Municipality");
-    if (!barangayCode) missing.push("Barangay");
-    if (cart.length === 0) missing.push("Cart");
+const missingFields = useMemo(() => {
+  const missing: string[] = [];
+  if (!customerInfo.name?.trim()) missing.push("Customer Name");
+  // Email is now optional
+  if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
+  // Phone is now optional
+  if (!houseStreet?.trim()) missing.push("House & Street");
+  if (!regionCode) missing.push("Region");
+  if (!isNCR && !provinceCode) missing.push("Province");
+  if (!cityCode) missing.push("City / Municipality");
+  if (!barangayCode) missing.push("Barangay");
+  if (cart.length === 0) missing.push("Cart");
 
-    if (customerInfo.payment_type === "Credit") {
-      if (!termsMonths) missing.push("Payment Terms (months)");
-      if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
-      if (!tcAccepted) missing.push("Accept Terms & Conditions");
-    }
+  if (customerInfo.payment_type === "Credit") {
+    if (!termsMonths) missing.push("Payment Terms (months)");
+    if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
+    if (!tcAccepted) missing.push("Accept Terms & Conditions");
+  }
 
-    return missing;
-  }, [
-    customerInfo.name,
-    customerInfo.email,
-    customerInfo.contact_person,
-    customerInfo.phone,
-    customerInfo.payment_type,
-    houseStreet,
-    regionCode,
-    provinceCode,
-    cityCode,
-    barangayCode,
-    cart,
-    isNCR,
-    termsMonths,
-    interestPercent,
-    tcAccepted, // <-- ADD THIS
-  ]);
+  return missing;
+}, [
+  customerInfo.name,
+  customerInfo.email,          // can stay in deps, no issue
+  customerInfo.contact_person,
+  customerInfo.phone,          // can stay in deps, no issue
+  customerInfo.payment_type,
+  houseStreet,
+  regionCode,
+  provinceCode,
+  cityCode,
+  barangayCode,
+  cart,
+  isNCR,
+  termsMonths,
+  interestPercent,
+  tcAccepted,
+]);
+
 
   const isConfirmEnabled = missingFields.length === 0;
 
@@ -1463,52 +1457,67 @@ export default function CheckoutPage() {
             </h2>
 
             <div className="flex-1 overflow-auto mt-4 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input
-                  placeholder="Customer Name"
-                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-                  value={customerInfo.name}
-                  readOnly
-                />
-                <input
-                  type="email"
-                  placeholder="Email"
-                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-                  value={customerInfo.email}
-                  readOnly
-                />
-                <input
-                  type="tel"
-                  placeholder="Phone (11 digits)"
-                  className={`border px-3 py-2 rounded bg-gray-100 cursor-not-allowed ${
-                    !customerInfo.phone ? "border-red-400" : ""
-                  }`}
-                  value={customerInfo.phone}
-                  readOnly
-                />
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  {/* Customer name – still read only (from auth) */}
+  <input
+    placeholder="Customer Name"
+    className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+    value={customerInfo.name}
+    readOnly
+  />
 
-                <input
-                  placeholder="Contact Person (required)"
-                  maxLength={30}
-                  pattern="[A-Za-z\\s]*"
-                  title="Letters only, maximum 30 characters"
-                  className={`border px-3 py-2 rounded ${
-                    !customerInfo.contact_person?.trim()
-                      ? "border-red-400 focus:ring-red-500"
-                      : ""
-                  }`}
-                  value={customerInfo.contact_person || ""}
-                  onChange={(e) => {
-                    const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
+  {/* Email – OPTIONAL + EDITABLE */}
+  <input
+    type="email"
+    placeholder="Email (optional)"
+    className="border px-3 py-2 rounded"
+    value={customerInfo.email || ""}
+    onChange={(e) =>
+      setCustomerInfo((prev) => ({
+        ...prev,
+        email: e.target.value,
+      }))
+    }
+  />
 
-                    if (value.length <= 30) {
-                      setCustomerInfo({
-                        ...customerInfo,
-                        contact_person: value,
-                      });
-                    }
-                  }}
-                />
+  {/* Phone – OPTIONAL + EDITABLE, digits only, max 11 */}
+  <input
+    type="tel"
+    placeholder="Phone (optional, 11 digits)"
+    className="border px-3 py-2 rounded"
+    value={customerInfo.phone || ""}
+    onChange={(e) => {
+      const digits = e.target.value.replace(/\D/g, "").slice(0, 11);
+      setCustomerInfo((prev) => ({
+        ...prev,
+        phone: digits,
+      }));
+    }}
+  />
+
+  {/* Contact person – still required */}
+  <input
+    placeholder="Contact Person (required)"
+    maxLength={30}
+    pattern="[A-Za-z\\s]*"
+    title="Letters only, maximum 30 characters"
+    className={`border px-3 py-2 rounded ${
+      !customerInfo.contact_person?.trim()
+        ? "border-red-400 focus:ring-red-500"
+        : ""
+    }`}
+    value={customerInfo.contact_person || ""}
+    onChange={(e) => {
+      const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
+      if (value.length <= 30) {
+        setCustomerInfo((prev) => ({
+          ...prev,
+          contact_person: value,
+        }));
+      }
+    }}
+  />
+
 
                 <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
                   <div>
@@ -1644,29 +1653,26 @@ export default function CheckoutPage() {
                   )}
                 </div>
 
-                <div className="flex gap-4">
-                  {(customerInfo.customer_type === "Existing Customer"
-                    ? (["Cash", "Credit"] as const) // Existing can pick Cash or Credit
-                    : (["Cash"] as const)
-                  ) // New = Cash only
-                    .map((type) => (
-                      <label key={type} className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="payment_type"
-                          value={type}
-                          checked={customerInfo.payment_type === type}
-                          onChange={(e) =>
-                            setCustomerInfo({
-                              ...customerInfo,
-                              payment_type: e.target.value as "Cash" | "Credit",
-                            })
-                          }
-                        />
-                        {type}
-                      </label>
-                    ))}
-                </div>
+<div className="flex gap-4">
+  {(["Cash", "Credit"] as const).map((type) => (
+    <label key={type} className="flex items-center gap-2">
+      <input
+        type="radio"
+        name="payment_type"
+        value={type}
+        checked={customerInfo.payment_type === type}
+        onChange={(e) =>
+          setCustomerInfo((prev) => ({
+            ...prev,
+            payment_type: e.target.value as "Cash" | "Credit",
+          }))
+        }
+      />
+      {type}
+    </label>
+  ))}
+</div>
+
 
                 {customerInfo.payment_type === "Credit" && (
                   <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1687,9 +1693,10 @@ export default function CheckoutPage() {
                         <option value={6}>6 months (Net 6)</option>
                         <option value={12}>12 months (Net 12)</option>
                       </select>
-                      <div className="text-xs text-gray-500 mt-1">
-                        Only available for Existing Customers with Credit.
-                      </div>
+<div className="text-xs text-gray-500 mt-1">
+  Available when you select Credit as payment type.
+</div>
+
                     </div>
 
                     <div>
