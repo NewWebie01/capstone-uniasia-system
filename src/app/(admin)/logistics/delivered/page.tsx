@@ -9,6 +9,16 @@ import { toast } from "sonner";
 import { ReceiptText } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 
+//12hr format helper
+const to12Hour = (timeString: string | null | undefined) => {
+  if (!timeString) return "—";
+  const [hour, minute] = timeString.split(":");
+  const h = Number(hour);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const formattedHour = h % 12 === 0 ? 12 : h % 12;
+  return `${formattedHour}:${minute} ${ampm}`;
+};
+
 /* =========================
    TYPES
 ========================= */
@@ -22,6 +32,7 @@ type Delivery = {
   arrival_date: string | null;
   participants?: string[] | null;
   created_at?: string;
+  departure_time?: string | null;
   _orders?: OrderWithCustomer[];
 };
 
@@ -374,6 +385,13 @@ export default function DeliveredPage() {
                         </div>
                         <div className="font-medium">
                           {delivery.schedule_date}
+                        </div>
+
+                        <div className="text-slate-500 uppercase tracking-wide text-xs">
+                          DEPARTURE TIME
+                        </div>
+                        <div className="font-medium">
+                          {to12Hour(delivery.departure_time)}
                         </div>
 
                         <div className="text-slate-500 uppercase tracking-wide text-xs">

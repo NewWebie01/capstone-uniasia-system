@@ -239,21 +239,6 @@ export default function DeliveryReceiptLikeInvoice({
 
       {/* Notes + Totals */}
       <div className="grid grid-cols-2 mt-4">
-        {/* Notes */}
-        <div className="pr-4 text-[11px] leading-snug">
-          <p className="font-semibold mb-1">NOTE:</p>
-          <ol className="list-decimal list-inside space-y-1">
-            <li>
-              All goods are checked in good condition and complete after being
-              received and signed.
-            </li>
-            <li>Cash advances to salesman not allowed.</li>
-            <li>
-              All checks payable to UNIASIA Hardware & Electrical Marketing.
-            </li>
-          </ol>
-        </div>
-
         {/* Totals */}
         <div className="pl-6">
           <div className="w-full border border-neutral-300 rounded overflow-hidden">
