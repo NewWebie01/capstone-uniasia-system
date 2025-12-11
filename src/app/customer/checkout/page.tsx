@@ -9,7 +9,6 @@ import { toast } from "sonner";
 import supabase from "@/config/supabaseClient";
 import { useCart, CartItem as CtxCartItem } from "@/context/CartContext";
 
-
 /* -------------------------------- Types -------------------------------- */
 type InventoryItem = {
   id: number;
@@ -52,19 +51,32 @@ type SidebarOrder = {
 };
 
 type PSGCRegion = { id: number; name: string; code: string };
-type PSGCProvince = { id: number; name: string; code: string; region_id: number };
-type PSGCCity = { id: number; name: string; code: string; province_id?: number; type: string };
+type PSGCProvince = {
+  id: number;
+  name: string;
+  code: string;
+  region_id: number;
+};
+type PSGCCity = {
+  id: number;
+  name: string;
+  code: string;
+  province_id?: number;
+  type: string;
+};
 type PSGCBarangay = { id: number; name: string; code: string };
 
 /* ----------------------------- Constants ----------------------------- */
 const MAX_QTY = 1000;
-const clampQty = (n: number) => Math.max(1, Math.min(MAX_QTY, Math.floor(n) || 1));
+const clampQty = (n: number) =>
+  Math.max(1, Math.min(MAX_QTY, Math.floor(n) || 1));
 
 const TRUCK_LIMITS = {
   maxTotalWeightKg: 10_000,
   maxDistinctItems: 60,
 };
-const LIMIT_TOAST = "Exceeds items per transaction. Please split into another transaction.";
+const LIMIT_TOAST =
+  "Exceeds items per transaction. Please split into another transaction.";
 
 const TERM_TO_INTEREST: Record<number, number> = { 1: 2, 3: 6, 6: 12, 12: 24 };
 
@@ -88,7 +100,6 @@ const formatPH = (d?: string | number | Date) =>
   }).format(d ? new Date(d) : new Date());
 
 const safeFormatPH = (d?: string | null) => (d ? formatPH(d) : "—");
-
 
 const fixEncoding = (s: string) => {
   try {
@@ -114,13 +125,17 @@ function generateTransactionCode(): string {
 
 function normalizePhone(input: string | null | undefined): string {
   const digits = String(input || "").replace(/\D/g, "");
-  if (digits.startsWith("63") && digits.length === 12) return "0" + digits.slice(2);
+  if (digits.startsWith("63") && digits.length === 12)
+    return "0" + digits.slice(2);
   if (digits.length === 11 && digits.startsWith("0")) return digits;
   return "";
 }
 
 // Deterministic order TXN derived from order id (no DB change needed)
-function getTxnCode(orderId: string | number, createdAt?: string | Date | null) {
+function getTxnCode(
+  orderId: string | number,
+  createdAt?: string | Date | null
+) {
   const s = String(orderId);
   const last6 = s.slice(-6).toUpperCase();
   const dt = createdAt ? new Date(createdAt) : new Date();
@@ -128,13 +143,13 @@ function getTxnCode(orderId: string | number, createdAt?: string | Date | null) 
   return `TXN-${ymd}-${last6}`;
 }
 
-
-
 function getDisplayNameFromMetadata(meta: any, fallbackEmail?: string) {
   const nameFromMeta =
     meta?.full_name || meta?.name || meta?.display_name || meta?.username || "";
-  if (nameFromMeta && typeof nameFromMeta === "string") return nameFromMeta.trim();
-  if (fallbackEmail && fallbackEmail.includes("@")) return fallbackEmail.split("@")[0];
+  if (nameFromMeta && typeof nameFromMeta === "string")
+    return nameFromMeta.trim();
+  if (fallbackEmail && fallbackEmail.includes("@"))
+    return fallbackEmail.split("@")[0];
   return "";
 }
 
@@ -196,7 +211,9 @@ function unitWeightKg(i: InventoryItem): number {
     ) || 0;
   const weightPerPiece = Number(i.weight_per_piece_kg ?? 0);
   const w =
-    piecesPerUnit > 0 && weightPerPiece > 0 ? piecesPerUnit * weightPerPiece : 0;
+    piecesPerUnit > 0 && weightPerPiece > 0
+      ? piecesPerUnit * weightPerPiece
+      : 0;
   return isFinite(w) ? w : 0;
 }
 function cartTotalWeightKg(list: CartItem[]) {
@@ -209,8 +226,14 @@ export default function CheckoutPage() {
   const { cart, updateQty, removeItem, clearCart } = useCart();
 
   // auth defaults
-  const [authDefaults, setAuthDefaults] = useState({ name: "", email: "", phone: "" });
-  const [orderHistoryCount, setOrderHistoryCount] = useState<number | null>(null);
+  const [authDefaults, setAuthDefaults] = useState({
+    name: "",
+    email: "",
+    phone: "",
+  });
+  const [orderHistoryCount, setOrderHistoryCount] = useState<number | null>(
+    null
+  );
 
   // customer info
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
@@ -237,12 +260,10 @@ export default function CheckoutPage() {
   const [txnCode, setTxnCode] = useState<string>("");
 
   // Terms & Conditions (Credit) state
-const [showTermsModal, setShowTermsModal] = useState(false);
-const [tcAccepted, setTcAccepted] = useState(false);       // user tick on main confirm modal
-const [tcReadyToAccept, setTcReadyToAccept] = useState(false); // becomes true after reading terms
-const termsBodyRef = useRef<HTMLDivElement | null>(null);
-
-
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [tcAccepted, setTcAccepted] = useState(false); // user tick on main confirm modal
+  const [tcReadyToAccept, setTcReadyToAccept] = useState(false); // becomes true after reading terms
+  const termsBodyRef = useRef<HTMLDivElement | null>(null);
 
   // orders sidebar
   const [authUserId, setAuthUserId] = useState<string | null>(null);
@@ -261,14 +282,13 @@ const termsBodyRef = useRef<HTMLDivElement | null>(null);
   const [houseStreet, setHouseStreet] = useState("");
 
   // NEW: staged address prefill holder (applied level-by-level)
-const [pendingAddress, setPendingAddress] = useState<{
-  region?: string;
-  province?: string;
-  city?: string;
-  barangay?: string;
-  house?: string;
-} | null>(null);
-
+  const [pendingAddress, setPendingAddress] = useState<{
+    region?: string;
+    province?: string;
+    city?: string;
+    barangay?: string;
+    house?: string;
+  } | null>(null);
 
   /* ---------------------- Address computation hooks ---------------------- */
   const selectedRegion = useMemo(
@@ -292,7 +312,9 @@ const [pendingAddress, setPendingAddress] = useState<{
     () =>
       !!regionCode &&
       (regionCode.startsWith("13") ||
-        (selectedRegion?.name || "").toLowerCase().includes("national capital")),
+        (selectedRegion?.name || "")
+          .toLowerCase()
+          .includes("national capital")),
     [regionCode, selectedRegion]
   );
 
@@ -307,7 +329,13 @@ const [pendingAddress, setPendingAddress] = useState<{
       .filter(Boolean)
       .map(fixEncoding);
     return parts.join(", ");
-  }, [houseStreet, selectedBarangay, selectedCity, selectedProvince, selectedRegion]);
+  }, [
+    houseStreet,
+    selectedBarangay,
+    selectedCity,
+    selectedProvince,
+    selectedRegion,
+  ]);
 
   useEffect(() => {
     setCustomerInfo((prev) => ({ ...prev, address: computedAddress }));
@@ -315,12 +343,13 @@ const [pendingAddress, setPendingAddress] = useState<{
 
   /* -------------------- Autofill from last customer row -------------------- */
   const loadLastCustomerSnapshot = useCallback(async (email: string) => {
-  const clean = (email || "").trim();
-  if (!clean) return;
+    const clean = (email || "").trim();
+    if (!clean) return;
 
-  const { data: last, error } = await supabase
-    .from("customers")
-    .select(`
+    const { data: last, error } = await supabase
+      .from("customers")
+      .select(
+        `
       contact_person,
       landmark,
       payment_type,
@@ -331,50 +360,61 @@ const [pendingAddress, setPendingAddress] = useState<{
       barangay_code,
       house_street,
       address
-    `)
-    .ilike("email", clean)
-    .order("date", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    `
+      )
+      .ilike("email", clean)
+      .order("date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-  if (error || !last) return;
+    if (error || !last) return;
 
-  // Stage the codes so we can apply them when each list is ready.
-  setPendingAddress({
-    region: last.region_code || undefined,
-    province: last.province_code || undefined,
-    city: last.city_code || undefined,
-    barangay: last.barangay_code || undefined,
-    house: last.house_street || undefined,
-  });
+    // Stage the codes so we can apply them when each list is ready.
+    setPendingAddress({
+      region: last.region_code || undefined,
+      province: last.province_code || undefined,
+      city: last.city_code || undefined,
+      barangay: last.barangay_code || undefined,
+      house: last.house_street || undefined,
+    });
 
-  // Do NOT set region/province/city/barangay here directly — they’ll be
-  // applied by the staged effects below once each options list is ready.
+    // Do NOT set region/province/city/barangay here directly — they’ll be
+    // applied by the staged effects below once each options list is ready.
 
-  setCustomerInfo((prev) => {
-    const resolvedType = prev.customer_type || last.customer_type || undefined;
-    const canUseCredit = resolvedType === "Existing Customer";
-    const priorPay = last.payment_type === "Credit" && canUseCredit ? "Credit" : "Cash";
+    setCustomerInfo((prev) => {
+      const resolvedType =
+        prev.customer_type || last.customer_type || undefined;
+      const canUseCredit = resolvedType === "Existing Customer";
+      const priorPay =
+        last.payment_type === "Credit" && canUseCredit ? "Credit" : "Cash";
 
-    return {
-      ...prev,
-      contact_person: prev.contact_person || last.contact_person || "",
-      landmark: prev.landmark || last.landmark || "",
-      payment_type: prev.payment_type || priorPay,
-      customer_type: resolvedType,
-    };
-  });
-}, []);
-
-
+      return {
+        ...prev,
+        contact_person: prev.contact_person || last.contact_person || "",
+        landmark: prev.landmark || last.landmark || "",
+        payment_type: prev.payment_type || priorPay,
+        customer_type: resolvedType,
+      };
+    });
+  }, []);
 
   /* ------------------------ Prefill from auth ------------------------ */
   useEffect(() => {
     (async () => {
-      const { email, name, phone: phoneFromAuth, authUserId } = await getAuthIdentity();
+      const {
+        email,
+        name,
+        phone: phoneFromAuth,
+        authUserId,
+      } = await getAuthIdentity();
       if (email) {
-        const phoneFromSources = phoneFromAuth || (await loadPhoneForEmail(email));
-        setAuthDefaults({ name: name || "", email: email || "", phone: phoneFromSources || "" });
+        const phoneFromSources =
+          phoneFromAuth || (await loadPhoneForEmail(email));
+        setAuthDefaults({
+          name: name || "",
+          email: email || "",
+          phone: phoneFromSources || "",
+        });
         setCustomerInfo((prev) => ({
           ...prev,
           name: prev.name || name || "",
@@ -403,7 +443,8 @@ const [pendingAddress, setPendingAddress] = useState<{
     if (error) return;
     const completedCount = count ?? 0;
     setOrderHistoryCount(completedCount);
-    const type: CustomerInfo["customer_type"] = completedCount > 0 ? "Existing Customer" : "New Customer";
+    const type: CustomerInfo["customer_type"] =
+      completedCount > 0 ? "Existing Customer" : "New Customer";
     setCustomerInfo((prev) => ({
       ...prev,
       customer_type: type,
@@ -442,8 +483,12 @@ const [pendingAddress, setPendingAddress] = useState<{
 
     if (isNCR) {
       Promise.all([
-        fetchJSON<PSGCCity[]>(`https://psgc.cloud/api/regions/${regionCode}/cities`),
-        fetchJSON<PSGCCity[]>(`https://psgc.cloud/api/regions/${regionCode}/municipalities`),
+        fetchJSON<PSGCCity[]>(
+          `https://psgc.cloud/api/regions/${regionCode}/cities`
+        ),
+        fetchJSON<PSGCCity[]>(
+          `https://psgc.cloud/api/regions/${regionCode}/municipalities`
+        ),
       ])
         .then(([c, m]) => {
           const list = [...c, ...m]
@@ -479,7 +524,8 @@ const [pendingAddress, setPendingAddress] = useState<{
       fetchJSON<PSGCCity[]>("https://psgc.cloud/api/municipalities"),
     ])
       .then(([c, m]) => {
-        const byProv = (x: PSGCCity) => x.code.startsWith(provinceCode.slice(0, 4));
+        const byProv = (x: PSGCCity) =>
+          x.code.startsWith(provinceCode.slice(0, 4));
         const list = [...c.filter(byProv), ...m.filter(byProv)]
           .map((x) => ({ ...x, name: fixEncoding(x.name) }))
           .sort((a, b) => a.name.localeCompare(b.name));
@@ -497,7 +543,10 @@ const [pendingAddress, setPendingAddress] = useState<{
       const prefix9 = cityCode.slice(0, 9);
       const prefix6 = cityCode.slice(0, 6);
       const fixSort = (list: PSGCBarangay[]) => {
-        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+        const collator = new Intl.Collator(undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
         return list
           .map((b) => ({ ...b, name: fixEncoding(b.name) }))
           .sort((a, b) => collator.compare(a.name, b.name));
@@ -520,7 +569,9 @@ const [pendingAddress, setPendingAddress] = useState<{
       } catch {}
 
       try {
-        const all = await fetchJSON<PSGCBarangay[]>("https://psgc.cloud/api/barangays");
+        const all = await fetchJSON<PSGCBarangay[]>(
+          "https://psgc.cloud/api/barangays"
+        );
         const filtered = all.filter(
           (b) => b.code.startsWith(prefix9) || b.code.startsWith(prefix6)
         );
@@ -532,113 +583,114 @@ const [pendingAddress, setPendingAddress] = useState<{
     loadBarangays();
   }, [cityCode]);
 
-// 3.1 Apply REGION once regions are loaded
-useEffect(() => {
-  if (!pendingAddress) return;
-  if (pendingAddress.region && regions.length && regionCode !== pendingAddress.region) {
-    setRegionCode(pendingAddress.region);
-  }
-}, [pendingAddress, regions, regionCode]);
-
-// 3.2 Apply PROVINCE (only for non-NCR) once provinces are ready
-useEffect(() => {
-  if (!pendingAddress) return;
-  if (isNCR) return;              // NCR has no provinces
-  if (!regionCode) return;        // need region first
-  if (provinces.length && pendingAddress.province && !provinceCode) {
-    const exists = provinces.some((p) => p.code === pendingAddress.province);
-    if (exists) setProvinceCode(pendingAddress.province);
-  }
-}, [pendingAddress, isNCR, regionCode, provinces, provinceCode]);
-
-// 3.3 Apply CITY once cities are ready
-useEffect(() => {
-  if (!pendingAddress) return;
-  if (!regionCode) return;
-  // for non-NCR, province must be set first
-  if (!isNCR && !provinceCode) return;
-  if (cities.length && pendingAddress.city && !cityCode) {
-    const exists = cities.some((c) => c.code === pendingAddress.city);
-    if (exists) setCityCode(pendingAddress.city);
-  }
-}, [pendingAddress, isNCR, regionCode, provinceCode, cities, cityCode]);
-
-// 3.4 Apply BARANGAY (and house/street) once barangays are ready, then clear pending
-useEffect(() => {
-  if (!pendingAddress) return;
-  if (!cityCode) return;
-  if (barangays.length && pendingAddress.barangay && !barangayCode) {
-    const exists = barangays.some((b) => b.code === pendingAddress.barangay);
-    if (exists) {
-      setBarangayCode(pendingAddress.barangay);
-      if (pendingAddress.house) setHouseStreet(pendingAddress.house);
-      // Clear after final step so we don't keep re-applying
-      setPendingAddress(null);
+  // 3.1 Apply REGION once regions are loaded
+  useEffect(() => {
+    if (!pendingAddress) return;
+    if (
+      pendingAddress.region &&
+      regions.length &&
+      regionCode !== pendingAddress.region
+    ) {
+      setRegionCode(pendingAddress.region);
     }
-  }
-}, [pendingAddress, cityCode, barangays, barangayCode]);
+  }, [pendingAddress, regions, regionCode]);
 
-/* ----------------------------- Sidebar orders ----------------------------- */
-// Directly read orders joined to customers, filtered by the signed-in email.
-useEffect(() => {
-  let mounted = true;
+  // 3.2 Apply PROVINCE (only for non-NCR) once provinces are ready
+  useEffect(() => {
+    if (!pendingAddress) return;
+    if (isNCR) return; // NCR has no provinces
+    if (!regionCode) return; // need region first
+    if (provinces.length && pendingAddress.province && !provinceCode) {
+      const exists = provinces.some((p) => p.code === pendingAddress.province);
+      if (exists) setProvinceCode(pendingAddress.province);
+    }
+  }, [pendingAddress, isNCR, regionCode, provinces, provinceCode]);
 
-  const load = async () => {
-    setFetchingOrders(true);
-    try {
-      const { data: uw } = await supabase.auth.getUser();
-      const email = uw?.user?.email?.trim().toLowerCase() ?? "";
-      if (!email) {
-        if (mounted) setOrders([]);
-        return;
+  // 3.3 Apply CITY once cities are ready
+  useEffect(() => {
+    if (!pendingAddress) return;
+    if (!regionCode) return;
+    // for non-NCR, province must be set first
+    if (!isNCR && !provinceCode) return;
+    if (cities.length && pendingAddress.city && !cityCode) {
+      const exists = cities.some((c) => c.code === pendingAddress.city);
+      if (exists) setCityCode(pendingAddress.city);
+    }
+  }, [pendingAddress, isNCR, regionCode, provinceCode, cities, cityCode]);
+
+  // 3.4 Apply BARANGAY (and house/street) once barangays are ready, then clear pending
+  useEffect(() => {
+    if (!pendingAddress) return;
+    if (!cityCode) return;
+    if (barangays.length && pendingAddress.barangay && !barangayCode) {
+      const exists = barangays.some((b) => b.code === pendingAddress.barangay);
+      if (exists) {
+        setBarangayCode(pendingAddress.barangay);
+        if (pendingAddress.house) setHouseStreet(pendingAddress.house);
+        // Clear after final step so we don't keep re-applying
+        setPendingAddress(null);
       }
+    }
+  }, [pendingAddress, cityCode, barangays, barangayCode]);
 
-      // Direct join: orders -> customer (filter by email)
-const { data, error } = await supabase
-  .from("orders")
-  .select(`
+  /* ----------------------------- Sidebar orders ----------------------------- */
+  // Directly read orders joined to customers, filtered by the signed-in email.
+  useEffect(() => {
+    let mounted = true;
+
+    const load = async () => {
+      setFetchingOrders(true);
+      try {
+        const { data: uw } = await supabase.auth.getUser();
+        const email = uw?.user?.email?.trim().toLowerCase() ?? "";
+        if (!email) {
+          if (mounted) setOrders([]);
+          return;
+        }
+
+        // Direct join: orders -> customer (filter by email)
+        const { data, error } = await supabase
+          .from("orders")
+          .select(
+            `
     id,
     status,
     date_created,
     grand_total_with_interest,
     customer:customer_id ( email )
-  `)
-  .eq("customer.email", email)
-  .order("date_created", { ascending: false })
-  .limit(20);
+  `
+          )
+          .eq("customer.email", email)
+          .order("date_created", { ascending: false })
+          .limit(20);
 
+        if (error) {
+          console.warn("[checkout sidebar] orders join fetch error:", error);
+          if (mounted) setOrders([]);
+          return;
+        }
+        const rows = (data ?? []).map((o: any) => ({
+          id: o.id,
+          status: o?.status ?? "pending",
+          created_at: o?.date_created ?? null, // mapped for UI
+          total: o?.grand_total_with_interest ?? null,
+        }));
 
-      if (error) {
-        console.warn("[checkout sidebar] orders join fetch error:", error);
+        if (mounted) setOrders(rows);
+        console.log("[checkout sidebar] loaded orders:", rows.length, rows);
+      } catch (e) {
+        console.error("[checkout sidebar] load failed:", e);
         if (mounted) setOrders([]);
-        return;
+      } finally {
+        if (mounted) setFetchingOrders(false);
       }
-const rows = (data ?? []).map((o: any) => ({
-  id: o.id,
-  status: o?.status ?? "pending",
-  created_at: o?.date_created ?? null,   // mapped for UI
-  total: o?.grand_total_with_interest ?? null,
-}));
+    };
 
-
-      if (mounted) setOrders(rows);
-      console.log("[checkout sidebar] loaded orders:", rows.length, rows);
-    } catch (e) {
-      console.error("[checkout sidebar] load failed:", e);
-      if (mounted) setOrders([]);
-    } finally {
-      if (mounted) setFetchingOrders(false);
-    }
-  };
-
-  load();
-  return () => {
-    mounted = false;
-  };
-}, []); // reads auth inside
-
-
-
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, []); // reads auth inside
 
   /* --------------------------- Payment type logic --------------------------- */
   useEffect(() => {
@@ -657,15 +709,14 @@ const rows = (data ?? []).map((o: any) => ({
       setInterestPercent(0);
     }
   }, [customerInfo.payment_type]);
-  
-  useEffect(() => {
-  if (customerInfo.payment_type !== "Credit") {
-    setTcAccepted(false);
-    setTcReadyToAccept(false);
-    setShowTermsModal(false);
-  }
-}, [customerInfo.payment_type]);
 
+  useEffect(() => {
+    if (customerInfo.payment_type !== "Credit") {
+      setTcAccepted(false);
+      setTcReadyToAccept(false);
+      setShowTermsModal(false);
+    }
+  }, [customerInfo.payment_type]);
 
   useEffect(() => {
     if (customerInfo.payment_type === "Credit" && termsMonths != null) {
@@ -677,7 +728,10 @@ const rows = (data ?? []).map((o: any) => ({
   const handleUpdateQty = (ci: CtxCartItem, nextRaw: number) => {
     const next = clampQty(Number.isFinite(nextRaw) ? nextRaw : 1);
 
-    const tempCart: CartItem[] = cart.map((x) => ({ item: x.item as any, quantity: x.quantity }));
+    const tempCart: CartItem[] = cart.map((x) => ({
+      item: x.item as any,
+      quantity: x.quantity,
+    }));
     const target = tempCart.find((x) => x.item.id === ci.item.id);
     if (!target) return;
 
@@ -687,13 +741,16 @@ const rows = (data ?? []).map((o: any) => ({
       return;
     }
 
-    const weightWithoutThis = cartTotalWeightKg(tempCart) - perUnitKg * target.quantity;
+    const weightWithoutThis =
+      cartTotalWeightKg(tempCart) - perUnitKg * target.quantity;
     const remainingKg = TRUCK_LIMITS.maxTotalWeightKg - weightWithoutThis;
     const maxQtyByWeight = Math.max(0, Math.floor(remainingKg / perUnitKg));
     const approved = Math.max(1, Math.min(next, maxQtyByWeight));
 
     if (next > MAX_QTY) {
-      toast.error(`Maximum ${MAX_QTY} per item. For more, please submit another transaction.`);
+      toast.error(
+        `Maximum ${MAX_QTY} per item. For more, please submit another transaction.`
+      );
     } else if (next > approved) {
       toast.error(LIMIT_TOAST);
     }
@@ -702,52 +759,56 @@ const rows = (data ?? []).map((o: any) => ({
 
   /* ------------------------------ Derived totals ----------------------------- */
   const subtotal = useMemo(
-    () => cart.reduce((s, ci) => s + (Number(ci.item.unit_price || 0) * ci.quantity), 0),
+    () =>
+      cart.reduce(
+        (s, ci) => s + Number(ci.item.unit_price || 0) * ci.quantity,
+        0
+      ),
     [cart]
   );
   const tax = 0;
   const shipping = 0;
   const grandTotal = subtotal + tax + shipping;
 
-/* ------------------------------ Validation ------------------------------ */
-const missingFields = useMemo(() => {
-  const missing: string[] = [];
-  if (!customerInfo.name?.trim()) missing.push("Customer Name");
-  if (!customerInfo.email?.includes("@")) missing.push("Email");
-  if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
-  if (!customerInfo.phone || !isValidPhone(customerInfo.phone)) missing.push("Phone (11 digits)");
-  if (!houseStreet?.trim()) missing.push("House & Street");
-  if (!regionCode) missing.push("Region");
-  if (!isNCR && !provinceCode) missing.push("Province");
-  if (!cityCode) missing.push("City / Municipality");
-  if (!barangayCode) missing.push("Barangay");
-  if (cart.length === 0) missing.push("Cart");
+  /* ------------------------------ Validation ------------------------------ */
+  const missingFields = useMemo(() => {
+    const missing: string[] = [];
+    if (!customerInfo.name?.trim()) missing.push("Customer Name");
+    if (!customerInfo.email?.includes("@")) missing.push("Email");
+    if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
+    if (!customerInfo.phone || !isValidPhone(customerInfo.phone))
+      missing.push("Phone (11 digits)");
+    if (!houseStreet?.trim()) missing.push("House & Street");
+    if (!regionCode) missing.push("Region");
+    if (!isNCR && !provinceCode) missing.push("Province");
+    if (!cityCode) missing.push("City / Municipality");
+    if (!barangayCode) missing.push("Barangay");
+    if (cart.length === 0) missing.push("Cart");
 
-  if (customerInfo.payment_type === "Credit") {
-    if (!termsMonths) missing.push("Payment Terms (months)");
-    if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
-    if (!tcAccepted) missing.push("Accept Terms & Conditions");
-  }
+    if (customerInfo.payment_type === "Credit") {
+      if (!termsMonths) missing.push("Payment Terms (months)");
+      if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
+      if (!tcAccepted) missing.push("Accept Terms & Conditions");
+    }
 
-  return missing;
-}, [
-  customerInfo.name,
-  customerInfo.email,
-  customerInfo.contact_person,
-  customerInfo.phone,
-  customerInfo.payment_type,
-  houseStreet,
-  regionCode,
-  provinceCode,
-  cityCode,
-  barangayCode,
-  cart,
-  isNCR,
-  termsMonths,
-  interestPercent,
-  tcAccepted,          // <-- ADD THIS
-]);
-
+    return missing;
+  }, [
+    customerInfo.name,
+    customerInfo.email,
+    customerInfo.contact_person,
+    customerInfo.phone,
+    customerInfo.payment_type,
+    houseStreet,
+    regionCode,
+    provinceCode,
+    cityCode,
+    barangayCode,
+    cart,
+    isNCR,
+    termsMonths,
+    interestPercent,
+    tcAccepted, // <-- ADD THIS
+  ]);
 
   const isConfirmEnabled = missingFields.length === 0;
 
@@ -777,7 +838,12 @@ const missingFields = useMemo(() => {
     // 1) Try find existing by auth user id or email
     const { data: userWrap } = await supabase.auth.getUser();
     const auth = userWrap?.user;
-    const email = (customerInfo.email || authDefaults.email || auth?.email || "").trim();
+    const email = (
+      customerInfo.email ||
+      authDefaults.email ||
+      auth?.email ||
+      ""
+    ).trim();
 
     let existing: { id: string; code: string | null } | null = null;
 
@@ -799,10 +865,13 @@ const missingFields = useMemo(() => {
 
         .limit(1)
         .maybeSingle();
-      if (byEmail?.id) existing = { id: byEmail.id, code: byEmail.code ?? null };
+      if (byEmail?.id)
+        existing = { id: byEmail.id, code: byEmail.code ?? null };
     }
 
-    const nowPH = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
+    const nowPH = new Date().toLocaleString("sv-SE", {
+      timeZone: "Asia/Manila",
+    });
 
     const baseFields = {
       name: customerInfo.name,
@@ -816,21 +885,21 @@ const missingFields = useMemo(() => {
       customer_type: customerInfo.customer_type || null,
       landmark: customerInfo.landmark || null,
       region_code: regionCode || null,
-      province_code: isNCR ? null : (provinceCode || null),
+      province_code: isNCR ? null : provinceCode || null,
       city_code: cityCode || null,
       barangay_code: barangayCode || null,
       house_street: houseStreet || null,
       date: nowPH as any,
-      transaction: cart.map((ci) => `${ci.item.product_name} x${ci.quantity}`).join(", "),
+      transaction: cart
+        .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
+        .join(", "),
     };
 
-if (existing) {
-  // Update contact/address only — DO NOT touch customers.code
-  await supabase.from("customers").update(baseFields).eq("id", existing.id);
-  return { id: existing.id, code: existing.code || "" }; // code here is no longer used as TXN
-}
-
-
+    if (existing) {
+      // Update contact/address only — DO NOT touch customers.code
+      await supabase.from("customers").update(baseFields).eq("id", existing.id);
+      return { id: existing.id, code: existing.code || "" }; // code here is no longer used as TXN
+    }
 
     // 3) Create a new customer once with a unique code
     const freshCode = await ensureUniqueCustomerCode();
@@ -846,7 +915,10 @@ if (existing) {
         .single();
       if (!error && data) {
         created = { id: data.id, code: data.code };
-      } else if (error && String(error.message).includes("customers_code_key")) {
+      } else if (
+        error &&
+        String(error.message).includes("customers_code_key")
+      ) {
         const retryCode = await ensureUniqueCustomerCode();
         const { data: data2, error: err2 } = await supabase
           .from("customers")
@@ -865,67 +937,68 @@ if (existing) {
   }
 
   /* ------------------------------- Handlers ------------------------------- */
-const openConfirmModal = async () => {
-  // Best-effort phone autofill
-  const { email: authEmail, name: authName } = await getAuthIdentity();
-  const emailToUse =
-    (customerInfo.email && customerInfo.email.trim()) ||
-    authDefaults.email ||
-    authEmail;
+  const openConfirmModal = async () => {
+    // Best-effort phone autofill
+    const { email: authEmail, name: authName } = await getAuthIdentity();
+    const emailToUse =
+      (customerInfo.email && customerInfo.email.trim()) ||
+      authDefaults.email ||
+      authEmail;
 
-  let ensuredPhone =
-    normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
-  if (!ensuredPhone && emailToUse) ensuredPhone = await loadPhoneForEmail(emailToUse);
+    let ensuredPhone =
+      normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
+    if (!ensuredPhone && emailToUse)
+      ensuredPhone = await loadPhoneForEmail(emailToUse);
 
-  setAuthDefaults((prev) => ({
-    ...prev,
-    name: prev.name || authName,
-    email: prev.email || authEmail,
-    phone: ensuredPhone || prev.phone,
-  }));
+    setAuthDefaults((prev) => ({
+      ...prev,
+      name: prev.name || authName,
+      email: prev.email || authEmail,
+      phone: ensuredPhone || prev.phone,
+    }));
 
-  setCustomerInfo((prev) => ({
-    ...prev,
-    name: prev.name || authDefaults.name || authName,
-    email: prev.email || authDefaults.email || authEmail,
-    phone: ensuredPhone || prev.phone,
-  }));
+    setCustomerInfo((prev) => ({
+      ...prev,
+      name: prev.name || authDefaults.name || authName,
+      email: prev.email || authDefaults.email || authEmail,
+      phone: ensuredPhone || prev.phone,
+    }));
 
-  // NEW: Autofill from the most recent customer snapshot for this email
-  if (emailToUse) {
-    await loadLastCustomerSnapshot(emailToUse);
-  }
+    // NEW: Autofill from the most recent customer snapshot for this email
+    if (emailToUse) {
+      await loadLastCustomerSnapshot(emailToUse);
+    }
 
-  if (!ensuredPhone) {
-    toast.error("We couldn't auto-fill your phone number. Please update your profile.");
-  }
+    if (!ensuredPhone) {
+      toast.error(
+        "We couldn't auto-fill your phone number. Please update your profile."
+      );
+    }
 
-  setShowConfirmModal(true);
-};
+    setShowConfirmModal(true);
+  };
 
-// Open/close terms modal
-const openTerms = () => {
-  setShowTermsModal(true);
-  setTcReadyToAccept(false); // must scroll again to bottom each view
-};
-const closeTerms = () => setShowTermsModal(false);
+  // Open/close terms modal
+  const openTerms = () => {
+    setShowTermsModal(true);
+    setTcReadyToAccept(false); // must scroll again to bottom each view
+  };
+  const closeTerms = () => setShowTermsModal(false);
 
-// When user scrolls the terms body, unlock the checkbox
-const onTermsScroll = () => {
-  const el = termsBodyRef.current;
-  if (!el) return;
-  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
-  if (atBottom) setTcReadyToAccept(true);
-};
-
-
+  // When user scrolls the terms body, unlock the checkbox
+  const onTermsScroll = () => {
+    const el = termsBodyRef.current;
+    if (!el) return;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+    if (atBottom) setTcReadyToAccept(true);
+  };
 
   const proceedToFinal = () => {
     if (!isConfirmEnabled) {
       toast.error(
-        `Please complete required fields: ${missingFields.slice(0, 3).join(", ")}${
-          missingFields.length > 3 ? "…" : ""
-        }`
+        `Please complete required fields: ${missingFields
+          .slice(0, 3)
+          .join(", ")}${missingFields.length > 3 ? "…" : ""}`
       );
       return;
     }
@@ -952,43 +1025,40 @@ const onTermsScroll = () => {
 
     try {
       // (1) Ensure customer exists once (no duplicate code inserts)
-      const { id: customerId, code: customerCode } = await getOrCreateCustomer();
+      const { id: customerId, code: customerCode } =
+        await getOrCreateCustomer();
 
-// (2) Create order
-const now = new Date();
-const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
+      // (2) Create order
+      const now = new Date();
+      const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
 
-const orderPayload: any = {
-  customer_id: customerId,
-  total_amount: subtotal,
-  status: "pending",
-  date_created: phTime,            // <-- make sure your orders table has this column
-};
+      const orderPayload: any = {
+        customer_id: customerId,
+        total_amount: subtotal,
+        status: "pending",
+        date_created: phTime, // <-- make sure your orders table has this column
+      };
 
-// optional credit fields
-if (customerInfo.payment_type === "Credit") {
-  const months = termsMonths ?? 1;
-  orderPayload.terms = `Net ${months} Monthly`;
-  orderPayload.payment_terms = months;
-  orderPayload.interest_percent = TERM_TO_INTEREST[months];
-}
+      // optional credit fields
+      if (customerInfo.payment_type === "Credit") {
+        const months = termsMonths ?? 1;
+        orderPayload.terms = `Net ${months} Monthly`;
+        orderPayload.payment_terms = months;
+        orderPayload.interest_percent = TERM_TO_INTEREST[months];
+      }
 
-// insert the order and get id + date_created back
-const { data: ord, error: ordErr } = await supabase
-  .from("orders")
-  .insert([orderPayload])
-  .select("id, date_created")
-  .single();
-if (ordErr) throw ordErr;
+      // insert the order and get id + date_created back
+      const { data: ord, error: ordErr } = await supabase
+        .from("orders")
+        .insert([orderPayload])
+        .select("id, date_created")
+        .single();
+      if (ordErr) throw ordErr;
 
-// build the display TXN code from the new row
-const orderId = ord.id as string;
-const thisOrderCode = getTxnCode(orderId, ord?.date_created);
-setTxnCode(thisOrderCode);
-
-
-
-
+      // build the display TXN code from the new row
+      const orderId = ord.id as string;
+      const thisOrderCode = getTxnCode(orderId, ord?.date_created);
+      setTxnCode(thisOrderCode);
 
       // (3) Create order_items
       const items = cart.map((ci) => ({
@@ -997,7 +1067,9 @@ setTxnCode(thisOrderCode);
         quantity: ci.quantity,
         price: ci.item.unit_price || 0,
       }));
-      const { error: itemsErr } = await supabase.from("order_items").insert(items);
+      const { error: itemsErr } = await supabase
+        .from("order_items")
+        .insert(items);
       if (itemsErr) throw itemsErr;
 
       // (4) Admin notification (best effort)
@@ -1007,35 +1079,85 @@ setTxnCode(thisOrderCode);
           .map((ci) => `${ci.item.product_name} x${ci.quantity}`)
           .join(", ");
         const more = cart.length > 3 ? `, +${cart.length - 3} more` : "";
-await supabase.from("system_notifications").insert([
-  {
-    type: "order",
-    title: "🛒 Order Request",
-    message: `${customerInfo.name || authDefaults.name} • TXN ${thisOrderCode} • ${preview}${more} • Total: ${formatCurrency(subtotal)}`,
-    order_id: orderId,
-    customer_id: customerId,
-    source: "customer",
-    read: false,
-    metadata: {
-      order_id: orderId,
-      txn_code: thisOrderCode,
-      total_amount: Number(subtotal || 0),
-      item_count: cart.length,
-      payment_type: customerInfo.payment_type || "Cash",
-      terms_months: customerInfo.payment_type === "Credit" ? termsMonths ?? null : null,
-      interest_percent:
-        customerInfo.payment_type === "Credit" ? interestPercent ?? null : null,
-    },
-  },
-]);
-
+        await supabase.from("system_notifications").insert([
+          {
+            type: "order",
+            title: "Order Request",
+            message: `${
+              customerInfo.name || authDefaults.name
+            } • TXN ${thisOrderCode} • ${preview}${more} • Total: ${formatCurrency(
+              subtotal
+            )}`,
+            order_id: orderId,
+            customer_id: customerId,
+            source: "customer",
+            read: false,
+            metadata: {
+              order_id: orderId,
+              txn_code: thisOrderCode,
+              total_amount: Number(subtotal || 0),
+              item_count: cart.length,
+              payment_type: customerInfo.payment_type || "Cash",
+              terms_months:
+                customerInfo.payment_type === "Credit"
+                  ? termsMonths ?? null
+                  : null,
+              interest_percent:
+                customerInfo.payment_type === "Credit"
+                  ? interestPercent ?? null
+                  : null,
+            },
+          },
+        ]);
       } catch (notifErr) {
         console.warn("Failed to create order notification:", notifErr);
       }
+      //EMAIL ADMIN
+      // (5) Email admin about new order (best effort)
+      try {
+        const response = await fetch("/api/notify-admin-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderId,
+            transactionCode: thisOrderCode,
+            customer: {
+              name: customerInfo.name || authDefaults.name || "Customer",
+              email: customerInfo.email || authDefaults.email || "",
+              phone: customerInfo.phone || authDefaults.phone || "",
+              address: computedAddress,
+            },
+            totals: {
+              subtotal,
+              paymentType: customerInfo.payment_type || "Cash",
+              termsMonths:
+                customerInfo.payment_type === "Credit"
+                  ? termsMonths ?? null
+                  : null,
+              interestPercent:
+                customerInfo.payment_type === "Credit"
+                  ? interestPercent ?? null
+                  : null,
+            },
+            items: cart.map((ci) => ({
+              product_name: ci.item.product_name,
+              category: ci.item.category,
+              subcategory: ci.item.subcategory,
+              quantity: ci.quantity,
+              unit_price: Number(ci.item.unit_price || 0),
+            })),
+          }),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          console.error("notify-admin-order failed:", response.status, text);
+        }
+      } catch (emailErr) {
+        console.warn("Failed to send admin new-order email:", emailErr);
+      }
 
       toast.success("Your order has been submitted successfully!");
-
-
 
       // reset cart + keep auth defaults
       setShowFinalModal(false);
@@ -1066,19 +1188,17 @@ await supabase.from("system_notifications").insert([
         const emailUsed = customerInfo.email || authDefaults.email;
         if (emailUsed) await setTypeFromHistory(emailUsed);
       } catch {}
-
-
     } catch (e: any) {
       console.error("Order submission error:", e?.message || e);
-      toast.error(e?.message?.includes("customers_code_key")
-        ? "We hit a duplicate customer code once. Please try again."
-        : "Something went wrong. Please try again.");
+      toast.error(
+        e?.message?.includes("customers_code_key")
+          ? "We hit a duplicate customer code once. Please try again."
+          : "Something went wrong. Please try again."
+      );
     } finally {
       setPlacingOrder(false);
     }
   };
-
-
 
   /* --------------------------------- UI --------------------------------- */
   return (
@@ -1144,9 +1264,12 @@ await supabase.from("system_notifications").insert([
                                 )}
                               </div>
                               <div>
-                                <div className="font-medium">{ci.item.product_name}</div>
+                                <div className="font-medium">
+                                  {ci.item.product_name}
+                                </div>
                                 <div className="text-xs text-gray-500">
-                                  {ci.item.category ?? ""} • {ci.item.subcategory ?? ""}
+                                  {ci.item.category ?? ""} •{" "}
+                                  {ci.item.subcategory ?? ""}
                                 </div>
                               </div>
                             </div>
@@ -1155,7 +1278,9 @@ await supabase.from("system_notifications").insert([
                           <td className="py-3">
                             <div className="flex items-center gap-2">
                               <button
-                                onClick={() => handleUpdateQty(ci, clampQty(ci.quantity - 1))}
+                                onClick={() =>
+                                  handleUpdateQty(ci, clampQty(ci.quantity - 1))
+                                }
                                 className="px-2 py-1 border rounded"
                               >
                                 −
@@ -1163,12 +1288,19 @@ await supabase.from("system_notifications").insert([
                               <input
                                 type="number"
                                 value={ci.quantity}
-                                onChange={(e) => handleUpdateQty(ci, Number(e.target.value) || 1)}
+                                onChange={(e) =>
+                                  handleUpdateQty(
+                                    ci,
+                                    Number(e.target.value) || 1
+                                  )
+                                }
                                 className="w-16 text-center border rounded px-1 py-1"
                                 min={1}
                               />
                               <button
-                                onClick={() => handleUpdateQty(ci, clampQty(ci.quantity + 1))}
+                                onClick={() =>
+                                  handleUpdateQty(ci, clampQty(ci.quantity + 1))
+                                }
                                 className="px-2 py-1 border rounded"
                               >
                                 +
@@ -1176,9 +1308,13 @@ await supabase.from("system_notifications").insert([
                             </div>
                           </td>
 
-                          <td className="py-3">{formatCurrency(Number(ci.item.unit_price || 0))}</td>
                           <td className="py-3">
-                            {formatCurrency(Number(ci.item.unit_price || 0) * ci.quantity)}
+                            {formatCurrency(Number(ci.item.unit_price || 0))}
+                          </td>
+                          <td className="py-3">
+                            {formatCurrency(
+                              Number(ci.item.unit_price || 0) * ci.quantity
+                            )}
                           </td>
 
                           <td className="py-3">
@@ -1196,44 +1332,46 @@ await supabase.from("system_notifications").insert([
                 </div>
 
                 {/* totals + proceed */}
-<div className="mt-4 flex flex-col lg:flex-row items-start lg:items-center gap-4">
-  {/* Note + Estimated total */}
-  <div className="flex-1 bg-gray-50 p-4 rounded">
-    <div className="text-xs text-gray-600 mb-2">
-      * Final price may change if an admin applies a discount during order processing. 
-      Shipping fee is not yet applied and (if any) will be added later by the admin.
-    </div>
-    <div className="flex justify-between font-semibold text-lg">
-      <span>Estimated Total</span>
-      <span>{formatCurrency(subtotal)}</span>
-    </div>
-  </div>
+                <div className="mt-4 flex flex-col lg:flex-row items-start lg:items-center gap-4">
+                  {/* Note + Estimated total */}
+                  <div className="flex-1 bg-gray-50 p-4 rounded">
+                    <div className="text-xs text-gray-600 mb-2">
+                      * Final price may change if an admin applies a discount
+                      during order processing. Shipping fee is not yet applied
+                      and (if any) will be added later by the admin.
+                    </div>
+                    <div className="flex justify-between font-semibold text-lg">
+                      <span>Estimated Total</span>
+                      <span>{formatCurrency(subtotal)}</span>
+                    </div>
+                  </div>
 
-  {/* Actions */}
-  <div className="flex items-center gap-3">
-    <button
-      onClick={() => {
-        clearCart();
-        toast("Cart cleared.");
-      }}
-      className="h-11 px-5 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 shadow-sm transition"
-    >
-      Clear
-    </button>
+                  {/* Actions */}
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        clearCart();
+                        toast("Cart cleared.");
+                      }}
+                      className="h-11 px-5 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 shadow-sm transition"
+                    >
+                      Clear
+                    </button>
 
-    <button
-      onClick={openConfirmModal}
-      disabled={cart.length === 0}
-      className="h-11 px-6 rounded-lg bg-[#ffba20] text-black font-semibold hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed shadow-md transition whitespace-nowrap"
-      title={cart.length === 0 ? "Your cart is empty" : "Proceed to checkout"}
-    >
-      Proceed to Checkout
-    </button>
-  </div>
-</div>
-
-
-
+                    <button
+                      onClick={openConfirmModal}
+                      disabled={cart.length === 0}
+                      className="h-11 px-6 rounded-lg bg-[#ffba20] text-black font-semibold hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed shadow-md transition whitespace-nowrap"
+                      title={
+                        cart.length === 0
+                          ? "Your cart is empty"
+                          : "Proceed to checkout"
+                      }
+                    >
+                      Proceed to Checkout
+                    </button>
+                  </div>
+                </div>
               </>
             )}
           </div>
@@ -1246,19 +1384,27 @@ await supabase.from("system_notifications").insert([
             <div className="text-sm text-gray-700 space-y-1">
               <div>
                 <span className="text-gray-500">Name: </span>
-                <span className="font-medium">{customerInfo.name || authDefaults.name || "—"}</span>
+                <span className="font-medium">
+                  {customerInfo.name || authDefaults.name || "—"}
+                </span>
               </div>
               <div>
                 <span className="text-gray-500">Email: </span>
-                <span className="font-medium">{customerInfo.email || authDefaults.email || "—"}</span>
+                <span className="font-medium">
+                  {customerInfo.email || authDefaults.email || "—"}
+                </span>
               </div>
               <div>
                 <span className="text-gray-500">Phone: </span>
-                <span className="font-medium">{customerInfo.phone || authDefaults.phone || "—"}</span>
+                <span className="font-medium">
+                  {customerInfo.phone || authDefaults.phone || "—"}
+                </span>
               </div>
               <div>
                 <span className="text-gray-500">Customer Type: </span>
-                <span className="font-medium">{customerInfo.customer_type || "—"}</span>
+                <span className="font-medium">
+                  {customerInfo.customer_type || "—"}
+                </span>
               </div>
               {orderHistoryCount !== null && (
                 <div className="text-xs text-gray-500">
@@ -1283,15 +1429,17 @@ await supabase.from("system_notifications").insert([
                   <li key={o.id} className="border rounded p-2">
                     <div className="flex justify-between items-center">
                       <div>
-                        <div className="font-medium">{getTxnCode(o.id, o.created_at)}</div>
+                        <div className="font-medium">
+                          {getTxnCode(o.id, o.created_at)}
+                        </div>
 
-                        <div className="text-xs text-gray-500">{safeFormatPH(o.created_at)}</div>
-
+                        <div className="text-xs text-gray-500">
+                          {safeFormatPH(o.created_at)}
+                        </div>
                       </div>
-<div className="text-right">
-  <div className="text-xs text-gray-500">{o.status}</div>
-</div>
-
+                      <div className="text-right">
+                        <div className="text-xs text-gray-500">{o.status}</div>
+                      </div>
                     </div>
                   </li>
                 ))}
@@ -1310,7 +1458,9 @@ await supabase.from("system_notifications").insert([
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
             className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
-            <h2 className="text-2xl font-semibold tracking-tight shrink-0">Confirm Order</h2>
+            <h2 className="text-2xl font-semibold tracking-tight shrink-0">
+              Confirm Order
+            </h2>
 
             <div className="flex-1 overflow-auto mt-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1352,7 +1502,10 @@ await supabase.from("system_notifications").insert([
                     const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
 
                     if (value.length <= 30) {
-                      setCustomerInfo({ ...customerInfo, contact_person: value });
+                      setCustomerInfo({
+                        ...customerInfo,
+                        contact_person: value,
+                      });
                     }
                   }}
                 />
@@ -1399,7 +1552,9 @@ await supabase.from("system_notifications").insert([
                   </div>
 
                   <div>
-                    <label className="block text-sm mb-1">City / Municipality</label>
+                    <label className="block text-sm mb-1">
+                      City / Municipality
+                    </label>
                     <select
                       className="border px-3 py-2 rounded w-full"
                       value={cityCode}
@@ -1450,7 +1605,8 @@ await supabase.from("system_notifications").insert([
                   className="border px-3 py-2 rounded col-span-2"
                   value={houseStreet}
                   onChange={(e) => {
-                    if (e.target.value.length <= 30) setHouseStreet(e.target.value);
+                    if (e.target.value.length <= 30)
+                      setHouseStreet(e.target.value);
                   }}
                 />
                 <input
@@ -1461,7 +1617,10 @@ await supabase.from("system_notifications").insert([
                   value={customerInfo.landmark || ""}
                   onChange={(e) =>
                     e.target.value.length <= 30 &&
-                    setCustomerInfo({ ...customerInfo, landmark: e.target.value })
+                    setCustomerInfo({
+                      ...customerInfo,
+                      landmark: e.target.value,
+                    })
                   }
                 />
                 <input
@@ -1485,30 +1644,29 @@ await supabase.from("system_notifications").insert([
                   )}
                 </div>
 
-<div className="flex gap-4">
-  {(
-    customerInfo.customer_type === "Existing Customer"
-      ? (["Cash", "Credit"] as const)  // Existing can pick Cash or Credit
-      : (["Cash"] as const)            // New = Cash only
-  ).map((type) => (
-    <label key={type} className="flex items-center gap-2">
-      <input
-        type="radio"
-        name="payment_type"
-        value={type}
-        checked={customerInfo.payment_type === type}
-        onChange={(e) =>
-          setCustomerInfo({
-            ...customerInfo,
-            payment_type: e.target.value as "Cash" | "Credit",
-          })
-        }
-      />
-      {type}
-    </label>
-  ))}
-</div>
-
+                <div className="flex gap-4">
+                  {(customerInfo.customer_type === "Existing Customer"
+                    ? (["Cash", "Credit"] as const) // Existing can pick Cash or Credit
+                    : (["Cash"] as const)
+                  ) // New = Cash only
+                    .map((type) => (
+                      <label key={type} className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="payment_type"
+                          value={type}
+                          checked={customerInfo.payment_type === type}
+                          onChange={(e) =>
+                            setCustomerInfo({
+                              ...customerInfo,
+                              payment_type: e.target.value as "Cash" | "Credit",
+                            })
+                          }
+                        />
+                        {type}
+                      </label>
+                    ))}
+                </div>
 
                 {customerInfo.payment_type === "Credit" && (
                   <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1519,7 +1677,9 @@ await supabase.from("system_notifications").insert([
                           !termsMonths ? "border-red-400" : ""
                         }`}
                         value={termsMonths ?? ""}
-                        onChange={(e) => setTermsMonths(Number(e.target.value) || null)}
+                        onChange={(e) =>
+                          setTermsMonths(Number(e.target.value) || null)
+                        }
                       >
                         <option value="">Select term</option>
                         <option value={1}>1 month (Net 1)</option>
@@ -1551,39 +1711,41 @@ await supabase.from("system_notifications").insert([
               </div>
 
               {/* Credit Terms & Conditions acknowledgement */}
-{customerInfo.payment_type === "Credit" && (
-  <div className="col-span-2 rounded border p-3 bg-amber-50/50">
-    <div className="text-sm">
-      By selecting <span className="font-medium">Credit</span>, you agree to our{" "}
-      <button
-        type="button"
-        onClick={openTerms}
-        className="text-blue-600 hover:underline underline-offset-2"
-      >
-        Terms & Conditions on interest
-      </button>.
-    </div>
+              {customerInfo.payment_type === "Credit" && (
+                <div className="col-span-2 rounded border p-3 bg-amber-50/50">
+                  <div className="text-sm">
+                    By selecting <span className="font-medium">Credit</span>,
+                    you agree to our{" "}
+                    <button
+                      type="button"
+                      onClick={openTerms}
+                      className="text-blue-600 hover:underline underline-offset-2"
+                    >
+                      Terms & Conditions on interest
+                    </button>
+                    .
+                  </div>
 
-    <label className="mt-2 flex items-start gap-2 text-sm">
-      <input
-        type="checkbox"
-        className="mt-0.5"
-        checked={tcAccepted}
-        onChange={(e) => setTcAccepted(e.target.checked)}
-        disabled={!tcReadyToAccept}
-      />
-      <span>
-        I have read and agree to the Terms & Conditions on interest.
-        {!tcReadyToAccept && (
-          <span className="ml-1 text-xs text-gray-500">
-            (open & read the terms first)
-          </span>
-        )}
-      </span>
-    </label>
-  </div>
-)}
-
+                  <label className="mt-2 flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={tcAccepted}
+                      onChange={(e) => setTcAccepted(e.target.checked)}
+                      disabled={!tcReadyToAccept}
+                    />
+                    <span>
+                      I have read and agree to the Terms & Conditions on
+                      interest.
+                      {!tcReadyToAccept && (
+                        <span className="ml-1 text-xs text-gray-500">
+                          (open & read the terms first)
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                </div>
+              )}
 
               {/* Items table */}
               <div className="border rounded-xl bg-gray-100 overflow-hidden">
@@ -1611,7 +1773,9 @@ await supabase.from("system_notifications").insert([
                         <td className="py-2 px-3">{ci.quantity}</td>
                         <td className="py-2 px-3">{ci.item.status}</td>
                         <td className="py-2 px-3 font-medium">
-                          {formatCurrency(Number(ci.item.unit_price || 0) * ci.quantity)}
+                          {formatCurrency(
+                            Number(ci.item.unit_price || 0) * ci.quantity
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1620,19 +1784,27 @@ await supabase.from("system_notifications").insert([
 
                 <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
                   <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount during order
-                    processing.
+                    * Final price may change if an admin applies a discount
+                    during order processing.
                   </div>
                   <div className="text-right text-sm">
                     <div>
-                      <span className="mr-2 text-gray-600">Estimated Total:</span>
-                      <span className="font-semibold">{formatCurrency(subtotal)}</span>
+                      <span className="mr-2 text-gray-600">
+                        Estimated Total:
+                      </span>
+                      <span className="font-semibold">
+                        {formatCurrency(subtotal)}
+                      </span>
                     </div>
                     {customerInfo.payment_type === "Credit" && (
                       <div className="mt-1">
-                        <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
+                        <span className="mr-2 text-gray-600">
+                          Est. w/ Interest:
+                        </span>
                         <span className="font-semibold">
-                          {formatCurrency(subtotal * (1 + Math.max(0, interestPercent) / 100))}
+                          {formatCurrency(
+                            subtotal * (1 + Math.max(0, interestPercent) / 100)
+                          )}
                         </span>
                       </div>
                     )}
@@ -1660,7 +1832,11 @@ await supabase.from("system_notifications").insert([
                 onClick={proceedToFinal}
                 className="px-4 py-2 rounded-xl bg-green-600 text-white shadow-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
                 disabled={!isConfirmEnabled}
-                title={!isConfirmEnabled ? "Please complete required fields" : "Submit order"}
+                title={
+                  !isConfirmEnabled
+                    ? "Please complete required fields"
+                    : "Submit order"
+                }
               >
                 Submit Order
               </button>
@@ -1670,105 +1846,129 @@ await supabase.from("system_notifications").insert([
       )}
 
       {/* ------------------------ Terms & Conditions Modal ------------------------ */}
-{showTermsModal && (
-  <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-    <motion.div
-      initial={{ opacity: 0, y: 16, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ type: "spring", stiffness: 260, damping: 22 }}
-      className="bg-white w-full max-w-3xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col"
-    >
-      <h2 className="text-xl font-semibold tracking-tight">Terms &amp; Conditions – Credit Interest</h2>
+      {showTermsModal && (
+        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 260, damping: 22 }}
+            className="bg-white w-full max-w-3xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col"
+          >
+            <h2 className="text-xl font-semibold tracking-tight">
+              Terms &amp; Conditions – Credit Interest
+            </h2>
 
-      {/* Scrollable body; must reach bottom to enable main checkbox */}
-      <div
-        ref={termsBodyRef}
-        onScroll={onTermsScroll}
-        className="mt-4 overflow-auto pr-2"
-        style={{ maxHeight: "60vh" }}
-      >
-        <div className="prose prose-sm max-w-none">
-          <p>
-            These Terms &amp; Conditions govern the application of interest for credit purchases
-            made through UniAsia Hardware &amp; Electrical Mktg. Corp. By using the Credit payment
-            option, you acknowledge and agree to the following:
-          </p>
+            {/* Scrollable body; must reach bottom to enable main checkbox */}
+            <div
+              ref={termsBodyRef}
+              onScroll={onTermsScroll}
+              className="mt-4 overflow-auto pr-2"
+              style={{ maxHeight: "60vh" }}
+            >
+              <div className="prose prose-sm max-w-none">
+                <p>
+                  These Terms &amp; Conditions govern the application of
+                  interest for credit purchases made through UniAsia Hardware
+                  &amp; Electrical Mktg. Corp. By using the Credit payment
+                  option, you acknowledge and agree to the following:
+                </p>
 
-          <h3>1. Interest Schedule</h3>
-          <ul>
-            <li>Net 1 month: <strong>2%</strong> interest for the whole term.</li>
-            <li>Net 3 months: <strong>6%</strong> interest for the whole term.</li>
-            <li>Net 6 months: <strong>12%</strong> interest for the whole term.</li>
-            <li>Net 12 months: <strong>24%</strong> interest for the whole term.</li>
-          </ul>
+                <h3>1. Interest Schedule</h3>
+                <ul>
+                  <li>
+                    Net 1 month: <strong>2%</strong> interest for the whole
+                    term.
+                  </li>
+                  <li>
+                    Net 3 months: <strong>6%</strong> interest for the whole
+                    term.
+                  </li>
+                  <li>
+                    Net 6 months: <strong>12%</strong> interest for the whole
+                    term.
+                  </li>
+                  <li>
+                    Net 12 months: <strong>24%</strong> interest for the whole
+                    term.
+                  </li>
+                </ul>
 
-          <h3>2. Computation Basis</h3>
-          <p>
-            Interest is computed on the order subtotal (exclusive of shipping). Shipping fees, if
-            any, may be added separately and are not part of the interest base.
-          </p>
+                <h3>2. Computation Basis</h3>
+                <p>
+                  Interest is computed on the order subtotal (exclusive of
+                  shipping). Shipping fees, if any, may be added separately and
+                  are not part of the interest base.
+                </p>
 
-          <h3>3. Payment Schedule</h3>
-          <p>
-            The total with interest is divided into equal monthly installments over the selected
-            term. Any missed or late installment may be subject to additional charges or order
-            restrictions at the Company’s discretion.
-          </p>
+                <h3>3. Payment Schedule</h3>
+                <p>
+                  The total with interest is divided into equal monthly
+                  installments over the selected term. Any missed or late
+                  installment may be subject to additional charges or order
+                  restrictions at the Company’s discretion.
+                </p>
 
-          <h3>4. Early Settlement</h3>
-          <p>
-            Early payment of the remaining balance is allowed. Any request for interest adjustment
-            on early settlement is subject to approval by the Company.
-          </p>
+                <h3>4. Early Settlement</h3>
+                <p>
+                  Early payment of the remaining balance is allowed. Any request
+                  for interest adjustment on early settlement is subject to
+                  approval by the Company.
+                </p>
 
-          <h3>5. Order Changes</h3>
-          <p>
-            Discounts, returns, or adjustments approved by an administrator may change the final
-            payable amount. Such changes will reflect in subsequent statements or installment
-            schedules.
-          </p>
+                <h3>5. Order Changes</h3>
+                <p>
+                  Discounts, returns, or adjustments approved by an
+                  administrator may change the final payable amount. Such
+                  changes will reflect in subsequent statements or installment
+                  schedules.
+                </p>
 
-          <h3>6. Defaults</h3>
-          <p>
-            Failure to comply with the payment schedule may result in suspension of credit
-            privileges and collection actions permitted by law.
-          </p>
+                <h3>6. Defaults</h3>
+                <p>
+                  Failure to comply with the payment schedule may result in
+                  suspension of credit privileges and collection actions
+                  permitted by law.
+                </p>
 
-          <h3>7. Acceptance</h3>
-          <p>
-            You must read this document in full before accepting. The agreement checkbox in the
-            confirmation form will only be enabled after you scroll to the bottom of this page.
-          </p>
+                <h3>7. Acceptance</h3>
+                <p>
+                  You must read this document in full before accepting. The
+                  agreement checkbox in the confirmation form will only be
+                  enabled after you scroll to the bottom of this page.
+                </p>
 
-          <p className="text-gray-500 text-sm mt-6">
-            <em>Scroll to the very bottom to enable acceptance.</em>
-          </p>
+                <p className="text-gray-500 text-sm mt-6">
+                  <em>Scroll to the very bottom to enable acceptance.</em>
+                </p>
+              </div>
+
+              {/* Invisible spacer so the user truly reaches the bottom */}
+              <div className="h-6" />
+            </div>
+
+            <div className="mt-4 flex justify-between items-center">
+              <div className="text-sm">
+                {tcReadyToAccept ? (
+                  <span className="text-green-700 font-medium">
+                    You may now tick the checkbox in the form.
+                  </span>
+                ) : (
+                  <span className="text-gray-600">
+                    Please scroll to the bottom to unlock acceptance.
+                  </span>
+                )}
+              </div>
+
+              <button
+                onClick={closeTerms}
+                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
+              >
+                Close
+              </button>
+            </div>
+          </motion.div>
         </div>
-
-        {/* Invisible spacer so the user truly reaches the bottom */}
-        <div className="h-6" />
-      </div>
-
-      <div className="mt-4 flex justify-between items-center">
-        <div className="text-sm">
-          {tcReadyToAccept ? (
-            <span className="text-green-700 font-medium">You may now tick the checkbox in the form.</span>
-          ) : (
-            <span className="text-gray-600">Please scroll to the bottom to unlock acceptance.</span>
-          )}
-        </div>
-
-        <button
-          onClick={closeTerms}
-          className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
-        >
-          Close
-        </button>
-      </div>
-    </motion.div>
-  </div>
-)}
-
+      )}
 
       {/* ------------------------ Final Confirmation Modal ------------------------ */}
       {showFinalModal && (
@@ -1779,7 +1979,9 @@ await supabase.from("system_notifications").insert([
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
             className="bg-white w-full max-w-4xl max-height-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
-            <h2 className="text-2xl font-semibold tracking-tight shrink-0">Order Confirmation</h2>
+            <h2 className="text-2xl font-semibold tracking-tight shrink-0">
+              Order Confirmation
+            </h2>
 
             <div className="mt-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1790,7 +1992,6 @@ await supabase.from("system_notifications").insert([
                 <div>
                   <div className="text-xs text-gray-500">Transaction Code</div>
                   <div className="font-medium">{txnCode || "—"}</div>
-
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Date</div>
@@ -1806,10 +2007,14 @@ await supabase.from("system_notifications").insert([
                   </div>
                   <div>
                     <div className="text-xs text-gray-500">Terms</div>
-                    <div className="font-medium">{termsMonths ?? "-"} month(s)</div>
+                    <div className="font-medium">
+                      {termsMonths ?? "-"} month(s)
+                    </div>
                   </div>
                   <div>
-                    <div className="text-xs text-gray-500">Interest (Whole Term)</div>
+                    <div className="text-xs text-gray-500">
+                      Interest (Whole Term)
+                    </div>
                     <div className="font-medium">{interestPercent}%</div>
                   </div>
                 </div>
@@ -1818,11 +2023,15 @@ await supabase.from("system_notifications").insert([
               <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                 <div>
                   <div className="text-xs text-gray-500">Region</div>
-                  <div className="font-medium">{selectedRegion?.name ?? "-"}</div>
+                  <div className="font-medium">
+                    {selectedRegion?.name ?? "-"}
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Province</div>
-                  <div className="font-medium">{selectedProvince?.name ?? (isNCR ? "—" : "-")}</div>
+                  <div className="font-medium">
+                    {selectedProvince?.name ?? (isNCR ? "—" : "-")}
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">City/Municipality</div>
@@ -1830,7 +2039,9 @@ await supabase.from("system_notifications").insert([
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Barangay</div>
-                  <div className="font-medium">{selectedBarangay?.name ?? "-"}</div>
+                  <div className="font-medium">
+                    {selectedBarangay?.name ?? "-"}
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">House & Street</div>
@@ -1863,7 +2074,9 @@ await supabase.from("system_notifications").insert([
                         <td className="py-2 px-3">{ci.quantity}</td>
                         <td className="py-2 px-3">{ci.item.status}</td>
                         <td className="py-2 px-3 font-medium">
-                          {formatCurrency(Number(ci.item.unit_price || 0) * ci.quantity)}
+                          {formatCurrency(
+                            Number(ci.item.unit_price || 0) * ci.quantity
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1872,19 +2085,27 @@ await supabase.from("system_notifications").insert([
 
                 <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
                   <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount during order
-                    processing.
+                    * Final price may change if an admin applies a discount
+                    during order processing.
                   </div>
                   <div className="text-right text-sm">
                     <div>
-                      <span className="mr-2 text-gray-600">Estimated Total:</span>
-                      <span className="font-semibold">{formatCurrency(subtotal)}</span>
+                      <span className="mr-2 text-gray-600">
+                        Estimated Total:
+                      </span>
+                      <span className="font-semibold">
+                        {formatCurrency(subtotal)}
+                      </span>
                     </div>
                     {customerInfo.payment_type === "Credit" && (
                       <div className="mt-1">
-                        <span className="mr-2 text-gray-600">Est. w/ Interest:</span>
+                        <span className="mr-2 text-gray-600">
+                          Est. w/ Interest:
+                        </span>
                         <span className="font-semibold">
-                          {formatCurrency(subtotal * (1 + Math.max(0, interestPercent) / 100))}
+                          {formatCurrency(
+                            subtotal * (1 + Math.max(0, interestPercent) / 100)
+                          )}
                         </span>
                       </div>
                     )}
@@ -1906,7 +2127,9 @@ await supabase.from("system_notifications").insert([
                 onClick={() => !placingOrder && setShowFinalModal(false)}
                 disabled={placingOrder || !isConfirmEnabled}
                 className={`px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm ${
-                  placingOrder || !isConfirmEnabled ? "opacity-60 cursor-not-allowed" : ""
+                  placingOrder || !isConfirmEnabled
+                    ? "opacity-60 cursor-not-allowed"
+                    : ""
                 }`}
               >
                 Cancel
@@ -1915,7 +2138,9 @@ await supabase.from("system_notifications").insert([
                 onClick={handleConfirmOrder}
                 disabled={placingOrder || !isConfirmEnabled}
                 className={`px-4 py-2 rounded-xl bg-[#ffba20] text-black shadow-lg inline-flex items-center gap-2 ${
-                  placingOrder || !isConfirmEnabled ? "opacity-70 cursor-not-allowed" : ""
+                  placingOrder || !isConfirmEnabled
+                    ? "opacity-70 cursor-not-allowed"
+                    : ""
                 }`}
               >
                 {placingOrder ? (
@@ -1931,9 +2156,6 @@ await supabase.from("system_notifications").insert([
           </motion.div>
         </div>
       )}
-
-
     </div>
   );
 }
-  
