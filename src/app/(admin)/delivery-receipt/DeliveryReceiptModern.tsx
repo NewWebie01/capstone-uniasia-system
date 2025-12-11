@@ -47,7 +47,9 @@ type DeliveryReceiptModernProps = {
   editMode?: boolean;
   savingAll?: boolean;
   editedRemarks?: Record<string, string>;
-  setEditedRemarks?: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  setEditedRemarks?: React.Dispatch<
+    React.SetStateAction<Record<string, string>>
+  >;
 };
 
 export default function DeliveryReceiptModern({
@@ -68,7 +70,9 @@ export default function DeliveryReceiptModern({
 }: DeliveryReceiptModernProps) {
   // Internal fallbacks when parent doesn't control
   const [editModeLocal, setEditModeLocal] = useState(false);
-  const [editedRemarksLocal, setEditedRemarksLocal] = useState<Record<string, string>>({});
+  const [editedRemarksLocal, setEditedRemarksLocal] = useState<
+    Record<string, string>
+  >({});
   const [savingAllLocal, setSavingAllLocal] = useState(false);
 
   const editMode = editModeProp ?? editModeLocal;
@@ -76,17 +80,26 @@ export default function DeliveryReceiptModern({
   const editedRemarks = editedRemarksProp ?? editedRemarksLocal;
   const setEditedRemarks = setEditedRemarksProp ?? setEditedRemarksLocal;
 
-  const getDefaultRemarks = (item: InvoiceItem) => (item.remarks ? item.remarks : "");
+  const getDefaultRemarks = (item: InvoiceItem) =>
+    item.remarks ? item.remarks : "";
 
   function startEdit() {
     const remap: Record<string, string> = {};
-    (initialItems || []).forEach((it) => (remap[it.id] = it.remarks ?? getDefaultRemarks(it)));
+    (initialItems || []).forEach(
+      (it) => (remap[it.id] = it.remarks ?? getDefaultRemarks(it))
+    );
     setEditedRemarks(remap);
     if (!editModeProp) setEditModeLocal(true);
   }
 
   async function saveAllRemarks() {
-    if (!setItems || !editedRemarks || !Object.keys(editedRemarks).length || !editMode) return;
+    if (
+      !setItems ||
+      !editedRemarks ||
+      !Object.keys(editedRemarks).length ||
+      !editMode
+    )
+      return;
     setSavingAllLocal(true);
     await Promise.all(
       Object.entries(editedRemarks).map(([id, remark]) =>
@@ -96,7 +109,9 @@ export default function DeliveryReceiptModern({
     setItems((prev) =>
       prev
         ? prev.map((it) =>
-            editedRemarks[it.id] !== undefined ? { ...it, remarks: editedRemarks[it.id] } : it
+            editedRemarks[it.id] !== undefined
+              ? { ...it, remarks: editedRemarks[it.id] }
+              : it
           )
         : prev
     );
@@ -143,10 +158,12 @@ export default function DeliveryReceiptModern({
   const rawInterest = grandTotalOut - baseBeforeInterest;
   const interestAmount = Math.max(0, rawInterest);
   const interestPercent =
-    baseBeforeInterest > 0 && interestAmount > 0 ? (interestAmount / baseBeforeInterest) * 100 : 0;
+    baseBeforeInterest > 0 && interestAmount > 0
+      ? (interestAmount / baseBeforeInterest) * 100
+      : 0;
 
   // Final amount due = grand total (incl VAT/interest) + shipping fee (not taxed)
- const finalAmountDue = grandTotalOut;
+  const finalAmountDue = grandTotalOut;
 
   // Currency format
   function formatCurrency(n: number) {
@@ -225,7 +242,9 @@ export default function DeliveryReceiptModern({
           {status?.toLowerCase() === "completed" && (
             <div>
               <b>STATUS:</b>{" "}
-              <span className="text-green-700 font-bold px-2 py-0.5">Completed</span>
+              <span className="text-green-700 font-bold px-2 py-0.5">
+                Completed
+              </span>
             </div>
           )}
         </div>
@@ -239,17 +258,27 @@ export default function DeliveryReceiptModern({
               className="text-black uppercase tracking-wider text-[11px]"
               style={{ background: "#ffba20" }}
             >
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">QTY</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                QTY
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                UNIT
+              </th>
               <th className="px-2.5 py-1.5 text-center font-bold align-middle">
                 ITEM DESCRIPTION
               </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">REMARKS</th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">UNIT PRICE</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                REMARKS
+              </th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                UNIT PRICE
+              </th>
               <th className="px-2.5 py-1.5 text-center font-bold align-middle">
                 DISCOUNT/ADD (%)
               </th>
-              <th className="px-2.5 py-1.5 text-center font-bold align-middle">AMOUNT</th>
+              <th className="px-2.5 py-1.5 text-center font-bold align-middle">
+                AMOUNT
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -266,9 +295,16 @@ export default function DeliveryReceiptModern({
               const displayRemark = getDefaultRemarks(item);
 
               return (
-                <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.qty}</td>
-                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">{item.unit}</td>
+                <tr
+                  key={item.id}
+                  className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
+                >
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
+                    {item.qty}
+                  </td>
+                  <td className="px-2.5 py-1.5 font-mono text-center align-middle">
+                    {item.unit}
+                  </td>
                   <td className="px-2.5 py-1.5 text-center align-middle">
                     <span className="font-semibold">{item.description}</span>
                   </td>
@@ -297,10 +333,14 @@ export default function DeliveryReceiptModern({
                     {formatCurrency(item.unitPrice)}
                   </td>
                   <td className="px-2.5 py-1.5 text-center font-mono align-middle whitespace-nowrap">
-                    {item.discount && item.discount !== 0 ? `${item.discount}%` : ""}
+                    {item.discount && item.discount !== 0
+                      ? `${item.discount}%`
+                      : ""}
                   </td>
                   <td className="px-2.5 py-1.5 text-center font-mono font-bold align-middle whitespace-nowrap">
-                    {item.inStock === false ? formatCurrency(0) : formatCurrency(lineAfter)}
+                    {item.inStock === false
+                      ? formatCurrency(0)
+                      : formatCurrency(lineAfter)}
                   </td>
                 </tr>
               );
@@ -312,12 +352,15 @@ export default function DeliveryReceiptModern({
       {/* Notes + Summary */}
       <div className="flex flex-row gap-4 mt-5 print:gap-2">
         <div className="w-2/3 text-xs pr-4">
-          <b>NOTE:</b>
+          {/* <b>NOTE:</b>
           <ul className="list-decimal ml-6 space-y-0.5 mt-1">
-            <li>All goods are checked in good condition and complete after received and signed.</li>
+            <li>
+              All goods are checked in good condition and complete after
+              received and signed.
+            </li>
             <li>Cash advances to salesman not allowed.</li>
             <li>All checks payable to By–Grace Trading only.</li>
-          </ul>
+          </ul> */}
         </div>
 
         {/* Summary panel */}
@@ -325,7 +368,9 @@ export default function DeliveryReceiptModern({
           <table className="text-right w-full">
             <tbody>
               <tr>
-                <td className="font-semibold py-0.5">Subtotal (Before Discount):</td>
+                <td className="font-semibold py-0.5">
+                  Subtotal (Before Discount):
+                </td>
                 <td className="pl-2 font-mono">{formatCurrency(subtotal)}</td>
               </tr>
               <tr>
@@ -336,11 +381,16 @@ export default function DeliveryReceiptModern({
               </tr>
               <tr>
                 <td className="font-semibold py-0.5">Sales Tax (12%):</td>
-                <td className="pl-2 font-mono">{formatCurrency(salesTaxOut)}</td>
+                <td className="pl-2 font-mono">
+                  {formatCurrency(salesTaxOut)}
+                </td>
               </tr>
               <tr>
                 <td className="font-semibold py-0.5">
-                  Interest{interestPercent > 0 ? ` (${interestPercent.toFixed(2)}%)` : ""}
+                  Interest
+                  {interestPercent > 0
+                    ? ` (${interestPercent.toFixed(2)}%)`
+                    : ""}
                 </td>
                 <td className="pl-2 font-mono text-blue-600 font-bold">
                   {interestAmount > 0 ? formatCurrency(interestAmount) : "—"}
@@ -356,7 +406,9 @@ export default function DeliveryReceiptModern({
               {/* Shipping fee row (NOT taxed) */}
               <tr>
                 <td className="font-semibold py-0.5">Shipping Fee</td>
-                <td className="pl-2 font-mono">{formatCurrency(shippingFee)}</td>
+                <td className="pl-2 font-mono">
+                  {formatCurrency(shippingFee)}
+                </td>
               </tr>
 
               {perTermOut > 0 && (
@@ -370,7 +422,9 @@ export default function DeliveryReceiptModern({
 
               {/* Final amount due = grand total (incl VAT/interest) + shipping fee */}
               <tr>
-                <td className="font-extrabold py-1.5 text-base">Total Amount Due</td>
+                <td className="font-extrabold py-1.5 text-base">
+                  Total Amount Due
+                </td>
                 <td className="pl-2 font-extrabold text-base text-green-800 font-mono">
                   {formatCurrency(finalAmountDue)}
                 </td>
