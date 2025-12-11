@@ -1,7 +1,7 @@
 // src/components/ProductShowcase.tsx
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import supabase from "@/config/supabaseClient";
 import { motion, AnimatePresence } from "framer-motion";
@@ -9,7 +9,7 @@ import { toast } from "sonner";
 
 type InventoryItem = {
   id: number;
-  sku?: string | null; // 👈 added so we can look up gallery by SKU
+  sku?: string | null; // used to look up gallery by SKU
   product_name: string;
   category: string;
   subcategory: string;
@@ -56,16 +56,24 @@ export function ProductShowcase() {
   const [modalImages, setModalImages] = useState<string[]>([]);
   const [modalIndex, setModalIndex] = useState(0);
 
+  const [searchTerm, setSearchTerm] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<string>("");
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
+
   const router = useRouter();
 
-  // Load products (limit to 10 => 2 rows x 5 cols on md+)
+  // Load ALL products, then paginate client-side
   useEffect(() => {
     const fetchProducts = async () => {
       setLoading(true);
       const { data, error } = await supabase
         .from("inventory")
-        .select("id, sku, product_name, category, subcategory, unit_price, image_url")
-        .limit(10);
+        .select(
+          "id, sku, product_name, category, subcategory, unit_price, image_url"
+        )
+        .order("product_name", { ascending: true });
 
       if (error) {
         console.error(error);
@@ -75,8 +83,14 @@ export function ProductShowcase() {
       }
       setLoading(false);
     };
+
     fetchProducts();
   }, []);
+
+  // Reset page when search or category changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, categoryFilter]);
 
   // Close modal with Esc
   useEffect(() => {
@@ -111,77 +125,180 @@ export function ProductShowcase() {
     router.push("/login?next=/customer/checkout");
   };
 
+  /* -------------------- Search + Category Filter -------------------- */
+
+  const categoriesList = useMemo(
+    () =>
+      Array.from(new Set(products.map((i) => i.category || "")))
+        .filter((c) => c !== "")
+        .sort(),
+    [products]
+  );
+
+  const filteredProducts = useMemo(() => {
+    const q = searchTerm.toLowerCase();
+    return products.filter((i) => {
+      const matchesSearch =
+        i.product_name.toLowerCase().includes(q) ||
+        (i.category || "").toLowerCase().includes(q) ||
+        (i.subcategory || "").toLowerCase().includes(q) ||
+        (i.sku || "").toLowerCase().includes(q);
+      const matchesCategory =
+        categoryFilter === "" || (i.category || "") === categoryFilter;
+      return matchesSearch && matchesCategory;
+    });
+  }, [products, searchTerm, categoryFilter]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredProducts.length / ITEMS_PER_PAGE)
+  );
+
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  const pageStart = (currentPage - 1) * ITEMS_PER_PAGE;
+  const pageEnd = pageStart + ITEMS_PER_PAGE;
+  const paginatedProducts = useMemo(
+    () => filteredProducts.slice(pageStart, pageEnd),
+    [filteredProducts, pageStart, pageEnd]
+  );
+
+  const goToPage = (p: number) =>
+    setCurrentPage(Math.max(1, Math.min(totalPages, p)));
+
   return (
     <section className="py-12 bg-gray-50">
       <div className="max-w-7xl mx-auto px-4">
-        {loading ? (
-          <p>Loading products...</p>
-        ) : (
-          // 2 columns on mobile, 5 columns on md+ → with 10 items => 2 rows x 5 cols
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-6">
-            {products.map((item, index) => (
-              <motion.div
-                key={item.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.05 }}
-                whileHover={{ y: -4 }}
-                className="group bg-white rounded-lg shadow hover:shadow-lg overflow-hidden border border-gray-100 flex flex-col justify-between cursor-pointer"
-                onClick={() => openModal(item)}
-              >
-                <div>
-                  <div className="relative w-full h-40 bg-gray-100 overflow-hidden">
-                    {item.image_url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={item.image_url}
-                        alt={item.product_name}
-                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm">
-                        No Image
-                      </div>
-                    )}
-                    <div className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/10 to-transparent" />
-                  </div>
+        {/* Title + Description */}
+        <h2 className="text-2xl font-semibold text-neutral-900">
+          Featured Products
+        </h2>
+        <p className="text-neutral-500 mb-4 text-sm">
+          Browse available products and log in to add items to your cart.
+        </p>
 
-                  <div className="p-3">
-                    <h3
-                      className="text-sm font-medium text-gray-800 line-clamp-2 mb-1"
-                      title={item.product_name}
-                    >
-                      {item.product_name}
-                    </h3>
-
-                    <p className="text-xs text-gray-500 mb-1">
-                      {item.category} • {item.subcategory || "General"}
-                    </p>
-
-                    <p className="font-semibold text-[#ffba20]">
-                      ₱
-                      {Number(item.unit_price || 0).toLocaleString("en-PH", {
-                        minimumFractionDigits: 2,
-                      })}
-                    </p>
-                  </div>
-                </div>
-
-                <div
-                  className="p-3 pt-0"
-                  onClick={(e) => e.stopPropagation()} // prevent opening modal
-                >
-                  <button
-                    onClick={() => handleAddToCart(item)}
-                    className="w-full text-sm font-medium py-2 rounded-md bg-[#181918] text-white hover:text-[#ffba20] transition"
-                  >
-                    Add to Cart
-                  </button>
-                </div>
-              </motion.div>
+        {/* Search + Category filter (mirrors customer page) */}
+        <div className="mb-4 flex flex-col sm:flex-row gap-3 sm:items-center">
+          <input
+            type="text"
+            placeholder="Search by product, category, or subcategory..."
+            className="border border-gray-300 rounded px-3 py-2 w-full sm:max-w-xs focus:outline-none focus:ring-2 focus:ring-yellow-500"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          <select
+            className="border border-gray-300 rounded px-3 py-2 w-full sm:w-auto focus:outline-none focus:ring-2 focus:ring-yellow-500"
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+          >
+            <option value="">All Categories</option>
+            {categoriesList.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat || "Uncategorized"}
+              </option>
             ))}
-          </div>
+          </select>
+        </div>
+
+        {loading ? (
+          <p className="text-sm text-gray-500">Loading products...</p>
+        ) : filteredProducts.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            No products found. Try a different search or category.
+          </p>
+        ) : (
+          <>
+            {/* Product grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+              {paginatedProducts.map((item, index) => (
+                <motion.div
+                  key={item.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.04 }}
+                  whileHover={{ y: -4 }}
+                  className="group bg-white rounded-lg shadow hover:shadow-lg overflow-hidden border border-gray-100 flex flex-col justify-between cursor-pointer"
+                  onClick={() => openModal(item)}
+                >
+                  <div>
+                    <div className="relative w-full h-40 bg-gray-100 overflow-hidden">
+                      {item.image_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={item.image_url}
+                          alt={item.product_name}
+                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm">
+                          No Image
+                        </div>
+                      )}
+                      <div className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/10 to-transparent" />
+                    </div>
+
+                    <div className="p-3">
+                      <h3
+                        className="text-sm font-medium text-gray-800 line-clamp-2 mb-1"
+                        title={item.product_name}
+                      >
+                        {item.product_name}
+                      </h3>
+
+                      <p className="text-xs text-gray-500 mb-1">
+                        {item.category} • {item.subcategory || "General"}
+                      </p>
+
+                      <p className="font-semibold text-[#ffba20]">
+                        ₱
+                        {Number(item.unit_price || 0).toLocaleString("en-PH", {
+                          minimumFractionDigits: 2,
+                        })}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div
+                    className="p-3 pt-0"
+                    onClick={(e) => e.stopPropagation()} // prevent opening modal
+                  >
+                    <button
+                      onClick={() => handleAddToCart(item)}
+                      className="w-full text-sm font-medium py-2 rounded-md bg-[#181918] text-white hover:text-[#ffba20] transition"
+                    >
+                      Add to Cart
+                    </button>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+
+            {/* Pagination controls (same style as customer page) */}
+            <div className="mt-6 flex items-center justify-between">
+              <div>
+                <button
+                  onClick={() => goToPage(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 rounded border mr-2 disabled:opacity-50"
+                >
+                  Prev
+                </button>
+                <button
+                  onClick={() => goToPage(currentPage + 1)}
+                  disabled={currentPage >= totalPages}
+                  className="px-3 py-1 rounded border disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+              <div className="text-sm text-gray-700">
+                Page {currentPage} of {totalPages}
+              </div>
+            </div>
+          </>
         )}
       </div>
 
@@ -225,7 +342,8 @@ export function ProductShowcase() {
                                 onClick={() =>
                                   setModalIndex(
                                     (i) =>
-                                      (i - 1 + modalImages.length) % modalImages.length
+                                      (i - 1 + modalImages.length) %
+                                      modalImages.length
                                   )
                                 }
                                 title="Previous"
@@ -235,7 +353,9 @@ export function ProductShowcase() {
                               <button
                                 className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
                                 onClick={() =>
-                                  setModalIndex((i) => (i + 1) % modalImages.length)
+                                  setModalIndex(
+                                    (i) => (i + 1) % modalImages.length
+                                  )
                                 }
                                 title="Next"
                               >
@@ -252,7 +372,9 @@ export function ProductShowcase() {
                               <button
                                 key={u + idx}
                                 className={`h-12 w-16 flex-shrink-0 border rounded overflow-hidden ${
-                                  idx === modalIndex ? "ring-2 ring-[#ffba20]" : ""
+                                  idx === modalIndex
+                                    ? "ring-2 ring-[#ffba20]"
+                                    : ""
                                 }`}
                                 onClick={() => setModalIndex(idx)}
                                 title={`Image ${idx + 1}`}
@@ -299,11 +421,15 @@ export function ProductShowcase() {
 
                     <div className="mt-2 text-sm text-gray-600">
                       <p>
-                        <span className="font-medium text-gray-700">Category:</span>{" "}
+                        <span className="font-medium text-gray-700">
+                          Category:
+                        </span>{" "}
                         {selected.category}
                       </p>
                       <p>
-                        <span className="font-medium text-gray-700">Subcategory:</span>{" "}
+                        <span className="font-medium text-gray-700">
+                          Subcategory:
+                        </span>{" "}
                         {selected.subcategory || "General"}
                       </p>
                     </div>
@@ -311,9 +437,12 @@ export function ProductShowcase() {
                     <div className="mt-4">
                       <p className="text-2xl font-bold text-[#ffba20]">
                         ₱
-                        {Number(selected.unit_price || 0).toLocaleString("en-PH", {
-                          minimumFractionDigits: 2,
-                        })}
+                        {Number(selected.unit_price || 0).toLocaleString(
+                          "en-PH",
+                          {
+                            minimumFractionDigits: 2,
+                          }
+                        )}
                       </p>
                     </div>
 
