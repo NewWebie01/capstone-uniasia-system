@@ -82,6 +82,29 @@ const round2 = (n: number) =>
 
 const statusLower = (s?: string | null) => String(s || "").toLowerCase();
 
+const nowISO = () => new Date().toISOString();
+
+async function getAdminEmail() {
+  const { data } = await supabase.auth.getUser();
+  return data?.user?.email || null;
+}
+
+/* ----------------------- Upload proof image ----------------------- */
+async function uploadPaymentProof(file: File, orderId: string) {
+  // Uses existing public bucket: payment-cheques
+  const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+  const path = `${orderId}/${Date.now()}-${safeName}`;
+
+  const { error: upErr } = await supabase.storage
+    .from("payments-cheques")
+    .upload(path, file, { cacheControl: "3600", upsert: false });
+
+  if (upErr) throw upErr;
+
+  const { data } = supabase.storage.from("payments-cheques").getPublicUrl(path);
+  return data.publicUrl;
+}
+
 export default function AdminPaymentsLedgerPage() {
   const [loading, setLoading] = useState(true);
 
@@ -97,10 +120,31 @@ export default function AdminPaymentsLedgerPage() {
   const paySubKey = useRef<string>("");
   const orderSubKey = useRef<string>("");
 
+  /* -------------------- Add Payment form state -------------------- */
+  const [payAmount, setPayAmount] = useState<string>("");
+  const [payMethod, setPayMethod] = useState<string>("Cash");
+  const [payChequeNumber, setPayChequeNumber] = useState<string>("");
+  const [payBankName, setPayBankName] = useState<string>("");
+  const [payChequeDate, setPayChequeDate] = useState<string>(""); // YYYY-MM-DD
+  const [payProofFile, setPayProofFile] = useState<File | null>(null);
+  const [paySaving, setPaySaving] = useState<boolean>(false);
+
+  /* -------------------- Confirmation modal state -------------------- */
+  const [showConfirm, setShowConfirm] = useState<boolean>(false);
+
   /* ------------------------------ Helpers ------------------------------ */
   const makeCustomerKey = (c: CustomerRow) =>
     (c.email || "").trim().toLowerCase() ||
     `${(c.name || "").trim().toLowerCase()}|${(c.phone || "").trim()}`;
+
+  const resetPaymentForm = () => {
+    setPayAmount("");
+    setPayMethod("Cash");
+    setPayChequeNumber("");
+    setPayBankName("");
+    setPayChequeDate("");
+    setPayProofFile(null);
+  };
 
   /* ------------------------------ Fetch customers ------------------------------ */
   async function fetchCustomers() {
@@ -189,7 +233,8 @@ export default function AdminPaymentsLedgerPage() {
   const selectedCustomer = useMemo(() => {
     if (!selectedCustomerId) return null;
     return (
-      uniqueCustomers.find((c) => String(c.id) === String(selectedCustomerId)) || null
+      uniqueCustomers.find((c) => String(c.id) === String(selectedCustomerId)) ||
+      null
     );
   }, [uniqueCustomers, selectedCustomerId]);
 
@@ -315,11 +360,97 @@ export default function AdminPaymentsLedgerPage() {
     return round2(base + shipping);
   }, [selectedOrder]);
 
+  /* ------------------------------ Validation for Add Payment ------------------------------ */
+  const payAmountNum = useMemo(() => Number(payAmount), [payAmount]);
+
+  const payFormValid = useMemo(() => {
+    if (!selectedOrderId) return false;
+    if (!selectedCustomer) return false;
+
+    if (!Number.isFinite(payAmountNum) || payAmountNum <= 0) return false;
+    if (!String(payMethod || "").trim()) return false;
+
+    // REQUIRE all details:
+    if (!payChequeNumber.trim()) return false;
+    if (!payBankName.trim()) return false;
+    if (!payChequeDate) return false; // date required
+    if (!payProofFile) return false; // proof required
+
+    return true;
+  }, [
+    selectedOrderId,
+    selectedCustomer,
+    payAmountNum,
+    payMethod,
+    payChequeNumber,
+    payBankName,
+    payChequeDate,
+    payProofFile,
+  ]);
+
+  /* ------------------------------ Add payment (step 1: open confirm) ------------------------------ */
+  function openConfirmPayment() {
+    if (!payFormValid) {
+      toast.error("Complete all fields (including proof image) before adding payment.");
+      return;
+    }
+    setShowConfirm(true);
+  }
+
+  /* ------------------------------ Add payment (step 2: confirm + save) ------------------------------ */
+  async function confirmAddPayment() {
+    if (!payFormValid) {
+      toast.error("Complete all fields first.");
+      return;
+    }
+    if (!selectedOrderId || !selectedCustomer || !payProofFile) return;
+
+    setPaySaving(true);
+    try {
+      const adminEmail = await getAdminEmail();
+
+      // 1) Upload proof
+      const imageUrl = await uploadPaymentProof(payProofFile, String(selectedOrderId));
+
+      // 2) Insert payment row
+      const { error } = await supabase.from("payments").insert([
+        {
+          customer_id: String(selectedCustomer.id),
+          order_id: String(selectedOrderId),
+          amount: round2(payAmountNum),
+          method: payMethod || null,
+          cheque_number: payChequeNumber.trim(),
+          bank_name: payBankName.trim(),
+          cheque_date: payChequeDate, // YYYY-MM-DD
+          image_url: imageUrl,
+          status: "received",
+          received_at: nowISO(),
+          received_by: adminEmail,
+        },
+      ]);
+
+      if (error) throw error;
+
+      toast.success("Payment added.");
+
+      setShowConfirm(false);
+      resetPaymentForm();
+
+      // Refresh payments list
+      await fetchPaymentsByOrder(String(selectedOrderId));
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || "Failed to add payment.");
+    } finally {
+      setPaySaving(false);
+    }
+  }
+
   /* ------------------------------ Ledger rows ------------------------------ */
-  const ledgerRows: LedgerRow[] = useMemo(() => {
+  const ledgerRows = useMemo<LedgerRow[]>(() => {
     if (!selectedOrder) return [];
 
-    const createdAt = selectedOrder.date_created || new Date().toISOString();
+    const createdAt = selectedOrder.date_created || nowISO();
     const rows: Omit<LedgerRow, "balance">[] = [];
 
     rows.push({
@@ -331,33 +462,26 @@ export default function AdminPaymentsLedgerPage() {
       remarks: `Order Status: ${(selectedOrder.status || "—").toUpperCase()}`,
     });
 
-    const payRows = (payments || [])
+    const payRows: Omit<LedgerRow, "balance">[] = (payments || [])
       .filter((p) => String(p.order_id ?? "") === String(selectedOrder.id))
-      .filter((p) => {
-        const st = statusLower(p.status);
-        return st === "received";
-      })
+      .filter((p) => statusLower(p.status) === "received")
       .map((p) => {
-        const st = statusLower(p.status);
         const method = String(p.method || "Payment");
-        const refParts = [
-          p.cheque_number ? `Ref: ${p.cheque_number}` : null,
-          p.bank_name ? `Bank: ${p.bank_name}` : null,
-          p.cheque_date ? `Date: ${p.cheque_date}` : null,
-        ].filter(Boolean);
+        const isDeposit = method.toLowerCase() === "deposit";
 
-        const desc =
-          method.toLowerCase() === "deposit"
-            ? `Deposit Payment${refParts.length ? ` (${refParts.join(" • ")})` : ""}`
-            : `${method} Payment${refParts.length ? ` (${refParts.join(" • ")})` : ""}`;
+        const lines: string[] = [];
+        lines.push(isDeposit ? "Deposit Payment" : `${method} Payment`);
+        if (p.cheque_number) lines.push(`Ref: ${p.cheque_number}`);
+        if (p.bank_name) lines.push(`Bank: ${p.bank_name}`);
+        if (p.cheque_date) lines.push(`Date: ${p.cheque_date}`);
 
         return {
-          sortDate: p.created_at || new Date().toISOString(),
+          sortDate: p.created_at || nowISO(),
           dateLabel: formatPH(p.created_at),
-          description: desc,
+          description: lines.join("\n"),
           debit: 0,
           credit: round2(Number(p.amount || 0)),
-          remarks: st === "received" ? "RECEIVED" : "PENDING",
+          remarks: "RECEIVED",
         };
       });
 
@@ -391,7 +515,8 @@ export default function AdminPaymentsLedgerPage() {
               Payments Ledger
             </h1>
             <p className="text-sm text-gray-600 mt-1">
-              Select a customer, then select an Invoice to view the ledger: Debit, Credit, and Balance.
+              Select a customer, then select an Invoice to view the ledger: Debit, Credit, and
+              Balance.
             </p>
           </div>
         </div>
@@ -414,6 +539,11 @@ export default function AdminPaymentsLedgerPage() {
 
                   const key = picked ? makeCustomerKey(picked) : "";
                   setSelectedCustomerKey(key);
+
+                  // reset invoice selection + payment form
+                  setSelectedOrderId("");
+                  setPayments([]);
+                  resetPaymentForm();
                 }}
               >
                 <option value="">— Select customer —</option>
@@ -446,13 +576,16 @@ export default function AdminPaymentsLedgerPage() {
               <select
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 value={selectedOrderId}
-                onChange={(e) => setSelectedOrderId(e.target.value)}
+                onChange={(e) => {
+                  setSelectedOrderId(e.target.value);
+                  resetPaymentForm();
+                }}
                 disabled={!selectedCustomerId}
               >
                 <option value="">— Select Invoice —</option>
                 {orders.map((o) => (
                   <option key={String(o.id)} value={String(o.id)}>
-                    Invoice No. {selectedCustomer?.code || "—"} — {(o.status || "—").toUpperCase()}
+                    Invoice No. {selectedCustomer?.code || "—"}
                   </option>
                 ))}
               </select>
@@ -494,6 +627,102 @@ export default function AdminPaymentsLedgerPage() {
               </div>
             </div>
 
+            {/* Add Payment (for selected invoice) */}
+            <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p- видно3">
+              <div className="text-sm font-semibold text-gray-800 mb-2">
+                Add Payment (for this Invoice)
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                <div className="md:col-span-2">
+                  <label className="block text-xs text-gray-600">Amount *</label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    placeholder="0.00"
+                    value={payAmount}
+                    onChange={(e) => setPayAmount(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-600">Method *</label>
+                  <select
+                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    value={payMethod}
+                    onChange={(e) => setPayMethod(e.target.value)}
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="Deposit">Deposit</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="Transfer">Transfer</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-600">Ref / Cheque No. *</label>
+                  <input
+                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    value={payChequeNumber}
+                    onChange={(e) => setPayChequeNumber(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-600">Bank *</label>
+                  <input
+                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    value={payBankName}
+                    onChange={(e) => setPayBankName(e.target.value)}
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-xs text-gray-600">Cheque/Deposit Date *</label>
+                  <input
+                    type="date"
+                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    value={payChequeDate}
+                    onChange={(e) => setPayChequeDate(e.target.value)}
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-xs text-gray-600">
+                    Proof of Payment (Image) *
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] || null;
+                      setPayProofFile(f);
+                    }}
+                  />
+                  {payProofFile ? (
+                    <div className="mt-1 text-[11px] text-gray-600">
+                      Selected: <span className="font-medium">{payProofFile.name}</span>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="md:col-span-2 flex items-end justify-end">
+                  <button
+                    type="button"
+                    onClick={openConfirmPayment}
+                    disabled={!payFormValid || paySaving}
+                    className="h-10 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
+                    title={!payFormValid ? "Complete all required fields first." : ""}
+                  >
+                    {paySaving ? "Saving..." : "Add Payment"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Ledger Table */}
             <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
               <table className="w-full text-sm align-middle">
                 <thead>
@@ -512,18 +741,27 @@ export default function AdminPaymentsLedgerPage() {
 
                 <tbody>
                   {ledgerRows.map((r, idx) => (
-                    <tr key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>
+                    <tr
+                      key={idx}
+                      className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
+                    >
                       <td className="py-2.5 px-3">{r.dateLabel}</td>
-                      <td className="py-2.5 px-3 font-medium">{r.description}</td>
-                      <td className="py-2.5 px-3 text-left font-mono">
-                        {r.debit > 0 ? peso(r.debit) : "—"}
+                      <td className="py-2.5 px-3 font-medium whitespace-pre-line">
+                        {r.description}
                       </td>
+
                       <td className="py-2.5 px-3 text-left font-mono">
-                        {r.credit > 0 ? peso(r.credit) : "—"}
+                        {peso(r.debit || 0)}
                       </td>
+
+                      <td className="py-2.5 px-3 text-left font-mono">
+                        {peso(r.credit || 0)}
+                      </td>
+
                       <td className="py-2.5 px-3 text-right font-mono font-bold">
-                        {peso(r.balance)}
+                        {peso(r.balance || 0)}
                       </td>
+
                       <td className="py-2.5 px-3 text-left">
                         <span
                           className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
@@ -550,6 +788,82 @@ export default function AdminPaymentsLedgerPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* Confirmation Modal */}
+            {showConfirm ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+                <div className="w-full max-w-xl rounded-2xl bg-white shadow-xl">
+                  <div className="p-4 border-b border-gray-200">
+                    <div className="text-lg font-bold text-neutral-800">
+                      Confirm Payment
+                    </div>
+                    <div className="text-sm text-gray-600 mt-1">
+                      Please review the details before saving.
+                    </div>
+                  </div>
+
+                  <div className="p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Invoice No.</div>
+                        <div className="font-mono font-semibold">{invoiceNo || "—"}</div>
+                      </div>
+
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Amount</div>
+                        <div className="font-semibold">{peso(payAmountNum || 0)}</div>
+                      </div>
+
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Method</div>
+                        <div className="font-semibold">{payMethod}</div>
+                      </div>
+
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Ref / Cheque No.</div>
+                        <div className="font-semibold">{payChequeNumber}</div>
+                      </div>
+
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Bank</div>
+                        <div className="font-semibold">{payBankName}</div>
+                      </div>
+
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Cheque/Deposit Date</div>
+                        <div className="font-semibold">{payChequeDate}</div>
+                      </div>
+
+                      <div className="md:col-span-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Proof Image</div>
+                        <div className="font-semibold">
+                          {payProofFile ? payProofFile.name : "—"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirm(false)}
+                        disabled={paySaving}
+                        className="h-10 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-60"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmAddPayment}
+                        disabled={paySaving}
+                        className="h-10 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
+                      >
+                        {paySaving ? "Saving..." : "Confirm & Save"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
