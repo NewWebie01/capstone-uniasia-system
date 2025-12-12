@@ -6,7 +6,6 @@ import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 import { Info } from "lucide-react";
 
-
 /* ----------------------------- Money ------------------------------ */
 const peso = (n: number) =>
   (Number(n) || 0).toLocaleString("en-PH", {
@@ -33,7 +32,7 @@ const formatPH = (d: string | Date | null | undefined) => {
 type CustomerRow = {
   id: string | number;
   name: string | null;
-  code: string | null; // TXN code lives here
+  code: string | null; // Invoice No. lives here (customers.code)
   email: string | null;
   phone: string | null;
   address: string | null;
@@ -94,7 +93,6 @@ export default function AdminPaymentsLedgerPage() {
   const [selectedCustomerKey, setSelectedCustomerKey] = useState<string>("");
 
   const [selectedOrderId, setSelectedOrderId] = useState<string>("");
-
 
   const paySubKey = useRef<string>("");
   const orderSubKey = useRef<string>("");
@@ -190,13 +188,12 @@ export default function AdminPaymentsLedgerPage() {
   /* ------------------------------ Selected objects ------------------------------ */
   const selectedCustomer = useMemo(() => {
     if (!selectedCustomerId) return null;
-    // IMPORTANT: match dropdown source
     return (
       uniqueCustomers.find((c) => String(c.id) === String(selectedCustomerId)) || null
     );
   }, [uniqueCustomers, selectedCustomerId]);
 
-  const txnCode = useMemo(() => {
+  const invoiceNo = useMemo(() => {
     return String(selectedCustomer?.code || "").trim();
   }, [selectedCustomer]);
 
@@ -220,7 +217,7 @@ export default function AdminPaymentsLedgerPage() {
         setPayments([]);
       } catch (e: any) {
         console.error(e);
-        toast.error(e?.message || "Failed to load TXNs.");
+        toast.error(e?.message || "Failed to load invoices.");
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -309,7 +306,8 @@ export default function AdminPaymentsLedgerPage() {
     if (!o) return 0;
 
     const base =
-      typeof o.grand_total_with_interest === "number" && Number.isFinite(o.grand_total_with_interest)
+      typeof o.grand_total_with_interest === "number" &&
+      Number.isFinite(o.grand_total_with_interest)
         ? Number(o.grand_total_with_interest)
         : Number(o.total_amount || 0);
 
@@ -327,7 +325,7 @@ export default function AdminPaymentsLedgerPage() {
     rows.push({
       sortDate: createdAt,
       dateLabel: formatPH(createdAt),
-      description: `TXN Charge (${txnCode || "No TXN Code"})`,
+      description: `Invoice Charge (${invoiceNo || "No Invoice No."})`,
       debit: orderGrandTotal,
       credit: 0,
       remarks: `Order Status: ${(selectedOrder.status || "—").toUpperCase()}`,
@@ -337,8 +335,7 @@ export default function AdminPaymentsLedgerPage() {
       .filter((p) => String(p.order_id ?? "") === String(selectedOrder.id))
       .filter((p) => {
         const st = statusLower(p.status);
-return st === "received";
-
+        return st === "received";
       })
       .map((p) => {
         const st = statusLower(p.status);
@@ -372,8 +369,7 @@ return st === "received";
       bal = round2(bal + (r.debit || 0) - (r.credit || 0));
       return { ...r, balance: bal };
     });
-  }, [selectedOrder, payments, orderGrandTotal, txnCode]);
-
+  }, [selectedOrder, payments, orderGrandTotal, invoiceNo]);
 
   const totalCredits = useMemo(
     () => round2(ledgerRows.reduce((s, r) => s + (r.credit || 0), 0)),
@@ -395,11 +391,9 @@ return st === "received";
               Payments Ledger
             </h1>
             <p className="text-sm text-gray-600 mt-1">
-              Select a customer, then select a TXN to view the ledger: Debit, Credit, and Balance.
+              Select a customer, then select an Invoice to view the ledger: Debit, Credit, and Balance.
             </p>
           </div>
-
-
         </div>
 
         {/* Selectors */}
@@ -446,20 +440,19 @@ return st === "received";
               )}
             </div>
 
-            {/* TXN / Order */}
+            {/* Invoice / Order */}
             <div>
-              <label className="text-xs text-gray-600">Choose TXN (Order) *</label>
+              <label className="text-xs text-gray-600">Choose Invoice *</label>
               <select
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 value={selectedOrderId}
                 onChange={(e) => setSelectedOrderId(e.target.value)}
                 disabled={!selectedCustomerId}
               >
-                <option value="">— Select TXN —</option>
+                <option value="">— Select Invoice —</option>
                 {orders.map((o) => (
                   <option key={String(o.id)} value={String(o.id)}>
-                    TXN {selectedCustomer?.code || "—"} — Order {String(o.id).slice(0, 8)}… —{" "}
-                    {(o.status || "—").toUpperCase()}
+                    Invoice No. {selectedCustomer?.code || "—"} — {(o.status || "—").toUpperCase()}
                   </option>
                 ))}
               </select>
@@ -472,8 +465,6 @@ return st === "received";
               )}
             </div>
           </div>
-
-
         </div>
 
         {/* Ledger */}
@@ -482,7 +473,8 @@ return st === "received";
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
               <div>
                 <h2 className="text-lg font-semibold">
-                  Ledger for TXN <span className="font-mono">{txnCode || "—"}</span>
+                  Ledger for Invoice No.{" "}
+                  <span className="font-mono">{invoiceNo || "—"}</span>
                 </h2>
                 <p className="text-xs text-gray-600">
                   Debit = charge • Credit = payments • Balance = running balance
@@ -558,8 +550,6 @@ return st === "received";
                 </tbody>
               </table>
             </div>
-
-
           </div>
         ) : null}
 
