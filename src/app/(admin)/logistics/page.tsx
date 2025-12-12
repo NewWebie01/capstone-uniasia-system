@@ -43,6 +43,15 @@ const todayLocal = (() => {
   const dd = String(now.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 })();
+//12hr format
+const to12Hour = (timeString: string | null | undefined) => {
+  if (!timeString) return "—";
+  const [hour, minute] = timeString.split(":");
+  const h = Number(hour);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const formattedHour = h % 12 === 0 ? 12 : h % 12;
+  return `${formattedHour}:${minute} ${ampm}`;
+};
 
 /* =========================
    TYPES
@@ -59,6 +68,7 @@ type Delivery = {
   participants?: string[] | null;
   created_at?: string;
   shipping_fee?: number | null;
+  departure_time?: string | null;
   _orders?: OrderWithCustomer[];
 };
 
@@ -160,6 +170,7 @@ export default function TruckDeliveryPage() {
     arrivalDate: "",
     driver: "",
     participants: [] as string[],
+    departureTime: "",
   });
 
   // Region / Province pickers for Destination
@@ -442,6 +453,7 @@ export default function TruckDeliveryPage() {
     setNewDelivery((prev) => ({
       ...prev,
       destination: "",
+      departureTime: "",
     }));
     setRegionCode("");
     setProvinceCode("");
@@ -458,6 +470,7 @@ export default function TruckDeliveryPage() {
       arrivalDate: "",
       driver: "",
       participants: [],
+      departureTime: "",
     });
     setRegionCode("");
     setProvinceCode("");
@@ -513,10 +526,11 @@ export default function TruckDeliveryPage() {
           status: newDelivery.status,
           schedule_date: newDelivery.scheduleDate,
           arrival_date: newDelivery.arrivalDate || null,
+          departure_time: newDelivery.departureTime || null,
         },
       ])
       .select(
-        "id, destination, plate_number, driver, status, schedule_date, arrival_date, participants, created_at, shipping_fee"
+        "id, destination, plate_number, driver, status, schedule_date, arrival_date, participants, created_at, shipping_fee, departure_time"
       )
       .single();
 
@@ -558,6 +572,7 @@ export default function TruckDeliveryPage() {
             participants: insData.participants ?? [],
             created_at: insData.created_at,
             shipping_fee: insData.shipping_fee ?? null,
+            departure_time: insData.departure_time ?? null,
             _orders: [
               {
                 ...prefillOrderObj,
@@ -582,6 +597,7 @@ export default function TruckDeliveryPage() {
       status: newDelivery.status,
       schedule_date: newDelivery.scheduleDate,
       arrival_date: newDelivery.arrivalDate || null,
+      departure_time: newDelivery.departureTime || null,
     });
 
     setPrefillOrderId(null);
@@ -708,48 +724,47 @@ export default function TruckDeliveryPage() {
     });
   };
   // SHIPPING FEE HANDLER
-// SHIPPING FEE HANDLER (syncs truck + all attached invoices)
-const handleShippingFeeChange = async (deliveryId: number, value: number) => {
-  // 1) Persist to the truck
-  const { error: updTruckErr } = await supabase
-    .from("truck_deliveries")
-    .update({ shipping_fee: value })
-    .eq("id", deliveryId);
+  // SHIPPING FEE HANDLER (syncs truck + all attached invoices)
+  const handleShippingFeeChange = async (deliveryId: number, value: number) => {
+    // 1) Persist to the truck
+    const { error: updTruckErr } = await supabase
+      .from("truck_deliveries")
+      .update({ shipping_fee: value })
+      .eq("id", deliveryId);
 
-  if (updTruckErr) {
-    toast.error("Failed to update Shipping Fee on truck");
-    console.error("Shipping fee update error:", updTruckErr);
-    return;
-  }
+    if (updTruckErr) {
+      toast.error("Failed to update Shipping Fee on truck");
+      console.error("Shipping fee update error:", updTruckErr);
+      return;
+    }
 
-  // 2) Persist to ALL invoices (orders) assigned to this truck
-  const { error: updOrdersErr } = await supabase
-    .from("orders")
-    .update({ shipping_fee: value })
-    .eq("truck_delivery_id", String(deliveryId));
+    // 2) Persist to ALL invoices (orders) assigned to this truck
+    const { error: updOrdersErr } = await supabase
+      .from("orders")
+      .update({ shipping_fee: value })
+      .eq("truck_delivery_id", String(deliveryId));
 
-  if (updOrdersErr) {
-    // truck already updated; warn that invoices didn’t sync (RLS or network)
-    toast.warning(
-      "Truck updated, but syncing to invoices failed. Please refresh or check RLS."
+    if (updOrdersErr) {
+      // truck already updated; warn that invoices didn’t sync (RLS or network)
+      toast.warning(
+        "Truck updated, but syncing to invoices failed. Please refresh or check RLS."
+      );
+      console.error("Sync shipping_fee to orders failed:", updOrdersErr);
+    } else {
+      toast.success("Shipping Fee updated and synced to invoices");
+    }
+
+    // 3) Optimistically update local state
+    setDeliveries((prev) =>
+      prev.map((d) => (d.id === deliveryId ? { ...d, shipping_fee: value } : d))
     );
-    console.error("Sync shipping_fee to orders failed:", updOrdersErr);
-  } else {
-    toast.success("Shipping Fee updated and synced to invoices");
-  }
 
-  // 3) Optimistically update local state
-  setDeliveries((prev) =>
-    prev.map((d) => (d.id === deliveryId ? { ...d, shipping_fee: value } : d))
-  );
-
-  // 4) Activity log
-  await logActivity("Updated Shipping Fee", {
-    delivery_id: deliveryId,
-    shipping_fee: value,
-  });
-};
-
+    // 4) Activity log
+    await logActivity("Updated Shipping Fee", {
+      delivery_id: deliveryId,
+      shipping_fee: value,
+    });
+  };
 
   /** Update eta_date (Estimated Arrival for Ongoing) */
   /** Update eta_date (Estimated Arrival) AND email customers for cheque collection */
@@ -1149,6 +1164,13 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                           </div>
 
                           <div className="text-slate-500 uppercase tracking-wide text-xs">
+                            DEPARTURE TIME
+                          </div>
+                          <div className="font-medium">
+                            {to12Hour(delivery.departure_time)}
+                          </div>
+
+                          <div className="text-slate-500 uppercase tracking-wide text-xs">
                             PLATE NUMBER
                           </div>
                           <div className="font-medium">
@@ -1199,7 +1221,7 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                           </div>
                         )}
 
-                        {/* Shipping Fee input while Scheduled */}
+                        {/* Shipping Fee input while Scheduled
                         {delivery.status === "Scheduled" && (
                           <div className="mt-3">
                             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
@@ -1300,7 +1322,7 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                               </p>
                             )}
                           </div>
-                        )}
+                        )} */}
 
                         {delivery.status === "Delivered" && (
                           <div className="mt-3">
@@ -1949,6 +1971,24 @@ const handleShippingFeeChange = async (deliveryId: number, value: number) => {
                       setNewDelivery({
                         ...newDelivery,
                         scheduleDate: e.target.value,
+                      })
+                    }
+                    className="w-full border p-2 rounded"
+                    required
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="w-32 text-sm font-medium">
+                    Time Departure
+                  </label>
+                  <input
+                    type="time"
+                    value={newDelivery.departureTime}
+                    onChange={(e) =>
+                      setNewDelivery({
+                        ...newDelivery,
+                        departureTime: e.target.value,
                       })
                     }
                     className="w-full border p-2 rounded"
