@@ -1,8 +1,10 @@
+// src/app/customer/payment-ledger/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
+import { Info } from "lucide-react";
 
 /* ----------------------------- Money ------------------------------ */
 const peso = (n: number) =>
@@ -13,666 +15,572 @@ const peso = (n: number) =>
   });
 
 /* ----------------------------- Dates ------------------------------ */
-const startOfTodayLocal = () => {
-  const t = new Date();
-  t.setHours(0, 0, 0, 0);
-  return t;
+const formatPH = (d: string | Date | null | undefined) => {
+  if (!d) return "—";
+  const dt = typeof d === "string" ? new Date(d) : d;
+  if (isNaN(dt.getTime())) return "—";
+  return dt.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 };
 
-// Normalize any date-like value to local YYYY-MM-DD
-const toYYYYMMDD = (val?: string | null) => {
-  if (!val) return "";
-  const d = new Date(val);
-  if (isNaN(d.getTime())) {
-    return String(val).slice(0, 10);
-  }
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 10);
-};
-
-const parseLocalDate = (isoDate: string) => {
-  const [y, m, d] = (isoDate || "").split("-").map(Number);
-  return new Date(y || 1970, (m || 1) - 1, d || 1, 0, 0, 0, 0);
-};
-
-/* ----------------------------- Utils ------------------------------ */
 const round2 = (n: number) =>
   Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-const EPS = 0.000001;
 
-/* ---------------------------------- Types --------------------------------- */
-type OrderItemRow = {
-  quantity: number;
-  price: number | null;
-  discount_percent?: number | null;
-  inventory?: {
-    product_name?: string | null;
-    unit?: string | null;
-    unit_price?: number | null;
-  } | null;
+const statusLower = (s?: string | null) => String(s || "").toLowerCase();
+const nowISO = () => new Date().toISOString();
+
+/* ------------------------------ Types ------------------------------ */
+type CustomerRow = {
+  id: string | number;
+  name: string | null;
+  code: string | null; // Invoice No. lives here per your schema
+  email: string | null;
+  phone: string | null;
+  address: string | null;
 };
 
 type OrderRow = {
   id: string | number;
+  customer_id?: string | number | null;
   status: string | null;
+  date_created?: string | null;
+
+  total_amount?: number | null;
   grand_total_with_interest?: number | null;
   sales_tax?: number | null;
-  interest_percent?: number | null;
-  per_term_amount?: number | null; // base per-term (no shipping)
+  shipping_fee?: number | null;
+
+  terms?: string | null;
   payment_terms?: number | null;
-  truck_delivery_id?: string | null;
-  order_items?: OrderItemRow[] | null;
+  per_term_amount?: number | null;
+
+  // ✅ Join customers (single row, forced inner join)
+  customers?: { code: string | null } | null;
 };
 
-type CustomerTx = {
-  id: string | number;
-  name: string | null;
-  code: string | null; // TXN code
-  email: string | null;
-  payment_type?: string | null;
-  orders?: OrderRow[] | null;
+type PaymentRow = {
+  id: string;
+  customer_id: string | number;
+  order_id: string | number | null;
+  amount: number;
+  method: string | null;
+  cheque_number: string | null;
+  bank_name: string | null;
+  cheque_date: string | null;
+  image_url: string | null;
+  status: string | null;
+  created_at: string | null;
 };
 
-type InstallmentRow = {
-  id?: string;
-  order_id: string;
-  term_no: number;
-  due_date: string | null; // original schedule per term
-  amount_due: number;
-  amount_paid?: number | null;
-  status?: string | null; // "paid" | "pending"
+type LedgerRow = {
+  sortDate: string;
+  dateLabel: string;
+  description: string;
+  debit: number;
+  credit: number;
+  balance: number;
+  remarks: string;
 };
 
-/* -------- Shipping fee: orders.truck_delivery_id -> truck_deliveries.shipping_fee -------- */
-async function fetchShippingFeeForOrder(
-  orderId: string | number
-): Promise<number> {
-  try {
-    const { data: ord } = await supabase
-      .from("orders")
-      .select("truck_delivery_id")
-      .eq("id", orderId)
-      .maybeSingle();
-
-    const deliveryId = ord?.truck_delivery_id;
-    if (!deliveryId) return 0;
-
-    const { data: del } = await supabase
-      .from("truck_deliveries")
-      .select("shipping_fee")
-      .eq("id", deliveryId)
-      .maybeSingle();
-
-    const fee = Number(del?.shipping_fee ?? 0);
-    return Number.isFinite(fee) ? fee : 0;
-  } catch {
-    return 0;
-  }
-}
-
-/* -------- ETA: orders.truck_delivery_id -> truck_deliveries.eta_date -------- */
-async function fetchEtaForDelivery(
-  deliveryId?: string | null
-): Promise<string | null> {
-  if (!deliveryId) return null;
-  try {
-    const { data, error } = await supabase
-      .from("truck_deliveries")
-      .select("eta_date")
-      .eq("id", deliveryId)
-      .maybeSingle();
-    if (error) throw error;
-    return data?.eta_date ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/* ------------------------------ Component ------------------------------ */
-export default function PaymentSchedulePage() {
+export default function CustomerMyPaymentLedgerPage() {
   const [loading, setLoading] = useState(true);
-  const [txns, setTxns] = useState<CustomerTx[]>([]);
-  const [selectedTxnCode, setSelectedTxnCode] = useState<string>("");
 
-  const [installments, setInstallments] = useState<InstallmentRow[]>([]);
-  const [loadingInstallments, setLoadingInstallments] = useState(false);
+  const [meEmail, setMeEmail] = useState<string>("");
+  const [meId, setMeId] = useState<string>("");
 
-  // order_id -> shippingFee cache
-  const [shippingFees, setShippingFees] = useState<Record<string, number>>({});
-  // selected order's ETA (used as fallback if a term has no due_date)
-  const [orderEtaDate, setOrderEtaDate] = useState<string | null>(null);
+  const [myCustomers, setMyCustomers] = useState<CustomerRow[]>([]);
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [payments, setPayments] = useState<PaymentRow[]>([]);
 
-  const paymentsSubKey = useRef<string>("");
+  const [selectedOrderId, setSelectedOrderId] = useState<string>("");
 
-  /* ---------------------- Fetch current user + their TXNs only ---------------------- */
+  const paySubKey = useRef<string>("");
+  const orderSubKey = useRef<string>("");
+
+  /* ------------------------------ Helpers ------------------------------ */
+  const makeCustomerKey = (c: CustomerRow) =>
+    (c.email || "").trim().toLowerCase() ||
+    `${(c.name || "").trim().toLowerCase()}|${(c.phone || "").trim()}`;
+
+  /* ------------------------------ Load current user ------------------------------ */
+  async function loadAuthUser() {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) throw error;
+
+    const email = data?.user?.email || "";
+    const uid = data?.user?.id || "";
+
+    setMeEmail(email);
+    setMeId(uid);
+
+    if (!email) throw new Error("No logged-in user email found.");
+    return { email, uid };
+  }
+
+  /* ------------------------------ Fetch customers owned by me ------------------------------ */
+  async function fetchMyCustomersByEmail(email: string) {
+    const { data, error } = await supabase
+      .from("customers")
+      .select("id, name, code, email, phone, address")
+      .eq("email", email)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    return ((data as CustomerRow[]) || []) as CustomerRow[];
+  }
+
+  async function fetchMyCustomersFallbackByProfilePhone(uid: string) {
+    const { data: prof, error: profErr } = await supabase
+      .from("profiles")
+      .select("contact_number")
+      .eq("id", uid)
+      .maybeSingle();
+
+    if (profErr) return [];
+
+    const phone = String((prof as any)?.contact_number || "").trim();
+    if (!phone) return [];
+
+    const { data, error } = await supabase
+      .from("customers")
+      .select("id, name, code, email, phone, address")
+      .eq("phone", phone)
+      .order("created_at", { ascending: false });
+
+    if (error) return [];
+    return ((data as CustomerRow[]) || []) as CustomerRow[];
+  }
+
+  /* ------------------------------ Fetch orders by my customer group ------------------------------ */
+  async function fetchOrdersByMyCustomerGroup(customersOwned: CustomerRow[]) {
+    if (!customersOwned.length) {
+      setOrders([]);
+      return;
+    }
+
+    const key = makeCustomerKey(customersOwned[0]);
+    const ids = customersOwned
+      .filter((c) => makeCustomerKey(c) === key)
+      .map((c) => String(c.id));
+
+    if (!ids.length) {
+      setOrders([]);
+      return;
+    }
+
+    // ✅ IMPORTANT: use !inner to force a single joined customer row
+    const { data, error } = await supabase
+      .from("orders")
+      .select(
+        `
+        id, customer_id, status, date_created,
+        total_amount, grand_total_with_interest, sales_tax, shipping_fee,
+        terms, payment_terms, per_term_amount,
+        customers:customers!inner ( code )
+        `
+      )
+      .in("customer_id", ids)
+      .order("date_created", { ascending: false });
+
+    if (error) throw error;
+
+    // Supabase sometimes still returns customers as array; normalize it here safely
+    const normalized: OrderRow[] = ((data as any[]) || []).map((row) => {
+      const c = row.customers;
+      const customersObj =
+        Array.isArray(c) ? (c[0] ?? null) : (c ?? null);
+
+      return { ...row, customers: customersObj };
+    });
+
+    setOrders(normalized);
+  }
+
+  /* ------------------------------ Fetch payments by selected order ------------------------------ */
+  async function fetchPaymentsByOrder(orderId: string) {
+    if (!orderId) {
+      setPayments([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("payments")
+      .select(
+        "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, status, created_at"
+      )
+      .eq("order_id", orderId)
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+    setPayments((data as PaymentRow[]) || []);
+  }
+
+  /* ------------------------------ Initial load ------------------------------ */
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const { data: auth } = await supabase.auth.getUser();
-        const userEmail = auth?.user?.email || null;
+        const { email, uid } = await loadAuthUser();
 
-        if (!userEmail) {
-          setTxns([]);
-          setLoading(false);
-          toast.info("Please sign in to view your payment schedule.");
-          return;
-        }
+        let owned = await fetchMyCustomersByEmail(email);
+        if (!owned.length) owned = await fetchMyCustomersFallbackByProfilePhone(uid);
 
-        // Fetch ONLY this customer's record(s) by email
-        const { data: customers, error } = await supabase
-          .from("customers")
-          .select(
-            `
-            id, name, code, email, payment_type,
-            orders (
-              id, status, grand_total_with_interest, sales_tax, interest_percent, per_term_amount, payment_terms, truck_delivery_id
-            )
-          `
-          )
-          .eq("email", userEmail)
-          .order("id", { ascending: false });
+        setMyCustomers(owned);
+        await fetchOrdersByMyCustomerGroup(owned);
 
-        if (error) throw error;
-
-        const list = (customers as CustomerTx[]) || [];
-        setTxns(list);
-
-        // Prefetch shipping fees for this user's completed orders
-        const completedOrders = list
-          .flatMap((c) => c.orders ?? [])
-          .filter((o) => (o.status || "").toLowerCase() === "completed");
-
-        const allOrderIds = Array.from(
-          new Set(completedOrders.map((o) => String(o.id)))
-        );
-        const entries = await Promise.all(
-          allOrderIds.map(
-            async (oid) =>
-              [oid, await fetchShippingFeeForOrder(oid)] as [string, number]
-          )
-        );
-        const map: Record<string, number> = {};
-        for (const [oid, fee] of entries) map[oid] = fee;
-        setShippingFees(map);
-      } catch (e) {
+        setSelectedOrderId("");
+        setPayments([]);
+      } catch (e: any) {
         console.error(e);
-        toast.error("Failed to load your payment schedules.");
+        toast.error(e?.message || "Failed to load your ledger.");
       } finally {
         setLoading(false);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* --------------------------- Build TXN options (completed only) --------------------------- */
-  const txnOptions = useMemo(() => {
-    const out: {
-      code: string;
-      order: OrderRow;
-      customerId: string;
-      customerName: string;
-      customerEmail: string | null;
-      paymentType: string | null | undefined;
-    }[] = [];
+  /* ------------------------------ Selected order ------------------------------ */
+  const selectedOrder = useMemo(() => {
+    if (!selectedOrderId) return null;
+    return orders.find((o) => String(o.id) === String(selectedOrderId)) || null;
+  }, [orders, selectedOrderId]);
 
-    for (const c of txns) {
-      const code = c.code ?? "";
-      const completed = (c.orders ?? []).find(
-        (o) => (o.status || "").toLowerCase() === "completed"
-      );
-      if (code && completed) {
-        out.push({
-          code,
-          order: completed,
-          customerId: String(c.id),
-          customerName: (c.name || "").trim() || "Unknown",
-          customerEmail: c.email || null,
-          paymentType: c.payment_type,
-        });
-      }
-    }
-    // Most recent first (already ordered by customers.id desc)
-    return out;
-  }, [txns]);
+  // ✅ The invoice number to display everywhere
+  const selectedInvoiceNo = useMemo(() => {
+    const inv = String(selectedOrder?.customers?.code || "").trim();
+    return inv || "";
+  }, [selectedOrder]);
 
-  const selectedPack = useMemo(() => {
-    if (!selectedTxnCode) return null;
-    return txnOptions.find((t) => t.code === selectedTxnCode) || null;
-  }, [txnOptions, selectedTxnCode]);
+  /* ------------------------------ My display info ------------------------------ */
+  const myDisplay = useMemo(() => {
+    const c = myCustomers?.[0] || null;
+    return {
+      name: c?.name || "Customer",
+      email: c?.email || meEmail || "—",
+      phone: c?.phone || "—",
+      address: c?.address || "—",
+    };
+  }, [myCustomers, meEmail]);
 
-  /* ----------------------------- Load schedule rows for selected order ----------------------------- */
+  /* ------------------------------ Compute order grand total ------------------------------ */
+  const orderGrandTotal = useMemo(() => {
+    const o = selectedOrder;
+    if (!o) return 0;
+
+    const base =
+      typeof o.grand_total_with_interest === "number" &&
+      Number.isFinite(o.grand_total_with_interest)
+        ? Number(o.grand_total_with_interest)
+        : Number(o.total_amount || 0);
+
+    const shipping = Number(o.shipping_fee || 0);
+    return round2(base + shipping);
+  }, [selectedOrder]);
+
+  /* ------------------------------ When order changes ------------------------------ */
   useEffect(() => {
     (async () => {
-      if (!selectedPack?.order?.id) {
-        setInstallments([]);
+      if (!selectedOrderId) {
+        setPayments([]);
         return;
       }
       try {
-        setLoadingInstallments(true);
-        const { data, error } = await supabase
-          .from("order_installments")
-          .select(
-            "id, order_id, term_no, due_date, amount_due, amount_paid, status"
-          )
-          .eq("order_id", String(selectedPack.order.id))
-          .order("term_no", { ascending: true });
-
-        if (error) throw error;
-        setInstallments((data as InstallmentRow[]) || []);
-      } catch (e) {
+        await fetchPaymentsByOrder(selectedOrderId);
+      } catch (e: any) {
         console.error(e);
-        toast.error("Failed to load installment schedule.");
-      } finally {
-        setLoadingInstallments(false);
+        toast.error(e?.message || "Failed to load payments.");
       }
     })();
-  }, [selectedPack?.order?.id]);
+  }, [selectedOrderId]);
 
-  /* ----------------------------- Fetch ETA for the selected order's delivery ----------------------------- */
+  /* ------------------------------ Realtime: refresh orders list ------------------------------ */
   useEffect(() => {
-    (async () => {
-      const deliveryId = selectedPack?.order?.truck_delivery_id ?? null;
-      const eta = await fetchEtaForDelivery(deliveryId || null);
-      setOrderEtaDate(eta ? toYYYYMMDD(eta) : null);
-    })();
-  }, [selectedPack?.order?.truck_delivery_id]);
+    if (!myCustomers.length) return;
 
-  /* -------- helper: get per-term effective due date (row.due_date or fallback ETA) -------- */
-  const getEffectiveDueDate = (row: InstallmentRow): string => {
-    const fromRow = toYYYYMMDD(row.due_date);
-    if (fromRow) return fromRow;
-    if (orderEtaDate) return orderEtaDate;
-    return "";
-  };
+    const key = `orders-my-ledger:${makeCustomerKey(myCustomers[0])}`;
+    if (orderSubKey.current === key) return;
+    orderSubKey.current = key;
 
-  /* ----------------------------- Realtime: order_installments & payments ----------------------------- */
-  useEffect(() => {
-    const orderId = selectedPack?.order?.id ? String(selectedPack.order.id) : "";
-    if (!orderId) return;
-
-    const ch = supabase.channel("realtime-installments-view");
-
-    const refresh = async () => {
-      try {
-        const { data } = await supabase
-          .from("order_installments")
-          .select(
-            "id, order_id, term_no, due_date, amount_due, amount_paid, status"
-          )
-          .eq("order_id", orderId)
-          .order("term_no", { ascending: true });
-        setInstallments((data as InstallmentRow[]) || []);
-      } catch (e) {
-        console.error(e);
+    const ch = supabase.channel("realtime-customer-ledger-orders");
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "orders" },
+      async () => {
+        try {
+          await fetchOrdersByMyCustomerGroup(myCustomers);
+        } catch (e) {
+          console.error("Realtime orders refresh failed:", e);
+        }
       }
-    };
-
-    ch.on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "order_installments",
-        filter: `order_id=eq.${orderId}`,
-      },
-      refresh
-    );
-
-    // Also listen to payments by this order to refresh
-    const payKey = `payments:${orderId}`;
-    if (paymentsSubKey.current !== payKey) paymentsSubKey.current = payKey;
-
-    ch.on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "payments",
-        filter: `order_id=eq.${orderId}`,
-      },
-      refresh
     );
 
     ch.subscribe();
     return () => {
       supabase.removeChannel(ch);
     };
-  }, [selectedPack?.order?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myCustomers]);
 
-  /* ----------------------------- Totals & status helpers ----------------------------- */
-  const orderShippingFee = useMemo(() => {
-    if (!selectedPack?.order?.id) return 0;
-    return round2(shippingFees[String(selectedPack.order.id)] || 0);
-  }, [selectedPack?.order?.id, shippingFees]);
+  /* ------------------------------ Realtime: payments for selected order ------------------------------ */
+  useEffect(() => {
+    if (!selectedOrderId) return;
 
-  // Sum from rows
-  const totals = useMemo(() => {
-    const due = round2(
-      installments.reduce((s, r) => s + Number(r.amount_due || 0), 0)
-    );
-    const paid = round2(
-      installments.reduce((s, r) => s + Number(r.amount_paid || 0), 0)
-    );
-    const remaining = Math.max(0, round2(due - paid));
-    return { due, paid, remaining };
-  }, [installments]);
+    const key = `payments-my-ledger:${selectedOrderId}`;
+    if (paySubKey.current === key) return;
+    paySubKey.current = key;
 
-  // Next unpaid term with its own due date
-  const nextUnpaid = useMemo(() => {
-    const sorted = [...installments].sort((a, b) => a.term_no - b.term_no);
-    for (const r of sorted) {
-      const amtDue = Number(r.amount_due || 0);
-      const amtPaid = Number(r.amount_paid || 0);
-      const isPaid =
-        (r.status || "").toLowerCase() === "paid" ||
-        amtPaid + EPS >= amtDue;
-
-      if (!isPaid) {
-        const effDate = getEffectiveDueDate(r);
-        const hasDate = !!effDate;
-        const isOverdue =
-          hasDate && parseLocalDate(effDate) < startOfTodayLocal();
-        return { ...r, effectiveDueDate: effDate, isOverdue };
+    const ch = supabase.channel("realtime-customer-ledger-payments");
+    ch.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "payments",
+        filter: `order_id=eq.${selectedOrderId}`,
+      },
+      async () => {
+        try {
+          await fetchPaymentsByOrder(selectedOrderId);
+        } catch (e) {
+          console.error("Realtime payments refresh failed:", e);
+        }
       }
-    }
-    return null;
-  }, [installments, getEffectiveDueDate]);
-
-  const badge = (isPaid: boolean, effectiveISO?: string) => {
-    if (isPaid)
-      return (
-        <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
-          Paid
-        </span>
-      );
-    if (!effectiveISO) {
-      return (
-        <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
-          Pending
-        </span>
-      );
-    }
-    const isOverdue = parseLocalDate(effectiveISO) < startOfTodayLocal();
-    if (isOverdue)
-      return (
-        <span className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-800">
-          Overdue
-        </span>
-      );
-    return (
-      <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
-        Pending
-      </span>
     );
-  };
 
-  const hasAnyDueDate = installments.some(
-    (r) => getEffectiveDueDate(r) !== ""
+    ch.subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [selectedOrderId]);
+
+  /* ------------------------------ Ledger rows ------------------------------ */
+  const ledgerRows = useMemo<LedgerRow[]>(() => {
+    if (!selectedOrder) return [];
+
+    const createdAt = selectedOrder.date_created || nowISO();
+    const rows: Omit<LedgerRow, "balance">[] = [];
+
+    rows.push({
+      sortDate: createdAt,
+      dateLabel: formatPH(createdAt),
+      description: `Invoice Charge (${selectedInvoiceNo || "No Invoice No."})`,
+      debit: orderGrandTotal,
+      credit: 0,
+      remarks: `Order Status: ${(selectedOrder.status || "—").toUpperCase()}`,
+    });
+
+    const payRows: Omit<LedgerRow, "balance">[] = (payments || [])
+      .filter((p) => String(p.order_id ?? "") === String(selectedOrder.id))
+      .map((p) => {
+        const method = String(p.method || "Payment");
+        const lines: string[] = [];
+        lines.push(`${method} Payment`);
+        if (p.cheque_number) lines.push(`Ref: ${p.cheque_number}`);
+        if (p.bank_name) lines.push(`Bank: ${p.bank_name}`);
+        if (p.cheque_date) lines.push(`Date: ${p.cheque_date}`);
+        if (p.image_url) lines.push(`Proof: Available`);
+
+        return {
+          sortDate: p.created_at || nowISO(),
+          dateLabel: formatPH(p.created_at),
+          description: lines.join("\n"),
+          debit: 0,
+          credit: round2(Number(p.amount || 0)),
+          remarks: (p.status || "—").toUpperCase(),
+        };
+      });
+
+    rows.push(...payRows);
+    rows.sort((a, b) => String(a.sortDate).localeCompare(String(b.sortDate)));
+
+    let bal = 0;
+    return rows.map((r) => {
+      bal = round2(bal + (r.debit || 0) - (r.credit || 0));
+      return { ...r, balance: bal };
+    });
+  }, [selectedOrder, payments, orderGrandTotal, selectedInvoiceNo]);
+
+  const totalCredits = useMemo(
+    () => round2(ledgerRows.reduce((s, r) => s + (r.credit || 0), 0)),
+    [ledgerRows]
   );
 
+  const currentBalance = useMemo(
+    () => (ledgerRows.length ? round2(ledgerRows[ledgerRows.length - 1].balance) : 0),
+    [ledgerRows]
+  );
+
+  /* ---------------------------------- UI ---------------------------------- */
   return (
     <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
-        <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
-            Payment Schedule
-          </h1>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
+              My Payment Ledger
+            </h1>
+            <p className="text-sm text-gray-600 mt-1">
+              Select one of your invoices to view Debit, Credit, and running Balance.
+            </p>
+          </div>
         </div>
-        <p className="text-sm text-gray-600 mt-1">
-          View your <b>installment plan</b> per Transaction Code (TXN). Status
-          updates in real time.
-        </p>
 
-        {/* Selector */}
-        <div className="mt-5 rounded-xl bg-white border border-gray-200 p-4">
-          <label className="text-xs text-gray-600">Select Transaction (TXN)</label>
-          <select
-            className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
-            value={selectedTxnCode}
-            onChange={(e) => setSelectedTxnCode(e.target.value)}
-          >
-            <option value="">— Choose a TXN —</option>
-            {txnOptions.map(({ code, customerName }, i) => (
-              <option key={`${code}-${i}`} value={code}>
-                {code} — {customerName}
-              </option>
-            ))}
-          </select>
-
-          {/* Owner badge */}
-          {!!selectedPack && (
-            <div className="mt-2 text-xs text-gray-700">
-              <span className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1">
-                <span className="font-semibold">Owner:</span>{" "}
-                <span className="font-medium">{selectedPack.customerName}</span>
-                {selectedPack.customerEmail ? (
+        {/* My info */}
+        <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="text-xs text-gray-700">
+              <div className="inline-flex flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1">
+                <span className="font-semibold">Customer:</span>
+                <span className="font-medium">{myDisplay.name}</span>
+                <span className="opacity-50">•</span>
+                <span className="text-gray-600">{myDisplay.email}</span>
+                {myDisplay.phone !== "—" ? (
                   <>
                     <span className="opacity-50">•</span>
-                    <span className="text-gray-500">
-                      {selectedPack.customerEmail}
-                    </span>
+                    <span className="text-gray-600">{myDisplay.phone}</span>
                   </>
                 ) : null}
-              </span>
+              </div>
+
+              {myDisplay.address !== "—" ? (
+                <div className="mt-2 text-[11px] text-gray-600">
+                  <span className="font-semibold">Address:</span> {myDisplay.address}
+                </div>
+              ) : null}
             </div>
-          )}
+
+            {!myCustomers.length && !loading ? (
+              <div className="flex items-start gap-2 text-xs text-gray-600">
+                <Info className="h-4 w-4 mt-0.5" />
+                No customer record matched your account yet (email/phone). Contact admin.
+              </div>
+            ) : null}
+          </div>
         </div>
 
-        {/* Summary */}
-        {selectedPack && (
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="rounded-xl border border-gray-200 bg-white p-4">
-              <div className="text-xs text-gray-500">
-                Grand Total (incl. shipping)
-              </div>
-              <div className="text-2xl font-bold text-green-700 mt-1">
-                {peso(
-                  round2(
-                    Number(selectedPack.order.grand_total_with_interest || 0) +
-                      (orderShippingFee || 0)
-                  )
-                )}
-              </div>
-              {orderShippingFee > 0 && (
-                <div className="text-[11px] text-gray-500 mt-1">
-                  Shipping fee: <b>{peso(orderShippingFee)}</b> (distributed
-                  across terms)
-                </div>
-              )}
-            </div>
+        {/* Invoice selector */}
+        <div className="mt-4 rounded-xl bg-white border border-gray-200 p-4">
+          <label className="text-xs text-gray-600">Choose Your Invoice *</label>
+          <select
+            className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
+            value={selectedOrderId}
+            onChange={(e) => setSelectedOrderId(e.target.value)}
+            disabled={!orders.length}
+          >
+            <option value="">— Select Invoice —</option>
 
-            <div className="rounded-xl border border-gray-200 bg-white p-4">
-              <div className="text-xs text-gray-500">Paid</div>
-              <div className="text-2xl font-bold text-blue-700 mt-1">
-                {peso(totals.paid)}
-              </div>
-              <div className="text-[11px] text-gray-500 mt-1">
-                Remaining:{" "}
-                <b className="text-amber-700">{peso(totals.remaining)}</b>
-              </div>
-            </div>
+            {orders.map((o) => {
+              const inv = String(o.customers?.code || "").trim();
+              return (
+                <option key={String(o.id)} value={String(o.id)}>
+                  {inv ? `Invoice No. ${inv}` : "Invoice No. —"}
+                </option>
+              );
+            })}
+          </select>
 
-            <div className="rounded-xl border border-gray-200 bg-white p-4">
-              <div className="text-xs text-gray-500">Next Due</div>
-              {nextUnpaid ? (
-                <div className="mt-1">
-                  <div className="text-lg font-semibold">
-                    Term #{nextUnpaid.term_no}
-                    {nextUnpaid.effectiveDueDate
-                      ? ` — ${nextUnpaid.effectiveDueDate}`
-                      : ""}
-                  </div>
-                  <div className="text-sm text-gray-700">
-                    Amount due:{" "}
-                    <b>{peso(Number(nextUnpaid.amount_due || 0))}</b>
-                  </div>
-                  <div className="mt-1">
-                    {badge(
-                      (nextUnpaid.status || "").toLowerCase() === "paid" ||
-                        Number(nextUnpaid.amount_paid || 0) + EPS >=
-                          Number(nextUnpaid.amount_due || 0),
-                      nextUnpaid.effectiveDueDate || undefined
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="text-lg font-semibold mt-1">All terms paid</div>
-              )}
+          {!orders.length && !loading ? (
+            <div className="mt-2 flex items-start gap-2 text-xs text-gray-600">
+              <Info className="h-4 w-4 mt-0.5" />
+              No invoices found for your account.
             </div>
-          </div>
-        )}
+          ) : null}
+        </div>
 
-        {/* Schedule table */}
-        {selectedPack && (
-          <div className="mt-6 rounded-xl bg-white border border-gray-200 overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200">
-              <h2 className="text-lg font-semibold">
-                Installment Schedule —{" "}
-                <span className="font-mono">{selectedPack.code}</span>
-              </h2>
-              <div className="text-xs text-gray-500">
-                {selectedPack.paymentType?.toLowerCase() === "credit"
-                  ? "Credit terms detected."
-                  : "Payment plan available."}{" "}
-                Showing per-term due dates from your payment schedule. Updates
-                automatically when a payment is received.
+        {/* Ledger */}
+        {selectedOrderId ? (
+          <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+              <div>
+                <h2 className="text-lg font-semibold">
+                  Ledger for{" "}
+                  <span className="font-mono">
+                    {selectedInvoiceNo ? `Invoice No. ${selectedInvoiceNo}` : "Invoice No. —"}
+                  </span>
+                </h2>
+                <p className="text-xs text-gray-600">
+                  Debit = charge • Credit = payments • Balance = running balance
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <span className="rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1">
+                  <b>Charge:</b> {peso(orderGrandTotal)}
+                </span>
+                <span className="rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1">
+                  <b>Credits:</b> {peso(totalCredits)}
+                </span>
+                <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-900">
+                  <b>Balance:</b> {peso(currentBalance)}
+                </span>
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            {/* Ledger Table */}
+            <div className="rounded-xl overflow-hidden ring-1 ring-gray-200 bg-white">
               <table className="w-full text-sm align-middle">
                 <thead>
                   <tr
                     className="text-black uppercase tracking-wider text-[11px]"
                     style={{ background: "#ffba20" }}
                   >
-                    <th className="py-2.5 px-3 text-center font-bold">Term #</th>
-                    {hasAnyDueDate && (
-                      <th className="py-2.5 px-3 text-center font-bold">
-                        Due Date
-                      </th>
-                    )}
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      Amount Due
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      Amount Paid
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">
-                      Remaining
-                    </th>
-                    <th className="py-2.5 px-3 text-center font-bold">Status</th>
+                    <th className="py-2.5 px-3 text-left font-bold">DATE</th>
+                    <th className="py-2.5 px-3 text-left font-bold">DESCRIPTION</th>
+                    <th className="py-2.5 px-3 text-left font-bold">DEBIT</th>
+                    <th className="py-2.5 px-3 text-left font-bold">CREDIT</th>
+                    <th className="py-2.5 px-3 text-right font-bold">BALANCE</th>
+                    <th className="py-2.5 px-3 text-left font-bold">STATUS</th>
                   </tr>
                 </thead>
+
                 <tbody>
-                  {loadingInstallments ? (
-                    <tr>
-                      <td
-                        colSpan={hasAnyDueDate ? 6 : 5}
-                        className="text-center py-8 text-neutral-400"
-                      >
-                        Loading schedule…
+                  {ledgerRows.map((r, idx) => (
+                    <tr key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>
+                      <td className="py-2.5 px-3">{r.dateLabel}</td>
+                      <td className="py-2.5 px-3 font-medium whitespace-pre-line">
+                        {r.description}
+                      </td>
+                      <td className="py-2.5 px-3 text-left font-mono">{peso(r.debit || 0)}</td>
+                      <td className="py-2.5 px-3 text-left font-mono">{peso(r.credit || 0)}</td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold">
+                        {peso(r.balance || 0)}
+                      </td>
+                      <td className="py-2.5 px-3 text-left">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            statusLower(r.remarks) === "received"
+                              ? "bg-green-100 text-green-800"
+                              : statusLower(r.remarks) === "pending"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-gray-100 text-gray-800"
+                          }`}
+                        >
+                          {r.remarks}
+                        </span>
                       </td>
                     </tr>
-                  ) : (installments ?? []).length ? (
-                    installments.map((r, idx) => {
-                      const amtDue = Number(r.amount_due || 0);
-                      const amtPaid = Number(r.amount_paid || 0);
-                      const remain = Math.max(0, round2(amtDue - amtPaid));
-                      const paid =
-                        (r.status || "").toLowerCase() === "paid" ||
-                        amtPaid + EPS >= amtDue;
+                  ))}
 
-                      const effDate = getEffectiveDueDate(r);
-                      const hasDate = !!effDate;
-                      const isOver =
-                        hasDate &&
-                        !paid &&
-                        parseLocalDate(effDate) < startOfTodayLocal();
-
-                      return (
-                        <tr
-                          key={r.id || `${r.order_id}-${r.term_no}-${idx}`}
-                          className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
-                        >
-                          <td className="py-2.5 px-3 text-center font-mono">
-                            {r.term_no}
-                          </td>
-
-                          {hasAnyDueDate && (
-                            <td className="py-2.5 px-3 text-center">
-                              {hasDate ? (
-                                <span
-                                  className={
-                                    isOver ? "text-rose-600 font-semibold" : ""
-                                  }
-                                >
-                                  {effDate}
-                                </span>
-                              ) : (
-                                <span className="text-gray-400">—</span>
-                              )}
-                            </td>
-                          )}
-
-                          <td className="py-2.5 px-3 text-center font-mono">
-                            {peso(amtDue)}
-                          </td>
-                          <td className="py-2.5 px-3 text-center font-mono">
-                            {peso(amtPaid)}
-                          </td>
-                          <td className="py-2.5 px-3 text-center font-mono">
-                            {peso(remain)}
-                          </td>
-                          <td className="py-2.5 px-3 text-center">
-                            {badge(paid, hasDate ? effDate : undefined)}
-                          </td>
-                        </tr>
-                      );
-                    })
-                  ) : (
+                  {ledgerRows.length === 0 && (
                     <tr>
-                      <td
-                        colSpan={hasAnyDueDate ? 6 : 5}
-                        className="text-center py-8 text-neutral-400"
-                      >
-                        No schedule found for this TXN.
+                      <td colSpan={6} className="text-center py-10 text-neutral-400">
+                        No ledger entries found.
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
-
-            {/* Footer totals */}
-            {!!installments.length && (
-              <div className="px-4 py-3 border-t border-gray-200 grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="text-sm">
-                  <div className="text-gray-500">Total Due</div>
-                  <div className="font-bold">{peso(totals.due)}</div>
-                </div>
-                <div className="text-sm">
-                  <div className="text-gray-500">Total Paid</div>
-                  <div className="font-bold text-blue-700">
-                    {peso(totals.paid)}
-                  </div>
-                </div>
-                <div className="text-sm">
-                  <div className="text-gray-500">Remaining Balance</div>
-                  <div className="font-bold text-amber-700">
-                    {peso(totals.remaining)}
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
-        )}
+        ) : null}
 
-        {!loading && !txnOptions.length && (
-          <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            No completed TXNs found for your account yet.
-          </div>
-        )}
+        {loading && <div className="mt-6 text-sm text-gray-600">Loading…</div>}
       </div>
     </div>
   );
