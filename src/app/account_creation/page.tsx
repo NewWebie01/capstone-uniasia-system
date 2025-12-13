@@ -89,6 +89,9 @@ export default function AccountCreationPage() {
   // Helper to identify if Region is NCR (starts with 13)
   const isNCR = formData.region_code.startsWith("13");
 
+  //USERNAME
+  const [pendingAuthEmail, setPendingAuthEmail] = useState("");
+
   /* ----------------------------- PSGC Fetching (UPDATED TO PSGC.CLOUD) ----------------------------- */
 
   // 1. Load Regions
@@ -383,9 +386,28 @@ export default function AccountCreationPage() {
       newErrors.first_name = "First name is required";
     if (!formData.last_name.trim())
       newErrors.last_name = "Last name is required";
-    if (!EMAIL_REGEX.test(formData.email))
-      newErrors.email =
-        "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
+
+    // Email/Username Validation
+    const identifier = formData.email.trim(); // this is now "Email / Username"
+    const isEmailInput = identifier.includes("@");
+
+    // Username rules (simple + safe)
+    const USERNAME_REGEX = /^[a-zA-Z0-9._-]{3,20}$/;
+
+    if (!identifier) {
+      newErrors.email = "Email or Username is required";
+    } else if (isEmailInput) {
+      if (!EMAIL_REGEX.test(identifier)) {
+        newErrors.email =
+          "Use a valid @gmail.com, @hotmail.com, or @yahoo.com email (or type a username without @).";
+      }
+    } else {
+      if (!USERNAME_REGEX.test(identifier)) {
+        newErrors.email =
+          "Username must be 3–20 characters and can include letters, numbers, dot (.), underscore (_), or dash (-).";
+      }
+    }
+
     if (!/^\d{10}$/.test(formData.contact_number))
       newErrors.contact_number = "Enter 10 digits after +63 (e.g., 9201234567)";
 
@@ -408,9 +430,10 @@ export default function AccountCreationPage() {
       );
     const personalInfo = [
       fullName,
-      formData.email,
+      identifier,
       "+63" + formData.contact_number,
     ];
+
     const pwStrength = getPasswordStrength(formData.password, personalInfo);
 
     if (["Weak", "Too Personal", "Invalid"].includes(pwStrength)) {
@@ -436,8 +459,16 @@ export default function AccountCreationPage() {
           ? window.location.origin
           : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
+      const identifier = formData.email.trim();
+      const isEmailInput = identifier.includes("@");
+
+      // For username signups, we create a pseudo-email
+      const username = !isEmailInput ? identifier.toLowerCase() : "";
+      const realEmail = isEmailInput ? identifier : ""; // what the user truly entered (optional)
+      const authEmail = isEmailInput ? identifier : `${username}@uniasia.local`;
+
       const { data, error } = await supabase.auth.signUp({
-        email: formData.email,
+        email: authEmail,
         password: formData.password,
         options: {
           data: {
@@ -449,6 +480,11 @@ export default function AccountCreationPage() {
             phone: "+63" + formData.contact_number,
             role: "customer",
             provider_type: "email",
+
+            // (optional) keep what they typed for later debugging/reference
+            login_identifier: identifier,
+            username: username || null,
+            customer_email: realEmail || null,
 
             // Location data (Saved to metadata so hooks trigger correctly)
             region_code: formData.region_code,
@@ -462,7 +498,7 @@ export default function AccountCreationPage() {
             house_street: formData.house_street.trim(),
             address: computedAddress,
           },
-          emailRedirectTo: `${origin}/auth/callback`,
+          //emailRedirectTo: `${origin}/auth/callback`,
         },
       });
 
@@ -471,7 +507,9 @@ export default function AccountCreationPage() {
         if (/already (registered|exists)/i.test(msg)) {
           setErrors((p) => ({
             ...p,
-            email: "This email is already registered. Please log in instead.",
+            email: isEmailInput
+              ? "This email is already registered. Please log in instead."
+              : "This username is already registered. Please use another username.",
           }));
           toast.error("Email already registered.");
         } else {
@@ -495,7 +533,7 @@ export default function AccountCreationPage() {
           name: fullName,
           contact_number: "+63" + formData.contact_number,
           role: "customer",
-          email: formData.email,
+          email: realEmail || null,
 
           region_code: formData.region_code,
           region_name: formData.region_name,
@@ -515,7 +553,8 @@ export default function AccountCreationPage() {
         console.error("profiles upsert error:", upsertErr);
       }
 
-      setPendingEmail(formData.email);
+      setPendingEmail(realEmail); // will be "" if they used username
+      setPendingAuthEmail(authEmail);
       setShowSuccessModal(true);
       handleReset();
     } catch (err: any) {
@@ -639,11 +678,12 @@ export default function AccountCreationPage() {
               {/* Email */}
               <div>
                 <label className="block text-sm font-medium text-neutral-700">
-                  Email
+                  Email / Username
                 </label>
                 <input
                   name="email"
-                  type="email"
+                  type="text"
+                  inputMode="email"
                   value={formData.email}
                   onChange={handleChange}
                   required
@@ -990,10 +1030,19 @@ export default function AccountCreationPage() {
           {showSuccessModal && (
             <motion.div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center">
               <div className="bg-white p-8 rounded-2xl max-w-sm w-full text-center">
-                <h2 className="text-2xl font-bold mb-2">Verify your email</h2>
-                <p className="mb-6">
-                  Link sent to <b>{pendingEmail}</b>
+                <h2 className="text-2xl font-bold mb-2">Account Created</h2>
+                <p className="mb-6 text-sm text-gray-700">
+                  {pendingEmail ? (
+                    <>
+                      Email saved: <b>{pendingEmail}</b>
+                    </>
+                  ) : (
+                    <>
+                      Your username is <b>{pendingAuthEmail}</b>
+                    </>
+                  )}
                 </p>
+
                 <button
                   onClick={() => router.push("/login")}
                   className="w-full bg-black text-white py-2 rounded"
