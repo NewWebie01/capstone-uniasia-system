@@ -1111,17 +1111,14 @@ export default function TruckDeliveryPage() {
 
             {dayDeliveries.map((delivery) => {
               // Disable dropdown when:
-              // - Scheduled & no shipping fee
-              // - To Ship & no ETA date
-              const disableForNoFee =
-                delivery.status === "Scheduled" &&
-                delivery.shipping_fee == null;
+
+              const disableForNoFee = false;
 
               const disableForNoEta =
                 delivery.status === "To Ship" && !delivery.eta_date;
 
               const disableSelect =
-                isLocked(delivery.status) || disableForNoFee || disableForNoEta;
+                isLocked(delivery.status) || disableForNoEta;
 
               return (
                 <motion.div
@@ -1194,7 +1191,6 @@ export default function TruckDeliveryPage() {
                               </>
                             )}
                         </div>
-
                         {/* ETA picker for To Ship */}
                         {delivery.status === "To Ship" && (
                           <div className="mt-3">
@@ -1220,9 +1216,7 @@ export default function TruckDeliveryPage() {
                             )}
                           </div>
                         )}
-
-                        {/* Shipping Fee input while Scheduled
-                        {delivery.status === "Scheduled" && (
+                        {/* {delivery.status === "Scheduled" && (
                           <div className="mt-3">
                             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
                               Shipping Fee (₱){" "}
@@ -1323,7 +1317,6 @@ export default function TruckDeliveryPage() {
                             )}
                           </div>
                         )} */}
-
                         {delivery.status === "Delivered" && (
                           <div className="mt-3">
                             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
@@ -1337,7 +1330,6 @@ export default function TruckDeliveryPage() {
                             />
                           </div>
                         )}
-
                         {(delivery.participants?.length ?? 0) > 0 && (
                           <p className="mt-3 text-sm">
                             <span className="text-slate-500 uppercase tracking-wide text-xs">
