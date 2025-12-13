@@ -49,8 +49,8 @@ const Menus: MenuItem[] = [
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
 
   // NEW: Payment Schedule
-  { title: "Payments", href: "/customer/payments/history", icon: ReceiptText },
-  { title: "Payment Schedule", href: "/customer/payments/schedule", icon: ReceiptText },
+  // { title: "Payments", href: "/customer/payments/history", icon: ReceiptText },
+  { title: "My Payment Ledger", href: "/customer/payments/schedule", icon: ReceiptText },
 
   // (optional) keep the uploader page hidden or re-enable if you want:
   // { title: "Payments", href: "/customer/payments", icon: ReceiptText },
@@ -147,7 +147,7 @@ const highlightTitles = new Set([
   "Cart (Checkout)",
   "My orders",
   "Payments",
-  "Payment Schedule",      // ← add this
+  "My Payment Ledger",      // ← add this
   "Payment History",
   "Returns / Issues",
   "Return Status",

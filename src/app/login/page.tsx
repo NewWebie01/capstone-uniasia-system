@@ -19,10 +19,6 @@ const dmSans = DM_Sans({
   variable: "--font-dm-sans",
 });
 
-function generateOTP() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
 /** Filter out Supabase PKCE noise we don't want to show to users */
 const isNoisyPkceError = (m?: string) =>
   !!m &&
@@ -52,9 +48,7 @@ export default function LoginPage() {
       url.searchParams.get("error_description");
     if (raw) {
       const msg = decodeURIComponent(raw);
-      if (!isNoisyPkceError(msg)) {
-        toast.error(msg);
-      }
+      if (!isNoisyPkceError(msg)) toast.error(msg);
       url.searchParams.delete("error");
       url.searchParams.delete("error_description");
       window.history.replaceState({}, "", url.toString());
@@ -72,28 +66,16 @@ export default function LoginPage() {
           setRememberMe(true);
         }
       } catch {}
+
       await supabase.auth.getSession();
       if (!mounted) return;
       setChecking(false);
     })();
+
     return () => {
       mounted = false;
     };
   }, []);
-
-  function shouldBypassOtp(email: string): boolean {
-    const otpVerified = localStorage.getItem("otpVerified") === "true";
-    const otpVerifiedEmail = localStorage.getItem("otpVerifiedEmail");
-    const otpVerifiedExpiry = parseInt(
-      localStorage.getItem("otpVerifiedExpiry") || "0",
-      10
-    );
-    return (
-      otpVerified &&
-      otpVerifiedEmail === email.trim() &&
-      Date.now() < otpVerifiedExpiry
-    );
-  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,7 +84,7 @@ export default function LoginPage() {
     setIsLoading(true);
     setErrorMessage("");
 
-    // 1) Password login
+    // 1) Password login ONLY (OTP removed)
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
@@ -110,14 +92,10 @@ export default function LoginPage() {
 
     if (error) {
       const msg = error.message ?? "";
-
-      // Quiet the PKCE noise; show clear messages for real auth errors
       if (!isNoisyPkceError(msg)) {
         if (/email not confirmed/i.test(msg)) {
           setErrorMessage("Please verify your email first, then try again.");
         } else if (/invalid login credentials/i.test(msg)) {
-          // We can’t 100% tell “not registered” on client without service role,
-          // so present the most helpful guidance:
           setErrorMessage("Account not registered or wrong password.");
         } else {
           setErrorMessage(msg);
@@ -129,78 +107,54 @@ export default function LoginPage() {
     }
 
     try {
-      if (rememberMe) {
-        localStorage.setItem("rememberedEmail", email.trim());
-      } else {
-        localStorage.removeItem("rememberedEmail");
-      }
+      if (rememberMe) localStorage.setItem("rememberedEmail", email.trim());
+      else localStorage.removeItem("rememberedEmail");
     } catch {}
 
+    // Optional: ensure session is ready
     await supabase.auth.getSession();
+
     const user = data?.user;
     const role = (user?.user_metadata?.role as string | undefined) ?? undefined;
 
-    // 2) Skip-OTP window (1hr)
-    if (shouldBypassOtp(email)) {
-      didNavigate.current = true;
-      supabase
-        .from("activity_logs")
-        .insert([
-          {
-            user_email: user?.email ?? null,
-            user_role: role ?? null,
-            action: "Login",
-            details: {},
-            created_at: new Date().toISOString(),
-          },
-        ])
-        .then(({ error: logError }) => {
-          if (logError)
-            console.error("Failed to insert activity log:", logError);
-        });
-
-      if (role === "admin") router.replace("/dashboard");
-      else if (role === "customer") router.replace("/customer/product-catalog");
-      else {
-        setErrorMessage("Access denied: No role found for this account.");
-        await supabase.auth.signOut();
-        didNavigate.current = false;
-        setIsLoading(false);
-      }
-      return;
-    }
-
-    // 3) OTP required
-    const newOtp = generateOTP();
-    const otpExpiry = Date.now() + 60 * 60 * 1000; // 1 hour trusted session
-
-    localStorage.setItem("otpCode", newOtp);
-    localStorage.setItem("otpExpiry", (Date.now() + 5 * 60 * 1000).toString());
-    localStorage.setItem("otpEmail", email.trim());
-    localStorage.setItem("otpVerified", "false");
-    localStorage.setItem("otpVerifiedEmail", email.trim());
-    localStorage.setItem("otpVerifiedExpiry", otpExpiry.toString());
-
-    try {
-      const res = await fetch("/api/send-otp", {
-        method: "POST",
-        body: JSON.stringify({ email: email.trim(), otp: newOtp }),
-        headers: { "Content-Type": "application/json" },
+    // 2) Log login activity (still keeps your activity log)
+    didNavigate.current = true;
+    supabase
+      .from("activity_logs")
+      .insert([
+        {
+          user_email: user?.email ?? null,
+          user_role: role ?? null,
+          action: "Login",
+          details: {},
+          created_at: new Date().toISOString(),
+        },
+      ])
+      .then(({ error: logError }) => {
+        if (logError) console.error("Failed to insert activity log:", logError);
       });
-      if (!res.ok) {
-        setErrorMessage("Failed to send OTP. Please try again.");
-        setIsLoading(false);
-        return;
-      }
-    } catch {
-      setErrorMessage("Failed to send OTP. Please try again.");
+
+    // 3) Route users based on role
+    if (!role) {
+      setErrorMessage("Access denied: No role found for this account.");
+      await supabase.auth.signOut();
+      didNavigate.current = false;
       setIsLoading(false);
       return;
     }
 
-    router.replace(
-      `/otp-verification?email=${encodeURIComponent(email.trim())}`
-    );
+    // Keep your original routing (add more roles if you want)
+    if (role === "admin") router.replace("/dashboard");
+    else if (role === "customer") router.replace("/customer/product-catalog");
+    else if (role === "cashier") router.replace("/sales");
+    else if (role === "warehouse") router.replace("/inventory");
+    else if (role === "trucker") router.replace("/logistics");
+    else {
+      setErrorMessage("Access denied: Role not recognized.");
+      await supabase.auth.signOut();
+      didNavigate.current = false;
+      setIsLoading(false);
+    }
   };
 
   if (checking) return null;
@@ -258,10 +212,12 @@ export default function LoginPage() {
                   className="cursor-pointer"
                 />
               </motion.button>
+
               <MenuIcon
                 className="h-5 w-5 md:hidden cursor-pointer"
                 onClick={() => setIsMenuOpen(!isMenuOpen)}
               />
+
               <AnimatePresence>
                 {isMenuOpen && (
                   <motion.div

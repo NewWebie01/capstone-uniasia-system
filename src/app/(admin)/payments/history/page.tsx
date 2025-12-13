@@ -44,13 +44,12 @@ type PaymentRow = {
   customer_id: string | number;
   order_id: string | number;
   amount: number;
-  method: string | null;          // "Cash" | "Deposit Slip" | legacy "Cheque"
-  cheque_number: string | null;   // kept for compatibility (now “slip #”)
+  method: string | null; // "Cash" | "Deposit Slip" | legacy "Cheque"
+  cheque_number: string | null; // kept for compatibility (now “slip #”)
   bank_name: string | null;
-  cheque_date: string | null;     // kept for compatibility (now “deposit date”)
   image_url: string | null;
   created_at: string | null;
-  status?: string | null;         // 'pending' | 'received' | 'rejected'
+  status?: string | null; // 'pending' | 'received' | 'rejected'
   received_at?: string | null;
   received_by?: string | null;
 };
@@ -59,6 +58,7 @@ type CustomerLite = {
   id: string | number;
   code: string | null; // TXN code (customer code)
   email: string | null;
+  name: string | null;
 };
 
 /* ------------------------------- Helpers ------------------------------- */
@@ -83,16 +83,19 @@ export default function PaymentHistoryPage() {
   const paymentsSubbed = useRef(false);
 
   // Filters
-const [q, setQ] = useState("");
-const [method, setMethod] = useState<"All" | "Deposit Slip" | "Cash">("All");
-const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected">("All");
+  const [q, setQ] = useState("");
+  const [method, setMethod] = useState<"All" | "Deposit Slip" | "Cash">("All");
+  const [status, setStatus] = useState<
+    "All" | "Pending" | "Received" | "Rejected"
+  >("All");
 
   // Image modal
   const [imgOpen, setImgOpen] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [imgMeta, setImgMeta] = useState<{ slip?: string | null; bank?: string | null } | null>(
-    null
-  );
+  const [imgMeta, setImgMeta] = useState<{
+    slip?: string | null;
+    bank?: string | null;
+  } | null>(null);
 
   // Build code map from customersById
   const codeByCustomerId = useMemo(() => {
@@ -113,7 +116,7 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
 
     const { data, error } = await supabase
       .from("customers")
-      .select("id, code, email")
+      .select("id, code, email, name")
       .in("id", missing);
 
     if (error) {
@@ -134,7 +137,7 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
         const { data: pays, error: pErr } = await supabase
           .from("payments")
           .select(
-            "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, created_at, status, received_at, received_by"
+            "id, customer_id, order_id, amount, method, cheque_number, bank_name, image_url, created_at, status, received_at, received_by"
           )
           .order("created_at", { ascending: false });
 
@@ -176,7 +179,9 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
           }
         } else if (payload.eventType === "UPDATE") {
           if (newRow) {
-            setPayments((prev) => prev.map((p) => (p.id === newRow.id ? newRow : p)));
+            setPayments((prev) =>
+              prev.map((p) => (p.id === newRow.id ? newRow : p))
+            );
             await ensureCustomerCodes([newRow.customer_id]);
           }
         } else if (payload.eventType === "DELETE") {
@@ -215,10 +220,15 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
         return false;
       }
 
-      // Search across TXN code, method, bank, slip, order_id, amount
+      // Search across customer name, TXN code, method, bank, slip, order_id, amount
       if (!qx) return true;
+
       const code = codeByCustomerId.get(String(p.customer_id)) || "";
+      const cust = customersById.get(String(p.customer_id));
+      const customerName = cust?.name || "";
+
       const hay = [
+        customerName,
         code,
         dispMethod,
         p.bank_name || "",
@@ -231,10 +241,13 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
 
       return hay.includes(qx);
     });
-  }, [payments, q, method, status, codeByCustomerId]);
+  }, [payments, q, method, status, codeByCustomerId, customersById]);
 
   /* ------------------------------ Image modal helpers ------------------------------ */
-  function openImage(url: string, meta?: { slip?: string | null; bank?: string | null }) {
+  function openImage(
+    url: string,
+    meta?: { slip?: string | null; bank?: string | null }
+  ) {
     setImgSrc(url);
     setImgMeta(meta || null);
     setImgOpen(true);
@@ -245,7 +258,7 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
 
   /* ---------------------------------- UI ---------------------------------- */
   return (
-    <div className="min-h[calc(100vh-80px)]">
+    <div className="min-h-[calc(100vh-80px)]">
       <div className="mx-auto w-full max-w-6xl px-6 py-6">
         <div className="flex items-center gap-3">
           <h1 className="text-3xl font-bold tracking-tight text-neutral-800">
@@ -253,7 +266,8 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
           </h1>
         </div>
         <p className="text-sm text-gray-600 mt-1">
-          View <b>all</b> customer payments — Cash and Deposit Slips — with live updates.
+          View <b>all</b> customer payments — Cash and Deposit Slips — with live
+          updates.
         </p>
 
         {/* Filters */}
@@ -263,7 +277,7 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search TXN / bank / slip # / amount…"
+              placeholder="Search customer / TXN / bank / slip # / amount…"
               className="w-full rounded-lg border border-gray-300 pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
             />
           </div>
@@ -296,13 +310,13 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
             <table className="min-w-full bg-white text-sm">
               <thead className="bg-[#ffba20] text-black text-left">
                 <tr>
-                  <th className={cellNowrap}>Date</th>
-                  <th className={cellNowrap}>TXN Code</th>
+                  <th className={cellNowrap}>Date of Payment</th>
+                  <th className={cellNowrap}>Customer</th>
+                  <th className={cellNowrap}>Invoice No.</th>
                   <th className={cellNowrap}>Amount</th>
                   <th className={cellNowrap}>Method</th>
-                  <th className={cellNowrap}>Slip #</th>
+                  <th className={cellNowrap}>Ref / Cheque No.</th>
                   <th className={cellNowrap}>Bank</th>
-                  <th className={cellNowrap}>Deposit Date</th>
                   <th className={cellNowrap}>Image</th>
                   <th className={cellNowrap}>Status</th>
                 </tr>
@@ -310,7 +324,11 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
 
               <tbody className="align-middle">
                 {filtered.map((p, idx) => {
-                  const code = codeByCustomerId.get(String(p.customer_id)) || "—";
+                  const code =
+                    codeByCustomerId.get(String(p.customer_id)) || "—";
+                  const cust = customersById.get(String(p.customer_id));
+                  const customerLabel = cust?.name || code || "—";
+
                   const s = (p.status || "").toLowerCase();
                   const statusBadge = (
                     <span
@@ -329,20 +347,30 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
                   const dispMethod = displayMethod(p.method);
 
                   return (
-                    <tr key={p.id} className={idx % 2 ? "bg-neutral-50" : "bg-white"}>
+                    <tr
+                      key={p.id}
+                      className={idx % 2 ? "bg-neutral-50" : "bg-white"}
+                    >
                       <td className="py-2.5 px-3 whitespace-nowrap">
                         {formatPH(p.received_at || p.created_at, "date")}
                       </td>
+
+                      <td className="py-2.5 px-3 whitespace-nowrap font-medium">
+                        {customerLabel}
+                      </td>
+
                       <td className="py-2.5 px-3 font-mono">{code}</td>
+
                       <td className="py-2.5 px-3 font-mono tabular-nums whitespace-nowrap">
                         {formatCurrency(p.amount)}
                       </td>
+
                       <td className="py-2.5 px-3">{dispMethod}</td>
+
                       <td className="py-2.5 px-3">{p.cheque_number ?? "—"}</td>
+
                       <td className="py-2.5 px-3">{p.bank_name ?? "—"}</td>
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        {p.cheque_date ? formatPH(p.cheque_date, "date") : "—"}
-                      </td>
+
                       <td className="py-2.5 px-3 whitespace-nowrap">
                         {p.image_url ? (
                           <button
@@ -362,14 +390,20 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
                           "—"
                         )}
                       </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap">{statusBadge}</td>
+
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        {statusBadge}
+                      </td>
                     </tr>
                   );
                 })}
 
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-10 text-center text-neutral-400">
+                    <td
+                      colSpan={9}
+                      className="py-10 text-center text-neutral-400"
+                    >
                       {loading ? "Loading…" : "No payments found."}
                     </td>
                   </tr>
@@ -383,8 +417,8 @@ const [status, setStatus] = useState<"All" | "Pending" | "Received" | "Rejected"
         <div className="mt-4 flex items-start gap-2 text-sm text-gray-600">
           <Info className="h-4 w-4 mt-0.5" />
           <span>
-            This list includes <b>all</b> payments from every customer (Pending, Received, and
-            Rejected). Use the filters above to narrow results.
+            This list includes <b>all</b> payments from every customer (Pending,
+            Received, and Rejected). Use the filters above to narrow results.
           </span>
         </div>
       </div>
