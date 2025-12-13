@@ -1,7 +1,7 @@
 // src/app/account_creation/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -15,7 +15,11 @@ const EMAIL_REGEX = /^[\w-\.]+@(gmail\.com|hotmail\.com|yahoo\.com)$/i;
 
 function getPasswordStrength(pw: string, personal: string[] = []) {
   if (!pw) return "Invalid";
-  if (personal.some((s) => s && s.length >= 3 && pw.toLowerCase().includes(s.toLowerCase())))
+  if (
+    personal.some(
+      (s) => s && s.length >= 3 && pw.toLowerCase().includes(s.toLowerCase())
+    )
+  )
     return "Too Personal";
   const hasLetter = /[A-Za-z]/.test(pw);
   const hasNumber = /\d/.test(pw);
@@ -29,6 +33,14 @@ function getPasswordStrength(pw: string, personal: string[] = []) {
   return "Weak";
 }
 
+async function fetchJSON<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch: ${url}`);
+  return res.json();
+}
+
+type PSGCItem = { code: string; name: string };
+
 /* =========================== Component ============================ */
 export default function AccountCreationPage() {
   const router = useRouter();
@@ -40,7 +52,19 @@ export default function AccountCreationPage() {
     contact_number: "",
     password: "",
     confirmPassword: "",
+
+    // Location (PSGC)
+    region_code: "",
+    region_name: "",
+    province_code: "",
+    province_name: "",
+    city_code: "",
+    city_name: "",
+    barangay_code: "",
+    barangay_name: "",
+    house_street: "",
   });
+
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -54,6 +78,174 @@ export default function AccountCreationPage() {
   // Success modal (email verification)
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [pendingEmail, setPendingEmail] = useState("");
+
+  // PSGC Lists
+  const [regions, setRegions] = useState<PSGCItem[]>([]);
+  const [provinces, setProvinces] = useState<PSGCItem[]>([]);
+  const [cities, setCities] = useState<PSGCItem[]>([]);
+  const [barangays, setBarangays] = useState<PSGCItem[]>([]);
+  const [psgcLoading, setPsgcLoading] = useState(false);
+
+  // Helper to identify if Region is NCR (starts with 13)
+  const isNCR = formData.region_code.startsWith("13");
+
+  /* ----------------------------- PSGC Fetching (UPDATED TO PSGC.CLOUD) ----------------------------- */
+
+  // 1. Load Regions
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        setPsgcLoading(true);
+        // CHANGED: Using psgc.cloud API
+        const data = await fetchJSON<any[]>("https://psgc.cloud/api/regions");
+        const mapped = data
+          .map((r) => ({ code: r.code, name: r.name }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        if (mounted) setRegions(mapped);
+      } catch (e: any) {
+        console.error(e);
+        toast.error("Failed to load regions.");
+      } finally {
+        if (mounted) setPsgcLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // 2. Load Provinces (With NCR Bypass Logic)
+  async function loadProvinces(regionCode: string) {
+    try {
+      setPsgcLoading(true);
+
+      // NCR Logic: NCR has no provinces in psgc.cloud
+      if (regionCode.startsWith("13")) {
+        setProvinces([]);
+        // Directly load cities for NCR
+        await loadCitiesForNCR(regionCode);
+        return;
+      }
+
+      const data = await fetchJSON<any[]>("https://psgc.cloud/api/provinces");
+      // psgc.cloud returns ALL provinces, so we filter by region prefix (first 2 digits)
+      const prefix = regionCode.slice(0, 2);
+      const filtered = data.filter((p) => p.code.startsWith(prefix));
+
+      setProvinces(
+        filtered
+          .map((p) => ({ code: p.code, name: p.name }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to load provinces.");
+    } finally {
+      setPsgcLoading(false);
+    }
+  }
+
+  // Special function for NCR Cities
+  async function loadCitiesForNCR(regionCode: string) {
+    try {
+      const [c, m] = await Promise.all([
+        fetchJSON<any[]>(`https://psgc.cloud/api/regions/${regionCode}/cities`),
+        fetchJSON<any[]>(
+          `https://psgc.cloud/api/regions/${regionCode}/municipalities`
+        ),
+      ]);
+      const list = [...c, ...m]
+        .map((x) => ({ code: x.code, name: x.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setCities(list);
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to load NCR cities");
+    } finally {
+      setPsgcLoading(false);
+    }
+  }
+
+  // 3. Load Cities (Normal Provinces)
+  async function loadCities(provinceCode: string) {
+    if (formData.region_code.startsWith("13")) return; // Skip if NCR
+
+    try {
+      setPsgcLoading(true);
+      const [c, m] = await Promise.all([
+        fetchJSON<any[]>("https://psgc.cloud/api/cities"),
+        fetchJSON<any[]>("https://psgc.cloud/api/municipalities"),
+      ]);
+
+      // Filter by province prefix (first 4 digits)
+      const prefix = provinceCode.slice(0, 4);
+      const filtered = [...c, ...m].filter((x) => x.code.startsWith(prefix));
+
+      setCities(
+        filtered
+          .map((c) => ({ code: c.code, name: c.name }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to load cities/municipalities.");
+    } finally {
+      setPsgcLoading(false);
+    }
+  }
+
+  // 4. Load Barangays
+  async function loadBarangays(cityCode: string) {
+    try {
+      setPsgcLoading(true);
+      // Try city endpoint first, then municipality endpoint (fallback)
+      let data = [];
+      try {
+        data = await fetchJSON<any[]>(
+          `https://psgc.cloud/api/cities/${cityCode}/barangays`
+        );
+      } catch {
+        try {
+          data = await fetchJSON<any[]>(
+            `https://psgc.cloud/api/municipalities/${cityCode}/barangays`
+          );
+        } catch {
+          data = [];
+        }
+      }
+
+      setBarangays(
+        data
+          .map((b) => ({ code: b.code, name: b.name }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to load barangays.");
+    } finally {
+      setPsgcLoading(false);
+    }
+  }
+
+  /* ----------------------------- Derived Address ----------------------------- */
+  const computedAddress = useMemo(() => {
+    const parts = [
+      formData.house_street?.trim(),
+      formData.barangay_name,
+      formData.city_name,
+      formData.province_name, // Will be empty for NCR, which is correct
+      formData.region_name,
+    ].filter(Boolean);
+    return parts.join(", ");
+  }, [
+    formData.house_street,
+    formData.barangay_name,
+    formData.city_name,
+    formData.province_name,
+    formData.region_name,
+  ]);
 
   /* ----------------------------- Handlers ----------------------------- */
   function handleOpenPrivacy(e?: React.MouseEvent | React.KeyboardEvent) {
@@ -75,6 +267,7 @@ export default function AccountCreationPage() {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target;
+
     if (name === "contact_number") {
       if (!/^\d*$/.test(value)) return;
       if (value.length > 10) return;
@@ -82,11 +275,13 @@ export default function AccountCreationPage() {
       if (errors[name]) setErrors((p) => ({ ...p, [name]: "" }));
       return;
     }
+
     if (type === "checkbox") {
       setPolicyAccepted(checked);
       if (errors.privacy) setErrors((p) => ({ ...p, privacy: "" }));
       return;
     }
+
     setFormData((p) => ({ ...p, [name]: value }));
     if (errors[name]) setErrors((p) => ({ ...p, [name]: "" }));
   };
@@ -99,27 +294,125 @@ export default function AccountCreationPage() {
       contact_number: "",
       password: "",
       confirmPassword: "",
+
+      region_code: "",
+      region_name: "",
+      province_code: "",
+      province_name: "",
+      city_code: "",
+      city_name: "",
+      barangay_code: "",
+      barangay_name: "",
+      house_street: "",
     });
+    setRegions((p) => p);
+    setProvinces([]);
+    setCities([]);
+    setBarangays([]);
     setErrors({});
     setPolicyAccepted(false);
     setHasScrolledToBottom(false);
   };
 
-  // 🔧 UPDATED VERSION
+  const handleRegionChange = async (code: string) => {
+    const picked = regions.find((r) => r.code === code);
+    setFormData((p) => ({
+      ...p,
+      region_code: code,
+      region_name: picked?.name || "",
+      province_code: "",
+      province_name: "",
+      city_code: "",
+      city_name: "",
+      barangay_code: "",
+      barangay_name: "",
+    }));
+    setProvinces([]);
+    setCities([]);
+    setBarangays([]);
+    if (errors.region_code) setErrors((p) => ({ ...p, region_code: "" }));
+    if (code) await loadProvinces(code);
+  };
+
+  const handleProvinceChange = async (code: string) => {
+    const picked = provinces.find((p) => p.code === code);
+    setFormData((prev) => ({
+      ...prev,
+      province_code: code,
+      province_name: picked?.name || "",
+      city_code: "",
+      city_name: "",
+      barangay_code: "",
+      barangay_name: "",
+    }));
+    setCities([]);
+    setBarangays([]);
+    if (errors.province_code) setErrors((p) => ({ ...p, province_code: "" }));
+    if (code) await loadCities(code);
+  };
+
+  const handleCityChange = async (code: string) => {
+    const picked = cities.find((c) => c.code === code);
+    setFormData((prev) => ({
+      ...prev,
+      city_code: code,
+      city_name: picked?.name || "",
+      barangay_code: "",
+      barangay_name: "",
+    }));
+    setBarangays([]);
+    if (errors.city_code) setErrors((p) => ({ ...p, city_code: "" }));
+    if (code) await loadBarangays(code);
+  };
+
+  const handleBarangayChange = (code: string) => {
+    const picked = barangays.find((b) => b.code === code);
+    setFormData((prev) => ({
+      ...prev,
+      barangay_code: code,
+      barangay_name: picked?.name || "",
+    }));
+    if (errors.barangay_code) setErrors((p) => ({ ...p, barangay_code: "" }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const newErrors: Record<string, string> = {};
 
-    if (!formData.first_name.trim()) newErrors.first_name = "First name is required";
-    if (!formData.last_name.trim()) newErrors.last_name = "Last name is required";
+    if (!formData.first_name.trim())
+      newErrors.first_name = "First name is required";
+    if (!formData.last_name.trim())
+      newErrors.last_name = "Last name is required";
     if (!EMAIL_REGEX.test(formData.email))
-      newErrors.email = "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
+      newErrors.email =
+        "Must be a valid @gmail.com, @hotmail.com, or @yahoo.com email";
     if (!/^\d{10}$/.test(formData.contact_number))
       newErrors.contact_number = "Enter 10 digits after +63 (e.g., 9201234567)";
 
-    const fullName = `${formData.first_name.trim()} ${formData.last_name.trim()}`.replace(/\s+/g, " ");
-    const personalInfo = [fullName, formData.email, "+63" + formData.contact_number];
+    // Location Validation
+    if (!formData.region_code) newErrors.region_code = "Select a region";
+
+    // IMPORTANT: Only require province if NOT NCR
+    if (!isNCR && !formData.province_code)
+      newErrors.province_code = "Select a province";
+
+    if (!formData.city_code) newErrors.city_code = "Select a city/municipality";
+    if (!formData.barangay_code) newErrors.barangay_code = "Select a barangay";
+    if (!formData.house_street.trim())
+      newErrors.house_street = "House number & street is required";
+
+    const fullName =
+      `${formData.first_name.trim()} ${formData.last_name.trim()}`.replace(
+        /\s+/g,
+        " "
+      );
+    const personalInfo = [
+      fullName,
+      formData.email,
+      "+63" + formData.contact_number,
+    ];
     const pwStrength = getPasswordStrength(formData.password, personalInfo);
+
     if (["Weak", "Too Personal", "Invalid"].includes(pwStrength)) {
       newErrors.password =
         pwStrength === "Too Personal"
@@ -128,7 +421,8 @@ export default function AccountCreationPage() {
     }
     if (formData.password !== formData.confirmPassword)
       newErrors.confirmPassword = "Passwords do not match";
-    if (!policyAccepted) newErrors.privacy = "You must read and accept the Privacy Policy.";
+    if (!policyAccepted)
+      newErrors.privacy = "You must read and accept the Privacy Policy.";
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -142,7 +436,6 @@ export default function AccountCreationPage() {
           ? window.location.origin
           : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
-      // 1) Create auth user with rich metadata
       const { data, error } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,
@@ -156,12 +449,23 @@ export default function AccountCreationPage() {
             phone: "+63" + formData.contact_number,
             role: "customer",
             provider_type: "email",
+
+            // Location data (Saved to metadata so hooks trigger correctly)
+            region_code: formData.region_code,
+            region_name: formData.region_name,
+            province_code: formData.province_code || null, // Allow null for NCR
+            province_name: formData.province_name || null,
+            city_code: formData.city_code,
+            city_name: formData.city_name,
+            barangay_code: formData.barangay_code,
+            barangay_name: formData.barangay_name,
+            house_street: formData.house_street.trim(),
+            address: computedAddress,
           },
           emailRedirectTo: `${origin}/auth/callback`,
         },
       });
 
-      // Handle explicit Supabase error first
       if (error) {
         const msg = error.message || "";
         if (/already (registered|exists)/i.test(msg)) {
@@ -177,54 +481,40 @@ export default function AccountCreationPage() {
       }
 
       const user = data.user;
-
       if (!user) {
         toast.error("Sign up failed. Please try again.");
         return;
       }
 
-      // 🔒 Guard for “obfuscated user” (email already taken)
-      const identities = (user as any).identities as any[] | undefined;
-      if (Array.isArray(identities) && identities.length === 0) {
-        setErrors((p) => ({
-          ...p,
-          email: "This email is already registered. Please log in instead.",
-        }));
-        toast.error("Email already registered.");
-        return;
-      }
+      // Upsert to profiles (Mirroring metadata)
+      const { error: upsertErr } = await supabase.from("profiles").upsert(
+        {
+          id: user.id,
+          first_name: formData.first_name.trim(),
+          last_name: formData.last_name.trim(),
+          name: fullName,
+          contact_number: "+63" + formData.contact_number,
+          role: "customer",
+          email: formData.email,
 
-      const userId = user.id;
-      if (!userId) {
-        toast.error("Sign up failed. Please try again.");
-        return;
-      }
-
-      // 2) Upsert into public.profiles (id = auth user id)
-      const { error: upsertErr } = await supabase
-        .from("profiles")
-        .upsert(
-          {
-            id: userId,
-            first_name: formData.first_name.trim(),
-            last_name: formData.last_name.trim(),
-            name: fullName,
-            contact_number: "+63" + formData.contact_number,
-            role: "customer",
-            email: formData.email,
-          },
-          { onConflict: "id" }
-        );
+          region_code: formData.region_code,
+          region_name: formData.region_name,
+          province_code: formData.province_code || null,
+          province_name: formData.province_name || null,
+          city_code: formData.city_code,
+          city_name: formData.city_name,
+          barangay_code: formData.barangay_code,
+          barangay_name: formData.barangay_name,
+          house_street: formData.house_street.trim(),
+          address: computedAddress,
+        },
+        { onConflict: "id" }
+      );
 
       if (upsertErr) {
         console.error("profiles upsert error:", upsertErr);
-        toast.error(
-          "Profile saving warning: " +
-            (upsertErr?.message ?? JSON.stringify(upsertErr))
-        );
       }
 
-      // 3) Show “verify your email” modal
       setPendingEmail(formData.email);
       setShowSuccessModal(true);
       handleReset();
@@ -236,14 +526,23 @@ export default function AccountCreationPage() {
     }
   };
 
-  const fullNamePreview = `${formData.first_name || ""} ${formData.last_name || ""}`.trim();
-  const personalInfo = [fullNamePreview, formData.email, "+63" + formData.contact_number];
-  const passwordStrength = getPasswordStrength(formData.password, personalInfo);
+  // Preview data
+  const fullNamePreview = `${formData.first_name || ""} ${
+    formData.last_name || ""
+  }`.trim();
+  const personalInfoData = [
+    fullNamePreview,
+    formData.email,
+    "+63" + formData.contact_number,
+  ];
+  const passwordStrength = getPasswordStrength(
+    formData.password,
+    personalInfoData
+  );
 
   /* ------------------------------- UI ------------------------------- */
   return (
     <div className="min-h-screen flex flex-col overflow-hidden relative">
-      {/* Header */}
       <header className="sticky top-0 backdrop-blur-sm z-20">
         <div className="flex justify-center items-center py-3 bg-[#181918] text-white text-sm gap-3">
           <div className="inline-flex gap-1 items-center">
@@ -259,15 +558,23 @@ export default function AccountCreationPage() {
                 transition={{ type: "spring", stiffness: 300 }}
                 aria-label="Go to Home"
               >
-                <Image src={Logo} alt="UniAsia Logo" height={50} width={50} className="cursor-pointer" />
+                <Image
+                  src={Logo}
+                  alt="UniAsia Logo"
+                  height={50}
+                  width={50}
+                  className="cursor-pointer"
+                />
               </motion.button>
-              <MenuIcon className="h-5 w-5 md:hidden cursor-pointer" onClick={() => setIsMenuOpen(!isMenuOpen)} />
+              <MenuIcon
+                className="h-5 w-5 md:hidden cursor-pointer"
+                onClick={() => setIsMenuOpen(!isMenuOpen)}
+              />
             </div>
           </div>
         </div>
       </header>
 
-      {/* Main */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -281,60 +588,82 @@ export default function AccountCreationPage() {
             </h1>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              {/* First / Last Name */}
+              {/* Names */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-neutral-700">First Name</label>
+                  <label className="block text-sm font-medium text-neutral-700">
+                    First Name
+                  </label>
                   <input
                     name="first_name"
                     type="text"
-                    placeholder="Enter first name"
                     value={formData.first_name}
                     onChange={handleChange}
                     required
                     className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
-                      errors.first_name ? "border-red-500" : "focus:ring-black border-gray-300"
+                      errors.first_name
+                        ? "border-red-500"
+                        : "focus:ring-black border-gray-300"
                     }`}
                   />
-                  {errors.first_name && <p className="text-red-500 text-xs mt-1">{errors.first_name}</p>}
+                  {errors.first_name && (
+                    <p className="text-red-500 text-xs mt-1">
+                      {errors.first_name}
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-neutral-700">Last Name</label>
+                  <label className="block text-sm font-medium text-neutral-700">
+                    Last Name
+                  </label>
                   <input
                     name="last_name"
                     type="text"
-                    placeholder="Enter last name"
                     value={formData.last_name}
                     onChange={handleChange}
                     required
                     className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
-                      errors.last_name ? "border-red-500" : "focus:ring-black border-gray-300"
+                      errors.last_name
+                        ? "border-red-500"
+                        : "focus:ring-black border-gray-300"
                     }`}
                   />
-                  {errors.last_name && <p className="text-red-500 text-xs mt-1">{errors.last_name}</p>}
+                  {errors.last_name && (
+                    <p className="text-red-500 text-xs mt-1">
+                      {errors.last_name}
+                    </p>
+                  )}
                 </div>
               </div>
 
               {/* Email */}
               <div>
-                <label className="block text-sm font-medium text-neutral-700">Email</label>
+                <label className="block text-sm font-medium text-neutral-700">
+                  Email
+                </label>
                 <input
                   name="email"
                   type="email"
-                  placeholder="your@email.com (@gmail.com, @hotmail.com, @yahoo.com)"
                   value={formData.email}
                   onChange={handleChange}
                   required
+                  placeholder="your@email.com"
                   className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
-                    errors.email ? "border-red-500" : "focus:ring-black border-gray-300"
+                    errors.email
+                      ? "border-red-500"
+                      : "focus:ring-black border-gray-300"
                   }`}
                 />
-                {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
+                {errors.email && (
+                  <p className="text-red-500 text-xs mt-1">{errors.email}</p>
+                )}
               </div>
 
-              {/* Contact Number */}
+              {/* Contact */}
               <div>
-                <label className="block text-sm font-medium text-neutral-700">Contact Number</label>
+                <label className="block text-sm font-medium text-neutral-700">
+                  Contact Number
+                </label>
                 <div className="flex items-center mt-1">
                   <span className="px-2 py-2 bg-gray-100 border border-r-0 border-gray-300 rounded-l-md text-gray-500 text-sm select-none">
                     +63
@@ -342,128 +671,258 @@ export default function AccountCreationPage() {
                   <input
                     name="contact_number"
                     type="tel"
-                    placeholder="9201234567"
                     value={formData.contact_number}
                     onChange={handleChange}
                     required
                     maxLength={10}
+                    placeholder="9123456789"
                     className={`w-full px-3 py-2 text-sm border border-gray-300 rounded-r-md outline-none focus:ring-2 ${
-                      errors.contact_number ? "border-red-500" : "focus:ring-black"
+                      errors.contact_number
+                        ? "border-red-500"
+                        : "focus:ring-black"
                     }`}
                     style={{ borderLeft: "none" }}
                   />
                 </div>
-                <span className="text-xs text-gray-500 ml-1">Philippine mobile (enter 10 digits after +63)</span>
-                {errors.contact_number && <p className="text-red-500 text-xs mt-1">{errors.contact_number}</p>}
+                {errors.contact_number && (
+                  <p className="text-red-500 text-xs mt-1">
+                    {errors.contact_number}
+                  </p>
+                )}
+              </div>
+
+              {/* Location */}
+              <div className="pt-2">
+                <label className="block text-sm font-medium text-neutral-700 mb-2">
+                  Location
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  {/* Region */}
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-600">
+                      Region
+                    </label>
+                    <select
+                      value={formData.region_code}
+                      onChange={(e) => handleRegionChange(e.target.value)}
+                      className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
+                        errors.region_code
+                          ? "border-red-500"
+                          : "focus:ring-black border-gray-300"
+                      }`}
+                      disabled={psgcLoading}
+                    >
+                      <option value="">
+                        {psgcLoading ? "Loading..." : "Select"}
+                      </option>
+                      {regions.map((r) => (
+                        <option key={r.code} value={r.code}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Province (Disabled if NCR) */}
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-600">
+                      Province
+                    </label>
+                    <select
+                      value={formData.province_code}
+                      onChange={(e) => handleProvinceChange(e.target.value)}
+                      className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
+                        errors.province_code
+                          ? "border-red-500"
+                          : "focus:ring-black border-gray-300"
+                      }`}
+                      disabled={!formData.region_code || isNCR || psgcLoading}
+                    >
+                      <option value="">
+                        {isNCR ? "NCR (None)" : "Select"}
+                      </option>
+                      {provinces.map((p) => (
+                        <option key={p.code} value={p.code}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* City */}
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-600">
+                      City/Mun
+                    </label>
+                    <select
+                      value={formData.city_code}
+                      onChange={(e) => handleCityChange(e.target.value)}
+                      className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
+                        errors.city_code
+                          ? "border-red-500"
+                          : "focus:ring-black border-gray-300"
+                      }`}
+                      disabled={
+                        (!formData.province_code && !isNCR) || psgcLoading
+                      }
+                    >
+                      <option value="">Select</option>
+                      {cities.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Barangay */}
+                  <div>
+                    <label className="block text-xs font-medium text-neutral-600">
+                      Barangay
+                    </label>
+                    <select
+                      value={formData.barangay_code}
+                      onChange={(e) => handleBarangayChange(e.target.value)}
+                      className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
+                        errors.barangay_code
+                          ? "border-red-500"
+                          : "focus:ring-black border-gray-300"
+                      }`}
+                      disabled={!formData.city_code || psgcLoading}
+                    >
+                      <option value="">Select</option>
+                      {barangays.map((b) => (
+                        <option key={b.code} value={b.code}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* House Street */}
+                <div className="mt-3">
+                  <input
+                    name="house_street"
+                    type="text"
+                    placeholder="House Number & Street Name"
+                    value={formData.house_street}
+                    onChange={handleChange}
+                    className={`w-full px-3 py-2 text-sm border rounded-md outline-none focus:ring-2 ${
+                      errors.house_street
+                        ? "border-red-500"
+                        : "focus:ring-black border-gray-300"
+                    }`}
+                  />
+                  {errors.house_street && (
+                    <p className="text-red-500 text-xs mt-1">
+                      {errors.house_street}
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Password */}
               <div>
-                <label className="block text-sm font-medium text-neutral-700">Password</label>
+                <label className="block text-sm font-medium text-neutral-700">
+                  Password
+                </label>
                 <div className="relative">
                   <input
                     name="password"
                     type={showPassword ? "text" : "password"}
-                    placeholder="Min 6 chars, 1 number, 1 special"
                     value={formData.password}
                     onChange={handleChange}
                     required
+                    placeholder="Min 6 chars"
                     className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
-                      errors.password ? "border-red-500" : "focus:ring-black border-gray-300"
+                      errors.password
+                        ? "border-red-500"
+                        : "focus:ring-black border-gray-300"
                     }`}
                   />
                   <button
                     type="button"
-                    tabIndex={-1}
-                    onClick={() => setShowPassword((v) => !v)}
+                    onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs"
                   >
                     {showPassword ? "Hide" : "Show"}
                   </button>
                 </div>
-
+                {/* Strength Meter UI */}
                 <div className="flex items-center gap-2 mt-1">
                   {formData.password && (
-                    <span
-                      className={`text-xs font-medium px-2 py-0.5 rounded
-                        ${passwordStrength === "Very Strong" ? "bg-green-100 text-green-800 border border-green-300" : ""}
-                        ${passwordStrength === "Strong" ? "bg-emerald-100 text-emerald-800 border-emerald-300" : ""}
-                        ${passwordStrength === "Moderate" ? "bg-yellow-100 text-yellow-800 border-yellow-300" : ""}
-                        ${passwordStrength === "Weak" ? "bg-red-100 text-red-800 border border-red-300" : ""}
-                        ${passwordStrength === "Too Personal" ? "bg-pink-100 text-pink-800 border-pink-300" : ""}
-                        ${passwordStrength === "Invalid" ? "bg-gray-100 text-gray-700 border border-gray-300" : ""}
-                      `}
-                    >
+                    <span className="text-xs font-medium px-2 py-0.5 rounded bg-gray-100 border border-gray-300 text-gray-700">
                       {passwordStrength}
                     </span>
                   )}
-                  <span className="text-xs text-gray-500">
-                    (Use 10+ chars, letters, numbers & special. Don’t use your name/email/phone.)
-                  </span>
                 </div>
-                {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password}</p>}
+                {errors.password && (
+                  <p className="text-red-500 text-xs mt-1">{errors.password}</p>
+                )}
               </div>
 
               {/* Confirm Password */}
               <div>
-                <label className="block text-sm font-medium text-neutral-700">Confirm Password</label>
+                <label className="block text-sm font-medium text-neutral-700">
+                  Confirm Password
+                </label>
                 <input
                   name="confirmPassword"
                   type="password"
-                  placeholder="Re-enter your password"
                   value={formData.confirmPassword}
                   onChange={handleChange}
                   required
                   className={`w-full px-3 py-2 mt-1 text-sm border rounded-md outline-none focus:ring-2 ${
-                    errors.confirmPassword ? "border-red-500" : "focus:ring-black border-gray-300"
+                    errors.confirmPassword
+                      ? "border-red-500"
+                      : "focus:ring-black border-gray-300"
                   }`}
                 />
-                {errors.confirmPassword && <p className="text-red-500 text-xs mt-1">{errors.confirmPassword}</p>}
+                {errors.confirmPassword && (
+                  <p className="text-red-500 text-xs mt-1">
+                    {errors.confirmPassword}
+                  </p>
+                )}
               </div>
 
-              {/* Privacy Policy consent (checkbox + link) */}
+              {/* Privacy Policy */}
               <div className="mt-3">
                 <label className="flex items-start gap-2 text-sm text-gray-700">
                   <input
                     type="checkbox"
-                    name="policyAccepted"
-                    className="mt-1 accent-[#ffba20]"
                     checked={policyAccepted}
-                    onChange={handleChange}
+                    onChange={(e) => {
+                      setPolicyAccepted(e.target.checked);
+                      if (errors.privacy)
+                        setErrors((p) => ({ ...p, privacy: "" }));
+                    }}
+                    className="mt-1 accent-[#ffba20]"
                   />
                   <span>
                     I agree to the{" "}
                     <button
                       type="button"
-                      className="underline text-[#ffba20] hover:text-[#181918]"
                       onClick={handleOpenPrivacy}
+                      className="underline text-[#ffba20]"
                     >
                       Privacy Policy & Terms
                     </button>
                     .
                   </span>
                 </label>
-                {errors.privacy && <p className="text-red-500 text-xs mt-1">{errors.privacy}</p>}
+                {errors.privacy && (
+                  <p className="text-red-500 text-xs mt-1">{errors.privacy}</p>
+                )}
               </div>
 
-              {/* Actions */}
               <div className="flex gap-2 mt-2">
                 <button
                   type="submit"
                   disabled={isLoading || !policyAccepted}
-                  className="w-full bg-[#181918] text-white py-2 rounded-md hover:text-[#ffba20] transition text-sm disabled:opacity-70 inline-flex items-center justify-center"
+                  className="w-full bg-[#181918] text-white py-2 rounded-md hover:text-[#ffba20] transition text-sm disabled:opacity-70"
                 >
-                  {isLoading ? (
-                    <span className="inline-flex items-center gap-2">
-                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-                      </svg>
-                      Creating…
-                    </span>
-                  ) : (
-                    "Create Account"
-                  )}
+                  {isLoading ? "Creating..." : "Create Account"}
                 </button>
                 <button
                   type="button"
@@ -477,144 +936,71 @@ export default function AccountCreationPage() {
           </div>
         </div>
 
-        {/* --- PRIVACY POLICY MODAL --- */}
+        {/* Privacy Modal */}
         <AnimatePresence>
           {showPrivacy && (
-            <motion.div
-              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={(e) => {
-                if (e.target === e.currentTarget) setShowPrivacy(false);
-              }}
-            >
-              <motion.div
-                initial={{ scale: 0.98, y: 40, opacity: 0 }}
-                animate={{ scale: 1, y: 0, opacity: 1 }}
-                exit={{ scale: 0.98, y: 40, opacity: 0 }}
-                className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-xl relative"
-                style={{ maxHeight: "90vh" }}
-                role="dialog"
-                aria-modal="true"
-              >
-                {/* Close */}
+            <motion.div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center">
+              <div className="bg-white p-6 rounded-2xl max-w-lg w-full">
+                <h2 className="text-xl font-bold mb-4">Privacy Policy</h2>
+                <div
+                  className="h-64 overflow-y-auto border p-2 mb-4"
+                  onScroll={handleScroll}
+                >
+                  <p className="text-sm">
+                    <strong>1. Collection of Data:</strong> We collect your
+                    name, email, contact, and address.
+                    <br />
+                    <br />
+                    <strong>2. Use of Data:</strong> Used for account
+                    management, order processing, and delivery.
+                    <br />
+                    <br />
+                    <strong>3. Sharing:</strong> We do not sell your data.
+                    Shared only with logistics partners.
+                    <br />
+                    <br />
+                    <strong>4. Rights:</strong> You may request to delete your
+                    data anytime.
+                    <br />
+                    <br />
+                    (Scroll to bottom to accept)
+                  </p>
+                  <div className="h-20"></div>
+                </div>
+                <button
+                  onClick={handleAcceptPolicy}
+                  disabled={!hasScrolledToBottom}
+                  className="w-full bg-black text-white py-2 rounded disabled:opacity-50"
+                >
+                  Accept
+                </button>
                 <button
                   onClick={() => setShowPrivacy(false)}
-                  className="absolute top-4 right-4 text-gray-400 hover:text-gray-900 transition-colors"
-                  aria-label="Close"
+                  className="w-full mt-2 text-gray-500 text-sm"
                 >
-                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                    <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
-                  </svg>
+                  Close
                 </button>
-
-                <h2 className="text-2xl font-bold mb-3 text-[#181918]">Privacy Policy</h2>
-                <div
-                  className="text-gray-700 text-sm leading-relaxed space-y-3 max-h-[65vh] overflow-y-auto pr-1 border border-gray-200 rounded p-3"
-                  style={{ scrollbarWidth: "thin" }}
-                  onScroll={handleScroll}
-                  tabIndex={0}
-                >
-                  <p><strong>Last updated:</strong> September 2025</p>
-                  <p>
-                    This Privacy Policy applies to the collection, use, and processing of personal information by
-                    <b> UniAsia Hardware & Electrical Marketing Corp.</b> (“UniAsia”, “we”, “our”, “us”), in compliance
-                    with the Data Privacy Act of 2012 and its IRR.
-                  </p>
-                  <h3 className="font-semibold text-base mt-4 mb-1">1. Collection of Personal Information</h3>
-                  <ul className="list-disc pl-6 space-y-2">
-                    <li><b>Personal Data:</b> first name, last name, email address, contact number, password.</li>
-                    <li><b>Additional:</b> delivery address and transaction history for orders.</li>
-                    <li><b>Automatic:</b> device, browser, IP, usage logs for security and analytics.</li>
-                  </ul>
-                  <h3 className="font-semibold text-base mt-4 mb-1">2. Purpose and Use</h3>
-                  <ul className="list-disc pl-6 space-y-2">
-                    <li>Process account creation and manage your profile;</li>
-                    <li>Communicate about orders, deliveries, and support;</li>
-                    <li>Improve products/services and website security;</li>
-                    <li>Comply with legal and regulatory obligations.</li>
-                  </ul>
-                  <h3 className="font-semibold text-base mt-4 mb-1">3. Sharing & Disclosure</h3>
-                  <ul className="list-disc pl-6 space-y-2">
-                    <li>No selling of personal information.</li>
-                    <li>Share only with trusted providers as necessary (e.g., courier/payment), under confidentiality.</li>
-                    <li>Disclose if required by law or to protect our rights/property.</li>
-                  </ul>
-                  <h3 className="font-semibold text-base mt-4 mb-1">4. Retention & Security</h3>
-                  <ul className="list-disc pl-6 space-y-2">
-                    <li>Retained as long as necessary or required by law.</li>
-                    <li>We apply organizational, physical, and technical safeguards.</li>
-                  </ul>
-                  <h3 className="font-semibold text-base mt-4 mb-1">5. Your Rights</h3>
-                  <ul className="list-disc pl-6 space-y-2">
-                    <li>Be informed; access/correct/delete; object; withdraw consent (subject to limits).</li>
-                    <li>Contact: <a className="underline text-[#ffba20]" href="mailto:support@uniasia.com">support@uniasia.com</a></li>
-                  </ul>
-                </div>
-
-                <button
-                  type="button"
-                  className="mt-4 w-full bg-[#181918] text-white px-4 py-2 rounded hover:text-[#ffba20] transition disabled:opacity-60"
-                  disabled={!hasScrolledToBottom}
-                  onClick={handleAcceptPolicy}
-                >
-                  Accept and Close
-                </button>
-                {!hasScrolledToBottom && (
-                  <div className="pt-2 pb-1 text-center">
-                    <span className="text-[11px] text-gray-400">Scroll to bottom to enable.</span>
-                  </div>
-                )}
-              </motion.div>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* --- VERIFY EMAIL MODAL --- */}
+        {/* Success Modal */}
         <AnimatePresence>
           {showSuccessModal && (
-            <motion.div
-              className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={(e) => {
-                if (e.target === e.currentTarget) setShowSuccessModal(false);
-              }}
-            >
-              <motion.div
-                className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center relative"
-                initial={{ scale: 0.98, y: 40, opacity: 0 }}
-                animate={{ scale: 1, y: 0, opacity: 1 }}
-                exit={{ scale: 0.98, y: 40, opacity: 0 }}
-                role="dialog"
-                aria-modal="true"
-              >
-                <h2 className="text-2xl font-bold text-[#181918] mb-2">Verify your email</h2>
-                <p className="text-gray-700 mb-6 text-sm">
-                  We sent a verification link to <b>{pendingEmail}</b>. Please open your inbox and click the link to activate your account.
+            <motion.div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center">
+              <div className="bg-white p-8 rounded-2xl max-w-sm w-full text-center">
+                <h2 className="text-2xl font-bold mb-2">Verify your email</h2>
+                <p className="mb-6">
+                  Link sent to <b>{pendingEmail}</b>
                 </p>
-                <div className="grid grid-cols-1 gap-2">
-                  <button
-                    className="w-full bg-[#181918] text-white py-2 rounded hover:text-[#ffba20] transition"
-                    onClick={() => {
-                      setShowSuccessModal(false);
-                      router.push("/login?verify=1");
-                    }}
-                  >
-                    Go to Login
-                  </button>
-                  <a
-                    href="https://mail.google.com"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block w-full bg-gray-200 text-black py-2 rounded hover:bg-gray-300 transition"
-                  >
-                    Open Gmail
-                  </a>
-                </div>
-              </motion.div>
+                <button
+                  onClick={() => router.push("/login")}
+                  className="w-full bg-black text-white py-2 rounded"
+                >
+                  Go to Login
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

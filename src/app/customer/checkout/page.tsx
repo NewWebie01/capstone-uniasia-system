@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -35,7 +34,6 @@ type CustomerInfo = {
   contact_person?: string;
   code?: string;
   area?: string;
-  landmark?: string;
   date?: string;
   transaction?: string;
   status?: "pending" | "completed" | "rejected";
@@ -108,6 +106,9 @@ const fixEncoding = (s: string) => {
     return s;
   }
 };
+// normalize PSGC codes to match dropdown option values
+const normalizePSGC = (code?: string | null) =>
+  (code || "").trim().padEnd(9, "0");
 
 async function fetchJSON<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -167,21 +168,23 @@ const getAuthIdentity = async () => {
   return { email, name, phone, authUserId: user?.id ?? null };
 };
 
-// pull contact number from profiles instead of account_requests
+// pull contact number from profiles
 const loadPhoneForEmail = async (email: string): Promise<string> => {
   const clean = (email || "").trim();
   try {
     const { data: userWrap } = await supabase.auth.getUser();
     const uid = userWrap?.user?.id || null;
+
     if (uid) {
       const { data: byUid } = await supabase
         .from("profiles")
         .select("contact_number")
         .eq("id", uid)
         .maybeSingle();
-      const phone = normalizePhone(byUid?.contact_number);
+      const phone = normalizePhone((byUid as any)?.contact_number);
       if (phone) return phone;
     }
+
     if (clean) {
       const { data: byEmail } = await supabase
         .from("profiles")
@@ -189,9 +192,10 @@ const loadPhoneForEmail = async (email: string): Promise<string> => {
         .ilike("email", clean)
         .limit(1)
         .maybeSingle();
-      const phone = normalizePhone(byEmail?.contact_number);
+      const phone = normalizePhone((byEmail as any)?.contact_number);
       if (phone) return phone;
     }
+
     return "";
   } catch {
     return "";
@@ -246,7 +250,6 @@ export default function CheckoutPage() {
     area: "",
     payment_type: "Cash",
     customer_type: undefined,
-    landmark: "",
   });
 
   // credit terms
@@ -261,8 +264,8 @@ export default function CheckoutPage() {
 
   // Terms & Conditions (Credit) state
   const [showTermsModal, setShowTermsModal] = useState(false);
-  const [tcAccepted, setTcAccepted] = useState(false); // user tick on main confirm modal
-  const [tcReadyToAccept, setTcReadyToAccept] = useState(false); // becomes true after reading terms
+  const [tcAccepted, setTcAccepted] = useState(false);
+  const [tcReadyToAccept, setTcReadyToAccept] = useState(false);
   const termsBodyRef = useRef<HTMLDivElement | null>(null);
 
   // orders sidebar
@@ -281,7 +284,7 @@ export default function CheckoutPage() {
   const [barangayCode, setBarangayCode] = useState("");
   const [houseStreet, setHouseStreet] = useState("");
 
-  // NEW: staged address prefill holder (applied level-by-level)
+  // staged address prefill
   const [pendingAddress, setPendingAddress] = useState<{
     region?: string;
     province?: string;
@@ -321,13 +324,14 @@ export default function CheckoutPage() {
   const computedAddress = useMemo(() => {
     const parts = [
       houseStreet.trim(),
-      selectedBarangay?.name ?? "",
-      selectedCity?.name ?? "",
-      selectedProvince?.name ?? "",
-      selectedRegion?.name ?? "",
+      selectedBarangay?.name || "", // Changed from barangayName
+      selectedCity?.name || "", // Changed from cityName
+      selectedProvince?.name || "", // Changed from provinceName
+      selectedRegion?.name || "", // Changed from regionName
     ]
       .filter(Boolean)
       .map(fixEncoding);
+
     return parts.join(", ");
   }, [
     houseStreet,
@@ -350,17 +354,16 @@ export default function CheckoutPage() {
       .from("customers")
       .select(
         `
-      contact_person,
-      landmark,
-      payment_type,
-      customer_type,
-      region_code,
-      province_code,
-      city_code,
-      barangay_code,
-      house_street,
-      address
-    `
+        contact_person,
+        payment_type,
+        customer_type,
+        region_code,
+        province_code,
+        city_code,
+        barangay_code,
+        house_street,
+        address
+      `
       )
       .ilike("email", clean)
       .order("date", { ascending: false })
@@ -369,36 +372,140 @@ export default function CheckoutPage() {
 
     if (error || !last) return;
 
-    // Stage the codes so we can apply them when each list is ready.
     setPendingAddress({
-      region: last.region_code || undefined,
-      province: last.province_code || undefined,
-      city: last.city_code || undefined,
-      barangay: last.barangay_code || undefined,
-      house: last.house_street || undefined,
+      region: (last as any)?.region_code || undefined,
+      province: (last as any)?.province_code || undefined,
+      city: (last as any)?.city_code || undefined,
+      barangay: (last as any)?.barangay_code || undefined,
+      house: (last as any)?.house_street || undefined,
     });
-
-    // Do NOT set region/province/city/barangay here directly — they’ll be
-    // applied by the staged effects below once each options list is ready.
 
     setCustomerInfo((prev) => {
       const resolvedType =
-        prev.customer_type || last.customer_type || undefined;
+        prev.customer_type || (last as any)?.customer_type || undefined;
       const canUseCredit = resolvedType === "Existing Customer";
       const priorPay =
-        last.payment_type === "Credit" && canUseCredit ? "Credit" : "Cash";
+        (last as any)?.payment_type === "Credit" && canUseCredit
+          ? "Credit"
+          : "Cash";
 
       return {
         ...prev,
-        contact_person: prev.contact_person || last.contact_person || "",
-        landmark: prev.landmark || last.landmark || "",
+        contact_person:
+          prev.contact_person || (last as any)?.contact_person || "",
         payment_type: prev.payment_type || priorPay,
         customer_type: resolvedType,
       };
     });
   }, []);
 
+  /* -------------------- Autofill from profiles (Create Account) -------------------- */
+  const loadProfileAddressSnapshot = useCallback(async () => {
+    try {
+      const { data: uw } = await supabase.auth.getUser();
+      const uid = uw?.user?.id || null;
+      const email = (uw?.user?.email || "").trim().toLowerCase();
+
+      if (!uid && !email) return false;
+
+      const PROFILE_SELECT = `
+        id,
+        email,
+        region_code,
+        province_code,
+        city_code,
+        barangay_code,
+        house_street,
+        address,
+        contact_number,
+        first_name,
+        last_name,
+        name
+      `;
+
+      // 1) Try by UID
+      let prof: any = null;
+
+      if (uid) {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select(PROFILE_SELECT)
+          .eq("id", uid)
+          .maybeSingle();
+
+        if (error) console.warn("[profiles] by uid error:", error);
+        prof = data || null;
+      }
+
+      // 2) Fallback by EMAIL
+      if (!prof && email) {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select(PROFILE_SELECT)
+          .ilike("email", email)
+          .limit(1)
+          .maybeSingle();
+
+        if (error) console.warn("[profiles] by email error:", error);
+        prof = data || null;
+      }
+
+      if (!prof) {
+        console.warn("[profiles] no row found for current user", {
+          uid,
+          email,
+        });
+        return false;
+      }
+
+      // Stage what we have (partial is OK)
+      setPendingAddress({
+        region: normalizePSGC(prof.region_code),
+        province: normalizePSGC(prof.province_code),
+        city: normalizePSGC(prof.city_code),
+        barangay: normalizePSGC(prof.barangay_code),
+        house: (prof.house_street || "").trim() || undefined,
+      });
+
+      // Update UI fields best-effort
+      setCustomerInfo((prev) => ({
+        ...prev,
+        address: prev.address || prof.address || "",
+        phone: prev.phone || normalizePhone(prof.contact_number) || prev.phone,
+      }));
+
+      return !!(
+        prof.region_code ||
+        prof.city_code ||
+        prof.barangay_code ||
+        prof.house_street
+      );
+    } catch (e) {
+      console.warn("loadProfileAddressSnapshot failed:", e);
+      return false;
+    }
+  }, []);
+
   /* ------------------------ Prefill from auth ------------------------ */
+  const setTypeFromHistory = useCallback(async (email: string) => {
+    const cleanEmail = (email || "").trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) return;
+    const { count, error } = await supabase
+      .from("orders")
+      .select("id, status, customers!inner(email)", {
+        count: "exact",
+        head: true,
+      })
+      .ilike("customers.email", cleanEmail)
+      .in("status", ["completed"]);
+    if (error) return;
+    const completedCount = count ?? 0;
+    setOrderHistoryCount(completedCount);
+    const type: CustomerInfo["customer_type"] =
+      completedCount > 0 ? "Existing Customer" : "New Customer";
+    setCustomerInfo((prev) => ({ ...prev, customer_type: type }));
+  }, []);
+
   useEffect(() => {
     (async () => {
       const {
@@ -407,6 +514,7 @@ export default function CheckoutPage() {
         phone: phoneFromAuth,
         authUserId,
       } = await getAuthIdentity();
+
       if (email) {
         const phoneFromSources =
           phoneFromAuth || (await loadPhoneForEmail(email));
@@ -415,42 +523,21 @@ export default function CheckoutPage() {
           email: email || "",
           phone: phoneFromSources || "",
         });
+
         setCustomerInfo((prev) => ({
           ...prev,
           name: prev.name || name || "",
           email: prev.email || email,
           phone: prev.phone || phoneFromSources || "",
         }));
+
         await setTypeFromHistory(email);
       }
+
       setAuthUserId(authUserId);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  /* -------- Compute customer type from completed orders by email -------- */
-const setTypeFromHistory = useCallback(async (email: string) => {
-  const cleanEmail = (email || "").trim().toLowerCase();
-  if (!cleanEmail || !cleanEmail.includes("@")) return;
-  const { count, error } = await supabase
-    .from("orders")
-    .select("id, status, customers!inner(email)", {
-      count: "exact",
-      head: true,
-    })
-    .ilike("customers.email", cleanEmail)
-    .in("status", ["completed"]);
-  if (error) return;
-  const completedCount = count ?? 0;
-  setOrderHistoryCount(completedCount);
-  const type: CustomerInfo["customer_type"] =
-    completedCount > 0 ? "Existing Customer" : "New Customer";
-  setCustomerInfo((prev) => ({
-    ...prev,
-    customer_type: type,
-  }));
-}, []);
-
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -580,10 +667,11 @@ const setTypeFromHistory = useCallback(async (email: string) => {
         toast.error("Failed to load barangays");
       }
     };
+
     loadBarangays();
   }, [cityCode]);
 
-  // 3.1 Apply REGION once regions are loaded
+  // Apply staged autofill level-by-level
   useEffect(() => {
     if (!pendingAddress) return;
     if (
@@ -595,46 +683,76 @@ const setTypeFromHistory = useCallback(async (email: string) => {
     }
   }, [pendingAddress, regions, regionCode]);
 
-  // 3.2 Apply PROVINCE (only for non-NCR) once provinces are ready
   useEffect(() => {
     if (!pendingAddress) return;
-    if (isNCR) return; // NCR has no provinces
-    if (!regionCode) return; // need region first
-    if (provinces.length && pendingAddress.province && !provinceCode) {
+    if (isNCR) return;
+    if (!regionCode) return;
+    if (
+      provinces.length &&
+      pendingAddress.province &&
+      provinceCode !== pendingAddress.province
+    ) {
       const exists = provinces.some((p) => p.code === pendingAddress.province);
       if (exists) setProvinceCode(pendingAddress.province);
     }
   }, [pendingAddress, isNCR, regionCode, provinces, provinceCode]);
 
-  // 3.3 Apply CITY once cities are ready
   useEffect(() => {
     if (!pendingAddress) return;
     if (!regionCode) return;
-    // for non-NCR, province must be set first
-    if (!isNCR && !provinceCode) return;
-    if (cities.length && pendingAddress.city && !cityCode) {
+    if (!isNCR && pendingAddress.province && !provinceCode) return;
+
+    if (
+      cities.length &&
+      pendingAddress.city &&
+      cityCode !== pendingAddress.city
+    ) {
       const exists = cities.some((c) => c.code === pendingAddress.city);
       if (exists) setCityCode(pendingAddress.city);
     }
   }, [pendingAddress, isNCR, regionCode, provinceCode, cities, cityCode]);
 
-  // 3.4 Apply BARANGAY (and house/street) once barangays are ready, then clear pending
   useEffect(() => {
     if (!pendingAddress) return;
     if (!cityCode) return;
-    if (barangays.length && pendingAddress.barangay && !barangayCode) {
+
+    // house can be applied anytime once we open the modal
+    if (pendingAddress.house && !houseStreet)
+      setHouseStreet(pendingAddress.house);
+
+    if (
+      barangays.length &&
+      pendingAddress.barangay &&
+      barangayCode !== pendingAddress.barangay
+    ) {
       const exists = barangays.some((b) => b.code === pendingAddress.barangay);
-      if (exists) {
-        setBarangayCode(pendingAddress.barangay);
-        if (pendingAddress.house) setHouseStreet(pendingAddress.house);
-        // Clear after final step so we don't keep re-applying
-        setPendingAddress(null);
-      }
+      if (exists) setBarangayCode(pendingAddress.barangay);
     }
-  }, [pendingAddress, cityCode, barangays, barangayCode]);
+
+    // Clear once the staged values are applied best-effort
+    // (don’t require everything, partial autofill still useful)
+    if (
+      (!pendingAddress.region || regionCode === pendingAddress.region) &&
+      (isNCR ||
+        !pendingAddress.province ||
+        provinceCode === pendingAddress.province) &&
+      (!pendingAddress.city || cityCode === pendingAddress.city) &&
+      (!pendingAddress.barangay || barangayCode === pendingAddress.barangay)
+    ) {
+      setPendingAddress(null);
+    }
+  }, [
+    pendingAddress,
+    cityCode,
+    barangays,
+    barangayCode,
+    houseStreet,
+    regionCode,
+    provinceCode,
+    isNCR,
+  ]);
 
   /* ----------------------------- Sidebar orders ----------------------------- */
-  // Directly read orders joined to customers, filtered by the signed-in email.
   useEffect(() => {
     let mounted = true;
 
@@ -648,17 +766,16 @@ const setTypeFromHistory = useCallback(async (email: string) => {
           return;
         }
 
-        // Direct join: orders -> customer (filter by email)
         const { data, error } = await supabase
           .from("orders")
           .select(
             `
-    id,
-    status,
-    date_created,
-    grand_total_with_interest,
-    customer:customer_id ( email )
-  `
+              id,
+              status,
+              date_created,
+              grand_total_with_interest,
+              customer:customer_id ( email )
+            `
           )
           .eq("customer.email", email)
           .order("date_created", { ascending: false })
@@ -669,15 +786,15 @@ const setTypeFromHistory = useCallback(async (email: string) => {
           if (mounted) setOrders([]);
           return;
         }
+
         const rows = (data ?? []).map((o: any) => ({
           id: o.id,
           status: o?.status ?? "pending",
-          created_at: o?.date_created ?? null, // mapped for UI
+          created_at: o?.date_created ?? null,
           total: o?.grand_total_with_interest ?? null,
         }));
 
         if (mounted) setOrders(rows);
-        console.log("[checkout sidebar] loaded orders:", rows.length, rows);
       } catch (e) {
         console.error("[checkout sidebar] load failed:", e);
         if (mounted) setOrders([]);
@@ -690,11 +807,9 @@ const setTypeFromHistory = useCallback(async (email: string) => {
     return () => {
       mounted = false;
     };
-  }, []); // reads auth inside
+  }, []);
 
   /* --------------------------- Payment type logic --------------------------- */
-
-
   useEffect(() => {
     if (customerInfo.payment_type === "Credit") {
       setTermsMonths((prev) => (prev == null ? 1 : prev));
@@ -760,55 +875,46 @@ const setTypeFromHistory = useCallback(async (email: string) => {
       ),
     [cart]
   );
-  const tax = 0;
-  const shipping = 0;
-  const grandTotal = subtotal + tax + shipping;
 
   /* ------------------------------ Validation ------------------------------ */
-const missingFields = useMemo(() => {
-  const missing: string[] = [];
-  if (!customerInfo.name?.trim()) missing.push("Customer Name");
-  // Email is now optional
-  if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
-  // Phone is now optional
-  if (!houseStreet?.trim()) missing.push("House & Street");
-  if (!regionCode) missing.push("Region");
-  if (!isNCR && !provinceCode) missing.push("Province");
-  if (!cityCode) missing.push("City / Municipality");
-  if (!barangayCode) missing.push("Barangay");
-  if (cart.length === 0) missing.push("Cart");
+  const missingFields = useMemo(() => {
+    const missing: string[] = [];
+    if (!customerInfo.name?.trim()) missing.push("Customer Name");
+    if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
+    if (!houseStreet?.trim()) missing.push("House & Street");
+    if (!regionCode) missing.push("Region");
+    if (!isNCR && !provinceCode) missing.push("Province");
+    if (!cityCode) missing.push("City / Municipality");
+    if (!barangayCode) missing.push("Barangay");
+    if (cart.length === 0) missing.push("Cart");
 
-  if (customerInfo.payment_type === "Credit") {
-    if (!termsMonths) missing.push("Payment Terms (months)");
-    if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
-    if (!tcAccepted) missing.push("Accept Terms & Conditions");
-  }
+    if (customerInfo.payment_type === "Credit") {
+      if (!termsMonths) missing.push("Payment Terms (months)");
+      if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
+      if (!tcAccepted) missing.push("Accept Terms & Conditions");
+    }
 
-  return missing;
-}, [
-  customerInfo.name,
-  customerInfo.email,          // can stay in deps, no issue
-  customerInfo.contact_person,
-  customerInfo.phone,          // can stay in deps, no issue
-  customerInfo.payment_type,
-  houseStreet,
-  regionCode,
-  provinceCode,
-  cityCode,
-  barangayCode,
-  cart,
-  isNCR,
-  termsMonths,
-  interestPercent,
-  tcAccepted,
-]);
-
+    return missing;
+  }, [
+    customerInfo.name,
+    customerInfo.contact_person,
+    customerInfo.payment_type,
+    houseStreet,
+    regionCode,
+    provinceCode,
+    cityCode,
+    barangayCode,
+    cart,
+    isNCR,
+    termsMonths,
+    interestPercent,
+    tcAccepted,
+  ]);
 
   const isConfirmEnabled = missingFields.length === 0;
 
   /* ------------------------- Customer upsert helpers ------------------------- */
   async function ensureUniqueCustomerCode(): Promise<string> {
-    // generate until we hit a free code (very low probability of >1 tries)
     for (let i = 0; i < 5; i++) {
       const candidate = generateTransactionCode();
       const { data: exists } = await supabase
@@ -817,19 +923,12 @@ const missingFields = useMemo(() => {
         .eq("code", candidate)
         .limit(1)
         .maybeSingle();
-      if (!exists?.id) return candidate;
+      if (!(exists as any)?.id) return candidate;
     }
-    // fallback with timestamp suffix
     return `${generateTransactionCode()}-${Date.now().toString().slice(-5)}`;
   }
 
-  /**
-   * Finds an existing customer (by auth uid or email). If none, creates one.
-   * Updates address/contact fields on existing row.
-   * Returns the customer id and the canonical code.
-   */
   async function getOrCreateCustomer(): Promise<{ id: string; code: string }> {
-    // 1) Try find existing by auth user id or email
     const { data: userWrap } = await supabase.auth.getUser();
     const auth = userWrap?.user;
     const email = (
@@ -845,9 +944,10 @@ const missingFields = useMemo(() => {
       const { data: byUid } = await supabase
         .from("customers")
         .select("id, code")
-        .eq("id", auth.id) // only if you use auth uid as customers.id; if not, this returns null and we fall back to email
+        .eq("id", auth.id)
         .maybeSingle();
-      if (byUid?.id) existing = { id: byUid.id, code: byUid.code ?? null };
+      if ((byUid as any)?.id)
+        existing = { id: (byUid as any).id, code: (byUid as any).code ?? null };
     }
 
     if (!existing && email) {
@@ -856,18 +956,20 @@ const missingFields = useMemo(() => {
         .select("id, code")
         .ilike("email", email)
         .order("date_created", { ascending: false })
-
         .limit(1)
         .maybeSingle();
-      if (byEmail?.id)
-        existing = { id: byEmail.id, code: byEmail.code ?? null };
+      if ((byEmail as any)?.id)
+        existing = {
+          id: (byEmail as any).id,
+          code: (byEmail as any).code ?? null,
+        };
     }
 
     const nowPH = new Date().toLocaleString("sv-SE", {
       timeZone: "Asia/Manila",
     });
 
-    const baseFields = {
+    const baseFields: any = {
       name: customerInfo.name,
       email,
       phone: normalizePhone(customerInfo.phone) || customerInfo.phone,
@@ -877,7 +979,6 @@ const missingFields = useMemo(() => {
       status: "pending",
       payment_type: customerInfo.payment_type === "Credit" ? "Credit" : "Cash",
       customer_type: customerInfo.customer_type || null,
-      landmark: customerInfo.landmark || null,
       region_code: regionCode || null,
       province_code: isNCR ? null : provinceCode || null,
       city_code: cityCode || null,
@@ -890,49 +991,42 @@ const missingFields = useMemo(() => {
     };
 
     if (existing) {
-      // Update contact/address only — DO NOT touch customers.code
       await supabase.from("customers").update(baseFields).eq("id", existing.id);
-      return { id: existing.id, code: existing.code || "" }; // code here is no longer used as TXN
+      return { id: existing.id, code: existing.code || "" };
     }
 
-    // 3) Create a new customer once with a unique code
     const freshCode = await ensureUniqueCustomerCode();
     const insertPayload = { ...baseFields, code: freshCode };
 
-    // Try insert; if we somehow collided on code, regenerate once and retry.
     let created: { id: string; code: string } | null = null;
-    {
-      const { data, error } = await supabase
+
+    const { data, error } = await supabase
+      .from("customers")
+      .insert([insertPayload])
+      .select("id, code")
+      .single();
+
+    if (!error && data) {
+      created = { id: (data as any).id, code: (data as any).code };
+    } else if (error && String(error.message).includes("customers_code_key")) {
+      const retryCode = await ensureUniqueCustomerCode();
+      const { data: data2, error: err2 } = await supabase
         .from("customers")
-        .insert([insertPayload])
+        .insert([{ ...insertPayload, code: retryCode }])
         .select("id, code")
         .single();
-      if (!error && data) {
-        created = { id: data.id, code: data.code };
-      } else if (
-        error &&
-        String(error.message).includes("customers_code_key")
-      ) {
-        const retryCode = await ensureUniqueCustomerCode();
-        const { data: data2, error: err2 } = await supabase
-          .from("customers")
-          .insert([{ ...insertPayload, code: retryCode }])
-          .select("id, code")
-          .single();
-        if (err2) throw err2;
-        created = { id: data2!.id, code: data2!.code };
-      } else if (error) {
-        throw error;
-      }
+      if (err2) throw err2;
+      created = { id: (data2 as any).id, code: (data2 as any).code };
+    } else if (error) {
+      throw error;
     }
-    // safety
+
     if (!created) throw new Error("Failed to create customer");
     return created;
   }
 
   /* ------------------------------- Handlers ------------------------------- */
   const openConfirmModal = async () => {
-    // Best-effort phone autofill
     const { email: authEmail, name: authName } = await getAuthIdentity();
     const emailToUse =
       (customerInfo.email && customerInfo.email.trim()) ||
@@ -958,28 +1052,21 @@ const missingFields = useMemo(() => {
       phone: ensuredPhone || prev.phone,
     }));
 
-    // NEW: Autofill from the most recent customer snapshot for this email
-    if (emailToUse) {
+    // Autofill address: PROFILES first (Create Account), fallback to last customer row
+    const gotProfileAddress = await loadProfileAddressSnapshot();
+    if (!gotProfileAddress && emailToUse) {
       await loadLastCustomerSnapshot(emailToUse);
-    }
-
-    if (!ensuredPhone) {
-      toast.error(
-        "We couldn't auto-fill your phone number. Please update your profile."
-      );
     }
 
     setShowConfirmModal(true);
   };
 
-  // Open/close terms modal
   const openTerms = () => {
     setShowTermsModal(true);
-    setTcReadyToAccept(false); // must scroll again to bottom each view
+    setTcReadyToAccept(true);
   };
   const closeTerms = () => setShowTermsModal(false);
 
-  // When user scrolls the terms body, unlock the checkbox
   const onTermsScroll = () => {
     const el = termsBodyRef.current;
     if (!el) return;
@@ -1018,11 +1105,8 @@ const missingFields = useMemo(() => {
     setPlacingOrder(true);
 
     try {
-      // (1) Ensure customer exists once (no duplicate code inserts)
-      const { id: customerId, code: customerCode } =
-        await getOrCreateCustomer();
+      const { id: customerId } = await getOrCreateCustomer();
 
-      // (2) Create order
       const now = new Date();
       const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
 
@@ -1030,10 +1114,9 @@ const missingFields = useMemo(() => {
         customer_id: customerId,
         total_amount: subtotal,
         status: "pending",
-        date_created: phTime, // <-- make sure your orders table has this column
+        date_created: phTime,
       };
 
-      // optional credit fields
       if (customerInfo.payment_type === "Credit") {
         const months = termsMonths ?? 1;
         orderPayload.terms = `Net ${months} Monthly`;
@@ -1041,7 +1124,6 @@ const missingFields = useMemo(() => {
         orderPayload.interest_percent = TERM_TO_INTEREST[months];
       }
 
-      // insert the order and get id + date_created back
       const { data: ord, error: ordErr } = await supabase
         .from("orders")
         .insert([orderPayload])
@@ -1049,12 +1131,10 @@ const missingFields = useMemo(() => {
         .single();
       if (ordErr) throw ordErr;
 
-      // build the display TXN code from the new row
-      const orderId = ord.id as string;
-      const thisOrderCode = getTxnCode(orderId, ord?.date_created);
+      const orderId = (ord as any).id as string;
+      const thisOrderCode = getTxnCode(orderId, (ord as any)?.date_created);
       setTxnCode(thisOrderCode);
 
-      // (3) Create order_items
       const items = cart.map((ci) => ({
         order_id: orderId,
         inventory_id: ci.item.id,
@@ -1066,7 +1146,7 @@ const missingFields = useMemo(() => {
         .insert(items);
       if (itemsErr) throw itemsErr;
 
-      // (4) Admin notification (best effort)
+      // Best-effort notification
       try {
         const preview = cart
           .slice(0, 3)
@@ -1106,8 +1186,8 @@ const missingFields = useMemo(() => {
       } catch (notifErr) {
         console.warn("Failed to create order notification:", notifErr);
       }
-      //EMAIL ADMIN
-      // (5) Email admin about new order (best effort)
+
+      // Best-effort email admin
       try {
         const response = await fetch("/api/notify-admin-order", {
           method: "POST",
@@ -1153,7 +1233,6 @@ const missingFields = useMemo(() => {
 
       toast.success("Your order has been submitted successfully!");
 
-      // reset cart + keep auth defaults
       setShowFinalModal(false);
       clearCart();
 
@@ -1168,6 +1247,7 @@ const missingFields = useMemo(() => {
         payment_type: "Cash",
         customer_type: undefined,
       });
+
       setRegionCode("");
       setProvinceCode("");
       setCityCode("");
@@ -1177,7 +1257,6 @@ const missingFields = useMemo(() => {
       setBarangays([]);
       setHouseStreet("");
 
-      // Refresh customer type after order
       try {
         const emailUsed = customerInfo.email || authDefaults.email;
         if (emailUsed) await setTypeFromHistory(emailUsed);
@@ -1325,9 +1404,7 @@ const missingFields = useMemo(() => {
                   </table>
                 </div>
 
-                {/* totals + proceed */}
                 <div className="mt-4 flex flex-col lg:flex-row items-start lg:items-center gap-4">
-                  {/* Note + Estimated total */}
                   <div className="flex-1 bg-gray-50 p-4 rounded">
                     <div className="text-xs text-gray-600 mb-2">
                       * Final price may change if an admin applies a discount
@@ -1340,7 +1417,6 @@ const missingFields = useMemo(() => {
                     </div>
                   </div>
 
-                  {/* Actions */}
                   <div className="flex items-center gap-3">
                     <button
                       onClick={() => {
@@ -1371,7 +1447,7 @@ const missingFields = useMemo(() => {
           </div>
         </div>
 
-        {/* RIGHT: Snapshot of customer status */}
+        {/* RIGHT: Snapshot */}
         <aside>
           <div className="bg-white rounded-lg shadow p-4">
             <h3 className="font-semibold mb-2">Customer Snapshot</h3>
@@ -1408,7 +1484,6 @@ const missingFields = useMemo(() => {
             </div>
           </div>
 
-          {/* Past orders for this customer */}
           <div className="bg-white rounded-lg shadow p-4 mt-4">
             <h3 className="font-semibold mb-3">Your Orders</h3>
             {fetchingOrders ? (
@@ -1426,7 +1501,6 @@ const missingFields = useMemo(() => {
                         <div className="font-medium">
                           {getTxnCode(o.id, o.created_at)}
                         </div>
-
                         <div className="text-xs text-gray-500">
                           {safeFormatPH(o.created_at)}
                         </div>
@@ -1457,67 +1531,61 @@ const missingFields = useMemo(() => {
             </h2>
 
             <div className="flex-1 overflow-auto mt-4 space-y-4">
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-  {/* Customer name – still read only (from auth) */}
-  <input
-    placeholder="Customer Name"
-    className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
-    value={customerInfo.name}
-    readOnly
-  />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <input
+                  placeholder="Customer Name"
+                  className="border px-3 py-2 rounded bg-gray-100 cursor-not-allowed"
+                  value={customerInfo.name}
+                  readOnly
+                />
 
-  {/* Email – OPTIONAL + EDITABLE */}
-  <input
-    type="email"
-    placeholder="Email (optional)"
-    className="border px-3 py-2 rounded"
-    value={customerInfo.email || ""}
-    onChange={(e) =>
-      setCustomerInfo((prev) => ({
-        ...prev,
-        email: e.target.value,
-      }))
-    }
-  />
+                <input
+                  type="email"
+                  placeholder="Email (optional)"
+                  className="border px-3 py-2 rounded"
+                  value={customerInfo.email || ""}
+                  onChange={(e) =>
+                    setCustomerInfo((prev) => ({
+                      ...prev,
+                      email: e.target.value,
+                    }))
+                  }
+                />
 
-  {/* Phone – OPTIONAL + EDITABLE, digits only, max 11 */}
-  <input
-    type="tel"
-    placeholder="Phone (optional, 11 digits)"
-    className="border px-3 py-2 rounded"
-    value={customerInfo.phone || ""}
-    onChange={(e) => {
-      const digits = e.target.value.replace(/\D/g, "").slice(0, 11);
-      setCustomerInfo((prev) => ({
-        ...prev,
-        phone: digits,
-      }));
-    }}
-  />
+                <input
+                  type="tel"
+                  placeholder="Phone (optional, 11 digits)"
+                  className="border px-3 py-2 rounded"
+                  value={customerInfo.phone || ""}
+                  onChange={(e) => {
+                    const digits = e.target.value
+                      .replace(/\D/g, "")
+                      .slice(0, 11);
+                    setCustomerInfo((prev) => ({ ...prev, phone: digits }));
+                  }}
+                />
 
-  {/* Contact person – still required */}
-  <input
-    placeholder="Contact Person (required)"
-    maxLength={30}
-    pattern="[A-Za-z\\s]*"
-    title="Letters only, maximum 30 characters"
-    className={`border px-3 py-2 rounded ${
-      !customerInfo.contact_person?.trim()
-        ? "border-red-400 focus:ring-red-500"
-        : ""
-    }`}
-    value={customerInfo.contact_person || ""}
-    onChange={(e) => {
-      const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
-      if (value.length <= 30) {
-        setCustomerInfo((prev) => ({
-          ...prev,
-          contact_person: value,
-        }));
-      }
-    }}
-  />
-
+                <input
+                  placeholder="Contact Person (required)"
+                  maxLength={30}
+                  pattern="[A-Za-z\\s]*"
+                  title="Letters only, maximum 30 characters"
+                  className={`border px-3 py-2 rounded ${
+                    !customerInfo.contact_person?.trim()
+                      ? "border-red-400 focus:ring-red-500"
+                      : ""
+                  }`}
+                  value={customerInfo.contact_person || ""}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/[^A-Za-z\s]/g, "");
+                    if (value.length <= 30) {
+                      setCustomerInfo((prev) => ({
+                        ...prev,
+                        contact_person: value,
+                      }));
+                    }
+                  }}
+                />
 
                 <div className="col-span-2 grid grid-cols-1 md:grid-cols-4 gap-3">
                   <div>
@@ -1618,20 +1686,7 @@ const missingFields = useMemo(() => {
                       setHouseStreet(e.target.value);
                   }}
                 />
-                <input
-                  placeholder="Landmark"
-                  maxLength={30}
-                  title="Maximum 30 characters only"
-                  className="border px-3 py-2 rounded col-span-2"
-                  value={customerInfo.landmark || ""}
-                  onChange={(e) =>
-                    e.target.value.length <= 30 &&
-                    setCustomerInfo({
-                      ...customerInfo,
-                      landmark: e.target.value,
-                    })
-                  }
-                />
+
                 <input
                   className="border px-3 py-2 rounded col-span-2 bg-gray-50"
                   value={customerInfo.address || ""}
@@ -1653,26 +1708,25 @@ const missingFields = useMemo(() => {
                   )}
                 </div>
 
-<div className="flex gap-4">
-  {(["Cash", "Credit"] as const).map((type) => (
-    <label key={type} className="flex items-center gap-2">
-      <input
-        type="radio"
-        name="payment_type"
-        value={type}
-        checked={customerInfo.payment_type === type}
-        onChange={(e) =>
-          setCustomerInfo((prev) => ({
-            ...prev,
-            payment_type: e.target.value as "Cash" | "Credit",
-          }))
-        }
-      />
-      {type}
-    </label>
-  ))}
-</div>
-
+                <div className="flex gap-4">
+                  {(["Cash", "Credit"] as const).map((type) => (
+                    <label key={type} className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="payment_type"
+                        value={type}
+                        checked={customerInfo.payment_type === type}
+                        onChange={(e) =>
+                          setCustomerInfo((prev) => ({
+                            ...prev,
+                            payment_type: e.target.value as "Cash" | "Credit",
+                          }))
+                        }
+                      />
+                      {type}
+                    </label>
+                  ))}
+                </div>
 
                 {customerInfo.payment_type === "Credit" && (
                   <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1693,10 +1747,9 @@ const missingFields = useMemo(() => {
                         <option value={6}>6 months (Net 6)</option>
                         <option value={12}>12 months (Net 12)</option>
                       </select>
-<div className="text-xs text-gray-500 mt-1">
-  Available when you select Credit as payment type.
-</div>
-
+                      <div className="text-xs text-gray-500 mt-1">
+                        Available when you select Credit as payment type.
+                      </div>
                     </div>
 
                     <div>
@@ -1717,7 +1770,6 @@ const missingFields = useMemo(() => {
                 )}
               </div>
 
-              {/* Credit Terms & Conditions acknowledgement */}
               {customerInfo.payment_type === "Credit" && (
                 <div className="col-span-2 rounded border p-3 bg-amber-50/50">
                   <div className="text-sm">
@@ -1754,7 +1806,6 @@ const missingFields = useMemo(() => {
                 </div>
               )}
 
-              {/* Items table */}
               <div className="border rounded-xl bg-gray-100 overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-200 sticky top-0 z-10">
@@ -1865,7 +1916,6 @@ const missingFields = useMemo(() => {
               Terms &amp; Conditions – Credit Interest
             </h2>
 
-            {/* Scrollable body; must reach bottom to enable main checkbox */}
             <div
               ref={termsBodyRef}
               onScroll={onTermsScroll}
@@ -1876,8 +1926,7 @@ const missingFields = useMemo(() => {
                 <p>
                   These Terms &amp; Conditions govern the application of
                   interest for credit purchases made through UniAsia Hardware
-                  &amp; Electrical Mktg. Corp. By using the Credit payment
-                  option, you acknowledge and agree to the following:
+                  &amp; Electrical Mktg. Corp.
                 </p>
 
                 <h3>1. Interest Schedule</h3>
@@ -1903,38 +1952,13 @@ const missingFields = useMemo(() => {
                 <h3>2. Computation Basis</h3>
                 <p>
                   Interest is computed on the order subtotal (exclusive of
-                  shipping). Shipping fees, if any, may be added separately and
-                  are not part of the interest base.
+                  shipping). Shipping fees, if any, may be added separately.
                 </p>
 
                 <h3>3. Payment Schedule</h3>
                 <p>
                   The total with interest is divided into equal monthly
-                  installments over the selected term. Any missed or late
-                  installment may be subject to additional charges or order
-                  restrictions at the Company’s discretion.
-                </p>
-
-                <h3>4. Early Settlement</h3>
-                <p>
-                  Early payment of the remaining balance is allowed. Any request
-                  for interest adjustment on early settlement is subject to
-                  approval by the Company.
-                </p>
-
-                <h3>5. Order Changes</h3>
-                <p>
-                  Discounts, returns, or adjustments approved by an
-                  administrator may change the final payable amount. Such
-                  changes will reflect in subsequent statements or installment
-                  schedules.
-                </p>
-
-                <h3>6. Defaults</h3>
-                <p>
-                  Failure to comply with the payment schedule may result in
-                  suspension of credit privileges and collection actions
-                  permitted by law.
+                  installments over the selected term.
                 </p>
 
                 <h3>7. Acceptance</h3>
@@ -1948,8 +1972,6 @@ const missingFields = useMemo(() => {
                   <em>Scroll to the very bottom to enable acceptance.</em>
                 </p>
               </div>
-
-              {/* Invisible spacer so the user truly reaches the bottom */}
               <div className="h-6" />
             </div>
 
