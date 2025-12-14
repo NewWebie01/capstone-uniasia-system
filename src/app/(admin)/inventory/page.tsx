@@ -1,7 +1,7 @@
 // src/app/(admin)/inventory/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 
@@ -48,6 +48,24 @@ type InventoryItem = {
   stock_level: string | null;
 };
 
+type SortKey =
+  | "sku"
+  | "product_name"
+  | "category"
+  | "subcategory"
+  | "unit"
+  | "size"
+  | "quantity"
+  | "cost_price"
+  | "markup_percent"
+  | "discount_percent"
+  | "unit_price"
+  | "amount"
+  | "expiration_date"
+  | "total_weight_kg"
+  | "stock_level"
+  | "date_created";
+
 const FIXED_UNIT_OPTIONS = ["Piece", "Dozen", "Box", "Pack", "Kg"] as const;
 
 const LIMITS = {
@@ -68,30 +86,36 @@ const peso = (n: number) =>
     minimumFractionDigits: 2,
   });
 
-type SortKey =
-  | "sku"
-  | "product_name"
-  | "category"
-  | "subcategory"
-  | "unit"
-  | "size"
-  | "quantity"
-  | "cost_price"
-  | "markup_percent"
-  | "discount_percent"
-  | "unit_price"
-  | "amount"
-  | "expiration_date"
-  | "total_weight_kg"
-  | "stock_level"
-  | "date_created";
-
 const BUCKET = "inventory-images";
 const MAX_GALLERY = 5;
 const ALLOWED_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const MAX_BYTES = 5 * 1024 * 1024;
 
 const safeSlug = (s: string) => (s || "item").trim().replace(/\s+/g, "-").toLowerCase();
+
+/* ============================================================================
+   ✅ IMPORTANT FIX: Row component MUST be outside InventoryPage()
+   Otherwise it is re-created each render and inputs lose focus.
+============================================================================ */
+function Row({
+  label,
+  required,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <label className="w-44 shrink-0 text-sm text-gray-700">
+        {label}
+        {required ? <span className="text-red-500">*</span> : null}
+      </label>
+      <div className="flex-1">{children}</div>
+    </div>
+  );
+}
 
 export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -104,7 +128,9 @@ export default function InventoryPage() {
   const [saving, setSaving] = useState(false);
 
   const [showRenameModal, setShowRenameModal] = useState(false);
-  const [renameFieldType, setRenameFieldType] = useState<"category" | "subcategory" | "unit" | "size" | null>(null);
+  const [renameFieldType, setRenameFieldType] = useState<
+    "category" | "subcategory" | "unit" | "size" | null
+  >(null);
   const [renameOldValue, setRenameOldValue] = useState("");
   const [renameNewValue, setRenameNewValue] = useState("");
   const [renaming, setRenaming] = useState(false);
@@ -153,7 +179,8 @@ export default function InventoryPage() {
     });
   };
 
-  const sortArrow = (key: SortKey) => (sortKey !== key ? "↕" : sortDir === "asc" ? "▲" : "▼");
+  const sortArrow = (key: SortKey) =>
+    sortKey !== key ? "↕" : sortDir === "asc" ? "▲" : "▼";
 
   const getCellVal = (item: InventoryItem, key: SortKey) => {
     switch (key) {
@@ -213,7 +240,9 @@ export default function InventoryPage() {
       return da - db;
     }
 
-    return String(va).localeCompare(String(vb), undefined, { sensitivity: "base" });
+    return String(va).localeCompare(String(vb), undefined, {
+      sensitivity: "base",
+    });
   };
 
   const [newItem, setNewItem] = useState<Omit<InventoryItem, "id">>({
@@ -222,7 +251,8 @@ export default function InventoryPage() {
     category: "",
     subcategory: "",
     unit: "",
-    size: null, // ✅
+    size: null,
+
     quantity: 0,
     unit_price: 0,
     cost_price: 0,
@@ -241,22 +271,6 @@ export default function InventoryPage() {
     stock_level: "In Stock",
   });
 
-  const [validationErrors, setValidationErrors] = useState({
-    product_name: false,
-    category: false,
-    subcategory: false,
-    unit: false,
-    size: false,
-    quantity: false,
-    cost_price: false,
-    markup_percent: false,
-    discount_percent: false,
-    pieces_per_unit: false,
-    weight_per_piece_kg: false,
-    ceiling_qty: false,
-    pricing_below_cost: false,
-  });
-
   const isPipe =
     (newItem.category || "").trim().toLowerCase() === "plumbing" &&
     (newItem.subcategory || "").trim().toLowerCase() === "pipes";
@@ -267,7 +281,9 @@ export default function InventoryPage() {
       const res = await fetch("/api/alerts/low-stock/run", { method: "POST" });
       const j = await res.json();
       if (!res.ok || !j?.ok) {
-        toast.error(`Low-stock email failed: ${j?.reason || j?.error || "Unknown error"}`);
+        toast.error(
+          `Low-stock email failed: ${j?.reason || j?.error || "Unknown error"}`
+        );
         return;
       }
       if ((j.count || 0) === 0) toast.info("No low/zero stock items found.");
@@ -294,17 +310,19 @@ export default function InventoryPage() {
   };
 
   const fetchDropdownOptions = async () => {
-    const { data, error } = await supabase.from("inventory").select("category, subcategory, unit, size");
+    const { data, error } = await supabase
+      .from("inventory")
+      .select("category, subcategory, unit, size");
     if (error) {
       console.error("Failed to fetch dropdown options:", error);
       return;
     }
-    const unique = (values: (string | null)[]) => [...new Set(values.filter(Boolean))] as string[];
+    const unique = (values: (string | null)[]) =>
+      [...new Set(values.filter(Boolean))] as string[];
+
     setCategoryOptions(unique(data.map((i) => i.category)));
     setSubcategoryOptions(unique(data.map((i) => i.subcategory)));
     setUnitOptions(unique(data.map((i) => i.unit)));
-
-    // ✅ sizes only from existing rows (works for any “pipe sizes” you already used)
     setSizeOptions(unique(data.map((i) => i.size)));
   };
 
@@ -316,17 +334,21 @@ export default function InventoryPage() {
   useEffect(() => {
     const channel = supabase
       .channel("realtime-inventory")
-      .on("postgres_changes", { event: "*", schema: "public", table: "inventory" }, () => {
-        fetchItems();
-        fetchDropdownOptions();
-      })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "inventory" },
+        () => {
+          fetchItems();
+          fetchDropdownOptions();
+        }
+      )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
   }, []);
 
-  // Unit defaults
+  // Unit defaults (safe; only fires on unit change)
   useEffect(() => {
     const u = newItem.unit;
     if (u === "Kg") {
@@ -343,23 +365,32 @@ export default function InventoryPage() {
     }
   }, [newItem.unit]);
 
-  // Compute weight
-  useEffect(() => {
-    const weightPerPiece = newItem.unit === "Kg" ? 1 : Number(newItem.weight_per_piece_kg) || 0;
-    const piecesPerUnit =
-      newItem.unit === "Kg"
-        ? 1
-        : Number(newItem.pieces_per_unit) || (newItem.unit === "Piece" ? 1 : newItem.unit === "Dozen" ? 12 : 0);
+  /* ============================================================================
+     ✅ Derived values (no setNewItem while typing)
+  ============================================================================ */
+
+  const computedWeight = useMemo(() => {
+    const unit = newItem.unit || "";
     const qty = Number(newItem.quantity) || 0;
-    const total = weightPerPiece > 0 && piecesPerUnit > 0 && qty > 0 ? weightPerPiece * piecesPerUnit * qty : 0;
-    setNewItem((prev) => ({ ...prev, total_weight_kg: total || null }));
+
+    const weightPerPiece = unit === "Kg" ? 1 : Number(newItem.weight_per_piece_kg) || 0;
+    const piecesPerUnit =
+      unit === "Kg"
+        ? 1
+        : Number(newItem.pieces_per_unit) ||
+          (unit === "Piece" ? 1 : unit === "Dozen" ? 12 : 0);
+
+    const total =
+      weightPerPiece > 0 && piecesPerUnit > 0 && qty > 0
+        ? weightPerPiece * piecesPerUnit * qty
+        : 0;
+
+    return total || 0;
   }, [newItem.unit, newItem.weight_per_piece_kg, newItem.pieces_per_unit, newItem.quantity]);
 
-  // ✅ Price logic (markup required, discount optional; never below cost)
-  useEffect(() => {
+  const computedPricing = useMemo(() => {
     const cost = Number(newItem.cost_price) || 0;
     const markup = clamp(Number(newItem.markup_percent) || 0, 0, LIMITS.MAX_MARKUP_PERCENT);
-    const baseSelling = cost + (cost * markup) / 100;
 
     const discountRaw = newItem.discount_percent;
     const discount =
@@ -367,54 +398,66 @@ export default function InventoryPage() {
         ? 0
         : clamp(Number(discountRaw) || 0, 0, LIMITS.MAX_DISCOUNT_PERCENT);
 
-    const discountedSelling = baseSelling * (1 - discount / 100);
     const qty = Number(newItem.quantity) || 0;
+
+    const baseSelling = cost + (cost * markup) / 100;
+    const discountedSelling = baseSelling * (1 - discount / 100);
 
     const belowCost = discountedSelling + 1e-9 < cost;
 
-    setNewItem((prev) => ({
-      ...prev,
-      markup_percent: markup,
-      discount_percent:
-        discountRaw === null || discountRaw === undefined || discountRaw === ("" as any) ? null : discount,
-      unit_price: parseFloat((belowCost ? cost : discountedSelling).toFixed(2)),
-      amount: (belowCost ? cost : discountedSelling) * qty,
-      profit: ((belowCost ? cost : discountedSelling) - cost) * qty,
-    }));
+    const finalUnit = Number((belowCost ? cost : discountedSelling).toFixed(2));
+    const amount = Number((finalUnit * qty).toFixed(2));
+    const profit = Number(((finalUnit - cost) * qty).toFixed(2));
 
-    setValidationErrors((prev) => ({ ...prev, pricing_below_cost: belowCost }));
+    return {
+      markup,
+      discount: discountRaw === null || discountRaw === undefined || discountRaw === ("" as any) ? null : discount,
+      unit_price: finalUnit,
+      amount,
+      profit,
+      belowCost,
+    };
   }, [newItem.cost_price, newItem.markup_percent, newItem.discount_percent, newItem.quantity]);
 
-  // Validation
-  useEffect(() => {
-    setValidationErrors((prev) => ({
-      ...prev,
+  const liveErrors = useMemo(() => {
+    const quantity = Number(newItem.quantity) || 0;
+    const cost_price = newItem.cost_price;
+    const markup_percent = newItem.markup_percent;
+    const discount_percent = newItem.discount_percent;
+    const wpp = newItem.weight_per_piece_kg;
+    const ceiling = newItem.ceiling_qty;
+
+    return {
       product_name: !newItem.product_name.trim(),
       category: !(newItem.category || "").trim(),
       subcategory: !(newItem.subcategory || "").trim(),
       unit: !(newItem.unit || "").trim(),
       size: isPipe ? !(newItem.size || "").trim() : false,
-      quantity: newItem.quantity < 0 || newItem.quantity > LIMITS.MAX_QUANTITY,
-      cost_price:
-        newItem.cost_price === null || newItem.cost_price < 0 || newItem.cost_price > LIMITS.MAX_COST_PRICE,
+
+      quantity: quantity < 0 || quantity > LIMITS.MAX_QUANTITY,
+      cost_price: cost_price === null || cost_price < 0 || cost_price > LIMITS.MAX_COST_PRICE,
       markup_percent:
-        newItem.markup_percent === null ||
-        newItem.markup_percent < 0 ||
-        newItem.markup_percent > LIMITS.MAX_MARKUP_PERCENT,
+        markup_percent === null ||
+        markup_percent < 0 ||
+        markup_percent > LIMITS.MAX_MARKUP_PERCENT,
       discount_percent:
-        newItem.discount_percent !== null &&
-        (newItem.discount_percent < 0 || newItem.discount_percent > LIMITS.MAX_DISCOUNT_PERCENT),
+        discount_percent !== null &&
+        (discount_percent < 0 || discount_percent > LIMITS.MAX_DISCOUNT_PERCENT),
+
       pieces_per_unit:
         (newItem.unit === "Box" || newItem.unit === "Pack") &&
         (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
+
       weight_per_piece_kg:
-        newItem.unit !== "Kg" && newItem.weight_per_piece_kg !== null
-          ? newItem.weight_per_piece_kg < 0 || newItem.weight_per_piece_kg > LIMITS.MAX_WEIGHT_PER_PIECE_KG
+        newItem.unit !== "Kg" && wpp !== null
+          ? wpp < 0 || wpp > LIMITS.MAX_WEIGHT_PER_PIECE_KG
           : false,
-      ceiling_qty: newItem.ceiling_qty != null && newItem.ceiling_qty < 0,
-      pricing_below_cost: validationErrors.pricing_below_cost,
-    }));
-  }, [newItem, isPipe, validationErrors.pricing_below_cost]);
+
+      ceiling_qty: ceiling != null && ceiling < 0,
+
+      pricing_below_cost: computedPricing.belowCost,
+    };
+  }, [newItem, isPipe, computedPricing.belowCost]);
 
   const handleImageSelect = (file: File | null) => {
     setImageFile(file);
@@ -499,6 +542,7 @@ export default function InventoryPage() {
 
   const normalizeForSave = () => {
     let { unit, pieces_per_unit, weight_per_piece_kg, quantity } = newItem;
+
     if (unit === "Kg") {
       pieces_per_unit = 1;
       weight_per_piece_kg = 1;
@@ -507,14 +551,16 @@ export default function InventoryPage() {
     } else if (unit === "Dozen") {
       pieces_per_unit = 12;
     }
+
     const total_weight_kg =
       pieces_per_unit && weight_per_piece_kg
         ? Number(pieces_per_unit) * Number(weight_per_piece_kg) * Number(quantity || 0)
         : null;
+
     return {
       pieces_per_unit: pieces_per_unit ?? null,
       weight_per_piece_kg: weight_per_piece_kg ?? null,
-      total_weight_kg,
+      total_weight_kg: total_weight_kg ?? null,
     };
   };
 
@@ -543,12 +589,14 @@ export default function InventoryPage() {
       ceiling_qty: null,
       stock_level: "In Stock",
     });
+
     setImageFile(null);
     setImagePreview(null);
     setGalleryFiles([]);
     setGalleryPreviews([]);
     setEditingItemId(null);
     setShowForm(false);
+
     setIsCustomCategory(false);
     setIsCustomSubcategory(false);
     setIsCustomUnit(false);
@@ -557,38 +605,9 @@ export default function InventoryPage() {
 
   const handleSubmitItem = async () => {
     try {
-      const errors = {
-        product_name: !newItem.product_name.trim(),
-        category: !(newItem.category || "").trim(),
-        subcategory: !(newItem.subcategory || "").trim(),
-        unit: !(newItem.unit || "").trim(),
-        size: isPipe ? !(newItem.size || "").trim() : false,
-        quantity: newItem.quantity < 0 || newItem.quantity > LIMITS.MAX_QUANTITY,
-        cost_price:
-          newItem.cost_price === null || newItem.cost_price < 0 || newItem.cost_price > LIMITS.MAX_COST_PRICE,
-        markup_percent:
-          newItem.markup_percent === null ||
-          newItem.markup_percent < 0 ||
-          newItem.markup_percent > LIMITS.MAX_MARKUP_PERCENT,
-        discount_percent:
-          newItem.discount_percent !== null &&
-          (newItem.discount_percent < 0 || newItem.discount_percent > LIMITS.MAX_DISCOUNT_PERCENT),
-        pieces_per_unit:
-          (newItem.unit === "Box" || newItem.unit === "Pack") &&
-          (!newItem.pieces_per_unit || newItem.pieces_per_unit <= 0),
-        weight_per_piece_kg:
-          newItem.unit !== "Kg" && newItem.weight_per_piece_kg !== null
-            ? newItem.weight_per_piece_kg < 0 || newItem.weight_per_piece_kg > LIMITS.MAX_WEIGHT_PER_PIECE_KG
-            : false,
-        ceiling_qty: newItem.ceiling_qty != null && newItem.ceiling_qty < 0,
-        pricing_below_cost: validationErrors.pricing_below_cost,
-      };
-
-      setValidationErrors((prev) => ({ ...prev, ...errors }));
-
-      const hasErrors = Object.values(errors).some(Boolean);
+      const hasErrors = Object.values(liveErrors).some(Boolean);
       if (hasErrors) {
-        if (errors.pricing_below_cost) {
+        if (liveErrors.pricing_below_cost) {
           toast.error("Discount is too high. Selling price cannot go below Cost Price.");
         } else {
           toast.error("Please fill all required fields correctly.");
@@ -612,11 +631,23 @@ export default function InventoryPage() {
       }
 
       const normalized = normalizeForSave();
+
+      // ✅ save computed values at submit time
       const dataToSave = {
         ...newItem,
         ...normalized,
         image_url: finalImageUrl,
         date_created: new Date().toISOString(),
+
+        // computed pricing + totals
+        markup_percent: computedPricing.markup,
+        discount_percent: computedPricing.discount,
+        unit_price: computedPricing.unit_price,
+        amount: computedPricing.amount,
+        profit: computedPricing.profit,
+
+        // computed weight
+        total_weight_kg: normalized.total_weight_kg ?? (computedWeight ? computedWeight : null),
       };
 
       if (editingItemId !== null) {
@@ -697,7 +728,6 @@ export default function InventoryPage() {
     return Array.from(new Set([...usedList, ...fixed, ...extras])).filter(Boolean);
   }, [items, unitOptions, newItem.category]);
 
-  // ✅ Size options only if Pipes (and prioritize used sizes for pipes)
   const sizeSuggested = useMemo(() => {
     if (!isPipe) return sizeOptions;
     const used = new Set(
@@ -712,7 +742,6 @@ export default function InventoryPage() {
     );
     const usedList = Array.from(used);
     const others = sizeOptions.filter((s) => !used.has((s || "").trim()));
-    // common pipe sizes (appear even if not used yet)
     const common = ['1/2"', '3/4"', '1"', '1 1/4"', '1 1/2"', '2"', '3"', '4"'];
     return Array.from(new Set([...usedList, ...common, ...others])).filter(Boolean);
   }, [isPipe, items, sizeOptions]);
@@ -725,25 +754,6 @@ export default function InventoryPage() {
   /* ------------------------------ UI helpers ------------------------------ */
   const cell = "px-4 py-2 text-left align-middle";
   const cellNowrap = `${cell} whitespace-nowrap`;
-
-  // ✅ aligned inputs: consistent label width
-  const Row = ({
-    label,
-    required,
-    children,
-  }: {
-    label: string;
-    required?: boolean;
-    children: React.ReactNode;
-  }) => (
-    <div className="flex items-center gap-3">
-      <label className="w-44 shrink-0 text-sm text-gray-700">
-        {label}
-        {required ? <span className="text-red-500">*</span> : null}
-      </label>
-      <div className="flex-1">{children}</div>
-    </div>
-  );
 
   // ✅ Double click row opens edit modal
   const openEditModalFromRow = (item: InventoryItem) => {
@@ -763,6 +773,9 @@ export default function InventoryPage() {
       ceiling_qty: item.ceiling_qty ?? null,
       stock_level: item.stock_level ?? "In Stock",
       unit_price: item.unit_price ?? 0,
+      total_weight_kg: item.total_weight_kg ?? null,
+      amount: item.amount ?? 0,
+      profit: item.profit ?? 0,
     });
 
     setImageFile(null);
@@ -853,7 +866,10 @@ export default function InventoryPage() {
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("product_name")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("product_name")}
+                  >
                     Product {sortArrow("product_name")}
                   </button>
                 </th>
@@ -863,7 +879,10 @@ export default function InventoryPage() {
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("subcategory")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("subcategory")}
+                  >
                     Subcategory {sortArrow("subcategory")}
                   </button>
                 </th>
@@ -872,75 +891,88 @@ export default function InventoryPage() {
                     Unit {sortArrow("unit")}
                   </button>
                 </th>
-
-                {/* ✅ Size column */}
                 <th className={cellNowrap}>
                   <button className="font-semibold hover:underline" onClick={() => toggleSort("size")}>
                     Size {sortArrow("size")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("quantity")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("quantity")}
+                  >
                     Quantity {sortArrow("quantity")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("cost_price")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("cost_price")}
+                  >
                     Cost Price {sortArrow("cost_price")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("markup_percent")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("markup_percent")}
+                  >
                     Markup % {sortArrow("markup_percent")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("discount_percent")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("discount_percent")}
+                  >
                     Discount % {sortArrow("discount_percent")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("unit_price")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("unit_price")}
+                  >
                     Unit Price {sortArrow("unit_price")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
                   <button className="font-semibold hover:underline" onClick={() => toggleSort("amount")}>
                     Total {sortArrow("amount")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("expiration_date")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("expiration_date")}
+                  >
                     Expiration Date {sortArrow("expiration_date")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("total_weight_kg")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("total_weight_kg")}
+                  >
                     Total Weight {sortArrow("total_weight_kg")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("stock_level")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("stock_level")}
+                  >
                     Stock Level {sortArrow("stock_level")}
                   </button>
                 </th>
-
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("date_created")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("date_created")}
+                  >
                     Date {sortArrow("date_created")}
                   </button>
                 </th>
-
-                {/* ✅ removed Actions column */}
               </tr>
             </thead>
 
@@ -949,7 +981,7 @@ export default function InventoryPage() {
                 <tr
                   key={item.id}
                   className="border-b hover:bg-gray-50 cursor-pointer"
-                  onDoubleClick={() => openEditModalFromRow(item)} // ✅ double click edit
+                  onDoubleClick={() => openEditModalFromRow(item)}
                   title="Double click to edit"
                 >
                   <td className={cellNowrap}>{item.sku}</td>
@@ -1014,7 +1046,11 @@ export default function InventoryPage() {
                           : lvl === "Out of Stock"
                           ? "bg-gray-200 text-gray-700"
                           : "bg-green-100 text-green-700";
-                      return <span className={`px-2 py-1 rounded text-xs font-semibold ${cls}`}>{lvl}</span>;
+                      return (
+                        <span className={`px-2 py-1 rounded text-xs font-semibold ${cls}`}>
+                          {lvl}
+                        </span>
+                      );
                     })()}
                   </td>
 
@@ -1086,7 +1122,9 @@ export default function InventoryPage() {
                         <>
                           <button
                             className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
-                            onClick={() => setModalIndex((i) => (i - 1 + modalImages.length) % modalImages.length)}
+                            onClick={() =>
+                              setModalIndex((i) => (i - 1 + modalImages.length) % modalImages.length)
+                            }
                             title="Previous"
                           >
                             ‹
@@ -1120,7 +1158,9 @@ export default function InventoryPage() {
                     )}
                   </div>
                 ) : (
-                  <div className="text-center text-gray-500 border rounded p-6">No images found for this item.</div>
+                  <div className="text-center text-gray-500 border rounded p-6">
+                    No images found for this item.
+                  </div>
                 )}
               </div>
 
@@ -1147,8 +1187,8 @@ export default function InventoryPage() {
             <div className="bg-white p-8 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto space-y-4">
               <h2 className="text-lg font-semibold">{editingItemId ? "Edit Item" : "Add New Item"}</h2>
 
-              {/* ✅ aligned layout */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* LEFT */}
                 <div className="space-y-3">
                   <Row label="SKU" required>
                     <input
@@ -1161,7 +1201,7 @@ export default function InventoryPage() {
 
                   <Row label="Product Name" required>
                     <input
-                      className="w-full border px-4 py-2 rounded"
+                      className={`w-full border px-4 py-2 rounded ${liveErrors.product_name ? "border-red-500" : ""}`}
                       placeholder="e.g. Boysen"
                       value={newItem.product_name}
                       onChange={(e) => setNewItem((prev) => ({ ...prev, product_name: e.target.value }))}
@@ -1172,7 +1212,7 @@ export default function InventoryPage() {
                     <div className="flex items-center gap-2">
                       {isCustomCategory ? (
                         <input
-                          className="w-full border px-4 py-2 rounded"
+                          className={`w-full border px-4 py-2 rounded ${liveErrors.category ? "border-red-500" : ""}`}
                           placeholder="Enter new category"
                           value={newItem.category || ""}
                           onChange={(e) =>
@@ -1187,7 +1227,12 @@ export default function InventoryPage() {
                       ) : (
                         <Popover open={catOpen} onOpenChange={setCatOpen}>
                           <PopoverTrigger asChild>
-                            <Button variant="outline" role="combobox" aria-expanded={catOpen} className="w-full justify-between">
+                            <Button
+                              variant="outline"
+                              role="combobox"
+                              aria-expanded={catOpen}
+                              className={`w-full justify-between ${liveErrors.category ? "border-red-500" : ""}`}
+                            >
                               {newItem.category ? newItem.category : "Select Category"}
                               <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50" />
                             </Button>
@@ -1207,7 +1252,12 @@ export default function InventoryPage() {
                                         setCatOpen(false);
                                       }}
                                     >
-                                      <Check className={cn("mr-2 h-4 w-4", newItem.category === c ? "opacity-100" : "opacity-0")} />
+                                      <Check
+                                        className={cn(
+                                          "mr-2 h-4 w-4",
+                                          newItem.category === c ? "opacity-100" : "opacity-0"
+                                        )}
+                                      />
                                       {c}
                                     </CommandItem>
                                   ))}
@@ -1219,7 +1269,12 @@ export default function InventoryPage() {
                       )}
 
                       <label className="text-sm flex items-center gap-1">
-                        <input type="checkbox" checked={isCustomCategory} onChange={(e) => setIsCustomCategory(e.target.checked)} /> New
+                        <input
+                          type="checkbox"
+                          checked={isCustomCategory}
+                          onChange={(e) => setIsCustomCategory(e.target.checked)}
+                        />{" "}
+                        New
                       </label>
                     </div>
                   </Row>
@@ -1228,7 +1283,7 @@ export default function InventoryPage() {
                     <div className="flex items-center gap-2">
                       {isCustomSubcategory ? (
                         <input
-                          className="w-full border px-4 py-2 rounded"
+                          className={`w-full border px-4 py-2 rounded ${liveErrors.subcategory ? "border-red-500" : ""}`}
                           placeholder="Enter new subcategory"
                           value={newItem.subcategory || ""}
                           onChange={(e) =>
@@ -1242,7 +1297,7 @@ export default function InventoryPage() {
                               variant="outline"
                               role="combobox"
                               aria-expanded={subOpen}
-                              className="w-full justify-between"
+                              className={`w-full justify-between ${liveErrors.subcategory ? "border-red-500" : ""}`}
                               disabled={!newItem.category}
                             >
                               {newItem.subcategory ? newItem.subcategory : "Select Subcategory"}
@@ -1264,7 +1319,12 @@ export default function InventoryPage() {
                                         setSubOpen(false);
                                       }}
                                     >
-                                      <Check className={cn("mr-2 h-4 w-4", newItem.subcategory === s ? "opacity-100" : "opacity-0")} />
+                                      <Check
+                                        className={cn(
+                                          "mr-2 h-4 w-4",
+                                          newItem.subcategory === s ? "opacity-100" : "opacity-0"
+                                        )}
+                                      />
                                       {s}
                                     </CommandItem>
                                   ))}
@@ -1276,7 +1336,12 @@ export default function InventoryPage() {
                       )}
 
                       <label className="text-sm flex items-center gap-1">
-                        <input type="checkbox" checked={isCustomSubcategory} onChange={(e) => setIsCustomSubcategory(e.target.checked)} /> New
+                        <input
+                          type="checkbox"
+                          checked={isCustomSubcategory}
+                          onChange={(e) => setIsCustomSubcategory(e.target.checked)}
+                        />{" "}
+                        New
                       </label>
                     </div>
                   </Row>
@@ -1285,7 +1350,7 @@ export default function InventoryPage() {
                     <div className="flex items-center gap-2">
                       {isCustomUnit ? (
                         <input
-                          className="w-full border px-4 py-2 rounded"
+                          className={`w-full border px-4 py-2 rounded ${liveErrors.unit ? "border-red-500" : ""}`}
                           placeholder="Enter new unit"
                           value={newItem.unit || ""}
                           onChange={(e) => setNewItem((prev) => ({ ...prev, unit: e.target.value }))}
@@ -1293,7 +1358,12 @@ export default function InventoryPage() {
                       ) : (
                         <Popover open={unitOpen} onOpenChange={setUnitOpen}>
                           <PopoverTrigger asChild>
-                            <Button variant="outline" role="combobox" aria-expanded={unitOpen} className="w-full justify-between">
+                            <Button
+                              variant="outline"
+                              role="combobox"
+                              aria-expanded={unitOpen}
+                              className={`w-full justify-between ${liveErrors.unit ? "border-red-500" : ""}`}
+                            >
                               {newItem.unit ? newItem.unit : "Select Unit"}
                               <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50" />
                             </Button>
@@ -1313,7 +1383,12 @@ export default function InventoryPage() {
                                         setUnitOpen(false);
                                       }}
                                     >
-                                      <Check className={cn("mr-2 h-4 w-4", newItem.unit === u ? "opacity-100" : "opacity-0")} />
+                                      <Check
+                                        className={cn(
+                                          "mr-2 h-4 w-4",
+                                          newItem.unit === u ? "opacity-100" : "opacity-0"
+                                        )}
+                                      />
                                       {u}
                                     </CommandItem>
                                   ))}
@@ -1325,18 +1400,22 @@ export default function InventoryPage() {
                       )}
 
                       <label className="text-sm flex items-center gap-1">
-                        <input type="checkbox" checked={isCustomUnit} onChange={(e) => setIsCustomUnit(e.target.checked)} /> New
+                        <input
+                          type="checkbox"
+                          checked={isCustomUnit}
+                          onChange={(e) => setIsCustomUnit(e.target.checked)}
+                        />{" "}
+                        New
                       </label>
                     </div>
                   </Row>
 
-                  {/* ✅ Pipes Size (only when pipes) */}
                   {isPipe && (
                     <Row label="Pipe Size" required>
                       <div className="flex items-center gap-2">
                         {isCustomSize ? (
                           <input
-                            className={`w-full border px-4 py-2 rounded ${validationErrors.size ? "border-red-500" : ""}`}
+                            className={`w-full border px-4 py-2 rounded ${liveErrors.size ? "border-red-500" : ""}`}
                             placeholder='e.g. 1/2", 3/4", 1"'
                             value={newItem.size || ""}
                             onChange={(e) => setNewItem((prev) => ({ ...prev, size: e.target.value }))}
@@ -1348,7 +1427,7 @@ export default function InventoryPage() {
                                 variant="outline"
                                 role="combobox"
                                 aria-expanded={sizeOpen}
-                                className={`w-full justify-between ${validationErrors.size ? "border-red-500" : ""}`}
+                                className={`w-full justify-between ${liveErrors.size ? "border-red-500" : ""}`}
                               >
                                 {newItem.size ? newItem.size : "Select Size"}
                                 <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50" />
@@ -1369,7 +1448,12 @@ export default function InventoryPage() {
                                           setSizeOpen(false);
                                         }}
                                       >
-                                        <Check className={cn("mr-2 h-4 w-4", newItem.size === s ? "opacity-100" : "opacity-0")} />
+                                        <Check
+                                          className={cn(
+                                            "mr-2 h-4 w-4",
+                                            newItem.size === s ? "opacity-100" : "opacity-0"
+                                          )}
+                                        />
                                         {s}
                                       </CommandItem>
                                     ))}
@@ -1381,7 +1465,12 @@ export default function InventoryPage() {
                         )}
 
                         <label className="text-sm flex items-center gap-1">
-                          <input type="checkbox" checked={isCustomSize} onChange={(e) => setIsCustomSize(e.target.checked)} /> New
+                          <input
+                            type="checkbox"
+                            checked={isCustomSize}
+                            onChange={(e) => setIsCustomSize(e.target.checked)}
+                          />{" "}
+                          New
                         </label>
                       </div>
                     </Row>
@@ -1396,7 +1485,7 @@ export default function InventoryPage() {
                       min={0}
                       max={LIMITS.MAX_WEIGHT_PER_PIECE_KG}
                       step="0.001"
-                      className={`w-full border px-4 py-2 rounded ${validationErrors.weight_per_piece_kg ? "border-red-500" : ""}`}
+                      className={`w-full border px-4 py-2 rounded ${liveErrors.weight_per_piece_kg ? "border-red-500" : ""}`}
                       placeholder={newItem.unit === "Kg" ? "1 (auto for Kg items)" : "e.g. 0.45"}
                       value={newItem.unit === "Kg" ? 1 : newItem.weight_per_piece_kg ?? ""}
                       disabled={newItem.unit === "Kg"}
@@ -1414,7 +1503,7 @@ export default function InventoryPage() {
                       min={0}
                       max={LIMITS.MAX_QUANTITY}
                       step="1"
-                      className={`w-full border px-4 py-2 rounded ${validationErrors.quantity ? "border-red-500" : ""}`}
+                      className={`w-full border px-4 py-2 rounded ${liveErrors.quantity ? "border-red-500" : ""}`}
                       value={newItem.quantity}
                       onFocus={(e) => e.target.select()}
                       onChange={(e) => {
@@ -1430,7 +1519,7 @@ export default function InventoryPage() {
                       type="number"
                       min={0}
                       step="1"
-                      className={`w-full border px-4 py-2 rounded ${validationErrors.ceiling_qty ? "border-red-500" : ""}`}
+                      className={`w-full border px-4 py-2 rounded ${liveErrors.ceiling_qty ? "border-red-500" : ""}`}
                       placeholder="Optional max stock (for Low/Critical)"
                       value={newItem.ceiling_qty ?? ""}
                       onChange={(e) =>
@@ -1448,7 +1537,7 @@ export default function InventoryPage() {
                       min={0}
                       max={LIMITS.MAX_COST_PRICE}
                       step="0.01"
-                      className={`w-full border px-4 py-2 rounded ${validationErrors.cost_price ? "border-red-500" : ""}`}
+                      className={`w-full border px-4 py-2 rounded ${liveErrors.cost_price ? "border-red-500" : ""}`}
                       value={newItem.cost_price ?? 0}
                       onFocus={(e) => e.target.select()}
                       onChange={(e) => {
@@ -1465,7 +1554,7 @@ export default function InventoryPage() {
                       min={0}
                       max={LIMITS.MAX_MARKUP_PERCENT}
                       step="0.01"
-                      className={`w-full border px-4 py-2 rounded ${validationErrors.markup_percent ? "border-red-500" : ""}`}
+                      className={`w-full border px-4 py-2 rounded ${liveErrors.markup_percent ? "border-red-500" : ""}`}
                       value={newItem.markup_percent ?? 0}
                       onFocus={(e) => e.target.select()}
                       onChange={(e) => {
@@ -1483,7 +1572,7 @@ export default function InventoryPage() {
                       max={LIMITS.MAX_DISCOUNT_PERCENT}
                       step="0.01"
                       className={`w-full border px-4 py-2 rounded ${
-                        validationErrors.discount_percent || validationErrors.pricing_below_cost ? "border-red-500" : ""
+                        liveErrors.discount_percent || liveErrors.pricing_below_cost ? "border-red-500" : ""
                       }`}
                       placeholder="Optional (0–100)"
                       value={newItem.discount_percent ?? ""}
@@ -1500,7 +1589,7 @@ export default function InventoryPage() {
                     />
                   </Row>
 
-                  {validationErrors.pricing_below_cost && (
+                  {liveErrors.pricing_below_cost && (
                     <div className="text-xs text-red-600 ml-44">
                       Discount is too high — selling price cannot go below cost price.
                     </div>
@@ -1527,19 +1616,29 @@ export default function InventoryPage() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="flex items-center gap-3">
                     <label className="w-44 shrink-0 text-sm text-gray-700">Unit Price (auto)</label>
-                    <input className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-600" value={peso(Number(newItem.unit_price || 0))} readOnly disabled />
+                    <input
+                      className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-600"
+                      value={peso(Number(computedPricing.unit_price || 0))}
+                      readOnly
+                      disabled
+                    />
                   </div>
                   <div className="flex items-center gap-3">
                     <label className="w-44 shrink-0 text-sm text-gray-700">Total Price</label>
-                    <input className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-600" value={peso(Number(newItem.amount || 0))} readOnly disabled />
+                    <input
+                      className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-600"
+                      value={peso(Number(computedPricing.amount || 0))}
+                      readOnly
+                      disabled
+                    />
                   </div>
                   <div className="flex items-center gap-3">
                     <label className="w-44 shrink-0 text-sm text-gray-700">Total Weight</label>
                     <input
                       className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-600"
                       value={
-                        newItem.total_weight_kg
-                          ? `${Number(newItem.total_weight_kg).toLocaleString(undefined, { maximumFractionDigits: 3 })} kg`
+                        computedWeight
+                          ? `${Number(computedWeight).toLocaleString(undefined, { maximumFractionDigits: 3 })} kg`
                           : "—"
                       }
                       readOnly
@@ -1574,7 +1673,11 @@ export default function InventoryPage() {
                 <p className="text-xs text-gray-500 mt-1">Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB</p>
 
                 {imagePreview && (
-                  <button type="button" onClick={() => handleImageSelect(null)} className="mt-2 text-xs text-red-600 underline">
+                  <button
+                    type="button"
+                    onClick={() => handleImageSelect(null)}
+                    className="mt-2 text-xs text-red-600 underline"
+                  >
                     Remove selected image
                   </button>
                 )}
@@ -1628,7 +1731,9 @@ export default function InventoryPage() {
                 <button
                   onClick={handleSubmitItem}
                   disabled={saving}
-                  className={`bg-black text-white px-4 py-2 rounded hover:text-[#ffba20] ${saving ? "opacity-70 pointer-events-none" : ""}`}
+                  className={`bg-black text-white px-4 py-2 rounded hover:text-[#ffba20] ${
+                    saving ? "opacity-70 pointer-events-none" : ""
+                  }`}
                 >
                   {saving ? "Saving..." : editingItemId ? "Update Item" : "Add Item"}
                 </button>
@@ -1662,7 +1767,9 @@ export default function InventoryPage() {
               </button>
               <button
                 className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                disabled={renaming || !renameNewValue.trim() || renameNewValue.trim() === renameOldValue}
+                disabled={
+                  renaming || !renameNewValue.trim() || renameNewValue.trim() === renameOldValue
+                }
                 onClick={async () => {
                   if (!renameFieldType || !renameOldValue || !renameNewValue.trim()) return;
                   setRenaming(true);
