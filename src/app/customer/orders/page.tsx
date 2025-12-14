@@ -792,14 +792,6 @@ order_items (
                               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                                 <p>
                                   <span className="text-gray-500">
-                                    Shipping Fee:
-                                  </span>{" "}
-                                  {typeof deliv.shipping_fee === "number"
-                                    ? `₱${deliv.shipping_fee.toFixed(2)}`
-                                    : "—"}
-                                </p>
-                                <p>
-                                  <span className="text-gray-500">
                                     Schedule:
                                   </span>{" "}
                                   {formatPH(deliv.schedule_date)}
