@@ -40,6 +40,7 @@ type CustomerRow = {
 
 type OrderRow = {
   id: string | number;
+  customer_id: string | number; // ✅ ADD THIS
   status: string | null;
   date_created?: string | null;
 
@@ -52,6 +53,7 @@ type OrderRow = {
   payment_terms?: number | null;
   per_term_amount?: number | null;
 };
+
 
 type PaymentRow = {
   id: string;
@@ -96,12 +98,14 @@ async function uploadPaymentProof(file: File, orderId: string) {
   const path = `${orderId}/${Date.now()}-${safeName}`;
 
   const { error: upErr } = await supabase.storage
-    .from("payments-cheques")
+    .from("payment-cheques")
+
     .upload(path, file, { cacheControl: "3600", upsert: false });
 
   if (upErr) throw upErr;
 
-  const { data } = supabase.storage.from("payments-cheques").getPublicUrl(path);
+  const { data } = supabase.storage.from("payment-cheques").getPublicUrl(path);
+
   return data.publicUrl;
 }
 
@@ -229,6 +233,17 @@ export default function AdminPaymentsLedgerPage() {
     return Array.from(map.values());
   }, [customers]);
 
+  const codeByCustomerId = useMemo(() => {
+  const map = new Map<string, string>();
+  for (const c of customers) {
+    const id = String(c.id);
+    const code = String(c.code || "").trim();
+    if (code) map.set(id, code);
+  }
+  return map;
+}, [customers]);
+
+
   /* ------------------------------ Selected objects ------------------------------ */
   const selectedCustomer = useMemo(() => {
     if (!selectedCustomerId) return null;
@@ -238,14 +253,18 @@ export default function AdminPaymentsLedgerPage() {
     );
   }, [uniqueCustomers, selectedCustomerId]);
 
-  const invoiceNo = useMemo(() => {
-    return String(selectedCustomer?.code || "").trim();
-  }, [selectedCustomer]);
-
-  const selectedOrder = useMemo(() => {
+    const selectedOrder = useMemo(() => {
     if (!selectedOrderId) return null;
     return orders.find((o) => String(o.id) === String(selectedOrderId)) || null;
   }, [orders, selectedOrderId]);
+
+const invoiceNo = useMemo(() => {
+  if (!selectedOrder) return "";
+  return String(codeByCustomerId.get(String(selectedOrder.customer_id)) || "").trim();
+}, [selectedOrder, codeByCustomerId]);
+
+
+
 
   /* ------------------------------ When customerKey changes -> load orders ------------------------------ */
   useEffect(() => {
@@ -583,11 +602,15 @@ export default function AdminPaymentsLedgerPage() {
                 disabled={!selectedCustomerId}
               >
                 <option value="">— Select Invoice —</option>
-                {orders.map((o) => (
-                  <option key={String(o.id)} value={String(o.id)}>
-                    Invoice No. {selectedCustomer?.code || "—"}
-                  </option>
-                ))}
+{orders.map((o) => {
+  const code = codeByCustomerId.get(String(o.customer_id)) || "—";
+  return (
+    <option key={String(o.id)} value={String(o.id)}>
+      Invoice No. {code}
+    </option>
+  );
+})}
+
               </select>
 
               {!selectedCustomerId && (
@@ -628,7 +651,8 @@ export default function AdminPaymentsLedgerPage() {
             </div>
 
             {/* Add Payment (for selected invoice) */}
-            <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p- видно3">
+            <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+
               <div className="text-sm font-semibold text-gray-800 mb-2">
                 Add Payment (for this Invoice)
               </div>
