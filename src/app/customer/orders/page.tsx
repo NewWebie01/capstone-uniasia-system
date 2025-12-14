@@ -490,9 +490,6 @@ order_items (
                   {/* Card header */}
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-5 py-3 border-b">
                     <div className="space-y-0.5">
-                      <div className="text-[10px] uppercase tracking-wide text-gray-500">
-                        TXN
-                      </div>
                       <div className="font-semibold tracking-wide">
                         {t.code ?? "—"}
                       </div>
