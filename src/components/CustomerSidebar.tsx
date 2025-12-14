@@ -48,14 +48,9 @@ const Menus: MenuItem[] = [
   { title: "Cart (Checkout)", href: "/customer/checkout", icon: ShoppingCart },
   { title: "My orders", href: "/customer/orders", icon: ClipboardList },
 
-  // NEW: Payment Schedule
-  // { title: "Payments", href: "/customer/payments/history", icon: ReceiptText },
-  { title: "My Payment Ledger", href: "/customer/payments/schedule", icon: ReceiptText },
 
-  // (optional) keep the uploader page hidden or re-enable if you want:
-  // { title: "Payments", href: "/customer/payments", icon: ReceiptText },
+  { title: "My Payment Ledger", href: "/customer/payments/ledger", icon: ReceiptText },
 
-  
 
   { title: "Returns / Issues", href: "/customer/returns", icon: RotateCcw },
   { title: "Return Status", href: "/customer/returns/status", icon: BadgeCheck },

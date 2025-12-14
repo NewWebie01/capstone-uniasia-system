@@ -1,7 +1,7 @@
 // src/app/customer/checkout/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -76,8 +76,6 @@ const TRUCK_LIMITS = {
 const LIMIT_TOAST =
   "Exceeds items per transaction. Please split into another transaction.";
 
-const TERM_TO_INTEREST: Record<number, number> = { 1: 2, 3: 6, 6: 12, 12: 24 };
-
 /* ------------------------------ Helpers ------------------------------ */
 const formatCurrency = (n: number) =>
   (Number(n) || 0).toLocaleString("en-PH", {
@@ -106,6 +104,7 @@ const fixEncoding = (s: string) => {
     return s;
   }
 };
+
 // normalize PSGC codes to match dropdown option values
 const normalizePSGC = (code?: string | null) =>
   (code || "").trim().padEnd(9, "0");
@@ -117,12 +116,13 @@ async function fetchJSON<T>(url: string): Promise<T> {
   return JSON.parse(text);
 }
 
-function generateTransactionCode(): string {
+function generateInvoiceCode(): string {
   const date = new Date();
-  const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, "");
-  const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-  return `TXN-${yyyymmdd}-${random}`;
+  const ymd = date.toISOString().slice(0, 10).replace(/-/g, "");
+  const rand = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `INV-${ymd}-${rand}`;
 }
+
 
 function normalizePhone(input: string | null | undefined): string {
   const digits = String(input || "").replace(/\D/g, "");
@@ -252,21 +252,10 @@ export default function CheckoutPage() {
     customer_type: undefined,
   });
 
-  // credit terms
-  const [termsMonths, setTermsMonths] = useState<number | null>(null);
-  const [interestPercent, setInterestPercent] = useState<number>(0);
-
   // modals
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showFinalModal, setShowFinalModal] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
-  const [txnCode, setTxnCode] = useState<string>("");
-
-  // Terms & Conditions (Credit) state
-  const [showTermsModal, setShowTermsModal] = useState(false);
-  const [tcAccepted, setTcAccepted] = useState(false);
-  const [tcReadyToAccept, setTcReadyToAccept] = useState(false);
-  const termsBodyRef = useRef<HTMLDivElement | null>(null);
 
   // orders sidebar
   const [authUserId, setAuthUserId] = useState<string | null>(null);
@@ -324,10 +313,10 @@ export default function CheckoutPage() {
   const computedAddress = useMemo(() => {
     const parts = [
       houseStreet.trim(),
-      selectedBarangay?.name || "", // Changed from barangayName
-      selectedCity?.name || "", // Changed from cityName
-      selectedProvince?.name || "", // Changed from provinceName
-      selectedRegion?.name || "", // Changed from regionName
+      selectedBarangay?.name || "",
+      selectedCity?.name || "",
+      selectedProvince?.name || "",
+      selectedRegion?.name || "",
     ]
       .filter(Boolean)
       .map(fixEncoding);
@@ -383,17 +372,12 @@ export default function CheckoutPage() {
     setCustomerInfo((prev) => {
       const resolvedType =
         prev.customer_type || (last as any)?.customer_type || undefined;
-      const canUseCredit = resolvedType === "Existing Customer";
-      const priorPay =
-        (last as any)?.payment_type === "Credit" && canUseCredit
-          ? "Credit"
-          : "Cash";
 
       return {
         ...prev,
         contact_person:
           prev.contact_person || (last as any)?.contact_person || "",
-        payment_type: prev.payment_type || priorPay,
+        payment_type: prev.payment_type || (last as any)?.payment_type || "Cash",
         customer_type: resolvedType,
       };
     });
@@ -423,7 +407,6 @@ export default function CheckoutPage() {
         name
       `;
 
-      // 1) Try by UID
       let prof: any = null;
 
       if (uid) {
@@ -437,7 +420,6 @@ export default function CheckoutPage() {
         prof = data || null;
       }
 
-      // 2) Fallback by EMAIL
       if (!prof && email) {
         const { data, error } = await supabase
           .from("profiles")
@@ -451,14 +433,10 @@ export default function CheckoutPage() {
       }
 
       if (!prof) {
-        console.warn("[profiles] no row found for current user", {
-          uid,
-          email,
-        });
+        console.warn("[profiles] no row found for current user", { uid, email });
         return false;
       }
 
-      // Stage what we have (partial is OK)
       setPendingAddress({
         region: normalizePSGC(prof.region_code),
         province: normalizePSGC(prof.province_code),
@@ -467,7 +445,6 @@ export default function CheckoutPage() {
         house: (prof.house_street || "").trim() || undefined,
       });
 
-      // Update UI fields best-effort
       setCustomerInfo((prev) => ({
         ...prev,
         address: prev.address || prof.address || "",
@@ -508,12 +485,8 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     (async () => {
-      const {
-        email,
-        name,
-        phone: phoneFromAuth,
-        authUserId,
-      } = await getAuthIdentity();
+      const { email, name, phone: phoneFromAuth, authUserId } =
+        await getAuthIdentity();
 
       if (email) {
         const phoneFromSources =
@@ -570,9 +543,7 @@ export default function CheckoutPage() {
 
     if (isNCR) {
       Promise.all([
-        fetchJSON<PSGCCity[]>(
-          `https://psgc.cloud/api/regions/${regionCode}/cities`
-        ),
+        fetchJSON<PSGCCity[]>(`https://psgc.cloud/api/regions/${regionCode}/cities`),
         fetchJSON<PSGCCity[]>(
           `https://psgc.cloud/api/regions/${regionCode}/municipalities`
         ),
@@ -611,8 +582,7 @@ export default function CheckoutPage() {
       fetchJSON<PSGCCity[]>("https://psgc.cloud/api/municipalities"),
     ])
       .then(([c, m]) => {
-        const byProv = (x: PSGCCity) =>
-          x.code.startsWith(provinceCode.slice(0, 4));
+        const byProv = (x: PSGCCity) => x.code.startsWith(provinceCode.slice(0, 4));
         const list = [...c.filter(byProv), ...m.filter(byProv)]
           .map((x) => ({ ...x, name: fixEncoding(x.name) }))
           .sort((a, b) => a.name.localeCompare(b.name));
@@ -656,9 +626,7 @@ export default function CheckoutPage() {
       } catch {}
 
       try {
-        const all = await fetchJSON<PSGCBarangay[]>(
-          "https://psgc.cloud/api/barangays"
-        );
+        const all = await fetchJSON<PSGCBarangay[]>("https://psgc.cloud/api/barangays");
         const filtered = all.filter(
           (b) => b.code.startsWith(prefix9) || b.code.startsWith(prefix6)
         );
@@ -674,11 +642,7 @@ export default function CheckoutPage() {
   // Apply staged autofill level-by-level
   useEffect(() => {
     if (!pendingAddress) return;
-    if (
-      pendingAddress.region &&
-      regions.length &&
-      regionCode !== pendingAddress.region
-    ) {
+    if (pendingAddress.region && regions.length && regionCode !== pendingAddress.region) {
       setRegionCode(pendingAddress.region);
     }
   }, [pendingAddress, regions, regionCode]);
@@ -687,11 +651,7 @@ export default function CheckoutPage() {
     if (!pendingAddress) return;
     if (isNCR) return;
     if (!regionCode) return;
-    if (
-      provinces.length &&
-      pendingAddress.province &&
-      provinceCode !== pendingAddress.province
-    ) {
+    if (provinces.length && pendingAddress.province && provinceCode !== pendingAddress.province) {
       const exists = provinces.some((p) => p.code === pendingAddress.province);
       if (exists) setProvinceCode(pendingAddress.province);
     }
@@ -702,11 +662,7 @@ export default function CheckoutPage() {
     if (!regionCode) return;
     if (!isNCR && pendingAddress.province && !provinceCode) return;
 
-    if (
-      cities.length &&
-      pendingAddress.city &&
-      cityCode !== pendingAddress.city
-    ) {
+    if (cities.length && pendingAddress.city && cityCode !== pendingAddress.city) {
       const exists = cities.some((c) => c.code === pendingAddress.city);
       if (exists) setCityCode(pendingAddress.city);
     }
@@ -716,26 +672,16 @@ export default function CheckoutPage() {
     if (!pendingAddress) return;
     if (!cityCode) return;
 
-    // house can be applied anytime once we open the modal
-    if (pendingAddress.house && !houseStreet)
-      setHouseStreet(pendingAddress.house);
+    if (pendingAddress.house && !houseStreet) setHouseStreet(pendingAddress.house);
 
-    if (
-      barangays.length &&
-      pendingAddress.barangay &&
-      barangayCode !== pendingAddress.barangay
-    ) {
+    if (barangays.length && pendingAddress.barangay && barangayCode !== pendingAddress.barangay) {
       const exists = barangays.some((b) => b.code === pendingAddress.barangay);
       if (exists) setBarangayCode(pendingAddress.barangay);
     }
 
-    // Clear once the staged values are applied best-effort
-    // (don’t require everything, partial autofill still useful)
     if (
       (!pendingAddress.region || regionCode === pendingAddress.region) &&
-      (isNCR ||
-        !pendingAddress.province ||
-        provinceCode === pendingAddress.province) &&
+      (isNCR || !pendingAddress.province || provinceCode === pendingAddress.province) &&
       (!pendingAddress.city || cityCode === pendingAddress.city) &&
       (!pendingAddress.barangay || barangayCode === pendingAddress.barangay)
     ) {
@@ -809,30 +755,6 @@ export default function CheckoutPage() {
     };
   }, []);
 
-  /* --------------------------- Payment type logic --------------------------- */
-  useEffect(() => {
-    if (customerInfo.payment_type === "Credit") {
-      setTermsMonths((prev) => (prev == null ? 1 : prev));
-    } else {
-      setTermsMonths(null);
-      setInterestPercent(0);
-    }
-  }, [customerInfo.payment_type]);
-
-  useEffect(() => {
-    if (customerInfo.payment_type !== "Credit") {
-      setTcAccepted(false);
-      setTcReadyToAccept(false);
-      setShowTermsModal(false);
-    }
-  }, [customerInfo.payment_type]);
-
-  useEffect(() => {
-    if (customerInfo.payment_type === "Credit" && termsMonths != null) {
-      setInterestPercent(TERM_TO_INTEREST[termsMonths] ?? 0);
-    }
-  }, [termsMonths, customerInfo.payment_type]);
-
   /* ---------------------------- Cart quantity ops --------------------------- */
   const handleUpdateQty = (ci: CtxCartItem, nextRaw: number) => {
     const next = clampQty(Number.isFinite(nextRaw) ? nextRaw : 1);
@@ -887,18 +809,10 @@ export default function CheckoutPage() {
     if (!cityCode) missing.push("City / Municipality");
     if (!barangayCode) missing.push("Barangay");
     if (cart.length === 0) missing.push("Cart");
-
-    if (customerInfo.payment_type === "Credit") {
-      if (!termsMonths) missing.push("Payment Terms (months)");
-      if (interestPercent < 0) missing.push("Interest % must be 0 or higher");
-      if (!tcAccepted) missing.push("Accept Terms & Conditions");
-    }
-
     return missing;
   }, [
     customerInfo.name,
     customerInfo.contact_person,
-    customerInfo.payment_type,
     houseStreet,
     regionCode,
     provinceCode,
@@ -906,27 +820,27 @@ export default function CheckoutPage() {
     barangayCode,
     cart,
     isNCR,
-    termsMonths,
-    interestPercent,
-    tcAccepted,
   ]);
 
   const isConfirmEnabled = missingFields.length === 0;
 
   /* ------------------------- Customer upsert helpers ------------------------- */
-  async function ensureUniqueCustomerCode(): Promise<string> {
-    for (let i = 0; i < 5; i++) {
-      const candidate = generateTransactionCode();
-      const { data: exists } = await supabase
-        .from("customers")
-        .select("id")
-        .eq("code", candidate)
-        .limit(1)
-        .maybeSingle();
-      if (!(exists as any)?.id) return candidate;
-    }
-    return `${generateTransactionCode()}-${Date.now().toString().slice(-5)}`;
+async function ensureUniqueCustomerCode(): Promise<string> {
+  for (let i = 0; i < 5; i++) {
+    const candidate = generateInvoiceCode();
+
+    const { data } = await supabase
+      .from("customers")
+      .select("id")
+      .eq("code", candidate)
+      .maybeSingle();
+
+    if (!data) return candidate;
   }
+
+  return `INV-${Date.now()}`;
+}
+
 
   async function getOrCreateCustomer(): Promise<{ id: string; code: string }> {
     const { data: userWrap } = await supabase.auth.getUser();
@@ -1035,8 +949,7 @@ export default function CheckoutPage() {
 
     let ensuredPhone =
       normalizePhone(customerInfo.phone) || normalizePhone(authDefaults.phone);
-    if (!ensuredPhone && emailToUse)
-      ensuredPhone = await loadPhoneForEmail(emailToUse);
+    if (!ensuredPhone && emailToUse) ensuredPhone = await loadPhoneForEmail(emailToUse);
 
     setAuthDefaults((prev) => ({
       ...prev,
@@ -1052,26 +965,12 @@ export default function CheckoutPage() {
       phone: ensuredPhone || prev.phone,
     }));
 
-    // Autofill address: PROFILES first (Create Account), fallback to last customer row
     const gotProfileAddress = await loadProfileAddressSnapshot();
     if (!gotProfileAddress && emailToUse) {
       await loadLastCustomerSnapshot(emailToUse);
     }
 
     setShowConfirmModal(true);
-  };
-
-  const openTerms = () => {
-    setShowTermsModal(true);
-    setTcReadyToAccept(true);
-  };
-  const closeTerms = () => setShowTermsModal(false);
-
-  const onTermsScroll = () => {
-    const el = termsBodyRef.current;
-    if (!el) return;
-    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
-    if (atBottom) setTcReadyToAccept(true);
   };
 
   const proceedToFinal = () => {
@@ -1105,7 +1004,9 @@ export default function CheckoutPage() {
     setPlacingOrder(true);
 
     try {
-      const { id: customerId } = await getOrCreateCustomer();
+      const { id: customerId, code: invoiceNo } = await getOrCreateCustomer();
+setCustomerInfo((prev) => ({ ...prev, code: invoiceNo }));
+
 
       const now = new Date();
       const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
@@ -1117,13 +1018,6 @@ export default function CheckoutPage() {
         date_created: phTime,
       };
 
-      if (customerInfo.payment_type === "Credit") {
-        const months = termsMonths ?? 1;
-        orderPayload.terms = `Net ${months} Monthly`;
-        orderPayload.payment_terms = months;
-        orderPayload.interest_percent = TERM_TO_INTEREST[months];
-      }
-
       const { data: ord, error: ordErr } = await supabase
         .from("orders")
         .insert([orderPayload])
@@ -1133,7 +1027,6 @@ export default function CheckoutPage() {
 
       const orderId = (ord as any).id as string;
       const thisOrderCode = getTxnCode(orderId, (ord as any)?.date_created);
-      setTxnCode(thisOrderCode);
 
       const items = cart.map((ci) => ({
         order_id: orderId,
@@ -1141,9 +1034,7 @@ export default function CheckoutPage() {
         quantity: ci.quantity,
         price: ci.item.unit_price || 0,
       }));
-      const { error: itemsErr } = await supabase
-        .from("order_items")
-        .insert(items);
+      const { error: itemsErr } = await supabase.from("order_items").insert(items);
       if (itemsErr) throw itemsErr;
 
       // Best-effort notification
@@ -1172,14 +1063,6 @@ export default function CheckoutPage() {
               total_amount: Number(subtotal || 0),
               item_count: cart.length,
               payment_type: customerInfo.payment_type || "Cash",
-              terms_months:
-                customerInfo.payment_type === "Credit"
-                  ? termsMonths ?? null
-                  : null,
-              interest_percent:
-                customerInfo.payment_type === "Credit"
-                  ? interestPercent ?? null
-                  : null,
             },
           },
         ]);
@@ -1192,10 +1075,11 @@ export default function CheckoutPage() {
         const response = await fetch("/api/notify-admin-order", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            orderId,
-            transactionCode: thisOrderCode,
-            customer: {
+body: JSON.stringify({
+  orderId,
+  transactionCode: invoiceNo,
+  customer: {
+
               name: customerInfo.name || authDefaults.name || "Customer",
               email: customerInfo.email || authDefaults.email || "",
               phone: customerInfo.phone || authDefaults.phone || "",
@@ -1204,14 +1088,6 @@ export default function CheckoutPage() {
             totals: {
               subtotal,
               paymentType: customerInfo.payment_type || "Cash",
-              termsMonths:
-                customerInfo.payment_type === "Credit"
-                  ? termsMonths ?? null
-                  : null,
-              interestPercent:
-                customerInfo.payment_type === "Credit"
-                  ? interestPercent ?? null
-                  : null,
             },
             items: cart.map((ci) => ({
               product_name: ci.item.product_name,
@@ -1362,10 +1238,7 @@ export default function CheckoutPage() {
                                 type="number"
                                 value={ci.quantity}
                                 onChange={(e) =>
-                                  handleUpdateQty(
-                                    ci,
-                                    Number(e.target.value) || 1
-                                  )
+                                  handleUpdateQty(ci, Number(e.target.value) || 1)
                                 }
                                 className="w-16 text-center border rounded px-1 py-1"
                                 min={1}
@@ -1558,9 +1431,7 @@ export default function CheckoutPage() {
                   className="border px-3 py-2 rounded"
                   value={customerInfo.phone || ""}
                   onChange={(e) => {
-                    const digits = e.target.value
-                      .replace(/\D/g, "")
-                      .slice(0, 11);
+                    const digits = e.target.value.replace(/\D/g, "").slice(0, 11);
                     setCustomerInfo((prev) => ({ ...prev, phone: digits }));
                   }}
                 />
@@ -1682,8 +1553,7 @@ export default function CheckoutPage() {
                   className="border px-3 py-2 rounded col-span-2"
                   value={houseStreet}
                   onChange={(e) => {
-                    if (e.target.value.length <= 30)
-                      setHouseStreet(e.target.value);
+                    if (e.target.value.length <= 30) setHouseStreet(e.target.value);
                   }}
                 />
 
@@ -1727,84 +1597,7 @@ export default function CheckoutPage() {
                     </label>
                   ))}
                 </div>
-
-                {customerInfo.payment_type === "Credit" && (
-                  <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block mb-1">Payment Terms</label>
-                      <select
-                        className={`border px-3 py-2 rounded w-full ${
-                          !termsMonths ? "border-red-400" : ""
-                        }`}
-                        value={termsMonths ?? ""}
-                        onChange={(e) =>
-                          setTermsMonths(Number(e.target.value) || null)
-                        }
-                      >
-                        <option value="">Select term</option>
-                        <option value={1}>1 month (Net 1)</option>
-                        <option value={3}>3 months (Net 3)</option>
-                        <option value={6}>6 months (Net 6)</option>
-                        <option value={12}>12 months (Net 12)</option>
-                      </select>
-                      <div className="text-xs text-gray-500 mt-1">
-                        Available when you select Credit as payment type.
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block mb-1">Interest %</label>
-                      <input
-                        type="number"
-                        className="border px-3 py-2 rounded w-full bg-gray-100 cursor-not-allowed"
-                        value={interestPercent}
-                        readOnly
-                        disabled
-                        title="Interest is fixed per selected term"
-                      />
-                      <div className="text-xs text-gray-500 mt-1">
-                        1m→2%, 3m→6%, 6m→12%, 12m→24%.
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
-
-              {customerInfo.payment_type === "Credit" && (
-                <div className="col-span-2 rounded border p-3 bg-amber-50/50">
-                  <div className="text-sm">
-                    By selecting <span className="font-medium">Credit</span>,
-                    you agree to our{" "}
-                    <button
-                      type="button"
-                      onClick={openTerms}
-                      className="text-blue-600 hover:underline underline-offset-2"
-                    >
-                      Terms & Conditions on interest
-                    </button>
-                    .
-                  </div>
-
-                  <label className="mt-2 flex items-start gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5"
-                      checked={tcAccepted}
-                      onChange={(e) => setTcAccepted(e.target.checked)}
-                      disabled={!tcReadyToAccept}
-                    />
-                    <span>
-                      I have read and agree to the Terms & Conditions on
-                      interest.
-                      {!tcReadyToAccept && (
-                        <span className="ml-1 text-xs text-gray-500">
-                          (open & read the terms first)
-                        </span>
-                      )}
-                    </span>
-                  </label>
-                </div>
-              )}
 
               <div className="border rounded-xl bg-gray-100 overflow-hidden">
                 <table className="w-full text-sm">
@@ -1842,30 +1635,16 @@ export default function CheckoutPage() {
 
                 <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
                   <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount
-                    during order processing.
+                    * Final price may change if an admin applies a discount during
+                    order processing.
                   </div>
                   <div className="text-right text-sm">
                     <div>
-                      <span className="mr-2 text-gray-600">
-                        Estimated Total:
-                      </span>
+                      <span className="mr-2 text-gray-600">Estimated Total:</span>
                       <span className="font-semibold">
                         {formatCurrency(subtotal)}
                       </span>
                     </div>
-                    {customerInfo.payment_type === "Credit" && (
-                      <div className="mt-1">
-                        <span className="mr-2 text-gray-600">
-                          Est. w/ Interest:
-                        </span>
-                        <span className="font-semibold">
-                          {formatCurrency(
-                            subtotal * (1 + Math.max(0, interestPercent) / 100)
-                          )}
-                        </span>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
@@ -1873,8 +1652,7 @@ export default function CheckoutPage() {
 
             {missingFields.length > 0 && (
               <div className="mt-3 text-sm text-red-600">
-                <strong>Required:</strong>{" "}
-                {missingFields.slice(0, 5).join(", ")}
+                <strong>Required:</strong> {missingFields.slice(0, 5).join(", ")}
                 {missingFields.length > 5 ? "..." : ""}
               </div>
             )}
@@ -1903,102 +1681,6 @@ export default function CheckoutPage() {
         </div>
       )}
 
-      {/* ------------------------ Terms & Conditions Modal ------------------------ */}
-      {showTermsModal && (
-        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-3xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col"
-          >
-            <h2 className="text-xl font-semibold tracking-tight">
-              Terms &amp; Conditions – Credit Interest
-            </h2>
-
-            <div
-              ref={termsBodyRef}
-              onScroll={onTermsScroll}
-              className="mt-4 overflow-auto pr-2"
-              style={{ maxHeight: "60vh" }}
-            >
-              <div className="prose prose-sm max-w-none">
-                <p>
-                  These Terms &amp; Conditions govern the application of
-                  interest for credit purchases made through UniAsia Hardware
-                  &amp; Electrical Mktg. Corp.
-                </p>
-
-                <h3>1. Interest Schedule</h3>
-                <ul>
-                  <li>
-                    Net 1 month: <strong>2%</strong> interest for the whole
-                    term.
-                  </li>
-                  <li>
-                    Net 3 months: <strong>6%</strong> interest for the whole
-                    term.
-                  </li>
-                  <li>
-                    Net 6 months: <strong>12%</strong> interest for the whole
-                    term.
-                  </li>
-                  <li>
-                    Net 12 months: <strong>24%</strong> interest for the whole
-                    term.
-                  </li>
-                </ul>
-
-                <h3>2. Computation Basis</h3>
-                <p>
-                  Interest is computed on the order subtotal (exclusive of
-                  shipping). Shipping fees, if any, may be added separately.
-                </p>
-
-                <h3>3. Payment Schedule</h3>
-                <p>
-                  The total with interest is divided into equal monthly
-                  installments over the selected term.
-                </p>
-
-                <h3>7. Acceptance</h3>
-                <p>
-                  You must read this document in full before accepting. The
-                  agreement checkbox in the confirmation form will only be
-                  enabled after you scroll to the bottom of this page.
-                </p>
-
-                <p className="text-gray-500 text-sm mt-6">
-                  <em>Scroll to the very bottom to enable acceptance.</em>
-                </p>
-              </div>
-              <div className="h-6" />
-            </div>
-
-            <div className="mt-4 flex justify-between items-center">
-              <div className="text-sm">
-                {tcReadyToAccept ? (
-                  <span className="text-green-700 font-medium">
-                    You may now tick the checkbox in the form.
-                  </span>
-                ) : (
-                  <span className="text-gray-600">
-                    Please scroll to the bottom to unlock acceptance.
-                  </span>
-                )}
-              </div>
-
-              <button
-                onClick={closeTerms}
-                className="px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm"
-              >
-                Close
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
-
       {/* ------------------------ Final Confirmation Modal ------------------------ */}
       {showFinalModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2013,48 +1695,28 @@ export default function CheckoutPage() {
             </h2>
 
             <div className="mt-4 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <div className="text-xs text-gray-500">Customer</div>
-                  <div className="font-medium">{customerInfo.name}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500">Transaction Code</div>
-                  <div className="font-medium">{txnCode || "—"}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-gray-500">Date</div>
-                  <div className="font-medium">{formatPH()}</div>
-                </div>
-              </div>
+<div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+  <div>
+    <div className="text-xs text-gray-500">Customer</div>
+    <div className="font-medium">{customerInfo.name}</div>
+  </div>
 
-              {customerInfo.payment_type === "Credit" && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div>
-                    <div className="text-xs text-gray-500">Payment Type</div>
-                    <div className="font-medium">Credit</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Terms</div>
-                    <div className="font-medium">
-                      {termsMonths ?? "-"} month(s)
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">
-                      Interest (Whole Term)
-                    </div>
-                    <div className="font-medium">{interestPercent}%</div>
-                  </div>
-                </div>
-              )}
+  <div>
+    <div className="text-xs text-gray-500">Invoice No.</div>
+    <div className="font-medium">{customerInfo.code || "—"}</div>
+  </div>
+
+  <div>
+    <div className="text-xs text-gray-500">Date</div>
+    <div className="font-medium">{formatPH()}</div>
+  </div>
+</div>
+
 
               <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                 <div>
                   <div className="text-xs text-gray-500">Region</div>
-                  <div className="font-medium">
-                    {selectedRegion?.name ?? "-"}
-                  </div>
+                  <div className="font-medium">{selectedRegion?.name ?? "-"}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Province</div>
@@ -2114,30 +1776,16 @@ export default function CheckoutPage() {
 
                 <div className="flex items-center justify-between px-3 py-2 bg-white border-t">
                   <div className="text-xs text-gray-500">
-                    * Final price may change if an admin applies a discount
-                    during order processing.
+                    * Final price may change if an admin applies a discount during
+                    order processing.
                   </div>
                   <div className="text-right text-sm">
                     <div>
-                      <span className="mr-2 text-gray-600">
-                        Estimated Total:
-                      </span>
+                      <span className="mr-2 text-gray-600">Estimated Total:</span>
                       <span className="font-semibold">
                         {formatCurrency(subtotal)}
                       </span>
                     </div>
-                    {customerInfo.payment_type === "Credit" && (
-                      <div className="mt-1">
-                        <span className="mr-2 text-gray-600">
-                          Est. w/ Interest:
-                        </span>
-                        <span className="font-semibold">
-                          {formatCurrency(
-                            subtotal * (1 + Math.max(0, interestPercent) / 100)
-                          )}
-                        </span>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>

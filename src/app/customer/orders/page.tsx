@@ -490,9 +490,6 @@ order_items (
                   {/* Card header */}
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-5 py-3 border-b">
                     <div className="space-y-0.5">
-                      <div className="text-[10px] uppercase tracking-wide text-gray-500">
-                        TXN
-                      </div>
                       <div className="font-semibold tracking-wide">
                         {t.code ?? "—"}
                       </div>
@@ -790,14 +787,6 @@ order_items (
                             {/* Delivery details */}
                             {deliv && (
                               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                                <p>
-                                  <span className="text-gray-500">
-                                    Shipping Fee:
-                                  </span>{" "}
-                                  {typeof deliv.shipping_fee === "number"
-                                    ? `₱${deliv.shipping_fee.toFixed(2)}`
-                                    : "—"}
-                                </p>
                                 <p>
                                   <span className="text-gray-500">
                                     Schedule:
