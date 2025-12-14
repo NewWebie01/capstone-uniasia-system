@@ -36,7 +36,10 @@ type InventoryItem = {
   subcategory: string;
   unit: string;
   quantity: number;
+
+  // ✅ Keep in data (needed elsewhere), but we will HIDE it in the inventory table UI
   unit_price: number;
+
   cost_price?: number | null;
   amount: number;
   profit?: number | null;
@@ -100,7 +103,9 @@ type OrderWithDetails = {
 
 type PickingOrder = { orderId: string; status: "accepted" | "rejected" };
 
-/* ===== Sorting keys for inventory (including virtual "total") ===== */
+/* ===== Sorting keys for inventory (including virtual "total") =====
+   ✅ REMOVED "unit_price" (hidden in the inventory table)
+*/
 type InvSortKey =
   | "sku"
   | "product_name"
@@ -108,7 +113,6 @@ type InvSortKey =
   | "subcategory"
   | "unit"
   | "quantity"
-  | "unit_price"
   | "cost_price"
   | "total";
 
@@ -309,12 +313,8 @@ function ReceiptLikeSalesOrder({
 
             <thead className="text-[12px]">
               <tr className="border-b border-black">
-                <th className="border-r border-black px-2 py-1 text-left">
-                  QTY
-                </th>
-                <th className="border-r border-black px-2 py-1 text-left">
-                  UNIT
-                </th>
+                <th className="border-r border-black px-2 py-1 text-left">QTY</th>
+                <th className="border-r border-black px-2 py-1 text-left">UNIT</th>
                 <th className="border-r border-black px-2 py-1 text-left">
                   ITEM DESCRIPTION
                 </th>
@@ -545,7 +545,9 @@ function SalesPageContent() {
   // ✅ Receipt notes (Edit Receipt logic like Invoice)
   const [receiptEditMode, setReceiptEditMode] = useState(false);
   const [savingReceiptNotes, setSavingReceiptNotes] = useState(false);
-  const [editedReceiptNotes, setEditedReceiptNotes] = useState<Record<string, string>>({});
+  const [editedReceiptNotes, setEditedReceiptNotes] = useState<
+    Record<string, string>
+  >({});
 
   useEffect(() => {
     setLocalForwarder(forwarder || "");
@@ -806,7 +808,11 @@ function SalesPageContent() {
   }, [selectedOrder, showSalesOrderModal]);
 
   useEffect(() => {
-    if (showSalesOrderModal && (!repName || !repName.trim()) && processor?.name) {
+    if (
+      showSalesOrderModal &&
+      (!repName || !repName.trim()) &&
+      processor?.name
+    ) {
       setRepName(nameOnly(processor.name));
     }
   }, [showSalesOrderModal, processor, repName]);
@@ -971,8 +977,9 @@ function SalesPageContent() {
     const dir = invSortDir === "asc" ? 1 : -1;
 
     const getVal = (it: InventoryItem, key: InvSortKey): any => {
+      // ✅ TOTAL now based on COST PRICE (since Unit Price is hidden)
       if (key === "total")
-        return (Number(it.unit_price) || 0) * (Number(it.quantity) || 0);
+        return (Number(it.cost_price) || 0) * (Number(it.quantity) || 0);
       if (key === "cost_price") return it.cost_price ?? null;
       return (it as any)[key];
     };
@@ -1544,7 +1551,9 @@ function SalesPageContent() {
                 { key: "subcategory", label: "Subcategory" },
                 { key: "unit", label: "Unit" },
                 { key: "quantity", label: "Quantity", align: "right" },
-                { key: "unit_price", label: "Unit Price", align: "right" },
+
+                // ✅ UNIT PRICE REMOVED (hidden)
+
                 { key: "cost_price", label: "Cost Price", align: "right" },
                 { key: "total", label: "Total", align: "right" },
               ].map((h) => (
@@ -1565,6 +1574,7 @@ function SalesPageContent() {
               ))}
             </tr>
           </thead>
+
           <tbody>
             {pagedInventory.map((it) => (
               <tr
@@ -1580,20 +1590,24 @@ function SalesPageContent() {
                 <td className="py-2 px-4">{it.subcategory}</td>
                 <td className="py-2 px-4">{it.unit}</td>
                 <td className="py-2 px-4 text-right">{it.quantity}</td>
-                <td className="py-2 px-4 text-right">{peso(it.unit_price)}</td>
+
+                {/* ✅ COST PRICE only */}
                 <td className="py-2 px-4 text-right">
                   {it.cost_price !== undefined && it.cost_price !== null
                     ? peso(it.cost_price)
                     : "—"}
                 </td>
+
+                {/* ✅ Total based on COST PRICE */}
                 <td className="py-2 px-4 text-right">
-                  {peso(it.unit_price * it.quantity)}
+                  {peso((Number(it.cost_price) || 0) * (Number(it.quantity) || 0))}
                 </td>
               </tr>
             ))}
+
             {pagedInventory.length === 0 && (
               <tr>
-                <td className="py-4 px-4 text-center text-gray-500" colSpan={9}>
+                <td className="py-4 px-4 text-center text-gray-500" colSpan={8}>
                   No inventory found.
                 </td>
               </tr>
@@ -1736,7 +1750,9 @@ function SalesPageContent() {
                   {isAccepted && (
                     <button
                       onClick={() => {
-                        setPickingStatus((prev) => prev.filter((p) => p.orderId !== order.id));
+                        setPickingStatus((prev) =>
+                          prev.filter((p) => p.orderId !== order.id)
+                        );
                         setEditedQuantities([]);
                         setEditedDiscounts([]);
                         setSelectedOrder(null);

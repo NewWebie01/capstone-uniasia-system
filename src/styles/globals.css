@@ -1,8 +1,6 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-input, textarea, select, [contenteditable="true"] { caret-color: #000; }
-.cmdk-input, [cmdk-input] { caret-color: #000; }
 
 @layer components {
   .btn {
