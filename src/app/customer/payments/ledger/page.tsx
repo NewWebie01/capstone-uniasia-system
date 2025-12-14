@@ -1,4 +1,4 @@
-// src/app/customer/payment-ledger/page.tsx
+// src/app/customer/payments/ledger/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -19,14 +19,13 @@ const formatPH = (d: string | Date | null | undefined) => {
   if (!d) return "—";
   const dt = typeof d === "string" ? new Date(d) : d;
   if (isNaN(dt.getTime())) return "—";
-  return dt.toLocaleString("en-PH", {
+  return dt.toLocaleDateString("en-PH", {
     year: "numeric",
     month: "short",
     day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
   });
 };
+
 
 const round2 = (n: number) =>
   Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -38,7 +37,7 @@ const nowISO = () => new Date().toISOString();
 type CustomerRow = {
   id: string | number;
   name: string | null;
-  code: string | null; // may be customer code (you said invoice no lives here before)
+  code: string | null; // Invoice No. lives here per your schema
   email: string | null;
   phone: string | null;
   address: string | null;
@@ -58,6 +57,9 @@ type OrderRow = {
   terms?: string | null;
   payment_terms?: number | null;
   per_term_amount?: number | null;
+
+  // ✅ Join customers (single row, forced inner join)
+  customers?: { code: string | null } | null;
 };
 
 type PaymentRow = {
@@ -121,20 +123,17 @@ export default function CustomerMyPaymentLedgerPage() {
 
   /* ------------------------------ Fetch customers owned by me ------------------------------ */
   async function fetchMyCustomersByEmail(email: string) {
-    // Primary: match customers.email to current auth email
     const { data, error } = await supabase
       .from("customers")
       .select("id, name, code, email, phone, address")
       .eq("email", email)
-      .order("date", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) throw error;
     return ((data as CustomerRow[]) || []) as CustomerRow[];
   }
 
   async function fetchMyCustomersFallbackByProfilePhone(uid: string) {
-    // Optional fallback: if your customers table has phone but email isn't saved
-    // reads profile phone, then matches customers.phone
     const { data: prof, error: profErr } = await supabase
       .from("profiles")
       .select("contact_number")
@@ -150,7 +149,7 @@ export default function CustomerMyPaymentLedgerPage() {
       .from("customers")
       .select("id, name, code, email, phone, address")
       .eq("phone", phone)
-      .order("date", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) return [];
     return ((data as CustomerRow[]) || []) as CustomerRow[];
@@ -163,7 +162,6 @@ export default function CustomerMyPaymentLedgerPage() {
       return;
     }
 
-    // Deduplicate (same person duplicated rows) using same key strategy you used in admin
     const key = makeCustomerKey(customersOwned[0]);
     const ids = customersOwned
       .filter((c) => makeCustomerKey(c) === key)
@@ -174,16 +172,32 @@ export default function CustomerMyPaymentLedgerPage() {
       return;
     }
 
+    // ✅ IMPORTANT: use !inner to force a single joined customer row
     const { data, error } = await supabase
       .from("orders")
       .select(
-        "id, customer_id, status, date_created, total_amount, grand_total_with_interest, sales_tax, shipping_fee, terms, payment_terms, per_term_amount"
+        `
+        id, customer_id, status, date_created,
+        total_amount, grand_total_with_interest, sales_tax, shipping_fee,
+        terms, payment_terms, per_term_amount,
+        customers:customers!inner ( code )
+        `
       )
       .in("customer_id", ids)
       .order("date_created", { ascending: false });
 
     if (error) throw error;
-    setOrders((data as OrderRow[]) || []);
+
+    // Supabase sometimes still returns customers as array; normalize it here safely
+    const normalized: OrderRow[] = ((data as any[]) || []).map((row) => {
+      const c = row.customers;
+      const customersObj =
+        Array.isArray(c) ? (c[0] ?? null) : (c ?? null);
+
+      return { ...row, customers: customersObj };
+    });
+
+    setOrders(normalized);
   }
 
   /* ------------------------------ Fetch payments by selected order ------------------------------ */
@@ -213,12 +227,7 @@ export default function CustomerMyPaymentLedgerPage() {
         const { email, uid } = await loadAuthUser();
 
         let owned = await fetchMyCustomersByEmail(email);
-
-        // fallback if email not stored in customers table
-        if (!owned.length) {
-          const fallback = await fetchMyCustomersFallbackByProfilePhone(uid);
-          owned = fallback;
-        }
+        if (!owned.length) owned = await fetchMyCustomersFallbackByProfilePhone(uid);
 
         setMyCustomers(owned);
         await fetchOrdersByMyCustomerGroup(owned);
@@ -241,16 +250,20 @@ export default function CustomerMyPaymentLedgerPage() {
     return orders.find((o) => String(o.id) === String(selectedOrderId)) || null;
   }, [orders, selectedOrderId]);
 
+  // ✅ The invoice number to display everywhere
+  const selectedInvoiceNo = useMemo(() => {
+    const inv = String(selectedOrder?.customers?.code || "").trim();
+    return inv || "";
+  }, [selectedOrder]);
+
   /* ------------------------------ My display info ------------------------------ */
   const myDisplay = useMemo(() => {
-    // show best info from customers row, else fallback to auth email
     const c = myCustomers?.[0] || null;
     return {
       name: c?.name || "Customer",
       email: c?.email || meEmail || "—",
       phone: c?.phone || "—",
       address: c?.address || "—",
-      code: c?.code || "", // if you want to show it as customer code
     };
   }, [myCustomers, meEmail]);
 
@@ -352,17 +365,15 @@ export default function CustomerMyPaymentLedgerPage() {
     const createdAt = selectedOrder.date_created || nowISO();
     const rows: Omit<LedgerRow, "balance">[] = [];
 
-    // Invoice/Charge entry
     rows.push({
       sortDate: createdAt,
       dateLabel: formatPH(createdAt),
-      description: `Invoice Charge (Order #${String(selectedOrder.id)})`,
+      description: `Invoice Charge (${selectedInvoiceNo || "No Invoice No."})`,
       debit: orderGrandTotal,
       credit: 0,
       remarks: `Order Status: ${(selectedOrder.status || "—").toUpperCase()}`,
     });
 
-    // Payments entries (show received + pending; you can restrict to received only if you want)
     const payRows: Omit<LedgerRow, "balance">[] = (payments || [])
       .filter((p) => String(p.order_id ?? "") === String(selectedOrder.id))
       .map((p) => {
@@ -392,7 +403,7 @@ export default function CustomerMyPaymentLedgerPage() {
       bal = round2(bal + (r.debit || 0) - (r.credit || 0));
       return { ...r, balance: bal };
     });
-  }, [selectedOrder, payments, orderGrandTotal]);
+  }, [selectedOrder, payments, orderGrandTotal, selectedInvoiceNo]);
 
   const totalCredits = useMemo(
     () => round2(ledgerRows.reduce((s, r) => s + (r.credit || 0), 0)),
@@ -462,11 +473,15 @@ export default function CustomerMyPaymentLedgerPage() {
             disabled={!orders.length}
           >
             <option value="">— Select Invoice —</option>
-            {orders.map((o) => (
-              <option key={String(o.id)} value={String(o.id)}>
-                {`Order #${String(o.id)} • ${formatPH(o.date_created || "")} • ${(o.status || "—").toUpperCase()}`}
-              </option>
-            ))}
+
+            {orders.map((o) => {
+              const inv = String(o.customers?.code || "").trim();
+              return (
+                <option key={String(o.id)} value={String(o.id)}>
+                  {inv ? `Invoice No. ${inv}` : "Invoice No. —"}
+                </option>
+              );
+            })}
           </select>
 
           {!orders.length && !loading ? (
@@ -483,7 +498,10 @@ export default function CustomerMyPaymentLedgerPage() {
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
               <div>
                 <h2 className="text-lg font-semibold">
-                  Ledger for <span className="font-mono">Order #{selectedOrderId}</span>
+                  Ledger for{" "}
+                  <span className="font-mono">
+                    {selectedInvoiceNo ? `Invoice No. ${selectedInvoiceNo}` : "Invoice No. —"}
+                  </span>
                 </h2>
                 <p className="text-xs text-gray-600">
                   Debit = charge • Credit = payments • Balance = running balance
@@ -522,27 +540,16 @@ export default function CustomerMyPaymentLedgerPage() {
 
                 <tbody>
                   {ledgerRows.map((r, idx) => (
-                    <tr
-                      key={idx}
-                      className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}
-                    >
+                    <tr key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-neutral-50"}>
                       <td className="py-2.5 px-3">{r.dateLabel}</td>
                       <td className="py-2.5 px-3 font-medium whitespace-pre-line">
                         {r.description}
                       </td>
-
-                      <td className="py-2.5 px-3 text-left font-mono">
-                        {peso(r.debit || 0)}
-                      </td>
-
-                      <td className="py-2.5 px-3 text-left font-mono">
-                        {peso(r.credit || 0)}
-                      </td>
-
+                      <td className="py-2.5 px-3 text-left font-mono">{peso(r.debit || 0)}</td>
+                      <td className="py-2.5 px-3 text-left font-mono">{peso(r.credit || 0)}</td>
                       <td className="py-2.5 px-3 text-right font-mono font-bold">
                         {peso(r.balance || 0)}
                       </td>
-
                       <td className="py-2.5 px-3 text-left">
                         <span
                           className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${

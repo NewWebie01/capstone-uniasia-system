@@ -19,14 +19,13 @@ const formatPH = (d: string | Date | null | undefined) => {
   if (!d) return "—";
   const dt = typeof d === "string" ? new Date(d) : d;
   if (isNaN(dt.getTime())) return "—";
-  return dt.toLocaleString("en-PH", {
+  return dt.toLocaleDateString("en-PH", {
     year: "numeric",
     month: "short",
     day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
   });
 };
+
 
 /* ------------------------------ Types ------------------------------ */
 type CustomerRow = {
