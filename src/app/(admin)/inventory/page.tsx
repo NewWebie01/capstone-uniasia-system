@@ -72,7 +72,10 @@ const LIMITS = {
   MAX_WEIGHT_PER_PIECE_KG: 100,
   MAX_QUANTITY: 999_999,
   MAX_COST_PRICE: 1_000_000,
+
+  MIN_MARKUP_PERCENT: 20, // ✅ NEW: Minimum 20%
   MAX_MARKUP_PERCENT: 100,
+
   MAX_DISCOUNT_PERCENT: 100,
 } as const;
 
@@ -256,7 +259,7 @@ export default function InventoryPage() {
     quantity: 0,
     unit_price: 0,
     cost_price: 0,
-    markup_percent: 0,
+    markup_percent: LIMITS.MIN_MARKUP_PERCENT, // ✅ default 20%
     discount_percent: null,
     amount: 0,
     profit: 0,
@@ -390,7 +393,13 @@ export default function InventoryPage() {
 
   const computedPricing = useMemo(() => {
     const cost = Number(newItem.cost_price) || 0;
-    const markup = clamp(Number(newItem.markup_percent) || 0, 0, LIMITS.MAX_MARKUP_PERCENT);
+
+    // ✅ markup min 20%
+    const markup = clamp(
+      Number(newItem.markup_percent) || LIMITS.MIN_MARKUP_PERCENT,
+      LIMITS.MIN_MARKUP_PERCENT,
+      LIMITS.MAX_MARKUP_PERCENT
+    );
 
     const discountRaw = newItem.discount_percent;
     const discount =
@@ -411,7 +420,10 @@ export default function InventoryPage() {
 
     return {
       markup,
-      discount: discountRaw === null || discountRaw === undefined || discountRaw === ("" as any) ? null : discount,
+      discount:
+        discountRaw === null || discountRaw === undefined || discountRaw === ("" as any)
+          ? null
+          : discount,
       unit_price: finalUnit,
       amount,
       profit,
@@ -436,10 +448,13 @@ export default function InventoryPage() {
 
       quantity: quantity < 0 || quantity > LIMITS.MAX_QUANTITY,
       cost_price: cost_price === null || cost_price < 0 || cost_price > LIMITS.MAX_COST_PRICE,
+
+      // ✅ markup must be at least 20%
       markup_percent:
         markup_percent === null ||
-        markup_percent < 0 ||
+        markup_percent < LIMITS.MIN_MARKUP_PERCENT ||
         markup_percent > LIMITS.MAX_MARKUP_PERCENT,
+
       discount_percent:
         discount_percent !== null &&
         (discount_percent < 0 || discount_percent > LIMITS.MAX_DISCOUNT_PERCENT),
@@ -575,7 +590,7 @@ export default function InventoryPage() {
       quantity: 0,
       unit_price: 0,
       cost_price: 0,
-      markup_percent: 0,
+      markup_percent: LIMITS.MIN_MARKUP_PERCENT, // ✅ default 20%
       discount_percent: null,
       amount: 0,
       profit: 0,
@@ -609,6 +624,8 @@ export default function InventoryPage() {
       if (hasErrors) {
         if (liveErrors.pricing_below_cost) {
           toast.error("Discount is too high. Selling price cannot go below Cost Price.");
+        } else if (liveErrors.markup_percent) {
+          toast.error(`Markup must be at least ${LIMITS.MIN_MARKUP_PERCENT}%.`);
         } else {
           toast.error("Please fill all required fields correctly.");
         }
@@ -694,7 +711,7 @@ export default function InventoryPage() {
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / itemsPerPage));
   const safePage = Math.min(currentPage, totalPages);
-  const paged = sorted.slice((safePage - 1) * itemsPerPage, safePage * itemsPerPage);
+  const paged = sorted.slice((safePage - 1) * itemsPerPage, itemsPerPage * safePage);
 
   useEffect(() => setCurrentPage(1), [searchQuery, sortKey, sortDir]);
 
@@ -767,7 +784,10 @@ export default function InventoryPage() {
       unit: item.unit || "",
       size: item.size ?? null,
       cost_price: item.cost_price ?? 0,
-      markup_percent: item.markup_percent ?? 0,
+
+      // ✅ Ensure markup respects min when editing old rows
+      markup_percent: Math.max(Number(item.markup_percent ?? LIMITS.MIN_MARKUP_PERCENT), LIMITS.MIN_MARKUP_PERCENT),
+
       discount_percent: item.discount_percent ?? null,
       expiration_date: item.expiration_date ?? null,
       ceiling_qty: item.ceiling_qty ?? null,
@@ -828,7 +848,7 @@ export default function InventoryPage() {
                 quantity: 0,
                 unit_price: 0,
                 cost_price: 0,
-                markup_percent: 0,
+                markup_percent: LIMITS.MIN_MARKUP_PERCENT, // ✅ default 20%
                 discount_percent: null,
                 amount: 0,
                 profit: 0,
@@ -1497,6 +1517,26 @@ export default function InventoryPage() {
                     />
                   </Row>
 
+                  {/* ✅ SWAPPED: Ceiling first */}
+                  <Row label="Ceiling (Max Stock)">
+                    <input
+                      type="number"
+                      min={0}
+                      step="1"
+                      className={`w-full border px-4 py-2 rounded ${liveErrors.ceiling_qty ? "border-red-500" : ""}`}
+                      placeholder="Optional max stock (for Low/Critical)"
+                      value={newItem.ceiling_qty ?? ""}
+                      onChange={(e) =>
+                        setNewItem((prev) => ({
+                          ...prev,
+                          ceiling_qty:
+                            e.target.value === "" ? null : Math.max(0, parseInt(e.target.value || "0", 10)),
+                        }))
+                      }
+                    />
+                  </Row>
+
+                  {/* ✅ SWAPPED: Quantity below Ceiling */}
                   <Row label="Quantity" required>
                     <input
                       type="number"
@@ -1511,23 +1551,6 @@ export default function InventoryPage() {
                         const val = clamp(raw, 0, LIMITS.MAX_QUANTITY);
                         setNewItem((prev) => ({ ...prev, quantity: val }));
                       }}
-                    />
-                  </Row>
-
-                  <Row label="Ceiling (Max Stock)">
-                    <input
-                      type="number"
-                      min={0}
-                      step="1"
-                      className={`w-full border px-4 py-2 rounded ${liveErrors.ceiling_qty ? "border-red-500" : ""}`}
-                      placeholder="Optional max stock (for Low/Critical)"
-                      value={newItem.ceiling_qty ?? ""}
-                      onChange={(e) =>
-                        setNewItem((prev) => ({
-                          ...prev,
-                          ceiling_qty: e.target.value === "" ? null : Math.max(0, parseInt(e.target.value || "0", 10)),
-                        }))
-                      }
                     />
                   </Row>
 
@@ -1551,19 +1574,27 @@ export default function InventoryPage() {
                   <Row label="Markup (%)" required>
                     <input
                       type="number"
-                      min={0}
+                      min={LIMITS.MIN_MARKUP_PERCENT}
                       max={LIMITS.MAX_MARKUP_PERCENT}
                       step="0.01"
                       className={`w-full border px-4 py-2 rounded ${liveErrors.markup_percent ? "border-red-500" : ""}`}
-                      value={newItem.markup_percent ?? 0}
+                      value={newItem.markup_percent ?? LIMITS.MIN_MARKUP_PERCENT}
                       onFocus={(e) => e.target.select()}
                       onChange={(e) => {
-                        const raw = parseFloat(e.target.value) || 0;
-                        const val = clamp(raw, 0, LIMITS.MAX_MARKUP_PERCENT);
+                        const raw = parseFloat(e.target.value);
+                        const val = clamp(
+                          isNaN(raw) ? LIMITS.MIN_MARKUP_PERCENT : raw,
+                          LIMITS.MIN_MARKUP_PERCENT,
+                          LIMITS.MAX_MARKUP_PERCENT
+                        );
                         setNewItem((prev) => ({ ...prev, markup_percent: val }));
                       }}
                     />
                   </Row>
+
+                  <div className="text-xs text-gray-500 ml-44 -mt-2">
+                    Minimum markup is {LIMITS.MIN_MARKUP_PERCENT}%.
+                  </div>
 
                   <Row label="Discount (%)">
                     <input
@@ -1612,41 +1643,50 @@ export default function InventoryPage() {
               </div>
 
               {/* Summary */}
-              <div className="border-t pt-4 mt-2">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div className="flex items-center gap-3">
-                    <label className="w-44 shrink-0 text-sm text-gray-700">Unit Price (auto)</label>
-                    <input
-                      className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-600"
-                      value={peso(Number(computedPricing.unit_price || 0))}
-                      readOnly
-                      disabled
-                    />
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <label className="w-44 shrink-0 text-sm text-gray-700">Total Price</label>
-                    <input
-                      className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-600"
-                      value={peso(Number(computedPricing.amount || 0))}
-                      readOnly
-                      disabled
-                    />
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <label className="w-44 shrink-0 text-sm text-gray-700">Total Weight</label>
-                    <input
-                      className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-600"
-                      value={
-                        computedWeight
-                          ? `${Number(computedWeight).toLocaleString(undefined, { maximumFractionDigits: 3 })} kg`
-                          : "—"
-                      }
-                      readOnly
-                      disabled
-                    />
-                  </div>
-                </div>
-              </div>
+              {/* Summary */}
+<div className="border-t pt-4 mt-2">
+  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    {/* Unit Price */}
+    <div className="space-y-1">
+      <label className="text-sm text-gray-700">Unit Price (auto)</label>
+      <input
+        className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
+        value={peso(Number(computedPricing.unit_price || 0))}
+        readOnly
+        disabled
+      />
+    </div>
+
+    {/* Total Price */}
+    <div className="space-y-1">
+      <label className="text-sm text-gray-700">Total Price</label>
+      <input
+        className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
+        value={peso(Number(computedPricing.amount || 0))}
+        readOnly
+        disabled
+      />
+    </div>
+
+    {/* Total Weight */}
+    <div className="space-y-1">
+      <label className="text-sm text-gray-700">Total Weight</label>
+      <input
+        className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
+        value={
+          computedWeight
+            ? `${Number(computedWeight).toLocaleString(undefined, {
+                maximumFractionDigits: 3,
+              })} kg`
+            : "—"
+        }
+        readOnly
+        disabled
+      />
+    </div>
+  </div>
+</div>
+
 
               {/* Images */}
               <div>
@@ -1767,9 +1807,7 @@ export default function InventoryPage() {
               </button>
               <button
                 className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                disabled={
-                  renaming || !renameNewValue.trim() || renameNewValue.trim() === renameOldValue
-                }
+                disabled={renaming || !renameNewValue.trim() || renameNewValue.trim() === renameOldValue}
                 onClick={async () => {
                   if (!renameFieldType || !renameOldValue || !renameNewValue.trim()) return;
                   setRenaming(true);

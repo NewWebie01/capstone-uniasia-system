@@ -125,7 +125,9 @@ function ReceiptLikeSalesOrder({
   poNumber,
   setPoNumber,
   processor,
+
   repName,
+  setRepName,
 
   localForwarder,
   setLocalForwarder,
@@ -149,9 +151,11 @@ function ReceiptLikeSalesOrder({
 
   // ✅ Receipt Notes (Edit Receipt logic)
   receiptEditMode,
+  setReceiptEditMode,
   savingReceiptNotes,
   editedReceiptNotes,
   setEditedReceiptNotes,
+  saveReceiptNotes,
 }: any) {
   const safe = (v: any) => (v === null || v === undefined || v === "" ? "—" : v);
 
@@ -195,8 +199,45 @@ function ReceiptLikeSalesOrder({
 
       <div className="receipt-sheet border border-black p-6">
         {/* HEADER */}
-        <div className="text-center">
+        <div className="relative text-center">
           <div className="text-[30px] font-bold tracking-wide">SALES ORDER</div>
+
+          {/* ✅ TOP-RIGHT Edit Receipt controls */}
+          <div className="no-print absolute right-0 top-0 flex items-center gap-2">
+            {!receiptEditMode ? (
+              <button
+                className="px-4 py-2 rounded-md bg-black text-white hover:bg-neutral-800 text-sm"
+                onClick={() => setReceiptEditMode(true)}
+                type="button"
+              >
+                Edit Receipt
+              </button>
+            ) : (
+              <>
+                <button
+                  className={`px-4 py-2 rounded-md text-white text-sm ${
+                    savingReceiptNotes
+                      ? "bg-gray-400 cursor-not-allowed"
+                      : "bg-blue-600 hover:bg-blue-700"
+                  }`}
+                  onClick={saveReceiptNotes}
+                  disabled={savingReceiptNotes}
+                  type="button"
+                >
+                  {savingReceiptNotes ? "Saving…" : "Save Notes"}
+                </button>
+
+                <button
+                  className="px-4 py-2 rounded-md bg-gray-300 hover:bg-gray-400 text-sm"
+                  onClick={() => setReceiptEditMode(false)}
+                  disabled={savingReceiptNotes}
+                  type="button"
+                >
+                  Cancel Edit
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* TOP META */}
@@ -282,14 +323,22 @@ function ReceiptLikeSalesOrder({
                 </div>
               </div>
 
+              {/* ✅ A) Blank + editable input */}
               <div className="flex items-end gap-2">
                 <span className="min-w-[70px]">Salesman:</span>
                 <div className="flex-1 border-b border-black pb-[2px]">
                   <input
-                    value={repName}
-                    readOnly
-                    disabled
-                    className="w-full outline-none bg-transparent opacity-80 cursor-not-allowed"
+                    value={repName || ""}
+                    onChange={(e) => {
+                      setRepName(e.target.value);
+                      if (fieldErrors?.repName) {
+                        setFieldErrors((f: any) => ({ ...f, repName: false }));
+                      }
+                    }}
+                    className={`w-full outline-none bg-transparent ${
+                      fieldErrors?.repName ? "text-red-700" : ""
+                    }`}
+                    placeholder="Enter salesman name"
                   />
                 </div>
               </div>
@@ -313,8 +362,12 @@ function ReceiptLikeSalesOrder({
 
             <thead className="text-[12px]">
               <tr className="border-b border-black">
-                <th className="border-r border-black px-2 py-1 text-left">QTY</th>
-                <th className="border-r border-black px-2 py-1 text-left">UNIT</th>
+                <th className="border-r border-black px-2 py-1 text-left">
+                  QTY
+                </th>
+                <th className="border-r border-black px-2 py-1 text-left">
+                  UNIT
+                </th>
                 <th className="border-r border-black px-2 py-1 text-left">
                   ITEM DESCRIPTION
                 </th>
@@ -529,7 +582,7 @@ function SalesPageContent() {
 
   // Sales order meta
   const [poNumber, setPoNumber] = useState("");
-  const [repName, setRepName] = useState("");
+  const [repName, setRepName] = useState(""); // ✅ now blank + editable
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
@@ -599,7 +652,8 @@ function SalesPageContent() {
         role: userRow?.role ?? (user as any)?.user_metadata?.role ?? null,
       });
 
-      setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(friendly)));
+      // ✅ DO NOT auto-fill repName anymore (must be blank + editable)
+      // setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(friendly)));
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -800,23 +854,6 @@ function SalesPageContent() {
     setInvPage(1);
   }, [searchQuery]);
 
-  // 👉 Autofill Sales Rep with the customer's name (locked/read-only)
-  useEffect(() => {
-    if (!selectedOrder) return;
-    const customerName = selectedOrder.customers?.name || "";
-    if (customerName) setRepName(customerName);
-  }, [selectedOrder, showSalesOrderModal]);
-
-  useEffect(() => {
-    if (
-      showSalesOrderModal &&
-      (!repName || !repName.trim()) &&
-      processor?.name
-    ) {
-      setRepName(nameOnly(processor.name));
-    }
-  }, [showSalesOrderModal, processor, repName]);
-
   /* ======= Data fetches & realtime ======= */
   const fetchItems = async () => {
     const { data, error } = await supabase.from("inventory").select("*, profit");
@@ -932,7 +969,7 @@ function SalesPageContent() {
   /* ======= Helpers ======= */
   const resetSalesForm = () => {
     setPoNumber("");
-    setRepName("");
+    setRepName(""); // ✅ keep blank
     setForwarder("");
     setLocalForwarder("");
     setNumberOfTerms(1);
@@ -1108,7 +1145,9 @@ function SalesPageContent() {
     }
 
     setSelectedOrder(order);
-    setRepName(order.customers?.name || "");
+
+    // ✅ Salesman stays blank by default (editable)
+    setRepName("");
 
     setEditedQuantities(order.order_items.map((it) => it.quantity));
     setEditedDiscounts(order.order_items.map((it) => it.discount_percent ?? 0));
@@ -1127,7 +1166,6 @@ function SalesPageContent() {
     setReceiptEditMode(false);
 
     setShowSalesOrderModal(true);
-    setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(processor?.name || "")));
     setPickingStatus((prev) => [...prev, { orderId: order.id, status: "accepted" }]);
 
     // Notify customer: order approved (best effort)
@@ -1800,21 +1838,31 @@ function SalesPageContent() {
         </div>
       </div>
 
-      {/* SALES ORDER MODAL (✅ no Print/Close header bar) */}
+      {/* SALES ORDER MODAL (✅ click outside closes) */}
       {showSalesOrderModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black/40 flex justify-center items-start z-50 overflow-y-auto">
-          <div className="bg-white rounded-xl shadow-2xl w-[96vw] h-[94vh] mx-auto flex flex-col px-6 py-6 my-4 max-w-5xl overflow-y-auto mt-16">
+        <div
+          className="fixed inset-0 bg-black/40 flex justify-center items-start z-50 overflow-y-auto"
+          onClick={() => {
+            setShowSalesOrderModal(false);
+            resetSalesForm();
+            setSelectedOrder(null);
+          }}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-[96vw] h-[94vh] mx-auto flex flex-col px-6 py-6 my-4 max-w-5xl overflow-y-auto mt-16"
+            onClick={(e) => e.stopPropagation()}
+          >
             <ReceiptLikeSalesOrder
               selectedOrder={selectedOrder}
               poNumber={poNumber}
               setPoNumber={setPoNumber}
               processor={processor}
               repName={repName}
+              setRepName={setRepName}
               localForwarder={localForwarder}
               setLocalForwarder={setLocalForwarder}
               commitForwarder={commitForwarder}
               numberOfTerms={numberOfTerms}
-              totals={totals}
               isSalesTaxOn={isSalesTaxOn}
               setIsSalesTaxOn={setIsSalesTaxOn}
               editedQuantities={editedQuantities}
@@ -1826,46 +1874,13 @@ function SalesPageContent() {
               totalDiscount={totalDiscount}
               salesTaxValue={salesTaxValue}
               displayAmountDue={displayAmountDue}
-              // ✅ notes props
               receiptEditMode={receiptEditMode}
+              setReceiptEditMode={setReceiptEditMode}
               savingReceiptNotes={savingReceiptNotes}
               editedReceiptNotes={editedReceiptNotes}
               setEditedReceiptNotes={setEditedReceiptNotes}
+              saveReceiptNotes={saveReceiptNotes}
             />
-
-            {/* ✅ Edit Receipt controls (same pattern as Invoice) */}
-            <div className="no-print flex justify-center gap-3 mt-4">
-              {!receiptEditMode ? (
-                <button
-                  className="px-6 py-2 rounded-lg bg-black text-white hover:bg-neutral-800"
-                  onClick={() => setReceiptEditMode(true)}
-                >
-                  Edit Receipt
-                </button>
-              ) : (
-                <>
-                  <button
-                    className={`px-6 py-2 rounded-lg text-white ${
-                      savingReceiptNotes
-                        ? "bg-gray-400 cursor-not-allowed"
-                        : "bg-blue-600 hover:bg-blue-700"
-                    }`}
-                    onClick={saveReceiptNotes}
-                    disabled={savingReceiptNotes}
-                  >
-                    {savingReceiptNotes ? "Saving…" : "Save Notes"}
-                  </button>
-
-                  <button
-                    className="px-6 py-2 rounded-lg bg-gray-300 hover:bg-gray-400"
-                    onClick={() => setReceiptEditMode(false)}
-                    disabled={savingReceiptNotes}
-                  >
-                    Cancel Edit
-                  </button>
-                </>
-              )}
-            </div>
 
             {/* Bottom Actions */}
             <div className="no-print flex justify-center gap-6 mt-6">
