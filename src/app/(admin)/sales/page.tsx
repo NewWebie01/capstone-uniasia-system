@@ -78,9 +78,11 @@ type OrderWithDetails = {
     order_count?: number;
   };
   order_items: {
+    id: any; // ✅ order_items.id (uuid or int) — kept flexible
     quantity: number;
     price: number;
     discount_percent?: number | null;
+    remarks?: string | null; // ✅ receipt notes
     inventory: {
       id: number;
       sku: string;
@@ -110,20 +112,410 @@ type InvSortKey =
   | "cost_price"
   | "total";
 
+/* =========================
+   RECEIPT-LIKE SALES ORDER
+   ✅ Must be OUTSIDE SalesPageContent to prevent remount + cursor loss
+========================= */
+function ReceiptLikeSalesOrder({
+  selectedOrder,
+  poNumber,
+  setPoNumber,
+  processor,
+  repName,
+
+  localForwarder,
+  setLocalForwarder,
+  commitForwarder,
+
+  numberOfTerms,
+  isSalesTaxOn,
+  setIsSalesTaxOn,
+
+  editedQuantities,
+  editedDiscounts,
+  setEditedDiscounts,
+
+  fieldErrors,
+  setFieldErrors,
+
+  subtotalBeforeDiscount,
+  totalDiscount,
+  salesTaxValue,
+  displayAmountDue,
+
+  // ✅ Receipt Notes (Edit Receipt logic)
+  receiptEditMode,
+  savingReceiptNotes,
+  editedReceiptNotes,
+  setEditedReceiptNotes,
+}: any) {
+  const safe = (v: any) => (v === null || v === undefined || v === "" ? "—" : v);
+
+  // longer table for big orders
+  const PRINT_ROWS = 30;
+
+  const its = selectedOrder?.order_items || [];
+  const rows = Array.from(
+    { length: Math.max(PRINT_ROWS, its.length) },
+    (_, i) => its[i] ?? null
+  );
+
+  const termsText =
+    selectedOrder?.customers?.payment_type === "Credit"
+      ? `Net ${numberOfTerms} Monthly`
+      : safe(selectedOrder?.customers?.payment_type);
+
+  // ✅ Column widths (no notes column)
+  const colWidths = [
+    "52px", // QTY
+    "52px", // UNIT
+    "56%", // ITEM DESCRIPTION
+    "86px", // UNIT PRICE
+    "110px", // DISCOUNT (%)
+    "92px", // AMOUNT
+    "92px", // TOTAL
+  ];
+
+  return (
+    <div
+      className="w-full bg-white text-black"
+      style={{ fontFamily: "Times New Roman, serif" }}
+    >
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          .receipt-sheet { box-shadow: none !important; border: none !important; margin: 0 !important; width: 100% !important; }
+          body { background: white !important; }
+        }
+      `}</style>
+
+      <div className="receipt-sheet border border-black p-6">
+        {/* HEADER */}
+        <div className="text-center">
+          <div className="text-[30px] font-bold tracking-wide">SALES ORDER</div>
+        </div>
+
+        {/* TOP META */}
+        <div className="mt-4 grid grid-cols-1 gap-2 text-[15px]">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="flex items-end gap-2">
+              <span className="min-w-[80px]">Customer:</span>
+              <div className="flex-1 border-b border-black pb-[2px]">
+                {safe(selectedOrder?.customers?.name)}
+              </div>
+            </div>
+
+            <div className="flex items-end gap-2">
+              <span className="min-w-[50px]">Date:</span>
+              <div className="flex-1 border-b border-black pb-[2px]">
+                {safe(formatPHISODate(new Date()))}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="flex items-end gap-2">
+              <span className="min-w-[80px]">Address:</span>
+              <div className="flex-1 border-b border-black pb-[2px]">
+                {safe(selectedOrder?.customers?.address)}
+              </div>
+            </div>
+
+            <div className="flex items-end gap-2">
+              <span className="min-w-[60px]">Terms:</span>
+              <div className="flex-1 border-b border-black pb-[2px]">
+                {termsText}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="flex items-end gap-2">
+              <span className="min-w-[80px]">Forwarder:</span>
+              <div className="flex-1 border-b border-black pb-[2px]">
+                <input
+                  value={localForwarder}
+                  onChange={(e) => setLocalForwarder(e.target.value)}
+                  onBlur={() => commitForwarder(localForwarder)}
+                  className="w-full outline-none bg-transparent"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex items-end gap-2">
+                <span className="min-w-[60px]">P.O. No.:</span>
+                <div className="flex-1 border-b border-black pb-[2px]">
+                  <input
+                    inputMode="numeric"
+                    pattern="\d*"
+                    maxLength={6}
+                    value={poNumber}
+                    onChange={(e) => {
+                      const digitsOnly = e.target.value
+                        .replace(/\D/g, "")
+                        .slice(0, 6);
+                      setPoNumber(digitsOnly);
+                      if (fieldErrors?.poNumber) {
+                        setFieldErrors((f: any) => ({ ...f, poNumber: false }));
+                      }
+                    }}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const text = (e.clipboardData.getData("text") || "")
+                        .replace(/\D/g, "")
+                        .slice(0, 6);
+                      setPoNumber(text);
+                      if (fieldErrors?.poNumber) {
+                        setFieldErrors((f: any) => ({ ...f, poNumber: false }));
+                      }
+                    }}
+                    className={`w-full outline-none bg-transparent tracking-widest tabular-nums ${
+                      fieldErrors?.poNumber ? "text-red-700" : ""
+                    }`}
+                    placeholder="000000"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-end gap-2">
+                <span className="min-w-[70px]">Salesman:</span>
+                <div className="flex-1 border-b border-black pb-[2px]">
+                  <input
+                    value={repName}
+                    readOnly
+                    disabled
+                    className="w-full outline-none bg-transparent opacity-80 cursor-not-allowed"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-[11px] opacity-80">
+            Processed By: <b>{processor?.name || "Unknown"}</b> (
+            {processor?.email || "—"})
+          </div>
+        </div>
+
+        {/* ITEMS TABLE */}
+        <div className="mt-4 border border-black">
+          <table className="w-full">
+            <colgroup>
+              {colWidths.map((w: string, i: number) => (
+                <col key={i} style={{ width: w }} />
+              ))}
+            </colgroup>
+
+            <thead className="text-[12px]">
+              <tr className="border-b border-black">
+                <th className="border-r border-black px-2 py-1 text-left">
+                  QTY
+                </th>
+                <th className="border-r border-black px-2 py-1 text-left">
+                  UNIT
+                </th>
+                <th className="border-r border-black px-2 py-1 text-left">
+                  ITEM DESCRIPTION
+                </th>
+                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">
+                  UNIT PRICE
+                </th>
+                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">
+                  DISCOUNT (%)
+                </th>
+                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">
+                  AMOUNT
+                </th>
+                <th className="px-2 py-1 text-right whitespace-nowrap">TOTAL</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {rows.map((row: any, idx: number) => {
+                if (!row) {
+                  return (
+                    <tr key={`blank-${idx}`} className="h-[20px]">
+                      <td className="border-r border-black px-2 py-1" />
+                      <td className="border-r border-black px-2 py-1" />
+                      <td className="border-r border-black px-2 py-1" />
+                      <td className="border-r border-black px-2 py-1" />
+                      <td className="border-r border-black px-2 py-1" />
+                      <td className="border-r border-black px-2 py-1" />
+                      <td className="px-2 py-1" />
+                    </tr>
+                  );
+                }
+
+                const qty = editedQuantities[idx] ?? row.quantity; // locked
+                const unit = row.inventory?.unit || "—";
+                const desc = row.inventory?.product_name || "—";
+                const unitPrice = Number(row.price || 0);
+
+                const rawPct = editedDiscounts[idx] ?? 0;
+                const pct = Math.max(0, Math.min(100, Number(rawPct) || 0));
+                const lineAmount = qty * unitPrice * (1 - pct / 100);
+
+                // ✅ notes/remarks key per order_items.id
+                const rowId = String(row.id);
+                const noteValue =
+                  (editedReceiptNotes &&
+                  editedReceiptNotes[rowId] !== undefined
+                    ? editedReceiptNotes[rowId]
+                    : row.remarks) || "";
+
+                return (
+                  <tr key={`item-${idx}`} className="h-[20px] align-top">
+                    <td className="border-r border-black px-2 py-1">{qty}</td>
+
+                    <td className="border-r border-black px-2 py-1">{unit}</td>
+
+                    <td className="border-r border-black px-2 py-1">
+                      <div className="font-medium leading-tight">{desc}</div>
+
+                      {/* ✅ Receipt Notes (Edit Receipt logic) */}
+                      <div className="mt-1">
+                        {receiptEditMode ? (
+                          <input
+                            value={noteValue}
+                            onChange={(e) => {
+                              if (!setEditedReceiptNotes) return;
+                              setEditedReceiptNotes((prev: any) => ({
+                                ...(prev || {}),
+                                [rowId]: e.target.value,
+                              }));
+                            }}
+                            disabled={!!savingReceiptNotes}
+                            placeholder="Notes / Remarks..."
+                            className="w-full text-[11px] px-2 py-1 border border-black/40 rounded-sm focus:outline-none focus:border-black bg-transparent"
+                          />
+                        ) : noteValue ? (
+                          <div className="text-[11px] italic">
+                            Notes: {noteValue}
+                          </div>
+                        ) : null}
+                      </div>
+                    </td>
+
+                    <td className="border-r border-black px-2 py-1 text-right tabular-nums whitespace-nowrap">
+                      {peso(unitPrice)}
+                    </td>
+
+                    {/* clean discount input */}
+                    <td className="border-r border-black px-2 py-1 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={pct === 0 ? "" : String(pct)}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw.trim() === "") {
+                              setEditedDiscounts((prev: number[]) => {
+                                const next = [...prev];
+                                next[idx] = 0;
+                                return next;
+                              });
+                              return;
+                            }
+                            let p = parseFloat(raw);
+                            if (isNaN(p)) p = 0;
+                            p = Math.max(0, Math.min(100, Math.floor(p)));
+                            setEditedDiscounts((prev: number[]) => {
+                              const next = [...prev];
+                              next[idx] = p;
+                              return next;
+                            });
+                          }}
+                          className="w-[60px] bg-transparent outline-none text-right tabular-nums border-b border-black"
+                          placeholder="—"
+                        />
+                        <span className="tabular-nums">%</span>
+                      </div>
+                    </td>
+
+                    <td className="border-r border-black px-2 py-1 text-right tabular-nums whitespace-nowrap">
+                      {peso(lineAmount)}
+                    </td>
+
+                    <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">
+                      {peso(lineAmount)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* BOTTOM TOTALS */}
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 text-[12px]">
+          <div />
+
+          <div className="border border-black">
+            <div className="grid grid-cols-2 border-b border-black">
+              <div className="px-2 py-1 font-bold">Total Amount</div>
+              <div className="px-2 py-1 text-right">
+                {peso(subtotalBeforeDiscount)}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 border-b border-black">
+              <div className="px-2 py-1 font-bold">Less</div>
+              <div className="px-2 py-1 text-right">
+                {totalDiscount ? `-${peso(Math.abs(totalDiscount))}` : peso(0)}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 border-b border-black">
+              <div className="px-2 py-1 font-bold">Sales Tax (12%)</div>
+              <div className="px-2 py-1 text-right">
+                {isSalesTaxOn ? peso(salesTaxValue) : peso(0)}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2">
+              <div className="px-2 py-1 font-bold">Amount Due</div>
+              <div className="px-2 py-1 text-right font-bold">
+                {peso(displayAmountDue)}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* tax toggle small */}
+        <div className="no-print mt-2 flex items-center gap-2 text-[12px]">
+          <input
+            type="checkbox"
+            checked={isSalesTaxOn}
+            onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
+            className="accent-black"
+            id="tax"
+          />
+          <label htmlFor="tax">Include Sales Tax (12%)</label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SalesPageContent() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Removed: showModal (Picking List). We only use Sales Order + Final Confirm.
-  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(
+    null
+  );
   const [showSalesOrderModal, setShowSalesOrderModal] = useState(false);
   const [showFinalConfirm, setShowFinalConfirm] = useState(false);
 
   const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
 
-  // quantities are locked to ordered values; discounts are editable in Sales Order
+  // quantities are locked to ordered values; discounts are editable
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
 
@@ -141,9 +533,25 @@ function SalesPageContent() {
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
-  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(null);
+  const [orderToReject, setOrderToReject] = useState<OrderWithDetails | null>(
+    null
+  );
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [forwarder, setForwarder] = useState("");
+
+  // ✅ FIX: local input state for Forwarder (prevents jumpy blur behavior)
+  const [localForwarder, setLocalForwarder] = useState("");
+
+  // ✅ Receipt notes (Edit Receipt logic like Invoice)
+  const [receiptEditMode, setReceiptEditMode] = useState(false);
+  const [savingReceiptNotes, setSavingReceiptNotes] = useState(false);
+  const [editedReceiptNotes, setEditedReceiptNotes] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setLocalForwarder(forwarder || "");
+  }, [forwarder, selectedOrder?.id]);
+
+  const commitForwarder = (v: string) => setForwarder(v);
 
   // Activity Logs Modal state (API kept for continuity – UI not rendered here)
   const [showLogsModal, setShowLogsModal] = useState(false);
@@ -160,30 +568,38 @@ function SalesPageContent() {
   const INV_ROWS_PER_PAGE = 10;
   const [invPage, setInvPage] = useState(1);
 
+  // Keep only letters & spaces, cap to 30 chars
+  const nameOnly = (s: string) =>
+    (s || "").replace(/[^A-Za-z\s]/g, "").trim().slice(0, 30);
+
   useEffect(() => {
     (async () => {
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) return;
+
       const { data: userRow } = await supabase
         .from("users")
         .select("display_name, role")
         .eq("email", user.email ?? "")
         .maybeSingle();
+
       const friendly =
         userRow?.display_name ||
-        user.user_metadata?.display_name ||
-        user.user_metadata?.full_name ||
+        (user as any)?.user_metadata?.display_name ||
+        (user as any)?.user_metadata?.full_name ||
         (user.email ? user.email.split("@")[0] : "User");
+
       setProcessor({
         name: friendly,
         email: user.email ?? "unknown",
-        role: userRow?.role ?? user.user_metadata?.role ?? null,
+        role: userRow?.role ?? (user as any)?.user_metadata?.role ?? null,
       });
 
       setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(friendly)));
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Pick up target order if navigated from NotificationBell
@@ -358,17 +774,17 @@ function SalesPageContent() {
   }, [orders, pendingScrollId]);
 
   /* ======= Stats cards ======= */
-  const totalOrders = orders.length;
   const completedOrders = useMemo(
     () => orders.filter((o) => o.status === "completed").length,
     [orders]
   );
-  const displayTotalNoTax = useMemo(
-    () => subtotalBeforeDiscount + totals.interestAmount,
-    [subtotalBeforeDiscount, totals.interestAmount]
-  );
+
+  // ✅ Amount Due reflects discounted + tax + interest (grand total)
+  const displayAmountDue = useMemo(() => totals.grandTotal, [totals.grandTotal]);
+
   const pendingOrAccepted = useMemo(
-    () => orders.filter((o) => o.status === "pending" || o.status === "accepted"),
+    () =>
+      orders.filter((o) => o.status === "pending" || o.status === "accepted"),
     [orders]
   );
 
@@ -433,9 +849,11 @@ function SalesPageContent() {
           order_count
         ),
         order_items (
+          id,
           quantity,
           price,
           discount_percent,
+          remarks,
           inventory:inventory_id (
             id,
             sku,
@@ -458,15 +876,15 @@ function SalesPageContent() {
     }
 
     if (data) {
-      const formatted = data.map((o: any) => ({
+      const formatted = (data as any[]).map((o: any) => ({
         ...o,
         customers: Array.isArray(o.customers) ? o.customers[0] : o.customers,
-        order_items: o.order_items.map((item: any) => ({
+        order_items: (o.order_items || []).map((item: any) => ({
           ...item,
           inventory: Array.isArray(item.inventory) ? item.inventory[0] : item.inventory,
         })),
       }));
-      setOrders(formatted);
+      setOrders(formatted as any);
     }
   };
 
@@ -477,23 +895,32 @@ function SalesPageContent() {
 
     const inventoryChannel: RealtimeChannel = supabase
       .channel("inventory-channel")
-      .on("postgres_changes", { event: "*", schema: "public", table: "inventory" }, () => {
-        fetchItems();
-        fetchMovingProducts();
-      })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "inventory" },
+        () => {
+          fetchItems();
+          fetchMovingProducts();
+        }
+      )
       .subscribe();
 
     const ordersChannel: RealtimeChannel = supabase
       .channel("orders-channel")
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, () => {
-        fetchOrders();
-      })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        () => {
+          fetchOrders();
+        }
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(inventoryChannel);
       supabase.removeChannel(ordersChannel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ======= Helpers ======= */
@@ -501,33 +928,40 @@ function SalesPageContent() {
     setPoNumber("");
     setRepName("");
     setForwarder("");
+    setLocalForwarder("");
     setNumberOfTerms(1);
     setInterestPercent(0);
     setIsSalesTaxOn(true);
     setEditedQuantities([]);
     setEditedDiscounts([]);
     setFieldErrors({ poNumber: false, repName: false });
+
+    // ✅ reset receipt notes edit state
+    setReceiptEditMode(false);
+    setSavingReceiptNotes(false);
+    setEditedReceiptNotes({});
   };
 
   useEffect(() => {
     if (!showSalesOrderModal) resetSalesForm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSalesOrderModal]);
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
   // Validation state
-  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
-    poNumber: false,
-    repName: false,
-  });
+  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>(
+    { poNumber: false, repName: false }
+  );
 
   /* ======= Inventory sorting & pagination helpers ======= */
   const filteredInventory = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return items;
     return items.filter((it) => {
-      const hay = `${it.product_name} ${it.sku} ${it.category} ${it.subcategory}`.toLowerCase();
+      const hay =
+        `${it.product_name} ${it.sku} ${it.category} ${it.subcategory}`.toLowerCase();
       return hay.includes(q);
     });
   }, [items, searchQuery]);
@@ -537,7 +971,8 @@ function SalesPageContent() {
     const dir = invSortDir === "asc" ? 1 : -1;
 
     const getVal = (it: InventoryItem, key: InvSortKey): any => {
-      if (key === "total") return (Number(it.unit_price) || 0) * (Number(it.quantity) || 0);
+      if (key === "total")
+        return (Number(it.unit_price) || 0) * (Number(it.quantity) || 0);
       if (key === "cost_price") return it.cost_price ?? null;
       return (it as any)[key];
     };
@@ -546,15 +981,12 @@ function SalesPageContent() {
       const va = getVal(a, invSortKey);
       const vb = getVal(b, invSortKey);
 
-      // Handle null/undefined
       if (va == null && vb == null) return 0;
-      if (va == null) return 1; // nulls last
+      if (va == null) return 1;
       if (vb == null) return -1;
 
-      if (typeof va === "number" && typeof vb === "number") {
-        return (va - vb) * dir;
-      }
-      // compare strings case-insensitively
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+
       const sa = String(va).toLowerCase();
       const sb = String(vb).toLowerCase();
       if (sa < sb) return -1 * dir;
@@ -576,14 +1008,12 @@ function SalesPageContent() {
   );
 
   const toggleInvSort = (key: InvSortKey) => {
-    setInvPage(1); // reset page when sorting changes
+    setInvPage(1);
     setInvSortKey((prevKey) => {
       if (prevKey === key) {
-        // same key → flip direction
         setInvSortDir((prevDir) => (prevDir === "asc" ? "desc" : "asc"));
         return prevKey;
       } else {
-        // new key → default to asc
         setInvSortDir("asc");
         return key;
       }
@@ -595,6 +1025,37 @@ function SalesPageContent() {
     return invSortDir === "asc" ? "▲" : "▼";
   };
 
+  /* =========================
+     ✅ Save Receipt Notes (Edit Receipt logic)
+  ========================= */
+  const saveReceiptNotes = async () => {
+    if (!selectedOrder) return;
+    if (savingReceiptNotes) return;
+
+    setSavingReceiptNotes(true);
+    try {
+      for (const oi of selectedOrder.order_items) {
+        const key = String(oi.id);
+        const nextVal = editedReceiptNotes[key] ?? "";
+
+        const { error } = await supabase
+          .from("order_items")
+          .update({ remarks: nextVal })
+          .eq("id", oi.id);
+
+        if (error) throw error;
+      }
+
+      toast.success("Receipt notes saved!");
+      await fetchOrders();
+      setReceiptEditMode(false);
+    } catch (err: any) {
+      toast.error(`Failed to save notes: ${err?.message ?? "Unexpected error"}`);
+    } finally {
+      setSavingReceiptNotes(false);
+    }
+  };
+
   /* ======= Accept / Reject / Complete ======= */
   const handleAcceptOrder = async (order: OrderWithDetails) => {
     // Log acceptance intent
@@ -603,7 +1064,8 @@ function SalesPageContent() {
         data: { user },
       } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
-      const userRole = (user?.user_metadata as any)?.role || "unknown";
+      const userRole = (user as any)?.user_metadata?.role || "unknown";
+
       await supabase.from("activity_logs").insert([
         {
           user_email: userEmail,
@@ -628,8 +1090,11 @@ function SalesPageContent() {
       console.error("Failed to log activity for order acceptance:", err);
     }
 
-    // Mark accepted immediately (no picking modal anymore)
-    const { error } = await supabase.from("orders").update({ status: "accepted" }).eq("id", order.id);
+    // Mark accepted immediately
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "accepted" })
+      .eq("id", order.id);
     if (error) {
       toast.error("Failed to accept order: " + error.message);
       return;
@@ -638,12 +1103,21 @@ function SalesPageContent() {
     setSelectedOrder(order);
     setRepName(order.customers?.name || "");
 
-    // use saved values from DB
     setEditedQuantities(order.order_items.map((it) => it.quantity));
     setEditedDiscounts(order.order_items.map((it) => it.discount_percent ?? 0));
 
     setNumberOfTerms(order.payment_terms || 1);
-    setInterestPercent(order.interest_percent || interestFromTerms(order.payment_terms || 1));
+    setInterestPercent(
+      order.interest_percent || interestFromTerms(order.payment_terms || 1)
+    );
+
+    // ✅ preload notes into editable map
+    const initialNotes: Record<string, string> = {};
+    (order.order_items || []).forEach((oi) => {
+      if (oi?.id != null) initialNotes[String(oi.id)] = (oi.remarks ?? "") as string;
+    });
+    setEditedReceiptNotes(initialNotes);
+    setReceiptEditMode(false);
 
     setShowSalesOrderModal(true);
     setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(processor?.name || "")));
@@ -704,7 +1178,7 @@ function SalesPageContent() {
         data: { user },
       } = await supabase.auth.getUser();
       const userEmail = user?.email || "unknown";
-      const userRole = (user?.user_metadata as any)?.role || "unknown";
+      const userRole = (user as any)?.user_metadata?.role || "unknown";
       await supabase.from("activity_logs").insert([
         {
           user_email: userEmail,
@@ -728,16 +1202,13 @@ function SalesPageContent() {
     } catch (err) {
       console.error("Failed to log activity for order rejection:", err);
     }
+
     fetchOrders();
   };
-
-  // Keep only letters & spaces, cap to 30 chars
-  const nameOnly = (s: string) => (s || "").replace(/[^A-Za-z\s]/g, "").trim().slice(0, 30);
 
   const handleOrderComplete = async () => {
     if (!selectedOrder || isCompletingOrder) return;
 
-    // Validate required fields
     setFieldErrors({ poNumber: false, repName: false });
     const errors: Record<string, boolean> = {};
     if (!poNumber || !poNumber.trim()) errors.poNumber = true;
@@ -750,20 +1221,22 @@ function SalesPageContent() {
 
     setIsCompletingOrder(true);
     try {
-      // Persist fulfilled quantities + per-item discounts + inventory & sales rows
       for (let i = 0; i < selectedOrder.order_items.length; i++) {
         const oi = selectedOrder.order_items[i];
         const invId = oi.inventory.id;
         const qty = editedQuantities[i];
 
-        // 1) fulfilled quantity
         await supabase
           .from("order_items")
-          .update({ fulfilled_quantity: qty, discount_percent: editedDiscounts[i] || 0 })
+          .update({
+            fulfilled_quantity: qty,
+            discount_percent: editedDiscounts[i] || 0,
+            // ✅ also persist notes (if any) — best-effort
+            remarks: editedReceiptNotes[String(oi.id)] ?? (oi.remarks ?? ""),
+          })
           .eq("order_id", selectedOrder.id)
           .eq("inventory_id", invId);
 
-        // 2) inventory decrement (guard)
         const remaining = (oi.inventory.quantity || 0) - qty;
         if (remaining < 0) {
           toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
@@ -774,7 +1247,6 @@ function SalesPageContent() {
         }
         await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
 
-        // 3) sales row
         const unitPrice = oi.price;
         const discountPercent = editedDiscounts[i] || 0;
         const costPrice = oi.inventory.cost_price || 0;
@@ -792,7 +1264,6 @@ function SalesPageContent() {
         ]);
       }
 
-      // Approve/schedule via RPC then mark completed
       const isCredit = selectedOrder.customers.payment_type === "Credit";
       const firstDue = new Date();
       firstDue.setMonth(firstDue.getMonth() + 1);
@@ -823,7 +1294,6 @@ function SalesPageContent() {
         .eq("id", selectedOrder.id);
       if (doneErr) throw doneErr;
 
-      // notify customer: order completed (best effort)
       try {
         await fetch("/api/notify-customer", {
           method: "POST",
@@ -848,7 +1318,6 @@ function SalesPageContent() {
         console.error("notify (order_completed) failed:", e);
       }
 
-      // Close / refresh
       setShowSalesOrderModal(false);
       setShowFinalConfirm(false);
       resetSalesForm();
@@ -891,7 +1360,10 @@ function SalesPageContent() {
 
   /* ======= UI ======= */
   const pagedOrders = useMemo(() => {
-    return pendingOrAccepted.slice((currentPage - 1) * ordersPerPage, currentPage * ordersPerPage);
+    return pendingOrAccepted.slice(
+      (currentPage - 1) * ordersPerPage,
+      currentPage * ordersPerPage
+    );
   }, [pendingOrAccepted, currentPage]);
 
   const totalPages = Math.max(1, Math.ceil(pendingOrAccepted.length / ordersPerPage));
@@ -935,7 +1407,8 @@ function SalesPageContent() {
                 {movingProducts[0].product_name}
               </div>
               <div className="text-sm text-gray-600">
-                Sold in last 90d: <b>{movingProducts[0].units_90d.toLocaleString()}</b> units
+                Sold in last 90d: <b>{movingProducts[0].units_90d.toLocaleString()}</b>{" "}
+                units
                 <br />
                 Stock Left: <b>{movingProducts[0].current_stock.toLocaleString()}</b>
               </div>
@@ -948,12 +1421,14 @@ function SalesPageContent() {
         {/* Total Orders */}
         <div className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs">
           <div className="text-xs text-gray-500 font-semibold mb-2">Total Orders</div>
-          <div className="text-2xl font-bold text-black mb-1">{totalOrders}</div>
+          <div className="text-2xl font-bold text-black mb-1">{orders.length}</div>
         </div>
 
         {/* Completed Orders */}
         <div className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs">
-          <div className="text-xs text-gray-500 font-semibold mb-2">Completed Orders</div>
+          <div className="text-xs text-gray-500 font-semibold mb-2">
+            Completed Orders
+          </div>
           <div className="text-2xl font-bold text-blue-700 mb-1">{completedOrders}</div>
         </div>
 
@@ -1031,8 +1506,12 @@ function SalesPageContent() {
                         <td className="py-2 px-3 font-bold">{prod.product_name}</td>
                         <td className="py-2 px-3">{prod.category}</td>
                         <td className="py-2 px-3">{prod.subcategory}</td>
-                        <td className="py-2 px-3 text-right">{prod.units_90d.toLocaleString()}</td>
-                        <td className="py-2 px-3 text-right">{prod.current_stock.toLocaleString()}</td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.units_90d.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {prod.current_stock.toLocaleString()}
+                        </td>
                         <td className="py-2 px-3 text-right">
                           {prod.est_days_of_cover ? prod.est_days_of_cover.toFixed(1) : "-"}
                         </td>
@@ -1069,7 +1548,10 @@ function SalesPageContent() {
                 { key: "cost_price", label: "Cost Price", align: "right" },
                 { key: "total", label: "Total", align: "right" },
               ].map((h) => (
-                <th key={h.key} className={`py-2 px-4 ${h.align === "right" ? "text-right" : ""}`}>
+                <th
+                  key={h.key}
+                  className={`py-2 px-4 ${h.align === "right" ? "text-right" : ""}`}
+                >
                   <button
                     onClick={() => toggleInvSort(h.key as InvSortKey)}
                     className="inline-flex items-center gap-1 font-semibold hover:opacity-80"
@@ -1167,6 +1649,7 @@ function SalesPageContent() {
           const isRejected = pickingStatus.some(
             (p) => p.orderId === order.id && p.status === "rejected"
           );
+
           return (
             <div
               key={order.id}
@@ -1220,16 +1703,13 @@ function SalesPageContent() {
                     {item.inventory.product_name} - {item.quantity} pcs
                     <br />
                     <span className="text-sm text-gray-600">
-                      Ordered: {peso(item.price)} | Now:{" "}
-                      {peso(item.inventory.unit_price)}
+                      Ordered: {peso(item.price)} | Now: {peso(item.inventory.unit_price)}
                     </span>
                   </li>
                 ))}
               </ul>
 
-              <p className="mt-2 font-bold text-lg">
-                Total: {peso(order.total_amount)}
-              </p>
+              <p className="mt-2 font-bold text-lg">Total: {peso(order.total_amount)}</p>
 
               {order.status !== "completed" && order.status !== "rejected" && (
                 <div className="flex gap-2 mt-2">
@@ -1252,6 +1732,7 @@ function SalesPageContent() {
                       </button>
                     </>
                   )}
+
                   {isAccepted && (
                     <button
                       onClick={() => {
@@ -1260,6 +1741,7 @@ function SalesPageContent() {
                         setEditedDiscounts([]);
                         setSelectedOrder(null);
                         setShowSalesOrderModal(false);
+                        resetSalesForm();
                       }}
                       className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500"
                     >
@@ -1289,9 +1771,7 @@ function SalesPageContent() {
             Page {Math.min(currentPage, totalPages)} of {totalPages}
           </span>
           <button
-            onClick={() =>
-              setCurrentPage((p) => (p < totalPages ? p + 1 : p))
-            }
+            onClick={() => setCurrentPage((p) => (p < totalPages ? p + 1 : p))}
             disabled={currentPage >= totalPages}
             className={`px-4 py-2 rounded ${
               currentPage >= totalPages
@@ -1304,352 +1784,98 @@ function SalesPageContent() {
         </div>
       </div>
 
-      {/* SALES ORDER MODAL */}
+      {/* SALES ORDER MODAL (✅ no Print/Close header bar) */}
       {showSalesOrderModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-start z-50 overflow-y-auto">
-          <div className="bg-white rounded-xl shadow-2xl w-[96vw] h-[94vh] mx-auto flex flex-col gap-6 px-10 py-8 my-4 text-[15px] max-w-none max-h-[94vh] overflow-y-auto mt-16">
-            <h2 className="text-3xl font-bold mb-6 tracking-wide text-center text-gray-800">
-              SALES ORDER
-            </h2>
+        <div className="fixed inset-0 bg-black/40 flex justify-center items-start z-50 overflow-y-auto">
+          <div className="bg-white rounded-xl shadow-2xl w-[96vw] h-[94vh] mx-auto flex flex-col px-6 py-6 my-4 max-w-5xl overflow-y-auto mt-16">
+            <ReceiptLikeSalesOrder
+              selectedOrder={selectedOrder}
+              poNumber={poNumber}
+              setPoNumber={setPoNumber}
+              processor={processor}
+              repName={repName}
+              localForwarder={localForwarder}
+              setLocalForwarder={setLocalForwarder}
+              commitForwarder={commitForwarder}
+              numberOfTerms={numberOfTerms}
+              totals={totals}
+              isSalesTaxOn={isSalesTaxOn}
+              setIsSalesTaxOn={setIsSalesTaxOn}
+              editedQuantities={editedQuantities}
+              editedDiscounts={editedDiscounts}
+              setEditedDiscounts={setEditedDiscounts}
+              fieldErrors={fieldErrors}
+              setFieldErrors={setFieldErrors}
+              subtotalBeforeDiscount={subtotalBeforeDiscount}
+              totalDiscount={totalDiscount}
+              salesTaxValue={salesTaxValue}
+              displayAmountDue={displayAmountDue}
+              // ✅ notes props
+              receiptEditMode={receiptEditMode}
+              savingReceiptNotes={savingReceiptNotes}
+              editedReceiptNotes={editedReceiptNotes}
+              setEditedReceiptNotes={setEditedReceiptNotes}
+            />
 
-            <div className="flex flex-col md:flex-row md:justify-between mb-2 gap-2">
-              <div>
-                <div>
-                  <span className="font-medium">Sales Order Number: </span>
-                  <span className="text-lg text-blue-700 font-bold">
-                    {selectedOrder.customers.code ?? "—"}
-                  </span>
-                </div>
-                <div>
-                  <span className="font-medium">Sales Order Date: </span>
-                  {formatPHISODate(new Date())}
-                </div>
-              </div>
-
-              <div className="text-right space-y-1">
-                {/* PO Number */}
-                <div className="flex items-baseline gap-2">
-                  <span className="font-medium">PO Number:</span>
-                  <span className="text-gray-700">No.</span>
-                  <input
-                    inputMode="numeric"
-                    pattern="\d*"
-                    maxLength={6}
-                    value={poNumber}
-                    onChange={(e) => {
-                      const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 6);
-                      setPoNumber(digitsOnly);
-                      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
-                    }}
-                    onPaste={(e) => {
-                      e.preventDefault();
-                      const text = (e.clipboardData.getData("text") || "")
-                        .replace(/\D/g, "")
-                        .slice(0, 6);
-                      setPoNumber(text);
-                      if (fieldErrors.poNumber) setFieldErrors((f) => ({ ...f, poNumber: false }));
-                    }}
-                    className={`border-b outline-none px-1 transition-all duration-150 tracking-widest tabular-nums ${
-                      fieldErrors.poNumber ? "border-red-500 bg-red-50 animate-shake" : "border-gray-300"
+            {/* ✅ Edit Receipt controls (same pattern as Invoice) */}
+            <div className="no-print flex justify-center gap-3 mt-4">
+              {!receiptEditMode ? (
+                <button
+                  className="px-6 py-2 rounded-lg bg-black text-white hover:bg-neutral-800"
+                  onClick={() => setReceiptEditMode(true)}
+                >
+                  Edit Receipt
+                </button>
+              ) : (
+                <>
+                  <button
+                    className={`px-6 py-2 rounded-lg text-white ${
+                      savingReceiptNotes
+                        ? "bg-gray-400 cursor-not-allowed"
+                        : "bg-blue-600 hover:bg-blue-700"
                     }`}
-                    style={{ minWidth: 110 }}
-                    placeholder="000000"
-                    aria-label="PO Number (numbers only, max 6)"
-                  />
-                </div>
-                {fieldErrors.poNumber && (
-                  <div className="text-xs text-red-600 mt-1">PO Number is required</div>
-                )}
+                    onClick={saveReceiptNotes}
+                    disabled={savingReceiptNotes}
+                  >
+                    {savingReceiptNotes ? "Saving…" : "Save Notes"}
+                  </button>
 
-                <div>
-                  <span className="font-medium">Processed By: </span>
-                  <span className="font-semibold">{processor?.name || "Unknown"}</span>
-                  <span className="text-gray-500"> ({processor?.email || "-"})</span>
-                  {processor?.role && (
-                    <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-100">
-                      {processor.role}
-                    </span>
-                  )}
-                </div>
-
-                {/* Sales Rep Name (autofilled from customer, read-only) */}
-                <div>
-                  <span className="font-medium">Sales Rep Name: </span>
-                  <input
-                    type="text"
-                    value={repName}
-                    readOnly
-                    disabled
-                    className="border-b outline-none px-1 bg-gray-100 text-gray-700 cursor-not-allowed border-gray-300"
-                    style={{ minWidth: 220 }}
-                    aria-label="Sales Rep Name (read-only)"
-                  />
-                  <div className="text-xs text-gray-500 mt-1">
-                    Auto-filled from customer name
-                  </div>
-                </div>
-
-                <div>
-                  <span className="font-medium">Payment Terms: </span>
-                  {selectedOrder.customers.payment_type === "Credit"
-                    ? <>Net {numberOfTerms} Monthly</>
-                    : selectedOrder.customers.payment_type}
-                </div>
-              </div>
+                  <button
+                    className="px-6 py-2 rounded-lg bg-gray-300 hover:bg-gray-400"
+                    onClick={() => setReceiptEditMode(false)}
+                    disabled={savingReceiptNotes}
+                  >
+                    Cancel Edit
+                  </button>
+                </>
+              )}
             </div>
 
-            {/* CUSTOMER DETAILS */}
-            <div className="bg-[#f6f6f9] border rounded-lg px-4 py-3 mb-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 text-[15px]">
-              <div>
-                <div className="font-bold">To:</div>
-                <div><b>Name:</b> {selectedOrder.customers.name}</div>
-                <div><b>Email:</b> {selectedOrder.customers.email}</div>
-                <div><b>Phone:</b> {selectedOrder.customers.phone}</div>
-                <div><b>Address:</b> {selectedOrder.customers.address}</div>
-                {selectedOrder.customers.area && (
-                  <div><b>Area:</b> {selectedOrder.customers.area}</div>
-                )}
-              </div>
-              <div>
-                <div className="font-bold">Ship To:</div>
-                <div><b>Name:</b> {selectedOrder.customers.name}</div>
-                <div><b>Address:</b> {selectedOrder.customers.address}</div>
-                {selectedOrder.customers.area && (
-                  <div><b>Area:</b> {selectedOrder.customers.area}</div>
-                )}
-              </div>
-            </div>
-
-            {/* Item Table – Discount inputs */}
-            <div className="rounded-xl border mt-3">
-              <table className="w-full text-[15px]">
-                <thead className="bg-[#ffba20] text-black">
-                  <tr>
-                    <th className="py-1 px-2 text-left">Quantity</th>
-                    <th className="py-1 px-2 text-left">Unit</th>
-                    <th className="py-1 px-2 text-left">Description</th>
-                    <th className="py-1 px-2 text-left">Notes</th>
-                    <th className="py-1 px-2 text-right">Unit Price</th>
-                    <th className="py-1 px-2 text-right">Cost Price</th>
-                    <th className="py-1 px-2 text-right">Discount (%)</th>
-                    <th className="py-1 px-2 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedOrder.order_items.map((item, idx) => {
-                    const qty = editedQuantities[idx] ?? item.quantity; // locked
-                    const price = item.price;
-                    const percent = editedDiscounts[idx] || 0;
-                    const amount = qty * price * (1 - percent / 100);
-                    const stock = item.inventory.quantity;
-                    const insufficient = qty > stock || stock === 0;
-
-                    // Show blank input when percent === 0
-                    const displayPercent = percent === 0 ? "" : String(percent);
-
-                    return (
-                      <tr
-                        key={idx}
-                        className={
-                          "border-t " + (insufficient ? "bg-red-100 text-red-700 font-semibold" : "")
-                        }
-                      >
-                        <td className="py-1 px-2">{qty}</td>
-                        <td className="py-1 px-2">{item.inventory.unit}</td>
-                        <td className="py-1 px-2 font-semibold">{item.inventory.product_name}</td>
-                        <td className="py-1 px-2">
-                          {stock === 0 ? (
-                            <span className="text-red-600 font-semibold">Out of Stock</span>
-                          ) : qty > stock ? (
-                            <span className="text-orange-600 font-semibold">
-                              Insufficient (Requested {qty}, In stock {stock})
-                            </span>
-                          ) : (
-                            <span className="text-green-600">Available</span>
-                          )}
-                        </td>
-                        <td className="py-1 px-2 text-right">{peso(price)}</td>
-                        <td className="py-1 px-2 text-right">
-                          {item.inventory.cost_price !== undefined &&
-                          item.inventory.cost_price !== null
-                            ? peso(item.inventory.cost_price)
-                            : "—"}
-                        </td>
-                        <td className="py-1 px-2 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <input
-                              type="number"
-                              min={0}
-                              max={50}
-                              step={1}
-                              value={displayPercent as any}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                if (raw.trim() === "") {
-                                  setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)));
-                                  return;
-                                }
-                                let p = parseFloat(raw.replace(/[^0-9]/g, ""));
-                                if (isNaN(p)) p = 0;
-                                if (p > 50) p = 50;
-                                if (p < 0) p = 0;
-                                setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? p : d)));
-                              }}
-                              className="w-16 text-center border rounded px-1 py-0.5 font-bold"
-                              placeholder=""
-                              aria-label="Discount percent (0-50)"
-                            />
-                            <span>%</span>
-                            <button
-                              className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 active:bg-blue-200 transition"
-                              onClick={() =>
-                                setEditedDiscounts((prev) => prev.map((d, i) => (i === idx ? 0 : d)))
-                              }
-                              type="button"
-                            >
-                              Reset
-                            </button>
-                          </div>
-                        </td>
-                        <td className="py-1 px-2 text-right font-semibold">
-                          {peso(amount)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Totals and Terms */}
-            <div className="flex flex-col md:flex-row md:justify-end gap-4 mt-5">
-              <div className="space-y-2 min-w-[350px]">
-                <div className="flex justify-between font-medium">
-                  <span>
-                    Subtotal:
-                    <div className="text-xs text-gray-500">Sum before tax & discount</div>
-                  </span>
-                  <span>
-                    {peso(subtotalBeforeDiscount)}
-                  </span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span>
-                    Sales Tax (12%):
-                    <div className="text-xs text-gray-500">Tax applied to subtotal</div>
-                  </span>
-                  <span>{peso(salesTaxValue)}</span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={isSalesTaxOn}
-                    onChange={() => setIsSalesTaxOn(!isSalesTaxOn)}
-                    id="sales-tax-toggle"
-                    className="mr-1 accent-blue-600"
-                  />
-                  <label htmlFor="sales-tax-toggle" className="font-semibold">
-                    Include Sales Tax (12%)
-                  </label>
-                </div>
-
-                <div className="flex justify-between">
-                  <span>
-                    Discount/Add:
-                    <div className="text-xs text-gray-500">Sum of per-item discounts/adds</div>
-                  </span>
-                  <span className={totalDiscount !== 0 ? "text-orange-600 font-semibold" : ""}>
-                    {totalDiscount === 0 ? "—" : `-${peso(Math.abs(totalDiscount))}`}
-                  </span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span>
-                    Subtotal w/ Tax & Discount:
-                    <div className="text-xs text-gray-500">Subtotal after discount & tax</div>
-                  </span>
-                  <span>
-                    {peso(subtotalBeforeDiscount + salesTaxValue - totalDiscount)}
-                  </span>
-                </div>
-
-                {selectedOrder.customers.payment_type === "Credit" && (
-                  <>
-                    <div className="flex justify-between">
-                      <span>
-                        Interest Amount ({totals.effectiveInterestPercent}%):
-                        <div className="text-xs text-gray-500">For credit terms</div>
-                      </span>
-                      <span>{peso(totals.interestAmount)}</span>
-                    </div>
-
-                    <div className="flex items-center gap-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">Terms (months):</span>
-                        <span className="px-2 py-1 rounded bg-gray-100 text-gray-700 font-semibold">
-                          {numberOfTerms}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">Interest %:</span>
-                        <span className="px-2 py-1 rounded bg-gray-100 text-gray-700 font-semibold">
-                          {interestPercent || totals.effectiveInterestPercent}
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                <div className="flex justify-between text-xl font-bold border-t pt-2">
-                  <span>
-                    TOTAL ORDER AMOUNT:
-                    <div className="text-xs text-gray-500">
-                      Subtotal + Interest (tax shown above but not included here)
-                    </div>
-                  </span>
-                  <span className="text-green-700">
-                    {peso(displayTotalNoTax)}
-                  </span>
-                </div>
-
-                {selectedOrder.customers.payment_type === "Credit" && (
-                  <div className="flex justify-between">
-                    <span>
-                      Payment per Term:
-                      <div className="text-xs text-gray-500">Amount per installment/month</div>
-                    </span>
-                    <span className="font-bold text-blue-700">
-                      {peso(getPerTermAmount())}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex justify-center gap-8 mt-6">
+            {/* Bottom Actions */}
+            <div className="no-print flex justify-center gap-6 mt-6">
               <button
-                className={`px-10 py-4 rounded-xl text-lg font-semibold shadow transition
-    ${hasInsufficientStock
-      ? "bg-gray-300 text-gray-600 cursor-not-allowed"
-      : "bg-green-600 text-white hover:bg-green-700"}`}
+                className={`px-10 py-3 rounded-xl text-lg font-semibold shadow transition
+                  ${
+                    hasInsufficientStock
+                      ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+                      : "bg-green-600 text-white hover:bg-green-700"
+                  }`}
                 onClick={() => {
                   if (hasInsufficientStock) {
-                    toast.error("Cannot proceed: at least one item is out of stock or exceeds available stock.");
+                    toast.error(
+                      "Cannot proceed: at least one item is out of stock or exceeds available stock."
+                    );
                     return;
                   }
                   setShowFinalConfirm(true);
                 }}
                 disabled={hasInsufficientStock}
-                aria-disabled={hasInsufficientStock}
-                title={hasInsufficientStock ? "Fix stock issues before confirming." : "Confirm"}
               >
                 Confirm
               </button>
+
               <button
-                className="bg-gray-400 text-white px-10 py-4 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
+                className="bg-gray-400 text-white px-10 py-3 rounded-xl text-lg font-semibold shadow hover:bg-gray-500 transition"
                 onClick={() => {
                   setShowSalesOrderModal(false);
                   resetSalesForm();
@@ -1668,18 +1894,21 @@ function SalesPageContent() {
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl mx-auto p-10 text-center">
             <div className="text-xl font-bold mb-6 text-gray-800">
-              Are you sure you want to <span className="text-green-700">COMPLETE</span> this order?
+              Are you sure you want to{" "}
+              <span className="text-green-700">COMPLETE</span> this order?
             </div>
             <div className="text-base mb-6">
-              This will deduct the items from inventory, mark the order as completed, and record the
-              sales transaction.
+              This will deduct the items from inventory, mark the order as completed, and record
+              the sales transaction.
             </div>
             <div className="flex justify-center gap-10 mt-4">
               <button
                 className={`px-8 py-3 rounded-xl text-lg font-semibold shadow flex items-center justify-center transition
-    ${isCompletingOrder || hasInsufficientStock
-      ? "bg-gray-300 text-gray-600 cursor-not-allowed"
-      : "bg-green-600 text-white hover:bg-green-700"}`}
+                  ${
+                    isCompletingOrder || hasInsufficientStock
+                      ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+                      : "bg-green-600 text-white hover:bg-green-700"
+                  }`}
                 onClick={() => {
                   if (hasInsufficientStock) {
                     toast.error("Cannot proceed: fix stock issues first.");
