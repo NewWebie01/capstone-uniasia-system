@@ -39,6 +39,8 @@ type CustomerInfo = {
   status?: "pending" | "completed" | "rejected";
   payment_type?: "Credit" | "Cash";
   customer_type?: "New Customer" | "Existing Customer";
+  terms_days?: 15 | 30 | 60 | 90 | 120 | null;
+
 };
 
 type SidebarOrder = {
@@ -250,6 +252,8 @@ export default function CheckoutPage() {
     area: "",
     payment_type: "Cash",
     customer_type: undefined,
+    terms_days: null,
+
   });
 
   // modals
@@ -261,6 +265,11 @@ export default function CheckoutPage() {
   const [authUserId, setAuthUserId] = useState<string | null>(null);
   const [orders, setOrders] = useState<SidebarOrder[]>([]);
   const [fetchingOrders, setFetchingOrders] = useState(false);
+
+const ORDERS_PAGE_SIZE = 10;
+const [ordersPage, setOrdersPage] = useState(1);
+const [ordersTotal, setOrdersTotal] = useState(0);
+
 
   // PSGC state
   const [regions, setRegions] = useState<PSGCRegion[]>([]);
@@ -712,20 +721,25 @@ export default function CheckoutPage() {
           return;
         }
 
-        const { data, error } = await supabase
-          .from("orders")
-          .select(
-            `
-              id,
-              status,
-              date_created,
-              grand_total_with_interest,
-              customer:customer_id ( email )
-            `
-          )
-          .eq("customer.email", email)
-          .order("date_created", { ascending: false })
-          .limit(20);
+const from = (ordersPage - 1) * ORDERS_PAGE_SIZE;
+const to = from + ORDERS_PAGE_SIZE - 1;
+
+const { data, error, count } = await supabase
+  .from("orders")
+  .select(
+    `
+      id,
+      status,
+      date_created,
+      grand_total_with_interest,
+      customer:customer_id ( email )
+    `,
+    { count: "exact" } // ✅ required for pagination
+  )
+  .eq("customer.email", email)
+  .order("date_created", { ascending: false })
+  .range(from, to);
+
 
         if (error) {
           console.warn("[checkout sidebar] orders join fetch error:", error);
@@ -740,7 +754,11 @@ export default function CheckoutPage() {
           total: o?.grand_total_with_interest ?? null,
         }));
 
-        if (mounted) setOrders(rows);
+        if (mounted) {
+  setOrders(rows);
+  setOrdersTotal(count ?? 0);
+}
+
       } catch (e) {
         console.error("[checkout sidebar] load failed:", e);
         if (mounted) setOrders([]);
@@ -753,7 +771,13 @@ export default function CheckoutPage() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [ordersPage]);
+
+  useEffect(() => {
+  setOrdersPage(1);
+}, [customerInfo.email]);
+
+
 
   /* ---------------------------- Cart quantity ops --------------------------- */
   const handleUpdateQty = (ci: CtxCartItem, nextRaw: number) => {
@@ -803,6 +827,8 @@ export default function CheckoutPage() {
     const missing: string[] = [];
     if (!customerInfo.name?.trim()) missing.push("Customer Name");
     if (!customerInfo.contact_person?.trim()) missing.push("Contact Person");
+    if (customerInfo.payment_type === "Credit" && !customerInfo.terms_days)
+  missing.push("Payment Terms");
     if (!houseStreet?.trim()) missing.push("House & Street");
     if (!regionCode) missing.push("Region");
     if (!isNCR && !provinceCode) missing.push("Province");
@@ -810,17 +836,20 @@ export default function CheckoutPage() {
     if (!barangayCode) missing.push("Barangay");
     if (cart.length === 0) missing.push("Cart");
     return missing;
-  }, [
-    customerInfo.name,
-    customerInfo.contact_person,
-    houseStreet,
-    regionCode,
-    provinceCode,
-    cityCode,
-    barangayCode,
-    cart,
-    isNCR,
-  ]);
+}, [
+  customerInfo.name,
+  customerInfo.contact_person,
+  customerInfo.payment_type, // ✅ add
+  customerInfo.terms_days,   // ✅ add
+  houseStreet,
+  regionCode,
+  provinceCode,
+  cityCode,
+  barangayCode,
+  cart,
+  isNCR,
+]);
+
 
   const isConfirmEnabled = missingFields.length === 0;
 
@@ -1011,12 +1040,24 @@ setCustomerInfo((prev) => ({ ...prev, code: invoiceNo }));
       const now = new Date();
       const phTime = now.toLocaleString("sv-SE", { timeZone: "Asia/Manila" });
 
-      const orderPayload: any = {
-        customer_id: customerId,
-        total_amount: subtotal,
-        status: "pending",
-        date_created: phTime,
-      };
+const orderPayload: any = {
+  customer_id: customerId,
+  total_amount: subtotal,
+  status: "pending",
+  date_created: phTime,
+
+  // text display (for invoice/admin)
+  terms:
+    customerInfo.payment_type === "Credit" && customerInfo.terms_days
+      ? `${customerInfo.terms_days} DAYS`
+      : null,
+
+  // numeric terms column (since your table has payment_terms int)
+  payment_terms:
+    customerInfo.payment_type === "Credit" ? customerInfo.terms_days : null,
+};
+
+
 
       const { data: ord, error: ordErr } = await supabase
         .from("orders")
@@ -1063,6 +1104,8 @@ setCustomerInfo((prev) => ({ ...prev, code: invoiceNo }));
               total_amount: Number(subtotal || 0),
               item_count: cart.length,
               payment_type: customerInfo.payment_type || "Cash",
+              terms: customerInfo.payment_type === "Credit" ? `${customerInfo.terms_days || ""} DAYS` : null,
+
             },
           },
         ]);
@@ -1122,6 +1165,7 @@ body: JSON.stringify({
         area: "",
         payment_type: "Cash",
         customer_type: undefined,
+        terms_days: null,
       });
 
       setRegionCode("");
@@ -1367,6 +1411,32 @@ body: JSON.stringify({
               </div>
             ) : (
               <ul className="space-y-2">
+              {ordersTotal > ORDERS_PAGE_SIZE && (
+  <div className="mt-3 flex items-center justify-between">
+    <button
+      className="px-3 py-1 rounded border text-sm disabled:opacity-50"
+      disabled={ordersPage === 1}
+      onClick={() => setOrdersPage((p) => Math.max(1, p - 1))}
+    >
+      Prev
+    </button>
+
+    <div className="text-xs text-gray-500">
+      Page {ordersPage} of {Math.max(1, Math.ceil(ordersTotal / ORDERS_PAGE_SIZE))}
+    </div>
+
+    <button
+      className="px-3 py-1 rounded border text-sm disabled:opacity-50"
+      disabled={ordersPage >= Math.ceil(ordersTotal / ORDERS_PAGE_SIZE)}
+      onClick={() =>
+        setOrdersPage((p) => Math.min(Math.ceil(ordersTotal / ORDERS_PAGE_SIZE), p + 1))
+      }
+    >
+      Next
+    </button>
+  </div>
+)}
+
                 {orders.map((o) => (
                   <li key={o.id} className="border rounded p-2">
                     <div className="flex justify-between items-center">
@@ -1578,25 +1648,62 @@ body: JSON.stringify({
                   )}
                 </div>
 
-                <div className="flex gap-4">
-                  {(["Cash", "Credit"] as const).map((type) => (
-                    <label key={type} className="flex items-center gap-2">
-                      <input
-                        type="radio"
-                        name="payment_type"
-                        value={type}
-                        checked={customerInfo.payment_type === type}
-                        onChange={(e) =>
-                          setCustomerInfo((prev) => ({
-                            ...prev,
-                            payment_type: e.target.value as "Cash" | "Credit",
-                          }))
-                        }
-                      />
-                      {type}
-                    </label>
-                  ))}
-                </div>
+<div className="col-span-2">
+  <div className="flex gap-6 items-center flex-wrap">
+    {(["Cash", "Credit"] as const).map((type) => (
+      <label key={type} className="flex items-center gap-2">
+        <input
+          type="radio"
+          name="payment_type"
+          value={type}
+          checked={customerInfo.payment_type === type}
+          onChange={(e) =>
+            setCustomerInfo((prev) => ({
+              ...prev,
+              payment_type: e.target.value as "Cash" | "Credit",
+              // reset terms if switching back to cash
+              terms_days: e.target.value === "Credit" ? prev.terms_days ?? null : null,
+            }))
+          }
+        />
+        {type}
+      </label>
+    ))}
+  </div>
+
+  <div className="mt-2 text-xs text-gray-600">
+    <span className="font-semibold">CASH</span> = Cash On Delivery •{" "}
+    <span className="font-semibold">CREDIT</span> = thru cheque
+  </div>
+
+  {customerInfo.payment_type === "Credit" && (
+    <div className="mt-3">
+      <label className="block text-sm mb-1">
+        Payment Terms <span className="text-red-600">*</span>
+      </label>
+      <select
+        className={`border px-3 py-2 rounded w-full ${
+          !customerInfo.terms_days ? "border-red-400 focus:ring-red-500" : ""
+        }`}
+        value={customerInfo.terms_days ?? ""}
+        onChange={(e) =>
+          setCustomerInfo((prev) => ({
+            ...prev,
+            terms_days: (Number(e.target.value) as 15 | 30 | 60 | 90 | 120) || null,
+          }))
+        }
+      >
+        <option value="">Select terms</option>
+        <option value="15">15 DAYS</option>
+        <option value="30">30 DAYS</option>
+        <option value="60">60 DAYS</option>
+        <option value="90">90 DAYS</option>
+        <option value="120">120 DAYS</option>
+      </select>
+    </div>
+  )}
+</div>
+
               </div>
 
               <div className="border rounded-xl bg-gray-100 overflow-hidden">
@@ -1688,14 +1795,14 @@ body: JSON.stringify({
             initial={{ opacity: 0, y: 16, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ type: "spring", stiffness: 260, damping: 22 }}
-            className="bg-white w-full max-w-4xl max-height-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
+            className="bg-white w-full max-w-4xl max-h-[85vh] p-6 rounded-2xl shadow-2xl ring-1 ring-black/5 flex flex-col overflow-hidden"
           >
             <h2 className="text-2xl font-semibold tracking-tight shrink-0">
               Order Confirmation
             </h2>
 
             <div className="mt-4 space-y-4">
-<div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+<div className="grid grid-cols-1 md:grid-cols-4 gap-3">
   <div>
     <div className="text-xs text-gray-500">Customer</div>
     <div className="font-medium">{customerInfo.name}</div>
@@ -1710,7 +1817,22 @@ body: JSON.stringify({
     <div className="text-xs text-gray-500">Date</div>
     <div className="font-medium">{formatPH()}</div>
   </div>
+
+  {/* ✅ ADD THIS BLOCK */}
+  <div>
+    <div className="text-xs text-gray-500">Payment</div>
+    <div className="font-medium">
+      {customerInfo.payment_type || "—"}
+      {customerInfo.payment_type === "Credit" && customerInfo.terms_days
+        ? ` • ${customerInfo.terms_days} DAYS`
+        : ""}
+    </div>
+    <div className="text-[11px] text-gray-500 mt-1">
+      CASH = Cash On Delivery • CREDIT = thru cheque
+    </div>
+  </div>
 </div>
+
 
 
               <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
