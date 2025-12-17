@@ -31,11 +31,14 @@ const formatPH = (d: string | Date | null | undefined) => {
 type CustomerRow = {
   id: string | number;
   name: string | null;
-  code: string | null; // Invoice No. lives here (customers.code)
+  code: string | null;
   email: string | null;
   phone: string | null;
   address: string | null;
+
+  payment_type?: "Cash" | "Credit" | string | null; // ✅ ADD
 };
+
 
 type OrderRow = {
   id: string | number;
@@ -153,7 +156,7 @@ export default function AdminPaymentsLedgerPage() {
   async function fetchCustomers() {
     const { data, error } = await supabase
       .from("customers")
-      .select("id, name, code, email, phone, address")
+      .select("id, name, code, email, phone, address, payment_type")
       .order("date", { ascending: false });
 
     if (error) throw error;
@@ -262,7 +265,30 @@ const invoiceNo = useMemo(() => {
   return String(codeByCustomerId.get(String(selectedOrder.customer_id)) || "").trim();
 }, [selectedOrder, codeByCustomerId]);
 
+const paymentSummary = useMemo(() => {
+  const payTypeRaw = String(selectedCustomer?.payment_type || "").trim();
+  const payType = payTypeRaw || "—";
 
+  const days =
+    typeof selectedOrder?.payment_terms === "number" && selectedOrder.payment_terms > 0
+      ? selectedOrder.payment_terms
+      : null;
+
+  const termsText = days
+    ? `${days} DAYS`
+    : selectedOrder?.terms
+    ? String(selectedOrder.terms)
+    : "";
+
+  if (payType.toLowerCase() === "credit") {
+    return `Credit${termsText ? ` • ${termsText}` : ""}`;
+  }
+  if (payType.toLowerCase() === "cash") {
+    return "Cash";
+  }
+
+  return `${payType}${termsText ? ` • ${termsText}` : ""}`;
+}, [selectedCustomer?.payment_type, selectedOrder?.payment_terms, selectedOrder?.terms]);
 
 
   /* ------------------------------ When customerKey changes -> load orders ------------------------------ */
@@ -627,10 +653,16 @@ const invoiceNo = useMemo(() => {
           <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
               <div>
-                <h2 className="text-lg font-semibold">
-                  Ledger for Invoice No.{" "}
-                  <span className="font-mono">{invoiceNo || "—"}</span>
-                </h2>
+<h2 className="text-lg font-semibold">
+  Ledger for Invoice No.{" "}
+  <span className="font-mono">{invoiceNo || "—"}</span>
+
+  <span className="mt-1 block text-sm font-normal text-gray-600">
+    • Payment: <span className="font-semibold">{paymentSummary}</span>
+  </span>
+</h2>
+
+
                 <p className="text-xs text-gray-600">
                   Debit = charge • Credit = payments • Balance = running balance
                 </p>
@@ -831,6 +863,12 @@ const invoiceNo = useMemo(() => {
                         <div className="text-xs text-gray-500">Invoice No.</div>
                         <div className="font-mono font-semibold">{invoiceNo || "—"}</div>
                       </div>
+
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+  <div className="text-xs text-gray-500">Customer Payment</div>
+  <div className="font-semibold">{paymentSummary}</div>
+</div>
+
 
                       <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                         <div className="text-xs text-gray-500">Amount</div>

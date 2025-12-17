@@ -37,11 +37,14 @@ const nowISO = () => new Date().toISOString();
 type CustomerRow = {
   id: string | number;
   name: string | null;
-  code: string | null; // Invoice No. lives here per your schema
+  code: string | null;
   email: string | null;
   phone: string | null;
   address: string | null;
+
+  payment_type?: "Cash" | "Credit" | string | null; // ✅ ADD THIS
 };
+
 
 type OrderRow = {
   id: string | number;
@@ -125,7 +128,7 @@ export default function CustomerMyPaymentLedgerPage() {
   async function fetchMyCustomersByEmail(email: string) {
     const { data, error } = await supabase
       .from("customers")
-      .select("id, name, code, email, phone, address")
+      .select("id, name, code, email, phone, address, payment_type")
       .eq("email", email)
       .order("created_at", { ascending: false });
 
@@ -136,7 +139,7 @@ export default function CustomerMyPaymentLedgerPage() {
   async function fetchMyCustomersFallbackByProfilePhone(uid: string) {
     const { data: prof, error: profErr } = await supabase
       .from("profiles")
-      .select("contact_number")
+      .select("id, name, code, email, phone, address, payment_type")
       .eq("id", uid)
       .maybeSingle();
 
@@ -255,6 +258,26 @@ export default function CustomerMyPaymentLedgerPage() {
     const inv = String(selectedOrder?.customers?.code || "").trim();
     return inv || "";
   }, [selectedOrder]);
+
+  const paymentSummary = useMemo(() => {
+  const payTypeRaw = String(myCustomers?.[0]?.payment_type || "").trim();
+  const payType = payTypeRaw || "—";
+
+  const days =
+    typeof selectedOrder?.payment_terms === "number" && selectedOrder.payment_terms > 0
+      ? selectedOrder.payment_terms
+      : null;
+
+  const termsText = days ? `${days} DAYS` : selectedOrder?.terms ? String(selectedOrder.terms) : "";
+
+  if (payType.toLowerCase() === "credit") {
+    return `Credit${termsText ? ` • ${termsText}` : ""}`;
+  }
+  if (payType.toLowerCase() === "cash") return "Cash";
+
+  return `${payType}${termsText ? ` • ${termsText}` : ""}`;
+}, [myCustomers, selectedOrder?.payment_terms, selectedOrder?.terms]);
+
 
   /* ------------------------------ My display info ------------------------------ */
   const myDisplay = useMemo(() => {
@@ -497,12 +520,17 @@ export default function CustomerMyPaymentLedgerPage() {
           <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
               <div>
-                <h2 className="text-lg font-semibold">
-                  Ledger for{" "}
-                  <span className="font-mono">
-                    {selectedInvoiceNo ? `Invoice No. ${selectedInvoiceNo}` : "Invoice No. —"}
-                  </span>
-                </h2>
+<h2 className="text-lg font-semibold">
+  Ledger for{" "}
+  <span className="font-mono">
+    {selectedInvoiceNo ? `Invoice No. ${selectedInvoiceNo}` : "Invoice No. —"}
+  </span>
+
+  <span className="mt-1 block text-sm font-normal text-gray-600">
+    • Payment: <span className="font-semibold">{paymentSummary}</span>
+  </span>
+</h2>
+
                 <p className="text-xs text-gray-600">
                   Debit = charge • Credit = payments • Balance = running balance
                 </p>
