@@ -49,7 +49,9 @@ type Props = {
   editMode?: boolean;
   savingAll?: boolean;
   editedRemarks?: Record<string, string>;
-  setEditedRemarks?: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  setEditedRemarks?: React.Dispatch<
+    React.SetStateAction<Record<string, string>>
+  >;
 };
 
 const peso = (n: number) =>
@@ -109,7 +111,13 @@ export default function DeliveryReceiptModern({
   editedRemarks,
   setEditedRemarks,
 }: Props) {
-  const items = Array.isArray(initialItems) ? initialItems : [];
+  const itemsRaw = Array.isArray(initialItems) ? initialItems : [];
+
+  // ✅ remove deleted/zero lines (also removes negative/NaN safety)
+  const items = React.useMemo(
+    () => itemsRaw.filter((it) => Number(it?.qty ?? 0) > 0),
+    [itemsRaw]
+  );
 
   const subtotal = React.useMemo(
     () => items.reduce((sum, it) => sum + lineSubtotal(it), 0),
@@ -137,10 +145,14 @@ export default function DeliveryReceiptModern({
     netBeforeSavedTotals + shippingFee + salesTax
   );
   const amountDue =
-    grandTotalWithInterest > 0 ? grandTotalWithInterest : computedFallbackAmountDue;
+    grandTotalWithInterest > 0
+      ? grandTotalWithInterest
+      : computedFallbackAmountDue;
 
   const overallLessPct =
-    subtotal > 0 ? Math.round((Math.abs(totalDiscountPeso) / subtotal) * 100) : 0;
+    subtotal > 0
+      ? Math.round((Math.abs(totalDiscountPeso) / subtotal) * 100)
+      : 0;
 
   // “Forwarder” is not in your props; keep blank to match form.
   const forwarder = "";
@@ -239,7 +251,9 @@ export default function DeliveryReceiptModern({
                   ITEM DESCRIPTION
                 </th>
                 <th className="w-[110px] border-r border-black px-2 py-2 text-center font-bold leading-tight">
-                  UNIT<br />PRICE
+                  UNIT
+                  <br />
+                  PRICE
                 </th>
                 <th className="w-[90px] border-r border-black px-2 py-2 text-center font-bold">
                   Discount
@@ -256,7 +270,10 @@ export default function DeliveryReceiptModern({
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-2 py-6 text-center text-neutral-600">
+                  <td
+                    colSpan={7}
+                    className="px-2 py-6 text-center text-neutral-600"
+                  >
                     No items found.
                   </td>
                 </tr>
@@ -303,7 +320,9 @@ export default function DeliveryReceiptModern({
                               className="w-full text-xs px-2 py-1 border border-black/40 rounded-sm focus:outline-none focus:border-black"
                             />
                           ) : remarkValue ? (
-                            <div className="text-xs italic">Remarks: {remarkValue}</div>
+                            <div className="text-xs italic">
+                              Remarks: {remarkValue}
+                            </div>
                           ) : null}
                         </div>
                       </td>
@@ -316,7 +335,9 @@ export default function DeliveryReceiptModern({
                       </td>
                       <td className="border-r border-black px-2 py-2 text-right tabular-nums">
                         {/* Amount column = discount peso (like “Less”) */}
-                        {discPct ? peso(Math.abs(discPeso)).replace("₱", "") : ""}
+                        {discPct
+                          ? peso(Math.abs(discPeso)).replace("₱", "")
+                          : ""}
                       </td>
                       <td className="px-2 py-2 text-right tabular-nums">
                         {peso(net).replace("₱", "")}
@@ -327,26 +348,29 @@ export default function DeliveryReceiptModern({
               )}
 
               {/* spacer rows to mimic the big empty area of the form */}
-              {Array.from({ length: Math.max(0, 12 - items.length) }).map((_, i) => (
-                <tr key={`sp-${i}`}>
-                  <td className="border-r border-black px-2 py-3">&nbsp;</td>
-                  <td className="border-r border-black px-2 py-3">&nbsp;</td>
-                  <td className="border-r border-black px-2 py-3">&nbsp;</td>
-                  <td className="border-r border-black px-2 py-3">&nbsp;</td>
-                  <td className="border-r border-black px-2 py-3">&nbsp;</td>
-                  <td className="border-r border-black px-2 py-3">&nbsp;</td>
-                  <td className="px-2 py-3 text-right tabular-nums">0.00</td>
-                </tr>
-              ))}
+              {Array.from({ length: Math.max(0, 12 - items.length) }).map(
+                (_, i) => (
+                  <tr key={`sp-${i}`}>
+                    <td className="border-r border-black px-2 py-3">&nbsp;</td>
+                    <td className="border-r border-black px-2 py-3">&nbsp;</td>
+                    <td className="border-r border-black px-2 py-3">&nbsp;</td>
+                    <td className="border-r border-black px-2 py-3">&nbsp;</td>
+                    <td className="border-r border-black px-2 py-3">&nbsp;</td>
+                    <td className="border-r border-black px-2 py-3">&nbsp;</td>
+                    <td className="px-2 py-3 text-right tabular-nums">
+                      &nbsp;
+                    </td>
+                  </tr>
+                )
+              )}
 
               {/* “NOTE” inside the table like the scanned form */}
-              
             </tbody>
           </table>
           {/* NOTE OUTSIDE TABLE (matches original receipt) */}
-<div className="border-t border-black px-3 py-2 text-xs">
-  <b>NOTE:</b> All Checks Payable to BY GRACE TRADING
-</div>
+          <div className="border-t border-black px-3 py-2 text-xs">
+            <b>NOTE:</b> All Checks Payable to BY GRACE TRADING
+          </div>
         </div>
 
         {/* TOTALS BOX (bottom-right) */}
@@ -354,7 +378,10 @@ export default function DeliveryReceiptModern({
           <div className="col-span-7 p-3 text-xs">
             <div className="font-bold">NOTE:</div>
             <ol className="list-decimal pl-5 space-y-1">
-              <li>All goods are checked in good condition and complete after received and signed.</li>
+              <li>
+                All goods are checked in good condition and complete after
+                received and signed.
+              </li>
               <li>Cash Advances to Salesman not allowed</li>
               <li>All Check payable to By-Grace Trading Only</li>
             </ol>
@@ -372,10 +399,14 @@ export default function DeliveryReceiptModern({
                 <tr className="border-b border-black">
                   <td className="px-3 py-2 font-bold">
                     Less&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;%&nbsp;
-                    <span className="font-normal">{overallLessPct ? overallLessPct : ""}</span>
+                    <span className="font-normal">
+                      {overallLessPct ? overallLessPct : ""}
+                    </span>
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
-                    {overallLessPct ? peso(Math.abs(totalDiscountPeso)).replace("₱", "") : ""}
+                    {overallLessPct
+                      ? peso(Math.abs(totalDiscountPeso)).replace("₱", "")
+                      : ""}
                   </td>
                 </tr>
                 <tr>

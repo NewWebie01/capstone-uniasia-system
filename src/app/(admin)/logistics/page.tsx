@@ -643,26 +643,26 @@ export default function TruckDeliveryPage() {
       return { ok: false, message: "Could not load delivery for validation." };
     }
 
-    const hasShipFee =
-      row.shipping_fee !== null && row.shipping_fee !== undefined;
-    const hasEta = !!row.eta_date;
+    // const hasShipFee =
+    //   row.shipping_fee !== null && row.shipping_fee !== undefined;
+    // const hasEta = !!row.eta_date;
 
-    if (targetStatus === "To Receive") {
-      if (!hasShipFee) {
-        return {
-          ok: false,
-          message:
-            "Please enter the Shipping Fee before changing status to “To Receive”.",
-        };
-      }
-      if (!hasEta) {
-        return {
-          ok: false,
-          message:
-            "Please set the Estimated Arrival date before changing status to “To Receive”.",
-        };
-      }
-    }
+    // if (targetStatus === "To Receive") {
+    //   if (!hasShipFee) {
+    //     return {
+    //       ok: false,
+    //       message:
+    //         "Please enter the Shipping Fee before changing status to “To Receive”.",
+    //     };
+    //   }
+    //   if (!hasEta) {
+    //     return {
+    //       ok: false,
+    //       message:
+    //         "Please set the Estimated Arrival date before changing status to “To Receive”.",
+    //     };
+    //   }
+    // }
 
     return { ok: true };
   }
@@ -1419,14 +1419,8 @@ export default function TruckDeliveryPage() {
                                 | "To Ship"
                                 | "To Receive";
 
-                              // final guard when going to "To Receive"
+                              // final guard ONLY when going to "To Receive"
                               if (next === "To Receive") {
-                                if (delivery.shipping_fee == null) {
-                                  toast.error(
-                                    "Please enter the Shipping Fee before changing status to “To Receive”."
-                                  );
-                                  return;
-                                }
                                 if (!delivery.eta_date) {
                                   toast.error(
                                     "Please set the Estimated Arrival date before changing status to “To Receive”."

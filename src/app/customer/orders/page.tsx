@@ -52,17 +52,19 @@ const formatCurrency = (n: number) =>
 
 /* ---------------------------------- Types --------------------------------- */
 type ItemRow = {
-  quantity: number;
+  quantity: number; // original ordered qty
+  fulfilled_quantity?: number | null; // ✅ admin-final qty
   price: number;
-  discount_percent?: number | null; // ← NEW
+  discount_percent?: number | null;
+  remarks?: string | null;
   inventory?: {
     product_name?: string | null;
     category?: string | null;
     subcategory?: string | null;
     status?: string | null;
-    unit?: string | null; // ← used for UNIT column
-    unit_price?: number | null; // ← fallback pricing
-    quantity?: number | null; // ← for in-stock flag
+    unit?: string | null;
+    unit_price?: number | null;
+    quantity?: number | null;
   } | null;
 };
 
@@ -274,20 +276,22 @@ export default function TrackPage() {
               grand_total_with_interest,
               sales_tax,
               per_term_amount,
-order_items (
-  quantity,
-  price,
-  discount_percent,
-  inventory:inventory_id (
-    product_name,
-    category,
-    subcategory,
-    status,
-    unit,
-    unit_price,
-    quantity
-  )
-)
+            order_items (
+              quantity,
+              fulfilled_quantity,
+              price,
+              discount_percent,
+              remarks,
+              inventory:inventory_id (
+                product_name,
+                category,
+                subcategory,
+                status,
+                unit,
+                unit_price,
+                quantity
+              )
+            )
 
             )
           `
@@ -549,25 +553,46 @@ order_items (
                       : undefined;
                     const rowStatus = deliv?.status ?? o.status ?? "Pending";
 
-                    // show table only when admin has saved totals
-                    // show details when the order is completed (works for Cash & Credit)
-                    const showDetails =
-                      (o.status || "").toLowerCase() === "completed";
+                    // ✅ consider "finalized" when admin has saved totals (works even if status isn't completed yet)
+                    const isFinalized =
+                      typeof o.grand_total_with_interest === "number" ||
+                      typeof o.sales_tax === "number" ||
+                      typeof o.per_term_amount === "number";
+
+                    const showDetails = isFinalized;
+                    const isCompleted = isFinalized; // reuse your existing logic below
+
+                    // ✅ source-of-truth qty:
+                    // - if completed: use fulfilled_quantity (admin final)
+                    // - else: use quantity (original order)
+                    const getDisplayQty = (it: ItemRow) => {
+                      const q = isCompleted
+                        ? it.fulfilled_quantity ?? it.quantity // ✅ fallback if null
+                        : it.quantity;
+
+                      return Number(q || 0);
+                    };
+
+                    // ✅ for completed orders, hide removed lines (fulfilled_quantity <= 0)
+                    const visibleItems = (o.order_items ?? []).filter((it) => {
+                      if (!isCompleted) return true;
+                      return Number(it.fulfilled_quantity || 0) > 0;
+                    });
 
                     // robust totals (works even if grand_total_with_interest is NULL)
-                    const items = o.order_items ?? [];
+                    const items = visibleItems;
 
                     const subtotal = items.reduce((s, it) => {
                       const unitPrice =
                         Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
-                      const qty = Number(it.quantity || 0);
+                      const qty = getDisplayQty(it);
                       return s + unitPrice * qty;
                     }, 0);
 
                     const totalDiscount = items.reduce((s, it) => {
                       const unitPrice =
                         Number(it.price ?? it.inventory?.unit_price ?? 0) || 0;
-                      const qty = Number(it.quantity || 0);
+                      const qty = getDisplayQty(it);
                       const pct = Number(it.discount_percent ?? 0);
                       return s + (unitPrice * qty * pct) / 100;
                     }, 0);
@@ -648,7 +673,7 @@ order_items (
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {(o.order_items ?? []).map((it, idx) => {
+                                      {items.map((it, idx) => {
                                         const unit =
                                           it.inventory?.unit?.trim() || "pcs";
                                         const desc =
@@ -659,7 +684,7 @@ order_items (
                                               it.inventory?.unit_price ??
                                               0
                                           ) || 0;
-                                        const qty = Number(it.quantity || 0);
+                                        const qty = getDisplayQty(it);
                                         const amount = qty * unitPrice;
 
                                         const inStockFlag =

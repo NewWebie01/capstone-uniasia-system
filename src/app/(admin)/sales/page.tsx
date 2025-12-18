@@ -149,15 +149,21 @@ function ReceiptLikeSalesOrder({
   salesTaxValue,
   displayAmountDue,
 
-  // ✅ Receipt Notes (Edit Receipt logic)
+  // receipt Notes (Edit Receipt logic)
   receiptEditMode,
   setReceiptEditMode,
   savingReceiptNotes,
   editedReceiptNotes,
   setEditedReceiptNotes,
   saveReceiptNotes,
+
+  //REMOVABLE ROWS
+  setEditedQuantities,
+  removedLines,
+  setRemovedLines,
 }: any) {
-  const safe = (v: any) => (v === null || v === undefined || v === "" ? "—" : v);
+  const safe = (v: any) =>
+    v === null || v === undefined || v === "" ? "—" : v;
 
   // longer table for big orders
   const PRINT_ROWS = 30;
@@ -380,7 +386,9 @@ function ReceiptLikeSalesOrder({
                 <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">
                   AMOUNT
                 </th>
-                <th className="px-2 py-1 text-right whitespace-nowrap">TOTAL</th>
+                <th className="px-2 py-1 text-right whitespace-nowrap">
+                  TOTAL
+                </th>
               </tr>
             </thead>
 
@@ -400,7 +408,13 @@ function ReceiptLikeSalesOrder({
                   );
                 }
 
-                const qty = editedQuantities[idx] ?? row.quantity; // locked
+                //REMOVABLE ROW
+                const isRemoved = !!removedLines?.[idx];
+                const orderedQty = Number(row.quantity || 0);
+                const inStock = Number(row.inventory?.quantity || 0);
+
+                //const qty = editedQuantities[idx] ?? row.quantity; // locked
+                const qty = isRemoved ? 0 : editedQuantities[idx] ?? orderedQty;
                 const unit = row.inventory?.unit || "—";
                 const desc = row.inventory?.product_name || "—";
                 const unitPrice = Number(row.price || 0);
@@ -412,14 +426,99 @@ function ReceiptLikeSalesOrder({
                 // ✅ notes/remarks key per order_items.id
                 const rowId = String(row.id);
                 const noteValue =
-                  (editedReceiptNotes &&
-                  editedReceiptNotes[rowId] !== undefined
+                  (editedReceiptNotes && editedReceiptNotes[rowId] !== undefined
                     ? editedReceiptNotes[rowId]
                     : row.remarks) || "";
 
                 return (
-                  <tr key={`item-${idx}`} className="h-[20px] align-top">
-                    <td className="border-r border-black px-2 py-1">{qty}</td>
+                  <tr
+                    key={`item-${idx}`}
+                    className={`h-[20px] align-top ${
+                      isRemoved ? "opacity-40" : ""
+                    }`}
+                  >
+                    <td className="border-r border-black px-2 py-1">
+                      <div className="flex flex-col gap-0.5">
+                        <input
+                          type="number"
+                          min={0}
+                          max={inStock}
+                          value={String(qty)}
+                          disabled={isRemoved}
+                          onChange={(e) => {
+                            const raw = Number(e.target.value);
+                            const next = Number.isFinite(raw) ? raw : 0;
+
+                            // ✅ clamp to stock (prevents exceeding)
+                            const clamped = Math.max(
+                              0,
+                              Math.min(next, inStock)
+                            );
+
+                            // ✅ update edited quantities
+                            setEditedQuantities((prev: number[]) => {
+                              const arr = [...(prev || [])];
+                              arr[idx] = clamped;
+                              return arr;
+                            });
+
+                            // ✅ auto-mark removed if qty becomes 0
+                            setRemovedLines((prev: boolean[]) => {
+                              const arr = [...(prev || [])];
+                              arr[idx] = clamped === 0;
+                              return arr;
+                            });
+                          }}
+                          className="w-[52px] bg-transparent outline-none text-left tabular-nums border-b border-black"
+                        />
+
+                        {/* ✅ Remove/Undo buttons (won’t print if you have .no-print css) */}
+                        <div className="no-print flex justify-center">
+                          {!isRemoved ? (
+                            <button
+                              type="button"
+                              className="mt-[2px] text-[9px] leading-none text-red-600 underline hover:text-red-700"
+                              onClick={() => {
+                                setRemovedLines((prev: boolean[]) => {
+                                  const arr = [...(prev || [])];
+                                  arr[idx] = true;
+                                  return arr;
+                                });
+                                setEditedQuantities((prev: number[]) => {
+                                  const arr = [...(prev || [])];
+                                  arr[idx] = 0;
+                                  return arr;
+                                });
+                              }}
+                            >
+                              Remove
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="mt-[2px] text-[9px] leading-none text-blue-600 underline hover:text-blue-700"
+                              onClick={() => {
+                                setRemovedLines((prev: boolean[]) => {
+                                  const arr = [...(prev || [])];
+                                  arr[idx] = false;
+                                  return arr;
+                                });
+                                setEditedQuantities((prev: number[]) => {
+                                  const arr = [...(prev || [])];
+                                  arr[idx] = Math.max(
+                                    0,
+                                    Math.min(orderedQty, inStock)
+                                  );
+                                  return arr;
+                                });
+                              }}
+                            >
+                              Undo
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </td>
 
                     <td className="border-r border-black px-2 py-1">{unit}</td>
 
@@ -572,6 +671,9 @@ function SalesPageContent() {
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
 
+  // remove rows from orders
+  const [removedLines, setRemovedLines] = useState<boolean[]>([]);
+
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
@@ -625,7 +727,10 @@ function SalesPageContent() {
 
   // Keep only letters & spaces, cap to 30 chars
   const nameOnly = (s: string) =>
-    (s || "").replace(/[^A-Za-z\s]/g, "").trim().slice(0, 30);
+    (s || "")
+      .replace(/[^A-Za-z\s]/g, "")
+      .trim()
+      .slice(0, 30);
 
   useEffect(() => {
     (async () => {
@@ -836,7 +941,10 @@ function SalesPageContent() {
   );
 
   // ✅ Amount Due reflects discounted + tax + interest (grand total)
-  const displayAmountDue = useMemo(() => totals.grandTotal, [totals.grandTotal]);
+  const displayAmountDue = useMemo(
+    () => totals.grandTotal,
+    [totals.grandTotal]
+  );
 
   const pendingOrAccepted = useMemo(
     () =>
@@ -856,7 +964,9 @@ function SalesPageContent() {
 
   /* ======= Data fetches & realtime ======= */
   const fetchItems = async () => {
-    const { data, error } = await supabase.from("inventory").select("*, profit");
+    const { data, error } = await supabase
+      .from("inventory")
+      .select("*, profit");
     if (error) {
       toast.error("Failed to load inventory.");
       return;
@@ -924,7 +1034,9 @@ function SalesPageContent() {
         customers: Array.isArray(o.customers) ? o.customers[0] : o.customers,
         order_items: (o.order_items || []).map((item: any) => ({
           ...item,
-          inventory: Array.isArray(item.inventory) ? item.inventory[0] : item.inventory,
+          inventory: Array.isArray(item.inventory)
+            ? item.inventory[0]
+            : item.inventory,
         })),
       }));
       setOrders(formatted as any);
@@ -983,6 +1095,9 @@ function SalesPageContent() {
     setReceiptEditMode(false);
     setSavingReceiptNotes(false);
     setEditedReceiptNotes({});
+
+    //REMOVE ROW
+    setRemovedLines([]);
   };
 
   useEffect(() => {
@@ -994,9 +1109,10 @@ function SalesPageContent() {
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
   // Validation state
-  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>(
-    { poNumber: false, repName: false }
-  );
+  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
+    poNumber: false,
+    repName: false,
+  });
 
   /* ======= Inventory sorting & pagination helpers ======= */
   const filteredInventory = useMemo(() => {
@@ -1029,7 +1145,8 @@ function SalesPageContent() {
       if (va == null) return 1;
       if (vb == null) return -1;
 
-      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+      if (typeof va === "number" && typeof vb === "number")
+        return (va - vb) * dir;
 
       const sa = String(va).toLowerCase();
       const sb = String(vb).toLowerCase();
@@ -1042,7 +1159,10 @@ function SalesPageContent() {
   }, [filteredInventory, invSortKey, invSortDir]);
 
   const invTotalRows = sortedInventory.length;
-  const invTotalPages = Math.max(1, Math.ceil(invTotalRows / INV_ROWS_PER_PAGE));
+  const invTotalPages = Math.max(
+    1,
+    Math.ceil(invTotalRows / INV_ROWS_PER_PAGE)
+  );
   const invClampedPage = Math.min(invPage, invTotalPages);
   const invStart = (invClampedPage - 1) * INV_ROWS_PER_PAGE;
   const invEnd = Math.min(invStart + INV_ROWS_PER_PAGE, invTotalRows);
@@ -1094,7 +1214,9 @@ function SalesPageContent() {
       await fetchOrders();
       setReceiptEditMode(false);
     } catch (err: any) {
-      toast.error(`Failed to save notes: ${err?.message ?? "Unexpected error"}`);
+      toast.error(
+        `Failed to save notes: ${err?.message ?? "Unexpected error"}`
+      );
     } finally {
       setSavingReceiptNotes(false);
     }
@@ -1146,27 +1268,32 @@ function SalesPageContent() {
 
     setSelectedOrder(order);
 
-    // ✅ Salesman stays blank by default (editable)
+    // Salesman stays blank by default (editable)
     setRepName("");
 
     setEditedQuantities(order.order_items.map((it) => it.quantity));
     setEditedDiscounts(order.order_items.map((it) => it.discount_percent ?? 0));
+    setRemovedLines(order.order_items.map(() => false));
 
     setNumberOfTerms(order.payment_terms || 1);
     setInterestPercent(
       order.interest_percent || interestFromTerms(order.payment_terms || 1)
     );
 
-    // ✅ preload notes into editable map
+    // preload notes into editable map
     const initialNotes: Record<string, string> = {};
     (order.order_items || []).forEach((oi) => {
-      if (oi?.id != null) initialNotes[String(oi.id)] = (oi.remarks ?? "") as string;
+      if (oi?.id != null)
+        initialNotes[String(oi.id)] = (oi.remarks ?? "") as string;
     });
     setEditedReceiptNotes(initialNotes);
     setReceiptEditMode(false);
 
     setShowSalesOrderModal(true);
-    setPickingStatus((prev) => [...prev, { orderId: order.id, status: "accepted" }]);
+    setPickingStatus((prev) => [
+      ...prev,
+      { orderId: order.id, status: "accepted" },
+    ]);
 
     // Notify customer: order approved (best effort)
     try {
@@ -1178,7 +1305,9 @@ function SalesPageContent() {
           recipientName: order.customers.name,
           type: "order_approved",
           title: "Order Approved",
-          message: `Your order ${order.customers.code ?? order.id} has been approved.`,
+          message: `Your order ${
+            order.customers.code ?? order.id
+          } has been approved.`,
           href: `/customer?txn=${order.customers.code ?? order.id}`,
           orderId: order.id,
           transactionCode: order.customers.code ?? null,
@@ -1191,8 +1320,14 @@ function SalesPageContent() {
   };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
-    setPickingStatus((prev) => [...prev, { orderId: order.id, status: "rejected" }]);
-    await supabase.from("orders").update({ status: "rejected" }).eq("id", order.id);
+    setPickingStatus((prev) => [
+      ...prev,
+      { orderId: order.id, status: "rejected" },
+    ]);
+    await supabase
+      .from("orders")
+      .update({ status: "rejected" })
+      .eq("id", order.id);
 
     // notify
     try {
@@ -1207,7 +1342,9 @@ function SalesPageContent() {
           recipientName: order.customers.name,
           type: "order_rejected",
           title: "Order Rejected",
-          message: `We're sorry — your order ${order.customers.code ?? order.id} was rejected.`,
+          message: `We're sorry — your order ${
+            order.customers.code ?? order.id
+          } was rejected.`,
           href: `/customer?txn=${order.customers.code ?? order.id}`,
           orderId: order.id,
           transactionCode: order.customers.code ?? null,
@@ -1277,7 +1414,7 @@ function SalesPageContent() {
             fulfilled_quantity: qty,
             discount_percent: editedDiscounts[i] || 0,
             // ✅ also persist notes (if any) — best-effort
-            remarks: editedReceiptNotes[String(oi.id)] ?? (oi.remarks ?? ""),
+            remarks: editedReceiptNotes[String(oi.id)] ?? oi.remarks ?? "",
           })
           .eq("order_id", selectedOrder.id)
           .eq("inventory_id", invId);
@@ -1290,13 +1427,17 @@ function SalesPageContent() {
           setShowSalesOrderModal(true);
           return;
         }
-        await supabase.from("inventory").update({ quantity: remaining }).eq("id", invId);
+        await supabase
+          .from("inventory")
+          .update({ quantity: remaining })
+          .eq("id", invId);
 
         const unitPrice = oi.price;
         const discountPercent = editedDiscounts[i] || 0;
         const costPrice = oi.inventory.cost_price || 0;
         const amount = qty * unitPrice * (1 - discountPercent / 100);
-        const earnings = (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
+        const earnings =
+          (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
 
         await supabase.from("sales").insert([
           {
@@ -1318,10 +1459,14 @@ function SalesPageContent() {
       const { error: rpcErr } = await supabase.rpc("approve_order", {
         p_order_id: selectedOrder.id,
         p_terms: isCredit ? numberOfTerms : 1,
-        p_per_term: round2(isCredit ? getPerTermAmount() : getGrandTotalWithInterest()),
+        p_per_term: round2(
+          isCredit ? getPerTermAmount() : getGrandTotalWithInterest()
+        ),
         p_first_due,
         p_grand_total_with_interest: round2(getGrandTotalWithInterest()),
-        p_interest_percent: isCredit ? round2(totals.effectiveInterestPercent) : 0,
+        p_interest_percent: isCredit
+          ? round2(totals.effectiveInterestPercent)
+          : 0,
         p_sales_tax: round2(isSalesTaxOn ? salesTaxValue : 0),
         p_po_number: poNumber,
         p_salesman: repName,
@@ -1335,7 +1480,11 @@ function SalesPageContent() {
       const nowPH = getPHISOString();
       const { error: doneErr } = await supabase
         .from("orders")
-        .update({ status: "completed", date_completed: nowPH, processed_at: nowPH })
+        .update({
+          status: "completed",
+          date_completed: nowPH,
+          processed_at: nowPH,
+        })
         .eq("id", selectedOrder.id);
       if (doneErr) throw doneErr;
 
@@ -1348,13 +1497,20 @@ function SalesPageContent() {
             recipientName: selectedOrder.customers.name,
             type: "order_completed",
             title: "Order Completed",
-            message: `Your order ${selectedOrder.customers.code ?? selectedOrder.id} has been completed. Thank you!`,
-            href: `/customer?txn=${selectedOrder.customers.code ?? selectedOrder.id}`,
+            message: `Your order ${
+              selectedOrder.customers.code ?? selectedOrder.id
+            } has been completed. Thank you!`,
+            href: `/customer?txn=${
+              selectedOrder.customers.code ?? selectedOrder.id
+            }`,
             orderId: selectedOrder.id,
             transactionCode: selectedOrder.customers.code ?? null,
             metadata: {
               grand_total: getGrandTotalWithInterest(),
-              terms: selectedOrder.customers.payment_type === "Credit" ? numberOfTerms : 1,
+              terms:
+                selectedOrder.customers.payment_type === "Credit"
+                  ? numberOfTerms
+                  : 1,
             },
             actorEmail: processor?.email ?? "admin@system",
           }),
@@ -1367,7 +1523,9 @@ function SalesPageContent() {
       setShowFinalConfirm(false);
       resetSalesForm();
       setSelectedOrder(null);
-      setPickingStatus((prev) => prev.filter((p) => p.orderId !== selectedOrder.id));
+      setPickingStatus((prev) =>
+        prev.filter((p) => p.orderId !== selectedOrder.id)
+      );
       await Promise.all([fetchOrders(), fetchItems()]);
       toast.success("Order successfully completed!");
 
@@ -1396,7 +1554,9 @@ function SalesPageContent() {
         setShowSalesOrderModal(true);
         return;
       }
-      toast.error(`Failed to complete order: ${err?.message ?? "Unexpected error"}`);
+      toast.error(
+        `Failed to complete order: ${err?.message ?? "Unexpected error"}`
+      );
       setIsCompletingOrder(false);
       setShowFinalConfirm(false);
       setShowSalesOrderModal(true);
@@ -1411,7 +1571,10 @@ function SalesPageContent() {
     );
   }, [pendingOrAccepted, currentPage]);
 
-  const totalPages = Math.max(1, Math.ceil(pendingOrAccepted.length / ordersPerPage));
+  const totalPages = Math.max(
+    1,
+    Math.ceil(pendingOrAccepted.length / ordersPerPage)
+  );
 
   return (
     <div className="p-6">
@@ -1452,10 +1615,11 @@ function SalesPageContent() {
                 {movingProducts[0].product_name}
               </div>
               <div className="text-sm text-gray-600">
-                Sold in last 90d: <b>{movingProducts[0].units_90d.toLocaleString()}</b>{" "}
-                units
+                Sold in last 90d:{" "}
+                <b>{movingProducts[0].units_90d.toLocaleString()}</b> units
                 <br />
-                Stock Left: <b>{movingProducts[0].current_stock.toLocaleString()}</b>
+                Stock Left:{" "}
+                <b>{movingProducts[0].current_stock.toLocaleString()}</b>
               </div>
             </>
           ) : (
@@ -1465,8 +1629,12 @@ function SalesPageContent() {
 
         {/* Total Orders */}
         <div className="bg-white rounded-2xl shadow p-5 min-w-[210px] flex-1 max-w-xs">
-          <div className="text-xs text-gray-500 font-semibold mb-2">Total Orders</div>
-          <div className="text-2xl font-bold text-black mb-1">{orders.length}</div>
+          <div className="text-xs text-gray-500 font-semibold mb-2">
+            Total Orders
+          </div>
+          <div className="text-2xl font-bold text-black mb-1">
+            {orders.length}
+          </div>
         </div>
 
         {/* Completed Orders */}
@@ -1474,7 +1642,9 @@ function SalesPageContent() {
           <div className="text-xs text-gray-500 font-semibold mb-2">
             Completed Orders
           </div>
-          <div className="text-2xl font-bold text-blue-700 mb-1">{completedOrders}</div>
+          <div className="text-2xl font-bold text-blue-700 mb-1">
+            {completedOrders}
+          </div>
         </div>
 
         {/* Pending Orders (jump) */}
@@ -1483,17 +1653,23 @@ function SalesPageContent() {
           title="Jump to Pending Orders"
           onClick={() => {
             if (pendingOrders > 0) {
-              document.getElementById("pending-orders-section")?.scrollIntoView({
-                behavior: "smooth",
-                block: "start",
-              });
+              document
+                .getElementById("pending-orders-section")
+                ?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                });
             } else {
               toast.info("No Available Orders");
             }
           }}
         >
-          <div className="text-xs text-gray-500 font-semibold mb-2">Pending Orders</div>
-          <div className="text-2xl font-bold text-orange-500 mb-1">{pendingOrders}</div>
+          <div className="text-xs text-gray-500 font-semibold mb-2">
+            Pending Orders
+          </div>
+          <div className="text-2xl font-bold text-orange-500 mb-1">
+            {pendingOrders}
+          </div>
         </div>
       </div>
 
@@ -1541,14 +1717,23 @@ function SalesPageContent() {
                       <th className="py-2 px-3 text-right">Sold (90d)</th>
                       <th className="py-2 px-3 text-right">Stock Left</th>
                       <th className="py-2 px-3 text-right">Days of Cover</th>
-                      <th className="py-2 px-3 text-right">Velocity (units/day)</th>
+                      <th className="py-2 px-3 text-right">
+                        Velocity (units/day)
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {movingProducts.map((prod, idx) => (
-                      <tr key={prod.id} className="border-b hover:bg-gray-50/80">
-                        <td className="py-2 px-3 font-semibold text-center">{idx + 1}</td>
-                        <td className="py-2 px-3 font-bold">{prod.product_name}</td>
+                      <tr
+                        key={prod.id}
+                        className="border-b hover:bg-gray-50/80"
+                      >
+                        <td className="py-2 px-3 font-semibold text-center">
+                          {idx + 1}
+                        </td>
+                        <td className="py-2 px-3 font-bold">
+                          {prod.product_name}
+                        </td>
                         <td className="py-2 px-3">{prod.category}</td>
                         <td className="py-2 px-3">{prod.subcategory}</td>
                         <td className="py-2 px-3 text-right">
@@ -1558,7 +1743,9 @@ function SalesPageContent() {
                           {prod.current_stock.toLocaleString()}
                         </td>
                         <td className="py-2 px-3 text-right">
-                          {prod.est_days_of_cover ? prod.est_days_of_cover.toFixed(1) : "-"}
+                          {prod.est_days_of_cover
+                            ? prod.est_days_of_cover.toFixed(1)
+                            : "-"}
                         </td>
                         <td className="py-2 px-3 text-right">
                           {prod.pr_units_velocity?.toFixed(2)}
@@ -1568,8 +1755,8 @@ function SalesPageContent() {
                   </tbody>
                 </table>
                 <div className="text-xs text-gray-500 mt-4">
-                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last 90 days).
-                  Highest rows are “fast”; lowest rows are “slow”.
+                  <b>Days of Cover</b> = Stock Left ÷ average daily sales (last
+                  90 days). Highest rows are “fast”; lowest rows are “slow”.
                 </div>
               </div>
             </motion.div>
@@ -1597,7 +1784,9 @@ function SalesPageContent() {
               ].map((h) => (
                 <th
                   key={h.key}
-                  className={`py-2 px-4 ${h.align === "right" ? "text-right" : ""}`}
+                  className={`py-2 px-4 ${
+                    h.align === "right" ? "text-right" : ""
+                  }`}
                 >
                   <button
                     onClick={() => toggleInvSort(h.key as InvSortKey)}
@@ -1606,7 +1795,9 @@ function SalesPageContent() {
                     aria-label={`Sort by ${h.label}`}
                   >
                     <span>{h.label}</span>
-                    <span className="text-xs">{sortIcon(h.key as InvSortKey)}</span>
+                    <span className="text-xs">
+                      {sortIcon(h.key as InvSortKey)}
+                    </span>
                   </button>
                 </th>
               ))}
@@ -1619,7 +1810,9 @@ function SalesPageContent() {
                 key={it.id}
                 className={
                   "border-b hover:bg-gray-100 " +
-                  (it.quantity === 0 ? "bg-red-100 text-red-700 font-semibold" : "")
+                  (it.quantity === 0
+                    ? "bg-red-100 text-red-700 font-semibold"
+                    : "")
                 }
               >
                 <td className="py-2 px-4">{it.sku}</td>
@@ -1638,7 +1831,9 @@ function SalesPageContent() {
 
                 {/* ✅ Total based on COST PRICE */}
                 <td className="py-2 px-4 text-right">
-                  {peso((Number(it.cost_price) || 0) * (Number(it.quantity) || 0))}
+                  {peso(
+                    (Number(it.cost_price) || 0) * (Number(it.quantity) || 0)
+                  )}
                 </td>
               </tr>
             ))}
@@ -1657,7 +1852,8 @@ function SalesPageContent() {
       {/* Inventory pagination controls */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-6">
         <div className="text-sm text-gray-600">
-          Rows {invTotalRows === 0 ? 0 : invStart + 1}–{invEnd} of {invTotalRows}
+          Rows {invTotalRows === 0 ? 0 : invStart + 1}–{invEnd} of{" "}
+          {invTotalRows}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -1689,11 +1885,17 @@ function SalesPageContent() {
       </div>
 
       {/* Orders List */}
-      <div className="mt-10" id="pending-orders-section" ref={pendingOrdersSectionRef}>
+      <div
+        className="mt-10"
+        id="pending-orders-section"
+        ref={pendingOrdersSectionRef}
+      >
         <h2 className="text-2xl font-bold mb-4">Customer Orders (Pending)</h2>
 
         {pendingOrAccepted.length === 0 && (
-          <div className="text-gray-500 italic mb-6">No pending or accepted orders.</div>
+          <div className="text-gray-500 italic mb-6">
+            No pending or accepted orders.
+          </div>
         )}
 
         {pagedOrders.map((order) => {
@@ -1716,7 +1918,9 @@ function SalesPageContent() {
               <div className="flex justify-between items-center mb-2">
                 <span className="font-bold text-xl">
                   Transaction ID:{" "}
-                  <span className="text-blue-700">{order.customers.code ?? "—"}</span>
+                  <span className="text-blue-700">
+                    {order.customers.code ?? "—"}
+                  </span>
                 </span>
                 <span
                   className={`font-bold px-3 py-1 rounded text-base ml-4 ${
@@ -1755,13 +1959,16 @@ function SalesPageContent() {
                     {item.inventory.product_name} - {item.quantity} pcs
                     <br />
                     <span className="text-sm text-gray-600">
-                      Ordered: {peso(item.price)} | Now: {peso(item.inventory.unit_price)}
+                      Ordered: {peso(item.price)} | Now:{" "}
+                      {peso(item.inventory.unit_price)}
                     </span>
                   </li>
                 ))}
               </ul>
 
-              <p className="mt-2 font-bold text-lg">Total: {peso(order.total_amount)}</p>
+              <p className="mt-2 font-bold text-lg">
+                Total: {peso(order.total_amount)}
+              </p>
 
               {order.status !== "completed" && order.status !== "rejected" && (
                 <div className="flex gap-2 mt-2">
@@ -1880,6 +2087,10 @@ function SalesPageContent() {
               editedReceiptNotes={editedReceiptNotes}
               setEditedReceiptNotes={setEditedReceiptNotes}
               saveReceiptNotes={saveReceiptNotes}
+              //REMOVABLE ROWS
+              removedLines={removedLines}
+              setRemovedLines={setRemovedLines}
+              setEditedQuantities={setEditedQuantities}
             />
 
             {/* Bottom Actions */}
@@ -1929,8 +2140,8 @@ function SalesPageContent() {
               <span className="text-green-700">COMPLETE</span> this order?
             </div>
             <div className="text-base mb-6">
-              This will deduct the items from inventory, mark the order as completed, and record
-              the sales transaction.
+              This will deduct the items from inventory, mark the order as
+              completed, and record the sales transaction.
             </div>
             <div className="flex justify-center gap-10 mt-4">
               <button
@@ -1962,7 +2173,9 @@ function SalesPageContent() {
 
               <button
                 className={`bg-gray-400 text-white px-8 py-3 rounded-xl text-lg font-semibold shadow transition ${
-                  isCompletingOrder ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-500"
+                  isCompletingOrder
+                    ? "opacity-50 cursor-not-allowed"
+                    : "hover:bg-gray-500"
                 }`}
                 onClick={() => setShowFinalConfirm(false)}
                 disabled={isCompletingOrder}
@@ -1979,7 +2192,8 @@ function SalesPageContent() {
         <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-auto p-8 text-center">
             <div className="text-xl font-bold mb-6 text-gray-800">
-              Are you sure you want to <span className="text-red-600">REJECT</span> this order?
+              Are you sure you want to{" "}
+              <span className="text-red-600">REJECT</span> this order?
             </div>
             <div className="text-base mb-6">
               This will permanently reject the order and notify the customer.
