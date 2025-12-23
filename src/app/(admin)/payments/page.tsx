@@ -26,7 +26,6 @@ const formatPH = (d: string | Date | null | undefined) => {
   });
 };
 
-
 /* ------------------------------ Types ------------------------------ */
 type CustomerRow = {
   id: string | number;
@@ -38,7 +37,6 @@ type CustomerRow = {
 
   payment_type?: "Cash" | "Credit" | string | null; // ✅ ADD
 };
-
 
 type OrderRow = {
   id: string | number;
@@ -56,7 +54,6 @@ type OrderRow = {
   per_term_amount?: number | null;
 };
 
-
 type PaymentRow = {
   id: string;
   customer_id: string | number;
@@ -69,6 +66,9 @@ type PaymentRow = {
   image_url: string | null;
   status: string | null;
   created_at: string | null;
+
+  received_at?: string | null;
+  received_by?: string | null;
 };
 
 type LedgerRow = {
@@ -101,7 +101,6 @@ async function uploadPaymentProof(file: File, orderId: string) {
 
   const { error: upErr } = await supabase.storage
     .from("payment-cheques")
-
     .upload(path, file, { cacheControl: "3600", upsert: false });
 
   if (upErr) throw upErr;
@@ -201,7 +200,7 @@ export default function AdminPaymentsLedgerPage() {
     const { data, error } = await supabase
       .from("payments")
       .select(
-        "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, status, created_at"
+        "id, customer_id, order_id, amount, method, cheque_number, bank_name, cheque_date, image_url, status, created_at, received_at, received_by"
       )
       .eq("order_id", orderId)
       .order("created_at", { ascending: true });
@@ -236,15 +235,14 @@ export default function AdminPaymentsLedgerPage() {
   }, [customers]);
 
   const codeByCustomerId = useMemo(() => {
-  const map = new Map<string, string>();
-  for (const c of customers) {
-    const id = String(c.id);
-    const code = String(c.code || "").trim();
-    if (code) map.set(id, code);
-  }
-  return map;
-}, [customers]);
-
+    const map = new Map<string, string>();
+    for (const c of customers) {
+      const id = String(c.id);
+      const code = String(c.code || "").trim();
+      if (code) map.set(id, code);
+    }
+    return map;
+  }, [customers]);
 
   /* ------------------------------ Selected objects ------------------------------ */
   const selectedCustomer = useMemo(() => {
@@ -255,41 +253,41 @@ export default function AdminPaymentsLedgerPage() {
     );
   }, [uniqueCustomers, selectedCustomerId]);
 
-    const selectedOrder = useMemo(() => {
+  const selectedOrder = useMemo(() => {
     if (!selectedOrderId) return null;
     return orders.find((o) => String(o.id) === String(selectedOrderId)) || null;
   }, [orders, selectedOrderId]);
 
-const invoiceNo = useMemo(() => {
-  if (!selectedOrder) return "";
-  return String(codeByCustomerId.get(String(selectedOrder.customer_id)) || "").trim();
-}, [selectedOrder, codeByCustomerId]);
+  const invoiceNo = useMemo(() => {
+    if (!selectedOrder) return "";
+    return String(codeByCustomerId.get(String(selectedOrder.customer_id)) || "").trim();
+  }, [selectedOrder, codeByCustomerId]);
 
-const paymentSummary = useMemo(() => {
-  const payTypeRaw = String(selectedCustomer?.payment_type || "").trim();
-  const payType = payTypeRaw || "—";
+  const paymentSummary = useMemo(() => {
+    const payTypeRaw = String(selectedCustomer?.payment_type || "").trim();
+    const payType = payTypeRaw || "—";
 
-  const days =
-    typeof selectedOrder?.payment_terms === "number" && selectedOrder.payment_terms > 0
-      ? selectedOrder.payment_terms
-      : null;
+    const days =
+      typeof selectedOrder?.payment_terms === "number" &&
+      selectedOrder.payment_terms > 0
+        ? selectedOrder.payment_terms
+        : null;
 
-  const termsText = days
-    ? `${days} DAYS`
-    : selectedOrder?.terms
-    ? String(selectedOrder.terms)
-    : "";
+    const termsText = days
+      ? `${days} DAYS`
+      : selectedOrder?.terms
+      ? String(selectedOrder.terms)
+      : "";
 
-  if (payType.toLowerCase() === "credit") {
-    return `Credit${termsText ? ` • ${termsText}` : ""}`;
-  }
-  if (payType.toLowerCase() === "cash") {
-    return "Cash";
-  }
+    if (payType.toLowerCase() === "credit") {
+      return `Credit${termsText ? ` • ${termsText}` : ""}`;
+    }
+    if (payType.toLowerCase() === "cash") {
+      return "Cash";
+    }
 
-  return `${payType}${termsText ? ` • ${termsText}` : ""}`;
-}, [selectedCustomer?.payment_type, selectedOrder?.payment_terms, selectedOrder?.terms]);
-
+    return `${payType}${termsText ? ` • ${termsText}` : ""}`;
+  }, [selectedCustomer?.payment_type, selectedOrder?.payment_terms, selectedOrder?.terms]);
 
   /* ------------------------------ When customerKey changes -> load orders ------------------------------ */
   useEffect(() => {
@@ -435,11 +433,37 @@ const paymentSummary = useMemo(() => {
   /* ------------------------------ Add payment (step 1: open confirm) ------------------------------ */
   function openConfirmPayment() {
     if (!payFormValid) {
-      toast.error("Complete all fields (including proof image) before adding payment.");
+      toast.error(
+        "Complete all fields (including proof image) before adding payment."
+      );
       return;
     }
     setShowConfirm(true);
   }
+
+  /* ------------------------------ Mark payment received (TRIGGER DB) ------------------------------ */
+  const markPaymentReceived = async (paymentId: string) => {
+    try {
+      const adminEmail = await getAdminEmail();
+
+      const { error } = await supabase
+        .from("payments")
+        .update({
+          status: "received",
+          received_at: nowISO(), // optional but recommended
+          received_by: adminEmail,
+        })
+        .eq("id", paymentId);
+
+      if (error) throw error;
+
+      toast.success("Payment marked as RECEIVED. Ledger + Cash Ledger updated.");
+      await fetchPaymentsByOrder(String(selectedOrderId));
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || "Failed to mark payment as received.");
+    }
+  };
 
   /* ------------------------------ Add payment (step 2: confirm + save) ------------------------------ */
   async function confirmAddPayment() {
@@ -454,9 +478,12 @@ const paymentSummary = useMemo(() => {
       const adminEmail = await getAdminEmail();
 
       // 1) Upload proof
-      const imageUrl = await uploadPaymentProof(payProofFile, String(selectedOrderId));
+      const imageUrl = await uploadPaymentProof(
+        payProofFile,
+        String(selectedOrderId)
+      );
 
-      // 2) Insert payment row
+      // ✅ 2) Insert payment row as PENDING first
       const { error } = await supabase.from("payments").insert([
         {
           customer_id: String(selectedCustomer.id),
@@ -467,20 +494,18 @@ const paymentSummary = useMemo(() => {
           bank_name: payBankName.trim(),
           cheque_date: payChequeDate, // YYYY-MM-DD
           image_url: imageUrl,
-          status: "received",
-          received_at: nowISO(),
-          received_by: adminEmail,
+          status: "pending",
+          created_at: nowISO(),
+          received_by: adminEmail, // keep for reference (optional)
         },
       ]);
 
       if (error) throw error;
 
-      toast.success("Payment added.");
-
+      toast.success("Payment added as PENDING. Click 'Mark Received' to finalize.");
       setShowConfirm(false);
       resetPaymentForm();
 
-      // Refresh payments list
       await fetchPaymentsByOrder(String(selectedOrderId));
     } catch (e: any) {
       console.error(e);
@@ -508,6 +533,7 @@ const paymentSummary = useMemo(() => {
 
     const payRows: Omit<LedgerRow, "balance">[] = (payments || [])
       .filter((p) => String(p.order_id ?? "") === String(selectedOrder.id))
+      // ✅ ONLY RECEIVED affects ledger
       .filter((p) => statusLower(p.status) === "received")
       .map((p) => {
         const method = String(p.method || "Payment");
@@ -520,8 +546,8 @@ const paymentSummary = useMemo(() => {
         if (p.cheque_date) lines.push(`Date: ${p.cheque_date}`);
 
         return {
-          sortDate: p.created_at || nowISO(),
-          dateLabel: formatPH(p.created_at),
+          sortDate: p.received_at || p.created_at || nowISO(),
+          dateLabel: formatPH(p.received_at || p.created_at),
           description: lines.join("\n"),
           debit: 0,
           credit: round2(Number(p.amount || 0)),
@@ -545,8 +571,16 @@ const paymentSummary = useMemo(() => {
   );
 
   const currentBalance = useMemo(
-    () => (ledgerRows.length ? round2(ledgerRows[ledgerRows.length - 1].balance) : 0),
+    () =>
+      ledgerRows.length
+        ? round2(ledgerRows[ledgerRows.length - 1].balance)
+        : 0,
     [ledgerRows]
+  );
+
+  const pendingPayments = useMemo(
+    () => payments.filter((p) => statusLower(p.status) !== "received"),
+    [payments]
   );
 
   /* ---------------------------------- UI ---------------------------------- */
@@ -559,8 +593,8 @@ const paymentSummary = useMemo(() => {
               Payments Ledger
             </h1>
             <p className="text-sm text-gray-600 mt-1">
-              Select a customer, then select an Invoice to view the ledger: Debit, Credit, and
-              Balance.
+              Select a customer, then select an Invoice to view the ledger:
+              Debit, Credit, and Balance.
             </p>
           </div>
         </div>
@@ -570,7 +604,9 @@ const paymentSummary = useMemo(() => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Customer */}
             <div>
-              <label className="text-xs text-gray-600">Choose Customer *</label>
+              <label className="text-xs text-gray-600">
+                Choose Customer *
+              </label>
               <select
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 value={selectedCustomerId}
@@ -579,7 +615,9 @@ const paymentSummary = useMemo(() => {
                   setSelectedCustomerId(id);
 
                   const picked =
-                    uniqueCustomers.find((x) => String(x.id) === String(id)) || null;
+                    uniqueCustomers.find(
+                      (x) => String(x.id) === String(id)
+                    ) || null;
 
                   const key = picked ? makeCustomerKey(picked) : "";
                   setSelectedCustomerKey(key);
@@ -593,7 +631,8 @@ const paymentSummary = useMemo(() => {
                 <option value="">— Select customer —</option>
                 {uniqueCustomers.map((c) => (
                   <option key={String(c.id)} value={String(c.id)}>
-                    {(c.name || "Unknown").trim()} {c.email ? `— ${c.email}` : ""}
+                    {(c.name || "Unknown").trim()}{" "}
+                    {c.email ? `— ${c.email}` : ""}
                   </option>
                 ))}
               </select>
@@ -602,11 +641,15 @@ const paymentSummary = useMemo(() => {
                 <div className="mt-2 text-xs text-gray-700">
                   <div className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1">
                     <span className="font-semibold">Customer:</span>
-                    <span className="font-medium">{selectedCustomer.name || "—"}</span>
+                    <span className="font-medium">
+                      {selectedCustomer.name || "—"}
+                    </span>
                     {selectedCustomer.phone ? (
                       <>
                         <span className="opacity-50">•</span>
-                        <span className="text-gray-500">{selectedCustomer.phone}</span>
+                        <span className="text-gray-500">
+                          {selectedCustomer.phone}
+                        </span>
                       </>
                     ) : null}
                   </div>
@@ -616,7 +659,9 @@ const paymentSummary = useMemo(() => {
 
             {/* Invoice / Order */}
             <div>
-              <label className="text-xs text-gray-600">Choose Invoice *</label>
+              <label className="text-xs text-gray-600">
+                Choose Invoice *
+              </label>
               <select
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 value={selectedOrderId}
@@ -627,15 +672,15 @@ const paymentSummary = useMemo(() => {
                 disabled={!selectedCustomerId}
               >
                 <option value="">— Select Invoice —</option>
-{orders.map((o) => {
-  const code = codeByCustomerId.get(String(o.customer_id)) || "—";
-  return (
-    <option key={String(o.id)} value={String(o.id)}>
-      Invoice No. {code}
-    </option>
-  );
-})}
-
+                {orders.map((o) => {
+                  const code =
+                    codeByCustomerId.get(String(o.customer_id)) || "—";
+                  return (
+                    <option key={String(o.id)} value={String(o.id)}>
+                      Invoice No. {code}
+                    </option>
+                  );
+                })}
               </select>
 
               {!selectedCustomerId && (
@@ -653,15 +698,14 @@ const paymentSummary = useMemo(() => {
           <div className="mt-6 rounded-xl bg-white border border-gray-200 p-4">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
               <div>
-<h2 className="text-lg font-semibold">
-  Ledger for Invoice No.{" "}
-  <span className="font-mono">{invoiceNo || "—"}</span>
-
-  <span className="mt-1 block text-sm font-normal text-gray-600">
-    • Payment: <span className="font-semibold">{paymentSummary}</span>
-  </span>
-</h2>
-
+                <h2 className="text-lg font-semibold">
+                  Ledger for Invoice No.{" "}
+                  <span className="font-mono">{invoiceNo || "—"}</span>
+                  <span className="mt-1 block text-sm font-normal text-gray-600">
+                    • Payment:{" "}
+                    <span className="font-semibold">{paymentSummary}</span>
+                  </span>
+                </h2>
 
                 <p className="text-xs text-gray-600">
                   Debit = charge • Credit = payments • Balance = running balance
@@ -681,9 +725,66 @@ const paymentSummary = useMemo(() => {
               </div>
             </div>
 
+            {/* Pending Payments list */}
+            {pendingPayments.length > 0 ? (
+              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div className="text-sm font-semibold text-amber-900 mb-2">
+                  Pending Payments (click “Mark Received” to trigger Cash Ledger)
+                </div>
+
+                <div className="space-y-2">
+                  {pendingPayments.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 rounded-lg border border-amber-200 bg-white p-3"
+                    >
+                      <div className="text-sm">
+                        <div className="font-semibold">
+                          {peso(p.amount)}{" "}
+                          <span className="text-gray-500 font-normal">
+                            • {p.method || "—"}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-600 mt-0.5">
+                          Ref: {p.cheque_number || "—"} • Bank:{" "}
+                          {p.bank_name || "—"} • Date: {p.cheque_date || "—"}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          Status:{" "}
+                          <span className="font-semibold">
+                            {(p.status || "pending").toUpperCase()}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {p.image_url ? (
+                          <a
+                            href={p.image_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs font-semibold underline text-gray-700"
+                          >
+                            View Proof
+                          </a>
+                        ) : null}
+
+                        <button
+                          type="button"
+                          onClick={() => markPaymentReceived(p.id)}
+                          className="h-9 rounded-lg bg-green-600 px-3 text-sm font-semibold text-white hover:bg-green-700"
+                        >
+                          Mark Received
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {/* Add Payment (for selected invoice) */}
             <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-
               <div className="text-sm font-semibold text-gray-800 mb-2">
                 Add Payment (for this Invoice)
               </div>
@@ -716,7 +817,9 @@ const paymentSummary = useMemo(() => {
                 </div>
 
                 <div>
-                  <label className="block text-xs text-gray-600">Ref / Cheque No. *</label>
+                  <label className="block text-xs text-gray-600">
+                    Ref / Cheque No. *
+                  </label>
                   <input
                     className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                     value={payChequeNumber}
@@ -734,7 +837,9 @@ const paymentSummary = useMemo(() => {
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="block text-xs text-gray-600">Cheque/Deposit Date *</label>
+                  <label className="block text-xs text-gray-600">
+                    Cheque/Deposit Date *
+                  </label>
                   <input
                     type="date"
                     className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
@@ -758,7 +863,8 @@ const paymentSummary = useMemo(() => {
                   />
                   {payProofFile ? (
                     <div className="mt-1 text-[11px] text-gray-600">
-                      Selected: <span className="font-medium">{payProofFile.name}</span>
+                      Selected:{" "}
+                      <span className="font-medium">{payProofFile.name}</span>
                     </div>
                   ) : null}
                 </div>
@@ -785,11 +891,17 @@ const paymentSummary = useMemo(() => {
                     className="text-black uppercase tracking-wider text-[11px]"
                     style={{ background: "#ffba20" }}
                   >
-                    <th className="py-2.5 px-3 text-left font-bold">DATE OF PAYMENT</th>
-                    <th className="py-2.5 px-3 text-left font-bold">DESCRIPTION</th>
+                    <th className="py-2.5 px-3 text-left font-bold">
+                      DATE OF PAYMENT
+                    </th>
+                    <th className="py-2.5 px-3 text-left font-bold">
+                      DESCRIPTION
+                    </th>
                     <th className="py-2.5 px-3 text-left font-bold">DEBIT</th>
                     <th className="py-2.5 px-3 text-left font-bold">CREDIT</th>
-                    <th className="py-2.5 px-3 text-left font-bold">BALANCE</th>
+                    <th className="py-2.5 px-3 text-left font-bold">
+                      BALANCE
+                    </th>
                     <th className="py-2.5 px-3 text-left font-bold">REMARKS</th>
                   </tr>
                 </thead>
@@ -861,18 +973,23 @@ const paymentSummary = useMemo(() => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                       <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                         <div className="text-xs text-gray-500">Invoice No.</div>
-                        <div className="font-mono font-semibold">{invoiceNo || "—"}</div>
+                        <div className="font-mono font-semibold">
+                          {invoiceNo || "—"}
+                        </div>
                       </div>
 
                       <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-  <div className="text-xs text-gray-500">Customer Payment</div>
-  <div className="font-semibold">{paymentSummary}</div>
-</div>
-
+                        <div className="text-xs text-gray-500">
+                          Customer Payment
+                        </div>
+                        <div className="font-semibold">{paymentSummary}</div>
+                      </div>
 
                       <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                         <div className="text-xs text-gray-500">Amount</div>
-                        <div className="font-semibold">{peso(payAmountNum || 0)}</div>
+                        <div className="font-semibold">
+                          {peso(payAmountNum || 0)}
+                        </div>
                       </div>
 
                       <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
@@ -881,7 +998,9 @@ const paymentSummary = useMemo(() => {
                       </div>
 
                       <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                        <div className="text-xs text-gray-500">Ref / Cheque No.</div>
+                        <div className="text-xs text-gray-500">
+                          Ref / Cheque No.
+                        </div>
                         <div className="font-semibold">{payChequeNumber}</div>
                       </div>
 
@@ -891,7 +1010,9 @@ const paymentSummary = useMemo(() => {
                       </div>
 
                       <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                        <div className="text-xs text-gray-500">Cheque/Deposit Date</div>
+                        <div className="text-xs text-gray-500">
+                          Cheque/Deposit Date
+                        </div>
                         <div className="font-semibold">{payChequeDate}</div>
                       </div>
 

@@ -6,19 +6,39 @@ import ChartFill from "@/assets/Chart_fill.png";
 import Logistics from "@/assets/logistics.png";
 import Sales from "@/assets/Sales.png";
 import LogoutIcon from "@/assets/power-button.png";
-import { ReceiptText } from "lucide-react";
+
+import { Boxes, FileText, Receipt, RotateCcw, ReceiptText, BookOpen } from "lucide-react";
 import { FaHistory } from "react-icons/fa";
-import { Boxes, FileText, Receipt, RotateCcw } from "lucide-react";
 
 import Image, { StaticImageData } from "next/image";
 import NavLink from "@/components/NavLink";
 
 import { usePathname } from "next/navigation";
-import { Dispatch, SetStateAction, useEffect, useState } from "react";
+import React, { Dispatch, SetStateAction, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
-// --- Menu Item Type
+/* ✅ Custom icon (unique) */
+const PurchaseIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <path d="M6 7h15l-1.5 8.5a2 2 0 0 1-2 1.5H8a2 2 0 0 1-2-1.6L4 3H2" />
+    <path d="M9 21a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />
+    <path d="M17 21a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />
+    <path d="M12 6V2" />
+    <path d="M10 4h4" />
+  </svg>
+);
+
+/* ----------------------------- Types ----------------------------- */
 type MenuItem = {
   title: string;
   href: string;
@@ -26,44 +46,54 @@ type MenuItem = {
   icon?: React.ComponentType<{ className?: string }>;
 };
 
-// --- Master Menu List (Account Request removed)
+/* ----------------------------- Menus ----------------------------- */
 const Menus: MenuItem[] = [
   { title: "Dashboard", src: ChartFill, href: "/dashboard" },
   { title: "Inventory", icon: Boxes, href: "/inventory" },
+
+  { title: "Purchase Products", icon: PurchaseIcon, href: "/purchase-products" },
+
+  // ✅ NEW: Cash Ledger (Company Cash Ledger)
+  { title: "Cash Ledger", icon: BookOpen, href: "/reports/cash-ledger" },
+
   { title: "Truck Delivery", src: Logistics, href: "/logistics" },
   { title: "Delivered", src: Logistics, href: "/logistics/delivered" },
   { title: "Sales", src: Sales, href: "/sales" },
   { title: "Invoice", icon: FileText, href: "/invoice" },
   { title: "Payments", icon: ReceiptText, href: "/payments" },
-{ title: "Payments History", icon: ReceiptText, href: "/payments/history" },
+  { title: "Payments History", icon: ReceiptText, href: "/payments/history" },
   { title: "Returns", icon: RotateCcw, href: "/returns" },
   { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
   { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
   { title: "Backup", icon: RotateCcw, href: "/backups" },
 ];
 
-// --- Which roles can see which menu titles (Account Request removed)
+/* -------------------------- Role Access -------------------------- */
 const ROLE_MENUS: Record<string, string[]> = {
   admin: [
     "Dashboard",
     "Inventory",
+    "Purchase Products",
+    "Cash Ledger",
     "Truck Delivery",
     "Delivered",
     "Sales",
     "Invoice",
     "Payments",
-    "Payments History", // NEW
+    "Payments History",
     "Returns",
     "Transaction History",
     "Activity Log",
     "Backup",
   ],
-  cashier: ["Sales", "Invoice", "Payments", "Returns", "Transaction History"],
-  warehouse: ["Inventory"],
+  cashier: ["Sales", "Invoice", "Payments", "Returns", "Transaction History", "Cash Ledger"],
+  warehouse: ["Inventory", "Purchase Products"],
   trucker: ["Truck Delivery", "Delivered"],
   supervisor: [
     "Dashboard",
     "Inventory",
+    "Purchase Products",
+    "Cash Ledger",
     "Truck Delivery",
     "Delivered",
     "Sales",
@@ -85,60 +115,52 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   const [role, setRole] = useState<string>("");
 
   useEffect(() => {
-    // Fetch user role from Supabase
     (async () => {
       const { data } = await supabase.auth.getUser();
       const user = data?.user;
       const userRole =
         user?.user_metadata?.role ||
-        // fallback for older accounts
         (user && (user as any).raw_user_meta_data?.role) ||
         "";
       setRole(userRole);
     })();
   }, [supabase]);
 
-  // --- Robust logout (clears storage, session, forces reload)
   const handleLogout = async () => {
     try {
-      // Clear OTP/other custom storage if needed
       localStorage.removeItem("otpVerified");
       localStorage.removeItem("otpVerifiedEmail");
       localStorage.removeItem("otpVerifiedExpiry");
       localStorage.removeItem("otpCode");
       localStorage.removeItem("otpExpiry");
       localStorage.removeItem("otpEmail");
-      // Optionally: localStorage.clear();
 
-      // Log out activity
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      const userEmail = user?.email || "unknown";
-      const userRole =
-        user?.user_metadata?.role ||
-        (user && (user as any).raw_user_meta_data?.role) ||
-        "unknown";
+
       await supabase.from("activity_logs").insert([
         {
-          user_email: userEmail,
-          user_role: userRole,
+          user_email: user?.email || "unknown",
+          user_role:
+            user?.user_metadata?.role ||
+            (user && (user as any).raw_user_meta_data?.role) ||
+            "unknown",
           action: "Logout",
           details: {},
           created_at: new Date().toISOString(),
         },
       ]);
+
       await supabase.auth.signOut();
     } catch (err) {
-      // Not blocking: still force reload
       console.error("Logout failed:", err);
     } finally {
-      window.location.href = "/login"; // ✅ Full reload
+      window.location.href = "/login";
     }
   };
 
-  // --- Filter menus based on current role
-  const filteredMenus: MenuItem[] = Menus.filter((menu) =>
+  const filteredMenus = Menus.filter((menu) =>
     ROLE_MENUS[role]?.includes(menu.title)
   );
 
@@ -148,7 +170,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
       transition={{ duration: 0.3, type: "spring", damping: 15 }}
       className="h-full bg-white relative flex flex-col"
     >
-      {/* Toggle Button */}
       <Image
         src={arrowcontrol}
         alt="Toggle Sidebar"
@@ -160,20 +181,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
         onClick={() => setOpen(!open)}
       />
 
-      {/* Logo Section */}
       <div className="p-5 pt-8">
         <div className="flex gap-x-4 items-center">
           <motion.div
             animate={{ rotate: open ? 360 : 0 }}
             transition={{ duration: 0.5 }}
           >
-            <Image
-              src={Logo}
-              alt="UNIASIA Logo"
-              width={40}
-              height={40}
-              className="cursor-pointer"
-            />
+            <Image src={Logo} alt="UNIASIA Logo" width={40} height={40} />
           </motion.div>
           <AnimatePresence>
             {open && (
@@ -182,7 +196,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.8 }}
                 transition={{ duration: 0.2 }}
-                className="font-bold tracking-tighter bg-gradient-to-b from-black to-[#001E80] text-transparent bg-clip-text origin-left text-xl"
+                className="font-bold tracking-tighter bg-gradient-to-b from-black to-[#001E80] text-transparent bg-clip-text text-xl"
               >
                 UNIASIA
               </motion.h1>
@@ -191,42 +205,39 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
         </div>
       </div>
 
-      {/* Menu Items */}
       <div className="flex-1 overflow-y-auto px-5">
         <ul className="flex flex-col gap-y-4">
           {filteredMenus.map((menu, idx) => {
             const isActive =
               pathname === menu.href || pathname?.startsWith(menu.href + "/");
 
+            const iconColor = [
+              "Inventory",
+              "Purchase Products",
+              "Cash Ledger",
+              "Invoice",
+              "Payments",
+              "Payments History",
+              "Returns",
+              "Transaction History",
+              "Activity Log",
+            ].includes(menu.title)
+              ? "text-[#ffba20]"
+              : "text-black";
+
             const IconOrImage = menu.src ? (
               <Image src={menu.src} alt={menu.title} width={20} height={20} />
             ) : menu.icon ? (
-              <menu.icon
-                className={`h-5 w-5 ${
-                  [
-                    "Activity Log",
-                    "Account Creation",
-                    "Purchase",
-                    "Inventory",
-                    "Invoice",
-                    "Transaction History",
-                    "Returns",
-                    "Payments",
-                    "Payments History",
-                  ].includes(menu.title)
-                    ? "text-[#ffba20]"
-                    : "text-black"
-                }`}
-              />
+              <menu.icon className={`h-5 w-5 ${iconColor}`} />
             ) : null;
 
-            const menuItem = (
+            const item = (
               <motion.li
                 key={menu.title}
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: idx * 0.05 }}
-                className={`flex items-center gap-x-4 p-2 rounded-md cursor-pointer text-sm text-black hover:bg-gray-200 transition-colors ${
+                className={`flex items-center gap-x-4 p-2 rounded-md cursor-pointer text-sm hover:bg-gray-200 ${
                   isActive ? "bg-gray-100 font-semibold" : ""
                 }`}
               >
@@ -238,7 +249,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: -10 }}
                       transition={{ duration: 0.15 }}
-                      className="origin-left"
                     >
                       {menu.title}
                     </motion.span>
@@ -247,46 +257,32 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
               </motion.li>
             );
 
-            return menu.href ? (
+            return (
               <NavLink href={menu.href} key={menu.title}>
-                {menuItem}
+                {item}
               </NavLink>
-            ) : (
-              <div key={menu.title}>{menuItem}</div>
             );
           })}
         </ul>
       </div>
 
-      {/* Logout Button */}
       <div className="p-5">
         {open ? (
-          <motion.button
+          <button
             onClick={handleLogout}
-            className="w-full px-4 py-2 btn btn-primary hover:text-[#ffba20] transition-colors duration-300"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
+            className="w-full px-4 py-2 bg-black text-white rounded hover:text-[#ffba20]"
           >
             Log out
-          </motion.button>
+          </button>
         ) : (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            transition={{ duration: 0.3 }}
-            className="cursor-pointer hover:scale-110 transition-transform duration-300"
-          >
-            <Image
-              src={LogoutIcon}
-              alt="Log out"
-              width={24}
-              height={24}
-              onClick={handleLogout}
-            />
-          </motion.div>
+          <Image
+            src={LogoutIcon}
+            alt="Log out"
+            width={24}
+            height={24}
+            className="cursor-pointer hover:scale-110 transition-transform"
+            onClick={handleLogout}
+          />
         )}
       </div>
     </motion.div>
