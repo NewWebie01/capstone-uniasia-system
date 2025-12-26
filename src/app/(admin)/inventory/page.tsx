@@ -9,7 +9,11 @@ import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Command,
   CommandEmpty,
@@ -91,10 +95,16 @@ const peso = (n: number) =>
 
 const BUCKET = "inventory-images";
 const MAX_GALLERY = 5;
-const ALLOWED_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const ALLOWED_MIME = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
 const MAX_BYTES = 5 * 1024 * 1024;
 
-const safeSlug = (s: string) => (s || "item").trim().replace(/\s+/g, "-").toLowerCase();
+const safeSlug = (s: string) =>
+  (s || "item").trim().replace(/\s+/g, "-").toLowerCase();
 
 /* ============================================================================
    ✅ IMPORTANT FIX: Row component MUST be outside InventoryPage()
@@ -110,12 +120,12 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 min-w-0">
       <label className="w-44 shrink-0 text-sm text-gray-700">
         {label}
         {required ? <span className="text-red-500">*</span> : null}
       </label>
-      <div className="flex-1">{children}</div>
+      <div className="flex-1 min-w-0">{children}</div>
     </div>
   );
 }
@@ -157,7 +167,9 @@ export default function InventoryPage() {
   const [galleryPreviews, setGalleryPreviews] = useState<string[]>([]);
 
   const [showImageModal, setShowImageModal] = useState(false);
-  const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(null);
+  const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(
+    null
+  );
   const [modalImages, setModalImages] = useState<string[]>([]);
   const [modalIndex, setModalIndex] = useState(0);
 
@@ -355,7 +367,11 @@ export default function InventoryPage() {
   useEffect(() => {
     const u = newItem.unit;
     if (u === "Kg") {
-      setNewItem((prev) => ({ ...prev, pieces_per_unit: 1, weight_per_piece_kg: 1 }));
+      setNewItem((prev) => ({
+        ...prev,
+        pieces_per_unit: 1,
+        weight_per_piece_kg: 1,
+      }));
       return;
     }
     if (u === "Piece") {
@@ -376,7 +392,8 @@ export default function InventoryPage() {
     const unit = newItem.unit || "";
     const qty = Number(newItem.quantity) || 0;
 
-    const weightPerPiece = unit === "Kg" ? 1 : Number(newItem.weight_per_piece_kg) || 0;
+    const weightPerPiece =
+      unit === "Kg" ? 1 : Number(newItem.weight_per_piece_kg) || 0;
     const piecesPerUnit =
       unit === "Kg"
         ? 1
@@ -389,7 +406,12 @@ export default function InventoryPage() {
         : 0;
 
     return total || 0;
-  }, [newItem.unit, newItem.weight_per_piece_kg, newItem.pieces_per_unit, newItem.quantity]);
+  }, [
+    newItem.unit,
+    newItem.weight_per_piece_kg,
+    newItem.pieces_per_unit,
+    newItem.quantity,
+  ]);
 
   const computedPricing = useMemo(() => {
     const cost = Number(newItem.cost_price) || 0;
@@ -403,7 +425,9 @@ export default function InventoryPage() {
 
     const discountRaw = newItem.discount_percent;
     const discount =
-      discountRaw === null || discountRaw === undefined || discountRaw === ("" as any)
+      discountRaw === null ||
+      discountRaw === undefined ||
+      discountRaw === ("" as any)
         ? 0
         : clamp(Number(discountRaw) || 0, 0, LIMITS.MAX_DISCOUNT_PERCENT);
 
@@ -421,7 +445,9 @@ export default function InventoryPage() {
     return {
       markup,
       discount:
-        discountRaw === null || discountRaw === undefined || discountRaw === ("" as any)
+        discountRaw === null ||
+        discountRaw === undefined ||
+        discountRaw === ("" as any)
           ? null
           : discount,
       unit_price: finalUnit,
@@ -429,7 +455,12 @@ export default function InventoryPage() {
       profit,
       belowCost,
     };
-  }, [newItem.cost_price, newItem.markup_percent, newItem.discount_percent, newItem.quantity]);
+  }, [
+    newItem.cost_price,
+    newItem.markup_percent,
+    newItem.discount_percent,
+    newItem.quantity,
+  ]);
 
   const liveErrors = useMemo(() => {
     const quantity = Number(newItem.quantity) || 0;
@@ -447,7 +478,10 @@ export default function InventoryPage() {
       size: isPipe ? !(newItem.size || "").trim() : false,
 
       quantity: quantity < 0 || quantity > LIMITS.MAX_QUANTITY,
-      cost_price: cost_price === null || cost_price < 0 || cost_price > LIMITS.MAX_COST_PRICE,
+      cost_price:
+        cost_price === null ||
+        cost_price < 0 ||
+        cost_price > LIMITS.MAX_COST_PRICE,
 
       // ✅ markup must be at least 20%
       markup_percent:
@@ -457,7 +491,8 @@ export default function InventoryPage() {
 
       discount_percent:
         discount_percent !== null &&
-        (discount_percent < 0 || discount_percent > LIMITS.MAX_DISCOUNT_PERCENT),
+        (discount_percent < 0 ||
+          discount_percent > LIMITS.MAX_DISCOUNT_PERCENT),
 
       pieces_per_unit:
         (newItem.unit === "Box" || newItem.unit === "Pack") &&
@@ -483,12 +518,16 @@ export default function InventoryPage() {
     const ext = file.name.split(".").pop() || "jpg";
     const safeSku = (skuForName || "item").replace(/\s+/g, "-").toLowerCase();
     const path = `${safeSku}-${Date.now()}.${ext}`;
-    const { error: uploadErr } = await supabase.storage.from(BUCKET).upload(path, file, {
-      cacheControl: "3600",
-      upsert: false,
-    });
+    const { error: uploadErr } = await supabase.storage
+      .from(BUCKET)
+      .upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
     if (uploadErr) throw uploadErr;
-    const { data: publicUrlData } = supabase.storage.from(BUCKET).getPublicUrl(path);
+    const { data: publicUrlData } = supabase.storage
+      .from(BUCKET)
+      .getPublicUrl(path);
     return publicUrlData.publicUrl;
   };
 
@@ -511,7 +550,10 @@ export default function InventoryPage() {
     setGalleryPreviews(filtered.map((f) => URL.createObjectURL(f)));
   };
 
-  const uploadGalleryAndReturnUrls = async (files: File[], skuForName: string) => {
+  const uploadGalleryAndReturnUrls = async (
+    files: File[],
+    skuForName: string
+  ) => {
     const folder = safeSlug(skuForName);
     const urls: string[] = [];
     for (let i = 0; i < files.length; i++) {
@@ -529,7 +571,10 @@ export default function InventoryPage() {
     return urls;
   };
 
-  const listGalleryUrls = async (skuOrName: string, primary?: string | null) => {
+  const listGalleryUrls = async (
+    skuOrName: string,
+    primary?: string | null
+  ) => {
     const folder = safeSlug(skuOrName);
     const { data, error } = await supabase.storage.from(BUCKET).list(folder, {
       limit: 50,
@@ -539,7 +584,9 @@ export default function InventoryPage() {
 
     const fileUrls =
       data?.map((f) => {
-        const { data } = supabase.storage.from(BUCKET).getPublicUrl(`${folder}/${f.name}`);
+        const { data } = supabase.storage
+          .from(BUCKET)
+          .getPublicUrl(`${folder}/${f.name}`);
         return data.publicUrl;
       }) || [];
 
@@ -549,7 +596,10 @@ export default function InventoryPage() {
 
   const openImageModal = async (item: InventoryItem) => {
     setImageModalItem(item);
-    const imgs = await listGalleryUrls(item.sku || item.product_name, item.image_url);
+    const imgs = await listGalleryUrls(
+      item.sku || item.product_name,
+      item.image_url
+    );
     setModalImages(imgs);
     setModalIndex(0);
     setShowImageModal(true);
@@ -569,7 +619,9 @@ export default function InventoryPage() {
 
     const total_weight_kg =
       pieces_per_unit && weight_per_piece_kg
-        ? Number(pieces_per_unit) * Number(weight_per_piece_kg) * Number(quantity || 0)
+        ? Number(pieces_per_unit) *
+          Number(weight_per_piece_kg) *
+          Number(quantity || 0)
         : null;
 
     return {
@@ -623,7 +675,9 @@ export default function InventoryPage() {
       const hasErrors = Object.values(liveErrors).some(Boolean);
       if (hasErrors) {
         if (liveErrors.pricing_below_cost) {
-          toast.error("Discount is too high. Selling price cannot go below Cost Price.");
+          toast.error(
+            "Discount is too high. Selling price cannot go below Cost Price."
+          );
         } else if (liveErrors.markup_percent) {
           toast.error(`Markup must be at least ${LIMITS.MIN_MARKUP_PERCENT}%.`);
         } else {
@@ -636,12 +690,18 @@ export default function InventoryPage() {
 
       let finalImageUrl = newItem.image_url || null;
       if (imageFile) {
-        finalImageUrl = await uploadImageAndGetUrl(imageFile, newItem.sku || newItem.product_name);
+        finalImageUrl = await uploadImageAndGetUrl(
+          imageFile,
+          newItem.sku || newItem.product_name
+        );
       }
 
       if (galleryFiles.length) {
         try {
-          await uploadGalleryAndReturnUrls(galleryFiles, newItem.sku || newItem.product_name);
+          await uploadGalleryAndReturnUrls(
+            galleryFiles,
+            newItem.sku || newItem.product_name
+          );
         } catch {
           toast.error("Some additional photos failed to upload.");
         }
@@ -664,11 +724,16 @@ export default function InventoryPage() {
         profit: computedPricing.profit,
 
         // computed weight
-        total_weight_kg: normalized.total_weight_kg ?? (computedWeight ? computedWeight : null),
+        total_weight_kg:
+          normalized.total_weight_kg ??
+          (computedWeight ? computedWeight : null),
       };
 
       if (editingItemId !== null) {
-        const { error } = await supabase.from("inventory").update(dataToSave).eq("id", editingItemId);
+        const { error } = await supabase
+          .from("inventory")
+          .update(dataToSave)
+          .eq("id", editingItemId);
         if (error) throw error;
         toast.success("Item updated successfully!");
       } else {
@@ -693,9 +758,9 @@ export default function InventoryPage() {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return items;
     return items.filter((item) =>
-      `${item.sku} ${item.product_name} ${item.category ?? ""} ${item.subcategory ?? ""} ${item.unit ?? ""} ${
-        item.size ?? ""
-      }`
+      `${item.sku} ${item.product_name} ${item.category ?? ""} ${
+        item.subcategory ?? ""
+      } ${item.unit ?? ""} ${item.size ?? ""}`
         .toLowerCase()
         .includes(q)
     );
@@ -711,7 +776,10 @@ export default function InventoryPage() {
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / itemsPerPage));
   const safePage = Math.min(currentPage, totalPages);
-  const paged = sorted.slice((safePage - 1) * itemsPerPage, itemsPerPage * safePage);
+  const paged = sorted.slice(
+    (safePage - 1) * itemsPerPage,
+    itemsPerPage * safePage
+  );
 
   useEffect(() => setCurrentPage(1), [searchQuery, sortKey, sortDir]);
 
@@ -726,7 +794,9 @@ export default function InventoryPage() {
         .filter(Boolean)
     );
     const usedList = Array.from(used);
-    const others = subcategoryOptions.filter((s) => !used.has((s || "").trim()));
+    const others = subcategoryOptions.filter(
+      (s) => !used.has((s || "").trim())
+    );
     return [...usedList, ...others].filter(Boolean);
   }, [items, subcategoryOptions, newItem.category]);
 
@@ -741,8 +811,12 @@ export default function InventoryPage() {
     );
     const fixed = FIXED_UNIT_OPTIONS.map(String);
     const usedList = Array.from(used);
-    const extras = unitOptions.filter((u) => !fixed.includes(u) && !used.has((u || "").trim()));
-    return Array.from(new Set([...usedList, ...fixed, ...extras])).filter(Boolean);
+    const extras = unitOptions.filter(
+      (u) => !fixed.includes(u) && !used.has((u || "").trim())
+    );
+    return Array.from(new Set([...usedList, ...fixed, ...extras])).filter(
+      Boolean
+    );
   }, [items, unitOptions, newItem.category]);
 
   const sizeSuggested = useMemo(() => {
@@ -760,7 +834,9 @@ export default function InventoryPage() {
     const usedList = Array.from(used);
     const others = sizeOptions.filter((s) => !used.has((s || "").trim()));
     const common = ['1/2"', '3/4"', '1"', '1 1/4"', '1 1/2"', '2"', '3"', '4"'];
-    return Array.from(new Set([...usedList, ...common, ...others])).filter(Boolean);
+    return Array.from(new Set([...usedList, ...common, ...others])).filter(
+      Boolean
+    );
   }, [isPipe, items, sizeOptions]);
 
   const categoryList = useMemo(
@@ -786,7 +862,10 @@ export default function InventoryPage() {
       cost_price: item.cost_price ?? 0,
 
       // ✅ Ensure markup respects min when editing old rows
-      markup_percent: Math.max(Number(item.markup_percent ?? LIMITS.MIN_MARKUP_PERCENT), LIMITS.MIN_MARKUP_PERCENT),
+      markup_percent: Math.max(
+        Number(item.markup_percent ?? LIMITS.MIN_MARKUP_PERCENT),
+        LIMITS.MIN_MARKUP_PERCENT
+      ),
 
       discount_percent: item.discount_percent ?? null,
       expiration_date: item.expiration_date ?? null,
@@ -881,7 +960,10 @@ export default function InventoryPage() {
             <thead className="bg-[#ffba20] text-black text-left">
               <tr>
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("sku")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("sku")}
+                  >
                     SKU {sortArrow("sku")}
                   </button>
                 </th>
@@ -894,7 +976,10 @@ export default function InventoryPage() {
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("category")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("category")}
+                  >
                     Category {sortArrow("category")}
                   </button>
                 </th>
@@ -907,12 +992,18 @@ export default function InventoryPage() {
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("unit")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("unit")}
+                  >
                     Unit {sortArrow("unit")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("size")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("size")}
+                  >
                     Size {sortArrow("size")}
                   </button>
                 </th>
@@ -957,7 +1048,10 @@ export default function InventoryPage() {
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button className="font-semibold hover:underline" onClick={() => toggleSort("amount")}>
+                  <button
+                    className="font-semibold hover:underline"
+                    onClick={() => toggleSort("amount")}
+                  >
                     Total {sortArrow("amount")}
                   </button>
                 </th>
@@ -1019,7 +1113,9 @@ export default function InventoryPage() {
                         {item.product_name}
                       </button>
                     ) : (
-                      <span className="text-gray-800 font-medium text-left">{item.product_name}</span>
+                      <span className="text-gray-800 font-medium text-left">
+                        {item.product_name}
+                      </span>
                     )}
                   </td>
 
@@ -1029,29 +1125,48 @@ export default function InventoryPage() {
                   <td className={cellNowrap}>{item.size || "—"}</td>
 
                   <td className={cellNowrap}>{item.quantity}</td>
-                  <td className={cellNowrap}>{item.cost_price != null ? peso(Number(item.cost_price)) : "—"}</td>
-                  <td className={cellNowrap}>{item.markup_percent != null ? `${Number(item.markup_percent)}%` : "—"}</td>
                   <td className={cellNowrap}>
-                    {item.discount_percent != null && Number(item.discount_percent) > 0
+                    {item.cost_price != null
+                      ? peso(Number(item.cost_price))
+                      : "—"}
+                  </td>
+                  <td className={cellNowrap}>
+                    {item.markup_percent != null
+                      ? `${Number(item.markup_percent)}%`
+                      : "—"}
+                  </td>
+                  <td className={cellNowrap}>
+                    {item.discount_percent != null &&
+                    Number(item.discount_percent) > 0
                       ? `${Number(item.discount_percent)}%`
                       : "—"}
                   </td>
-                  <td className={cellNowrap}>{item.unit_price != null ? peso(Number(item.unit_price)) : "—"}</td>
+                  <td className={cellNowrap}>
+                    {item.unit_price != null
+                      ? peso(Number(item.unit_price))
+                      : "—"}
+                  </td>
                   <td className={cellNowrap}>{peso(Number(item.amount))}</td>
 
                   <td className={cellNowrap}>
                     {item.expiration_date
-                      ? new Date(item.expiration_date).toLocaleDateString("en-PH", {
-                          year: "numeric",
-                          month: "short",
-                          day: "2-digit",
-                        })
+                      ? new Date(item.expiration_date).toLocaleDateString(
+                          "en-PH",
+                          {
+                            year: "numeric",
+                            month: "short",
+                            day: "2-digit",
+                          }
+                        )
                       : "—"}
                   </td>
 
                   <td className={cellNowrap}>
                     {item.total_weight_kg
-                      ? `${Number(item.total_weight_kg).toLocaleString(undefined, { maximumFractionDigits: 3 })} kg`
+                      ? `${Number(item.total_weight_kg).toLocaleString(
+                          undefined,
+                          { maximumFractionDigits: 3 }
+                        )} kg`
                       : "—"}
                   </td>
 
@@ -1067,20 +1182,27 @@ export default function InventoryPage() {
                           ? "bg-gray-200 text-gray-700"
                           : "bg-green-100 text-green-700";
                       return (
-                        <span className={`px-2 py-1 rounded text-xs font-semibold ${cls}`}>
+                        <span
+                          className={`px-2 py-1 rounded text-xs font-semibold ${cls}`}
+                        >
                           {lvl}
                         </span>
                       );
                     })()}
                   </td>
 
-                  <td className={cellNowrap}>{new Date(item.date_created).toLocaleString("en-PH")}</td>
+                  <td className={cellNowrap}>
+                    {new Date(item.date_created).toLocaleString("en-PH")}
+                  </td>
                 </tr>
               ))}
 
               {paged.length === 0 && !loading && (
                 <tr>
-                  <td className="px-4 py-6 text-center text-gray-500" colSpan={16}>
+                  <td
+                    className="px-4 py-6 text-center text-gray-500"
+                    colSpan={16}
+                  >
                     No items found.
                   </td>
                 </tr>
@@ -1143,7 +1265,11 @@ export default function InventoryPage() {
                           <button
                             className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
                             onClick={() =>
-                              setModalIndex((i) => (i - 1 + modalImages.length) % modalImages.length)
+                              setModalIndex(
+                                (i) =>
+                                  (i - 1 + modalImages.length) %
+                                  modalImages.length
+                              )
                             }
                             title="Previous"
                           >
@@ -1151,7 +1277,9 @@ export default function InventoryPage() {
                           </button>
                           <button
                             className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
-                            onClick={() => setModalIndex((i) => (i + 1) % modalImages.length)}
+                            onClick={() =>
+                              setModalIndex((i) => (i + 1) % modalImages.length)
+                            }
                             title="Next"
                           >
                             ›
@@ -1171,7 +1299,11 @@ export default function InventoryPage() {
                             onClick={() => setModalIndex(idx)}
                             title={`Image ${idx + 1}`}
                           >
-                            <img src={u} alt={`thumb-${idx + 1}`} className="h-full w-full object-cover" />
+                            <img
+                              src={u}
+                              alt={`thumb-${idx + 1}`}
+                              className="h-full w-full object-cover"
+                            />
                           </button>
                         ))}
                       </div>
@@ -1205,7 +1337,9 @@ export default function InventoryPage() {
         {showForm && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3">
             <div className="bg-white p-8 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto space-y-4">
-              <h2 className="text-lg font-semibold">{editingItemId ? "Edit Item" : "Add New Item"}</h2>
+              <h2 className="text-lg font-semibold">
+                {editingItemId ? "Edit Item" : "Add New Item"}
+              </h2>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* LEFT */}
@@ -1215,263 +1349,193 @@ export default function InventoryPage() {
                       className="w-full border px-4 py-2 rounded"
                       placeholder="PRODUCT ID"
                       value={newItem.sku}
-                      onChange={(e) => setNewItem((prev) => ({ ...prev, sku: e.target.value }))}
+                      onChange={(e) =>
+                        setNewItem((prev) => ({ ...prev, sku: e.target.value }))
+                      }
                     />
                   </Row>
 
                   <Row label="Product Name" required>
                     <input
-                      className={`w-full border px-4 py-2 rounded ${liveErrors.product_name ? "border-red-500" : ""}`}
+                      className={`w-full border px-4 py-2 rounded ${
+                        liveErrors.product_name ? "border-red-500" : ""
+                      }`}
                       placeholder="e.g. Boysen"
                       value={newItem.product_name}
-                      onChange={(e) => setNewItem((prev) => ({ ...prev, product_name: e.target.value }))}
+                      onChange={(e) =>
+                        setNewItem((prev) => ({
+                          ...prev,
+                          product_name: e.target.value,
+                        }))
+                      }
                     />
                   </Row>
 
                   <Row label="Category" required>
-                    <div className="flex items-center gap-2">
-                      {isCustomCategory ? (
-                        <input
-                          className={`w-full border px-4 py-2 rounded ${liveErrors.category ? "border-red-500" : ""}`}
-                          placeholder="Enter new category"
-                          value={newItem.category || ""}
-                          onChange={(e) =>
-                            setNewItem((prev) => ({
-                              ...prev,
-                              category: e.target.value,
-                              subcategory: "",
-                              size: null,
-                            }))
-                          }
-                        />
-                      ) : (
-                        <Popover open={catOpen} onOpenChange={setCatOpen}>
-                          <PopoverTrigger asChild>
-                            <Button
-                              variant="outline"
-                              role="combobox"
-                              aria-expanded={catOpen}
-                              className={`w-full justify-between ${liveErrors.category ? "border-red-500" : ""}`}
-                            >
-                              {newItem.category ? newItem.category : "Select Category"}
-                              <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50" />
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-[280px] p-0" align="start">
-                            <Command>
-                              <CommandInput placeholder="Search category..." />
-                              <CommandList>
-                                <CommandEmpty>No category found.</CommandEmpty>
-                                <CommandGroup>
-                                  {categoryList.map((c) => (
-                                    <CommandItem
-                                      key={c}
-                                      value={c}
-                                      onSelect={() => {
-                                        setNewItem((prev) => ({ ...prev, category: c, subcategory: "", size: null }));
-                                        setCatOpen(false);
-                                      }}
-                                    >
-                                      <Check
-                                        className={cn(
-                                          "mr-2 h-4 w-4",
-                                          newItem.category === c ? "opacity-100" : "opacity-0"
-                                        )}
-                                      />
-                                      {c}
-                                    </CommandItem>
-                                  ))}
-                                </CommandGroup>
-                              </CommandList>
-                            </Command>
-                          </PopoverContent>
-                        </Popover>
-                      )}
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex-1 min-w-0">
+                        {isCustomCategory ? (
+                          <input
+                            className={`w-full border px-4 py-2 rounded ${
+                              liveErrors.category ? "border-red-500" : ""
+                            }`}
+                            placeholder="Enter new category"
+                            value={newItem.category || ""}
+                            onChange={(e) =>
+                              setNewItem((prev) => ({
+                                ...prev,
+                                category: e.target.value,
+                                subcategory: "",
+                                size: null,
+                              }))
+                            }
+                          />
+                        ) : (
+                          <Popover open={catOpen} onOpenChange={setCatOpen}>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant="outline"
+                                role="combobox"
+                                aria-expanded={catOpen}
+                                className={`w-full justify-between ${
+                                  liveErrors.category ? "border-red-500" : ""
+                                }`}
+                              >
+                                <span className="truncate">
+                                  {newItem.category
+                                    ? newItem.category
+                                    : "Select Category"}
+                                </span>
+                                <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
+                              </Button>
+                            </PopoverTrigger>
 
-                      <label className="text-sm flex items-center gap-1">
+                            <PopoverContent
+                              className="w-[280px] p-0"
+                              align="start"
+                            >
+                              <Command>
+                                <CommandInput placeholder="Search category..." />
+                                <CommandList>
+                                  <CommandEmpty>
+                                    No category found.
+                                  </CommandEmpty>
+                                  <CommandGroup>
+                                    {categoryList.map((c) => (
+                                      <CommandItem
+                                        key={c}
+                                        value={c}
+                                        onSelect={() => {
+                                          setNewItem((prev) => ({
+                                            ...prev,
+                                            category: c,
+                                            subcategory: "",
+                                            size: null,
+                                          }));
+                                          setCatOpen(false);
+                                        }}
+                                      >
+                                        <Check
+                                          className={cn(
+                                            "mr-2 h-4 w-4",
+                                            newItem.category === c
+                                              ? "opacity-100"
+                                              : "opacity-0"
+                                          )}
+                                        />
+                                        {c}
+                                      </CommandItem>
+                                    ))}
+                                  </CommandGroup>
+                                </CommandList>
+                              </Command>
+                            </PopoverContent>
+                          </Popover>
+                        )}
+                      </div>
+
+                      <label className="shrink-0 whitespace-nowrap text-sm flex items-center gap-2">
                         <input
                           type="checkbox"
                           checked={isCustomCategory}
-                          onChange={(e) => setIsCustomCategory(e.target.checked)}
-                        />{" "}
+                          onChange={(e) =>
+                            setIsCustomCategory(e.target.checked)
+                          }
+                        />
                         New
                       </label>
                     </div>
                   </Row>
 
                   <Row label="Subcategory" required>
-                    <div className="flex items-center gap-2">
-                      {isCustomSubcategory ? (
-                        <input
-                          className={`w-full border px-4 py-2 rounded ${liveErrors.subcategory ? "border-red-500" : ""}`}
-                          placeholder="Enter new subcategory"
-                          value={newItem.subcategory || ""}
-                          onChange={(e) =>
-                            setNewItem((prev) => ({ ...prev, subcategory: e.target.value, size: null }))
-                          }
-                        />
-                      ) : (
-                        <Popover open={subOpen} onOpenChange={setSubOpen}>
-                          <PopoverTrigger asChild>
-                            <Button
-                              variant="outline"
-                              role="combobox"
-                              aria-expanded={subOpen}
-                              className={`w-full justify-between ${liveErrors.subcategory ? "border-red-500" : ""}`}
-                              disabled={!newItem.category}
-                            >
-                              {newItem.subcategory ? newItem.subcategory : "Select Subcategory"}
-                              <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50" />
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-[280px] p-0" align="start">
-                            <Command>
-                              <CommandInput placeholder="Search subcategory..." />
-                              <CommandList>
-                                <CommandEmpty>No subcategory found.</CommandEmpty>
-                                <CommandGroup>
-                                  {subcategoryFiltered.map((s) => (
-                                    <CommandItem
-                                      key={s}
-                                      value={s}
-                                      onSelect={() => {
-                                        setNewItem((prev) => ({ ...prev, subcategory: s, size: null }));
-                                        setSubOpen(false);
-                                      }}
-                                    >
-                                      <Check
-                                        className={cn(
-                                          "mr-2 h-4 w-4",
-                                          newItem.subcategory === s ? "opacity-100" : "opacity-0"
-                                        )}
-                                      />
-                                      {s}
-                                    </CommandItem>
-                                  ))}
-                                </CommandGroup>
-                              </CommandList>
-                            </Command>
-                          </PopoverContent>
-                        </Popover>
-                      )}
-
-                      <label className="text-sm flex items-center gap-1">
-                        <input
-                          type="checkbox"
-                          checked={isCustomSubcategory}
-                          onChange={(e) => setIsCustomSubcategory(e.target.checked)}
-                        />{" "}
-                        New
-                      </label>
-                    </div>
-                  </Row>
-
-                  <Row label="Unit" required>
-                    <div className="flex items-center gap-2">
-                      {isCustomUnit ? (
-                        <input
-                          className={`w-full border px-4 py-2 rounded ${liveErrors.unit ? "border-red-500" : ""}`}
-                          placeholder="Enter new unit"
-                          value={newItem.unit || ""}
-                          onChange={(e) => setNewItem((prev) => ({ ...prev, unit: e.target.value }))}
-                        />
-                      ) : (
-                        <Popover open={unitOpen} onOpenChange={setUnitOpen}>
-                          <PopoverTrigger asChild>
-                            <Button
-                              variant="outline"
-                              role="combobox"
-                              aria-expanded={unitOpen}
-                              className={`w-full justify-between ${liveErrors.unit ? "border-red-500" : ""}`}
-                            >
-                              {newItem.unit ? newItem.unit : "Select Unit"}
-                              <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50" />
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-[280px] p-0" align="start">
-                            <Command>
-                              <CommandInput placeholder="Search unit..." />
-                              <CommandList>
-                                <CommandEmpty>No unit found.</CommandEmpty>
-                                <CommandGroup>
-                                  {unitSuggested.map((u) => (
-                                    <CommandItem
-                                      key={u}
-                                      value={u}
-                                      onSelect={() => {
-                                        setNewItem((prev) => ({ ...prev, unit: u }));
-                                        setUnitOpen(false);
-                                      }}
-                                    >
-                                      <Check
-                                        className={cn(
-                                          "mr-2 h-4 w-4",
-                                          newItem.unit === u ? "opacity-100" : "opacity-0"
-                                        )}
-                                      />
-                                      {u}
-                                    </CommandItem>
-                                  ))}
-                                </CommandGroup>
-                              </CommandList>
-                            </Command>
-                          </PopoverContent>
-                        </Popover>
-                      )}
-
-                      <label className="text-sm flex items-center gap-1">
-                        <input
-                          type="checkbox"
-                          checked={isCustomUnit}
-                          onChange={(e) => setIsCustomUnit(e.target.checked)}
-                        />{" "}
-                        New
-                      </label>
-                    </div>
-                  </Row>
-
-                  {isPipe && (
-                    <Row label="Pipe Size" required>
-                      <div className="flex items-center gap-2">
-                        {isCustomSize ? (
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex-1 min-w-0">
+                        {isCustomSubcategory ? (
                           <input
-                            className={`w-full border px-4 py-2 rounded ${liveErrors.size ? "border-red-500" : ""}`}
-                            placeholder='e.g. 1/2", 3/4", 1"'
-                            value={newItem.size || ""}
-                            onChange={(e) => setNewItem((prev) => ({ ...prev, size: e.target.value }))}
+                            className={`w-full border px-4 py-2 rounded ${
+                              liveErrors.subcategory ? "border-red-500" : ""
+                            }`}
+                            placeholder="Enter new subcategory"
+                            value={newItem.subcategory || ""}
+                            onChange={(e) =>
+                              setNewItem((prev) => ({
+                                ...prev,
+                                subcategory: e.target.value,
+                                size: null,
+                              }))
+                            }
                           />
                         ) : (
-                          <Popover open={sizeOpen} onOpenChange={setSizeOpen}>
+                          <Popover open={subOpen} onOpenChange={setSubOpen}>
                             <PopoverTrigger asChild>
                               <Button
                                 variant="outline"
                                 role="combobox"
-                                aria-expanded={sizeOpen}
-                                className={`w-full justify-between ${liveErrors.size ? "border-red-500" : ""}`}
+                                aria-expanded={subOpen}
+                                className={`w-full justify-between ${
+                                  liveErrors.subcategory ? "border-red-500" : ""
+                                }`}
+                                disabled={!newItem.category}
                               >
-                                {newItem.size ? newItem.size : "Select Size"}
-                                <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50" />
+                                <span className="truncate">
+                                  {newItem.subcategory
+                                    ? newItem.subcategory
+                                    : "Select Subcategory"}
+                                </span>
+                                <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
                               </Button>
                             </PopoverTrigger>
-                            <PopoverContent className="w-[280px] p-0" align="start">
+
+                            <PopoverContent
+                              className="w-[280px] p-0"
+                              align="start"
+                            >
                               <Command>
-                                <CommandInput placeholder="Search size..." />
+                                <CommandInput placeholder="Search subcategory..." />
                                 <CommandList>
-                                  <CommandEmpty>No size found.</CommandEmpty>
+                                  <CommandEmpty>
+                                    No subcategory found.
+                                  </CommandEmpty>
                                   <CommandGroup>
-                                    {sizeSuggested.map((s) => (
+                                    {subcategoryFiltered.map((s) => (
                                       <CommandItem
                                         key={s}
                                         value={s}
                                         onSelect={() => {
-                                          setNewItem((prev) => ({ ...prev, size: s }));
-                                          setSizeOpen(false);
+                                          setNewItem((prev) => ({
+                                            ...prev,
+                                            subcategory: s,
+                                            size: null,
+                                          }));
+                                          setSubOpen(false);
                                         }}
                                       >
                                         <Check
                                           className={cn(
                                             "mr-2 h-4 w-4",
-                                            newItem.size === s ? "opacity-100" : "opacity-0"
+                                            newItem.subcategory === s
+                                              ? "opacity-100"
+                                              : "opacity-0"
                                           )}
                                         />
                                         {s}
@@ -1483,13 +1547,191 @@ export default function InventoryPage() {
                             </PopoverContent>
                           </Popover>
                         )}
+                      </div>
 
-                        <label className="text-sm flex items-center gap-1">
+                      <label className="shrink-0 whitespace-nowrap text-sm flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={isCustomSubcategory}
+                          onChange={(e) =>
+                            setIsCustomSubcategory(e.target.checked)
+                          }
+                        />
+                        New
+                      </label>
+                    </div>
+                  </Row>
+
+                  <Row label="Unit" required>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex-1 min-w-0">
+                        {isCustomUnit ? (
+                          <input
+                            className={`w-full border px-4 py-2 rounded ${
+                              liveErrors.unit ? "border-red-500" : ""
+                            }`}
+                            placeholder="Enter new unit"
+                            value={newItem.unit || ""}
+                            onChange={(e) =>
+                              setNewItem((prev) => ({
+                                ...prev,
+                                unit: e.target.value,
+                              }))
+                            }
+                          />
+                        ) : (
+                          <Popover open={unitOpen} onOpenChange={setUnitOpen}>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant="outline"
+                                role="combobox"
+                                aria-expanded={unitOpen}
+                                className={`w-full justify-between ${
+                                  liveErrors.unit ? "border-red-500" : ""
+                                }`}
+                              >
+                                <span className="truncate">
+                                  {newItem.unit ? newItem.unit : "Select Unit"}
+                                </span>
+                                <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
+                              </Button>
+                            </PopoverTrigger>
+
+                            <PopoverContent
+                              className="w-[280px] p-0"
+                              align="start"
+                            >
+                              <Command>
+                                <CommandInput placeholder="Search unit..." />
+                                <CommandList>
+                                  <CommandEmpty>No unit found.</CommandEmpty>
+                                  <CommandGroup>
+                                    {unitSuggested.map((u) => (
+                                      <CommandItem
+                                        key={u}
+                                        value={u}
+                                        onSelect={() => {
+                                          setNewItem((prev) => ({
+                                            ...prev,
+                                            unit: u,
+                                          }));
+                                          setUnitOpen(false);
+                                        }}
+                                      >
+                                        <Check
+                                          className={cn(
+                                            "mr-2 h-4 w-4",
+                                            newItem.unit === u
+                                              ? "opacity-100"
+                                              : "opacity-0"
+                                          )}
+                                        />
+                                        {u}
+                                      </CommandItem>
+                                    ))}
+                                  </CommandGroup>
+                                </CommandList>
+                              </Command>
+                            </PopoverContent>
+                          </Popover>
+                        )}
+                      </div>
+
+                      <label className="shrink-0 whitespace-nowrap text-sm flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={isCustomUnit}
+                          onChange={(e) => setIsCustomUnit(e.target.checked)}
+                        />
+                        New
+                      </label>
+                    </div>
+                  </Row>
+
+                  {isPipe && (
+                    <Row label="Pipe Size" required>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex-1 min-w-0">
+                          {isCustomSize ? (
+                            <input
+                              className={`w-full border px-4 py-2 rounded ${
+                                liveErrors.size ? "border-red-500" : ""
+                              }`}
+                              placeholder='e.g. 1/2", 3/4", 1"'
+                              value={newItem.size || ""}
+                              onChange={(e) =>
+                                setNewItem((prev) => ({
+                                  ...prev,
+                                  size: e.target.value,
+                                }))
+                              }
+                            />
+                          ) : (
+                            <Popover open={sizeOpen} onOpenChange={setSizeOpen}>
+                              <PopoverTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  role="combobox"
+                                  aria-expanded={sizeOpen}
+                                  className={`w-full justify-between ${
+                                    liveErrors.size ? "border-red-500" : ""
+                                  }`}
+                                >
+                                  <span className="truncate">
+                                    {newItem.size
+                                      ? newItem.size
+                                      : "Select Size"}
+                                  </span>
+                                  <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
+                                </Button>
+                              </PopoverTrigger>
+
+                              <PopoverContent
+                                className="w-[280px] p-0"
+                                align="start"
+                              >
+                                <Command>
+                                  <CommandInput placeholder="Search size..." />
+                                  <CommandList>
+                                    <CommandEmpty>No size found.</CommandEmpty>
+                                    <CommandGroup>
+                                      {sizeSuggested.map((s) => (
+                                        <CommandItem
+                                          key={s}
+                                          value={s}
+                                          onSelect={() => {
+                                            setNewItem((prev) => ({
+                                              ...prev,
+                                              size: s,
+                                            }));
+                                            setSizeOpen(false);
+                                          }}
+                                        >
+                                          <Check
+                                            className={cn(
+                                              "mr-2 h-4 w-4",
+                                              newItem.size === s
+                                                ? "opacity-100"
+                                                : "opacity-0"
+                                            )}
+                                          />
+                                          {s}
+                                        </CommandItem>
+                                      ))}
+                                    </CommandGroup>
+                                  </CommandList>
+                                </Command>
+                              </PopoverContent>
+                            </Popover>
+                          )}
+                        </div>
+
+                        <label className="shrink-0 whitespace-nowrap text-sm flex items-center gap-2">
                           <input
                             type="checkbox"
                             checked={isCustomSize}
                             onChange={(e) => setIsCustomSize(e.target.checked)}
-                          />{" "}
+                          />
                           New
                         </label>
                       </div>
@@ -1505,14 +1747,31 @@ export default function InventoryPage() {
                       min={0}
                       max={LIMITS.MAX_WEIGHT_PER_PIECE_KG}
                       step="0.001"
-                      className={`w-full border px-4 py-2 rounded ${liveErrors.weight_per_piece_kg ? "border-red-500" : ""}`}
-                      placeholder={newItem.unit === "Kg" ? "1 (auto for Kg items)" : "e.g. 0.45"}
-                      value={newItem.unit === "Kg" ? 1 : newItem.weight_per_piece_kg ?? ""}
+                      className={`w-full border px-4 py-2 rounded ${
+                        liveErrors.weight_per_piece_kg ? "border-red-500" : ""
+                      }`}
+                      placeholder={
+                        newItem.unit === "Kg"
+                          ? "1 (auto for Kg items)"
+                          : "e.g. 0.45"
+                      }
+                      value={
+                        newItem.unit === "Kg"
+                          ? 1
+                          : newItem.weight_per_piece_kg ?? ""
+                      }
                       disabled={newItem.unit === "Kg"}
                       onChange={(e) => {
                         const raw = parseFloat(e.target.value) || 0;
-                        const val = clamp(raw, 0, LIMITS.MAX_WEIGHT_PER_PIECE_KG);
-                        setNewItem((prev) => ({ ...prev, weight_per_piece_kg: newItem.unit === "Kg" ? 1 : val }));
+                        const val = clamp(
+                          raw,
+                          0,
+                          LIMITS.MAX_WEIGHT_PER_PIECE_KG
+                        );
+                        setNewItem((prev) => ({
+                          ...prev,
+                          weight_per_piece_kg: newItem.unit === "Kg" ? 1 : val,
+                        }));
                       }}
                     />
                   </Row>
@@ -1523,14 +1782,21 @@ export default function InventoryPage() {
                       type="number"
                       min={0}
                       step="1"
-                      className={`w-full border px-4 py-2 rounded ${liveErrors.ceiling_qty ? "border-red-500" : ""}`}
+                      className={`w-full border px-4 py-2 rounded ${
+                        liveErrors.ceiling_qty ? "border-red-500" : ""
+                      }`}
                       placeholder="Optional max stock (for Low/Critical)"
                       value={newItem.ceiling_qty ?? ""}
                       onChange={(e) =>
                         setNewItem((prev) => ({
                           ...prev,
                           ceiling_qty:
-                            e.target.value === "" ? null : Math.max(0, parseInt(e.target.value || "0", 10)),
+                            e.target.value === ""
+                              ? null
+                              : Math.max(
+                                  0,
+                                  parseInt(e.target.value || "0", 10)
+                                ),
                         }))
                       }
                     />
@@ -1543,7 +1809,9 @@ export default function InventoryPage() {
                       min={0}
                       max={LIMITS.MAX_QUANTITY}
                       step="1"
-                      className={`w-full border px-4 py-2 rounded ${liveErrors.quantity ? "border-red-500" : ""}`}
+                      className={`w-full border px-4 py-2 rounded ${
+                        liveErrors.quantity ? "border-red-500" : ""
+                      }`}
                       value={newItem.quantity}
                       onFocus={(e) => e.target.select()}
                       onChange={(e) => {
@@ -1560,7 +1828,9 @@ export default function InventoryPage() {
                       min={0}
                       max={LIMITS.MAX_COST_PRICE}
                       step="0.01"
-                      className={`w-full border px-4 py-2 rounded ${liveErrors.cost_price ? "border-red-500" : ""}`}
+                      className={`w-full border px-4 py-2 rounded ${
+                        liveErrors.cost_price ? "border-red-500" : ""
+                      }`}
                       value={newItem.cost_price ?? 0}
                       onFocus={(e) => e.target.select()}
                       onChange={(e) => {
@@ -1577,8 +1847,12 @@ export default function InventoryPage() {
                       min={LIMITS.MIN_MARKUP_PERCENT}
                       max={LIMITS.MAX_MARKUP_PERCENT}
                       step="0.01"
-                      className={`w-full border px-4 py-2 rounded ${liveErrors.markup_percent ? "border-red-500" : ""}`}
-                      value={newItem.markup_percent ?? LIMITS.MIN_MARKUP_PERCENT}
+                      className={`w-full border px-4 py-2 rounded ${
+                        liveErrors.markup_percent ? "border-red-500" : ""
+                      }`}
+                      value={
+                        newItem.markup_percent ?? LIMITS.MIN_MARKUP_PERCENT
+                      }
                       onFocus={(e) => e.target.select()}
                       onChange={(e) => {
                         const raw = parseFloat(e.target.value);
@@ -1587,7 +1861,10 @@ export default function InventoryPage() {
                           LIMITS.MIN_MARKUP_PERCENT,
                           LIMITS.MAX_MARKUP_PERCENT
                         );
-                        setNewItem((prev) => ({ ...prev, markup_percent: val }));
+                        setNewItem((prev) => ({
+                          ...prev,
+                          markup_percent: val,
+                        }));
                       }}
                     />
                   </Row>
@@ -1603,26 +1880,36 @@ export default function InventoryPage() {
                       max={LIMITS.MAX_DISCOUNT_PERCENT}
                       step="0.01"
                       className={`w-full border px-4 py-2 rounded ${
-                        liveErrors.discount_percent || liveErrors.pricing_below_cost ? "border-red-500" : ""
+                        liveErrors.discount_percent ||
+                        liveErrors.pricing_below_cost
+                          ? "border-red-500"
+                          : ""
                       }`}
                       placeholder="Optional (0–100)"
                       value={newItem.discount_percent ?? ""}
                       onChange={(e) => {
                         const v = e.target.value;
                         if (v === "") {
-                          setNewItem((prev) => ({ ...prev, discount_percent: null }));
+                          setNewItem((prev) => ({
+                            ...prev,
+                            discount_percent: null,
+                          }));
                           return;
                         }
                         const raw = parseFloat(v) || 0;
                         const val = clamp(raw, 0, LIMITS.MAX_DISCOUNT_PERCENT);
-                        setNewItem((prev) => ({ ...prev, discount_percent: val }));
+                        setNewItem((prev) => ({
+                          ...prev,
+                          discount_percent: val,
+                        }));
                       }}
                     />
                   </Row>
 
                   {liveErrors.pricing_below_cost && (
                     <div className="text-xs text-red-600 ml-44">
-                      Discount is too high — selling price cannot go below cost price.
+                      Discount is too high — selling price cannot go below cost
+                      price.
                     </div>
                   )}
 
@@ -1630,11 +1917,17 @@ export default function InventoryPage() {
                     <input
                       type="date"
                       className="w-full border px-4 py-2 rounded"
-                      value={newItem.expiration_date ? newItem.expiration_date.slice(0, 10) : ""}
+                      value={
+                        newItem.expiration_date
+                          ? newItem.expiration_date.slice(0, 10)
+                          : ""
+                      }
                       onChange={(e) =>
                         setNewItem((prev) => ({
                           ...prev,
-                          expiration_date: e.target.value ? e.target.value : null,
+                          expiration_date: e.target.value
+                            ? e.target.value
+                            : null,
                         }))
                       }
                     />
@@ -1644,49 +1937,55 @@ export default function InventoryPage() {
 
               {/* Summary */}
               {/* Summary */}
-<div className="border-t pt-4 mt-2">
-  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-    {/* Unit Price */}
-    <div className="space-y-1">
-      <label className="text-sm text-gray-700">Unit Price (auto)</label>
-      <input
-        className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
-        value={peso(Number(computedPricing.unit_price || 0))}
-        readOnly
-        disabled
-      />
-    </div>
+              <div className="border-t pt-4 mt-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {/* Unit Price */}
+                  <div className="space-y-1">
+                    <label className="text-sm text-gray-700">
+                      Unit Price (auto)
+                    </label>
+                    <input
+                      className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
+                      value={peso(Number(computedPricing.unit_price || 0))}
+                      readOnly
+                      disabled
+                    />
+                  </div>
 
-    {/* Total Price */}
-    <div className="space-y-1">
-      <label className="text-sm text-gray-700">Total Price</label>
-      <input
-        className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
-        value={peso(Number(computedPricing.amount || 0))}
-        readOnly
-        disabled
-      />
-    </div>
+                  {/* Total Price */}
+                  <div className="space-y-1">
+                    <label className="text-sm text-gray-700">Total Price</label>
+                    <input
+                      className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
+                      value={peso(Number(computedPricing.amount || 0))}
+                      readOnly
+                      disabled
+                    />
+                  </div>
 
-    {/* Total Weight */}
-    <div className="space-y-1">
-      <label className="text-sm text-gray-700">Total Weight</label>
-      <input
-        className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
-        value={
-          computedWeight
-            ? `${Number(computedWeight).toLocaleString(undefined, {
-                maximumFractionDigits: 3,
-              })} kg`
-            : "—"
-        }
-        readOnly
-        disabled
-      />
-    </div>
-  </div>
-</div>
-
+                  {/* Total Weight */}
+                  <div className="space-y-1">
+                    <label className="text-sm text-gray-700">
+                      Total Weight
+                    </label>
+                    <input
+                      className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
+                      value={
+                        computedWeight
+                          ? `${Number(computedWeight).toLocaleString(
+                              undefined,
+                              {
+                                maximumFractionDigits: 3,
+                              }
+                            )} kg`
+                          : "—"
+                      }
+                      readOnly
+                      disabled
+                    />
+                  </div>
+                </div>
+              </div>
 
               {/* Images */}
               <div>
@@ -1697,7 +1996,9 @@ export default function InventoryPage() {
                     const f = e.target.files?.[0] || null;
                     if (!f) return handleImageSelect(null);
                     if (!ALLOWED_MIME.has(f.type)) {
-                      toast.error("Please upload an image file (JPG, PNG, WEBP, or GIF).");
+                      toast.error(
+                        "Please upload an image file (JPG, PNG, WEBP, or GIF)."
+                      );
                       e.currentTarget.value = "";
                       return handleImageSelect(null);
                     }
@@ -1710,7 +2011,9 @@ export default function InventoryPage() {
                   }}
                   className="block w-full text-sm text-gray-700"
                 />
-                <p className="text-xs text-gray-500 mt-1">Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
+                </p>
 
                 {imagePreview && (
                   <button
@@ -1734,7 +2037,9 @@ export default function InventoryPage() {
                   onChange={(e) => handleGallerySelect(e.target.files)}
                   className="block w-full text-sm text-gray-700"
                 />
-                <p className="text-xs text-gray-500 mt-1">JPG, PNG, WEBP, GIF · Max 5MB each</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  JPG, PNG, WEBP, GIF · Max 5MB each
+                </p>
 
                 {galleryPreviews.length > 0 && (
                   <>
@@ -1743,8 +2048,15 @@ export default function InventoryPage() {
                     </div>
                     <div className="mt-2 flex gap-2 flex-wrap">
                       {galleryPreviews.map((src, i) => (
-                        <div key={i} className="h-20 w-24 border rounded overflow-hidden">
-                          <img src={src} className="h-full w-full object-cover" alt={`preview-${i + 1}`} />
+                        <div
+                          key={i}
+                          className="h-20 w-24 border rounded overflow-hidden"
+                        >
+                          <img
+                            src={src}
+                            className="h-full w-full object-cover"
+                            alt={`preview-${i + 1}`}
+                          />
                         </div>
                       ))}
                     </div>
@@ -1764,7 +2076,10 @@ export default function InventoryPage() {
 
               {/* Actions */}
               <div className="flex justify-end gap-2 pt-2">
-                <button onClick={resetForm} className="bg-gray-300 px-4 py-2 rounded">
+                <button
+                  onClick={resetForm}
+                  className="bg-gray-300 px-4 py-2 rounded"
+                >
                   Cancel
                 </button>
 
@@ -1775,7 +2090,11 @@ export default function InventoryPage() {
                     saving ? "opacity-70 pointer-events-none" : ""
                   }`}
                 >
-                  {saving ? "Saving..." : editingItemId ? "Update Item" : "Add Item"}
+                  {saving
+                    ? "Saving..."
+                    : editingItemId
+                    ? "Update Item"
+                    : "Add Item"}
                 </button>
               </div>
             </div>
@@ -1802,14 +2121,26 @@ export default function InventoryPage() {
               />
             </div>
             <div className="flex justify-end gap-2">
-              <button className="px-4 py-2 rounded bg-gray-200" onClick={() => setShowRenameModal(false)}>
+              <button
+                className="px-4 py-2 rounded bg-gray-200"
+                onClick={() => setShowRenameModal(false)}
+              >
                 Cancel
               </button>
               <button
                 className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                disabled={renaming || !renameNewValue.trim() || renameNewValue.trim() === renameOldValue}
+                disabled={
+                  renaming ||
+                  !renameNewValue.trim() ||
+                  renameNewValue.trim() === renameOldValue
+                }
                 onClick={async () => {
-                  if (!renameFieldType || !renameOldValue || !renameNewValue.trim()) return;
+                  if (
+                    !renameFieldType ||
+                    !renameOldValue ||
+                    !renameNewValue.trim()
+                  )
+                    return;
                   setRenaming(true);
                   const { error } = await supabase
                     .from("inventory")
@@ -1819,7 +2150,9 @@ export default function InventoryPage() {
 
                   if (error) toast.error(`Failed to rename: ${error.message}`);
                   else {
-                    toast.success(`Renamed "${renameOldValue}" to "${renameNewValue.trim()}".`);
+                    toast.success(
+                      `Renamed "${renameOldValue}" to "${renameNewValue.trim()}".`
+                    );
                     setShowRenameModal(false);
                     await fetchDropdownOptions();
                     await fetchItems();
