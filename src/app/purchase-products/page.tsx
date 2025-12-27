@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation"; // ✅ removed useSearchParams (can conflict on Vercel)
 import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 
@@ -112,6 +112,37 @@ type PurchaseRow = {
   weight_per_piece_kg: number | null;
 };
 
+type PurchaseSummaryRow = {
+  purchase_id: string;
+  supplier_name: string | null;
+  purchase_date: string | null;
+  total_amount: number | null;
+  total_paid: number | null;
+  balance: number | null;
+};
+
+type PurchaseReceiptRow = {
+  id: string;
+  purchase_id: string;
+  file_path: string;
+  file_url: string; // signed URL (generated fresh on fetch)
+  label: string | null;
+  created_at: string;
+};
+
+type SupplierPaymentRow = {
+  id: string;
+  purchase_id: string;
+  supplier_name: string | null;
+  amount: number | null;
+  paid_at: string | null;
+  method: string | null;
+  notes: string | null;
+  created_at: string | null;
+};
+
+type ReceiptCountRow = { purchase_id: string; receipt_count: number };
+
 function uid() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
@@ -167,9 +198,18 @@ function ClientPortal({ children }: { children: any }) {
   return createPortal(children, document.body);
 }
 
+// ✅ simple client-side query param helper (NO useSearchParams)
+function getClientQueryParam(key: string) {
+  if (typeof window === "undefined") return "";
+  try {
+    return new URLSearchParams(window.location.search).get(key) || "";
+  } catch {
+    return "";
+  }
+}
+
 export default function PurchaseProductsPage() {
   const router = useRouter();
-  const sp = useSearchParams();
 
   /* ----------------------------- Sidebar state ----------------------------- */
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -221,6 +261,40 @@ export default function PurchaseProductsPage() {
   ); // yyyy-mm-dd
   const [ledgerMethod, setLedgerMethod] = useState<string>("Cash");
   const [ledgerNotes, setLedgerNotes] = useState<string>("");
+
+  /* ===================== Purchases & Payments (Bottom) ===================== */
+  const [purchaseHistory, setPurchaseHistory] = useState<PurchaseSummaryRow[]>(
+    []
+  );
+  const [receiptCounts, setReceiptCounts] = useState<Record<string, number>>(
+    {}
+  );
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [showPurchaseDetails, setShowPurchaseDetails] = useState(false);
+  const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(
+    null
+  );
+
+  const [purchaseReceipts, setPurchaseReceipts] = useState<PurchaseReceiptRow[]>(
+    []
+  );
+  const [purchasePayments, setPurchasePayments] = useState<SupplierPaymentRow[]>(
+    []
+  );
+
+  // add partial payment form (inside modal)
+  const [payAmount2, setPayAmount2] = useState<number>(0);
+  const [payDate2, setPayDate2] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10)
+  );
+  const [payMethod2, setPayMethod2] = useState<string>("Cash");
+  const [payNotes2, setPayNotes2] = useState<string>("");
+
+  // upload receipt (private bucket)
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptLabel, setReceiptLabel] = useState<string>("Official Receipt");
+  const [uploadingReceipt, setUploadingReceipt] = useState(false);
 
   /* ----------------------------- Fetch inventory ----------------------------- */
   useEffect(() => {
@@ -425,9 +499,9 @@ export default function PurchaseProductsPage() {
               : null,
           };
 
-          const { error: insErr } = await supabase
-            .from("inventory")
-            .insert([payload]);
+          const { error: insErr } = await supabase.from("inventory").insert([
+            payload,
+          ]);
 
           if (insErr) {
             console.error(insErr, payload);
@@ -453,6 +527,215 @@ export default function PurchaseProductsPage() {
       setIsSavingInventory(false);
     }
   }
+
+  /* ===================== Purchases History (Bottom Table) ===================== */
+  async function fetchPurchaseHistory() {
+    setHistoryLoading(true);
+    try {
+      // primary: use view
+      const { data, error } = await supabase
+        .from("v_purchase_payment_summary")
+        .select("*")
+        .order("purchase_date", { ascending: false });
+
+      if (error) throw error;
+      setPurchaseHistory((data || []) as any);
+
+      // receipt counts (view)
+      const { data: rc, error: rcErr } = await supabase
+        .from("v_purchase_receipt_count")
+        .select("*");
+
+      if (rcErr) throw rcErr;
+
+      const map: Record<string, number> = {};
+      for (const r of (rc || []) as any as ReceiptCountRow[]) {
+        map[r.purchase_id] = r.receipt_count || 0;
+      }
+      setReceiptCounts(map);
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message ?? "Failed to load purchase history.");
+      setPurchaseHistory([]);
+      setReceiptCounts({});
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function fetchPurchaseDetails(purchaseId: string) {
+    // payments
+    const { data: payData, error: payErr } = await supabase
+      .from("supplier_payments")
+      .select("id,purchase_id,supplier_name,amount,paid_at,method,notes,created_at")
+      .eq("purchase_id", purchaseId)
+      .order("paid_at", { ascending: false });
+
+    if (payErr) throw payErr;
+    setPurchasePayments((payData || []) as any);
+
+    // receipts (select path + label, then generate fresh signed URLs)
+    const { data: rData, error: rErr } = await supabase
+      .from("purchase_receipts")
+      .select("id,purchase_id,file_path,label,created_at")
+      .eq("purchase_id", purchaseId)
+      .order("created_at", { ascending: false });
+
+    if (rErr) throw rErr;
+
+    const base = (rData || []) as any[];
+    const withSigned = await Promise.all(
+      base.map(async (row) => {
+        const file_path = String(row.file_path || "");
+        let signedUrl = "";
+        if (file_path) {
+          const { data: signed, error: sErr } = await supabase.storage
+            .from("purchase-receipts")
+            .createSignedUrl(file_path, 60 * 60 * 24 * 7); // 7 days
+          if (!sErr) signedUrl = signed?.signedUrl || "";
+        }
+
+        return {
+          id: row.id,
+          purchase_id: row.purchase_id,
+          file_path,
+          file_url: signedUrl,
+          label: row.label ?? null,
+          created_at: row.created_at,
+        } as PurchaseReceiptRow;
+      })
+    );
+
+    setPurchaseReceipts(withSigned);
+  }
+
+  async function openPurchaseDetails(purchaseId: string) {
+    try {
+      setSelectedPurchaseId(purchaseId);
+      setShowPurchaseDetails(true);
+
+      await fetchPurchaseDetails(purchaseId);
+
+      const row = purchaseHistory.find((x) => x.purchase_id === purchaseId);
+      const bal = Math.round(toNum(row?.balance) * 100) / 100;
+      setPayAmount2(bal > 0 ? bal : 0);
+      setPayDate2(new Date().toISOString().slice(0, 10));
+      setPayMethod2("Cash");
+      setPayNotes2("");
+      setReceiptFile(null);
+      setReceiptLabel("Official Receipt");
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message ?? "Failed to open purchase details.");
+    }
+  }
+
+  async function addPartialPayment() {
+    if (!selectedPurchaseId) return;
+
+    const amt = Math.round(toNum(payAmount2) * 100) / 100;
+    if (amt <= 0) {
+      toast.error("Payment amount must be > 0.");
+      return;
+    }
+
+    try {
+      const { data: userRes } = await supabase.auth.getUser();
+      const user = userRes?.user;
+      if (!user) {
+        toast.error("Not logged in.");
+        return;
+      }
+
+      const row = purchaseHistory.find((x) => x.purchase_id === selectedPurchaseId);
+
+      const payload: any = {
+        purchase_id: selectedPurchaseId,
+        supplier_name: String(row?.supplier_name || supplier || "").trim() || null,
+        amount: amt,
+        paid_at: payDate2 ? `${payDate2}T00:00:00.000Z` : new Date().toISOString(),
+        status: "paid",
+        method: String(payMethod2 || "Cash"),
+        notes: String(payNotes2 || "").trim() || null,
+        created_by: user.id,
+      };
+
+      const { error } = await supabase.from("supplier_payments").insert([payload]);
+      if (error) throw error;
+
+      toast.success("Payment added ✅");
+      await fetchPurchaseDetails(selectedPurchaseId);
+      await fetchPurchaseHistory();
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message ?? "Failed to add payment.");
+    }
+  }
+
+  async function uploadReceipt() {
+    if (!selectedPurchaseId) return;
+    if (!receiptFile) {
+      toast.error("Choose an image file first.");
+      return;
+    }
+
+    setUploadingReceipt(true);
+    try {
+      const { data: userRes } = await supabase.auth.getUser();
+      const user = userRes?.user;
+      if (!user) {
+        toast.error("Not logged in.");
+        return;
+      }
+
+      const ext = receiptFile.name.split(".").pop() || "jpg";
+      const uuid =
+        typeof crypto !== "undefined" && (crypto as any).randomUUID
+          ? (crypto as any).randomUUID()
+          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const path = `${selectedPurchaseId}/${uuid}.${ext}`;
+
+      const { error: upErr } = await supabase.storage
+        .from("purchase-receipts")
+        .upload(path, receiptFile, { upsert: false });
+
+      if (upErr) throw upErr;
+
+      // store metadata in DB (file_path + label). (Signed URL is generated on fetch.)
+      const receiptRow: any = {
+        purchase_id: selectedPurchaseId,
+        file_path: path,
+        // If your table requires file_url NOT NULL, keep this line:
+        // file_url will be refreshed anyway in fetchPurchaseDetails().
+        file_url: "signed-on-fetch",
+        label: String(receiptLabel || "").trim() || null,
+        uploaded_by: user.id,
+      };
+
+      const { error: insErr } = await supabase.from("purchase_receipts").insert([
+        receiptRow,
+      ]);
+
+      if (insErr) throw insErr;
+
+      toast.success("Receipt uploaded ✅");
+      setReceiptFile(null);
+
+      await fetchPurchaseDetails(selectedPurchaseId);
+      await fetchPurchaseHistory();
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message ?? "Failed to upload receipt.");
+    } finally {
+      setUploadingReceipt(false);
+    }
+  }
+
+  // load history on mount
+  useEffect(() => {
+    fetchPurchaseHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ----------------------------- Cash Ledger connection ----------------------------- */
   function openLedgerPostModal() {
@@ -641,6 +924,9 @@ export default function PurchaseProductsPage() {
       setShowLedgerModal(false);
       setRows([]);
 
+      // refresh bottom table
+      await fetchPurchaseHistory();
+
       if (spIns?.id) {
         router.push(
           `/reports/cash-ledger?open=supplier_payments&id=${spIns.id}`
@@ -656,7 +942,8 @@ export default function PurchaseProductsPage() {
 
   /* ----------------------------- Init: if opened from cash-ledger ----------------------------- */
   useEffect(() => {
-    const from = sp.get("from") || "";
+    // ✅ replaced useSearchParams with client-only URLSearchParams
+    const from = getClientQueryParam("from");
     if (
       rows.length === 0 &&
       (from.includes("cash-ledger") || from.includes("ledger"))
@@ -1054,7 +1341,10 @@ export default function PurchaseProductsPage() {
                                                         r.key,
                                                         String(it.id)
                                                       );
-                                                      setPickerOpen(r.key, false);
+                                                      setPickerOpen(
+                                                        r.key,
+                                                        false
+                                                      );
                                                     }}
                                                   >
                                                     <Check
@@ -1186,6 +1476,124 @@ export default function PurchaseProductsPage() {
                     </div>
                   </div>
 
+                  {/* ===================== Purchases & Payments (Bottom Table) ===================== */}
+                  <div className="mt-6 rounded-2xl bg-white/80 backdrop-blur border border-black/10 shadow-sm">
+                    <div className="p-4 flex items-center justify-between">
+                      <div>
+                        <div className="text-lg font-extrabold text-black">
+                          Purchases & Payments
+                        </div>
+                        <div className="text-xs text-black/60">
+                          Store partial payments and receipt images per purchase.
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={fetchPurchaseHistory}
+                        disabled={historyLoading}
+                      >
+                        {historyLoading ? "Refreshing..." : "Refresh"}
+                      </Button>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-black text-white">
+                          <tr>
+                            <th className="text-left px-4 py-3 text-xs uppercase tracking-wide">
+                              Supplier
+                            </th>
+                            <th className="text-left px-4 py-3 text-xs uppercase tracking-wide">
+                              Date
+                            </th>
+                            <th className="text-right px-4 py-3 text-xs uppercase tracking-wide">
+                              Total
+                            </th>
+                            <th className="text-right px-4 py-3 text-xs uppercase tracking-wide">
+                              Paid
+                            </th>
+                            <th className="text-right px-4 py-3 text-xs uppercase tracking-wide">
+                              Balance
+                            </th>
+                            <th className="text-center px-4 py-3 text-xs uppercase tracking-wide">
+                              Receipts
+                            </th>
+                            <th className="text-right px-4 py-3 text-xs uppercase tracking-wide">
+                              Action
+                            </th>
+                          </tr>
+                        </thead>
+
+                        <tbody className="divide-y">
+                          {purchaseHistory.length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={7}
+                                className="px-4 py-6 text-center text-black/60"
+                              >
+                                No purchases yet.
+                              </td>
+                            </tr>
+                          ) : (
+                            purchaseHistory.map((p) => {
+                              const total = toNum(p.total_amount);
+                              const paid = toNum(p.total_paid);
+                              const bal = toNum(p.balance);
+                              const rc = receiptCounts[p.purchase_id] || 0;
+
+                              return (
+                                <tr
+                                  key={p.purchase_id}
+                                  className="hover:bg-black/5"
+                                >
+                                  <td className="px-4 py-3 font-semibold">
+                                    {p.supplier_name || "—"}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    {(p.purchase_date || "").slice(0, 10) || "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-right font-semibold">
+                                    {peso(total)}
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    {peso(paid)}
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <span
+                                      className={
+                                        bal > 0
+                                          ? "font-bold text-red-600"
+                                          : "font-bold text-emerald-700"
+                                      }
+                                    >
+                                      {peso(bal)}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-center">
+                                    <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs">
+                                      {rc}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <Button
+                                      size="sm"
+                                      className="bg-black text-white hover:bg-black/90"
+                                      onClick={() =>
+                                        openPurchaseDetails(p.purchase_id)
+                                      }
+                                    >
+                                      View
+                                    </Button>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
                   {/* Insert Inventory Modal */}
                   {showInsertModal && (
                     <ClientPortal>
@@ -1213,10 +1621,7 @@ export default function PurchaseProductsPage() {
                           <div className="p-4">
                             <div className="space-y-3 max-h-[55vh] overflow-auto pr-1">
                               {rows.map((r) => (
-                                <div
-                                  key={r.key}
-                                  className="border rounded-xl p-3"
-                                >
+                                <div key={r.key} className="border rounded-xl p-3">
                                   <div className="flex items-center justify-between gap-3">
                                     <div className="text-sm font-semibold">
                                       {r.sku || "—"} • Qty: {toNum(r.qty)} • Net:{" "}
@@ -1266,9 +1671,7 @@ export default function PurchaseProductsPage() {
                                         }
                                         className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                                         placeholder="Product name"
-                                        disabled={
-                                          !!r.inventory_id && !r.is_new_item
-                                        }
+                                        disabled={!!r.inventory_id && !r.is_new_item}
                                       />
                                     </div>
 
@@ -1279,15 +1682,11 @@ export default function PurchaseProductsPage() {
                                       <input
                                         value={r.category}
                                         onChange={(e) =>
-                                          setRow(r.key, {
-                                            category: e.target.value,
-                                          })
+                                          setRow(r.key, { category: e.target.value })
                                         }
                                         className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                                         placeholder="Uncategorized"
-                                        disabled={
-                                          !!r.inventory_id && !r.is_new_item
-                                        }
+                                        disabled={!!r.inventory_id && !r.is_new_item}
                                       />
                                     </div>
 
@@ -1304,9 +1703,7 @@ export default function PurchaseProductsPage() {
                                         }
                                         className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                                         placeholder="Subcategory"
-                                        disabled={
-                                          !!r.inventory_id && !r.is_new_item
-                                        }
+                                        disabled={!!r.inventory_id && !r.is_new_item}
                                       />
                                     </div>
 
@@ -1321,9 +1718,7 @@ export default function PurchaseProductsPage() {
                                         }
                                         className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                                         placeholder="Piece"
-                                        disabled={
-                                          !!r.inventory_id && !r.is_new_item
-                                        }
+                                        disabled={!!r.inventory_id && !r.is_new_item}
                                       />
                                     </div>
 
@@ -1355,8 +1750,7 @@ export default function PurchaseProductsPage() {
                                         value={r.expiration_date ?? ""}
                                         onChange={(e) =>
                                           setRow(r.key, {
-                                            expiration_date:
-                                              e.target.value || null,
+                                            expiration_date: e.target.value || null,
                                           })
                                         }
                                         className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
@@ -1512,9 +1906,7 @@ export default function PurchaseProductsPage() {
                                 />
                                 <div className="mt-1 text-[11px] text-black/50">
                                   Suggested: Purchase Total ={" "}
-                                  <b className="text-black">
-                                    {peso(purchaseTotal)}
-                                  </b>
+                                  <b className="text-black">{peso(purchaseTotal)}</b>
                                 </div>
                               </div>
 
@@ -1529,9 +1921,7 @@ export default function PurchaseProductsPage() {
                                 >
                                   <option value="Cash">Cash</option>
                                   <option value="GCash">GCash</option>
-                                  <option value="Bank Transfer">
-                                    Bank Transfer
-                                  </option>
+                                  <option value="Bank Transfer">Bank Transfer</option>
                                   <option value="Cheque">Cheque</option>
                                   <option value="Other">Other</option>
                                 </select>
@@ -1558,8 +1948,8 @@ export default function PurchaseProductsPage() {
                                 • <b>purchases</b> header (supplier, date, terms,
                                 total) <br />
                                 • <b>purchase_items</b> (each row) <br />
-                                • <b>supplier_payments</b> (Cash Out) → appears
-                                in <b>Company Cash Ledger</b>
+                                • <b>supplier_payments</b> (Cash Out) → appears in{" "}
+                                <b>Company Cash Ledger</b>
                               </div>
                             </div>
                           </div>
@@ -1578,6 +1968,229 @@ export default function PurchaseProductsPage() {
                               className="bg-black text-white hover:bg-black/90 disabled:opacity-60"
                             >
                               {isPostingLedger ? "Posting..." : "Confirm Post"}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </ClientPortal>
+                  )}
+
+                  {/* Purchase Details Modal (Payments + Receipts) */}
+                  {showPurchaseDetails && selectedPurchaseId && (
+                    <ClientPortal>
+                      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
+                        <div className="bg-white rounded-2xl shadow-2xl w-[1100px] max-w-[96vw] max-h-[92vh] overflow-hidden flex flex-col">
+                          <div className="p-4 border-b flex items-center justify-between">
+                            <div>
+                              <div className="font-extrabold text-black">
+                                Purchase Details
+                              </div>
+                              <div className="text-xs text-black/60">
+                                Partial payments + receipt images are stored under this purchase.
+                              </div>
+                            </div>
+                            <Button
+                              variant="outline"
+                              onClick={() => setShowPurchaseDetails(false)}
+                            >
+                              Close
+                            </Button>
+                          </div>
+
+                          <div className="p-4 overflow-auto">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {/* LEFT: Payments */}
+                              <div className="rounded-xl border p-4">
+                                <div className="flex items-center justify-between">
+                                  <div className="font-bold">Payments</div>
+                                  <div className="text-xs text-black/50">
+                                    {purchasePayments.length} record(s)
+                                  </div>
+                                </div>
+
+                                <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+                                  <div className="md:col-span-1">
+                                    <label className="text-[11px] text-black/60">Amount</label>
+                                    <input
+                                      type="number"
+                                      value={payAmount2}
+                                      onChange={(e) => setPayAmount2(toNum(e.target.value))}
+                                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                                      min={0}
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-1">
+                                    <label className="text-[11px] text-black/60">Date</label>
+                                    <input
+                                      type="date"
+                                      value={payDate2}
+                                      onChange={(e) => setPayDate2(e.target.value)}
+                                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-1">
+                                    <label className="text-[11px] text-black/60">Method</label>
+                                    <select
+                                      value={payMethod2}
+                                      onChange={(e) => setPayMethod2(e.target.value)}
+                                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                                    >
+                                      <option value="Cash">Cash</option>
+                                      <option value="GCash">GCash</option>
+                                      <option value="Bank Transfer">Bank Transfer</option>
+                                      <option value="Cheque">Cheque</option>
+                                      <option value="Other">Other</option>
+                                    </select>
+                                  </div>
+
+                                  <div className="md:col-span-1 flex items-end">
+                                    <Button
+                                      className="w-full bg-black text-white hover:bg-black/90"
+                                      onClick={addPartialPayment}
+                                    >
+                                      Add Payment
+                                    </Button>
+                                  </div>
+
+                                  <div className="md:col-span-4">
+                                    <label className="text-[11px] text-black/60">Notes</label>
+                                    <input
+                                      value={payNotes2}
+                                      onChange={(e) => setPayNotes2(e.target.value)}
+                                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                                      placeholder="Optional"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="mt-4 space-y-2">
+                                  {purchasePayments.length === 0 ? (
+                                    <div className="text-sm text-black/60">No payments yet.</div>
+                                  ) : (
+                                    purchasePayments.map((p) => (
+                                      <div key={p.id} className="rounded-lg border p-3">
+                                        <div className="flex items-center justify-between">
+                                          <div className="font-semibold">{peso(toNum(p.amount))}</div>
+                                          <div className="text-xs text-black/60">
+                                            {(p.paid_at || "").slice(0, 10) || "—"} • {p.method || "—"}
+                                          </div>
+                                        </div>
+                                        {p.notes ? (
+                                          <div className="mt-1 text-xs text-black/60">{p.notes}</div>
+                                        ) : null}
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* RIGHT: Receipts */}
+                              <div className="rounded-xl border p-4">
+                                <div className="flex items-center justify-between">
+                                  <div className="font-bold">Receipt Images</div>
+                                  <div className="text-xs text-black/50">
+                                    {purchaseReceipts.length} file(s)
+                                  </div>
+                                </div>
+
+                                <div className="mt-3 grid grid-cols-1 md:grid-cols-6 gap-2">
+                                  <div className="md:col-span-2">
+                                    <label className="text-[11px] text-black/60">Label</label>
+                                    <input
+                                      value={receiptLabel}
+                                      onChange={(e) => setReceiptLabel(e.target.value)}
+                                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                                      placeholder="Official Receipt"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-3">
+                                    <label className="text-[11px] text-black/60">Image</label>
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-1 flex items-end">
+                                    <Button
+                                      className="w-full bg-black text-white hover:bg-black/90 disabled:opacity-60"
+                                      onClick={uploadReceipt}
+                                      disabled={uploadingReceipt}
+                                    >
+                                      {uploadingReceipt ? "Uploading..." : "Upload"}
+                                    </Button>
+                                  </div>
+                                </div>
+
+                                <div className="mt-4 grid grid-cols-2 md:grid-cols-3 gap-3">
+                                  {purchaseReceipts.length === 0 ? (
+                                    <div className="col-span-full text-sm text-black/60">
+                                      No receipts uploaded.
+                                    </div>
+                                  ) : (
+                                    purchaseReceipts.map((r) => (
+                                      <a
+                                        key={r.id}
+                                        href={r.file_url || "#"}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className={cn(
+                                          "group rounded-xl border overflow-hidden hover:shadow-sm",
+                                          !r.file_url && "opacity-60 pointer-events-none"
+                                        )}
+                                        title={r.label || "Receipt"}
+                                      >
+                                        <div className="aspect-[4/3] bg-black/5 overflow-hidden">
+                                          {r.file_url ? (
+                                            <img
+                                              src={r.file_url}
+                                              alt={r.label || "Receipt"}
+                                              className="h-full w-full object-cover group-hover:scale-[1.02] transition-transform"
+                                            />
+                                          ) : (
+                                            <div className="h-full w-full flex items-center justify-center text-xs text-black/50">
+                                              Signed URL failed
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="p-2">
+                                          <div className="text-xs font-semibold truncate">
+                                            {r.label || "Receipt"}
+                                          </div>
+                                          <div className="text-[11px] text-black/60">
+                                            {(r.created_at || "").slice(0, 10)}
+                                          </div>
+                                        </div>
+                                      </a>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="p-4 border-t flex items-center justify-between">
+                            <Button
+                              variant="outline"
+                              onClick={() => setShowPurchaseDetails(false)}
+                            >
+                              Close
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              onClick={async () => {
+                                if (!selectedPurchaseId) return;
+                                await fetchPurchaseDetails(selectedPurchaseId);
+                                await fetchPurchaseHistory();
+                                toast.success("Updated ✅");
+                              }}
+                            >
+                              Refresh
                             </Button>
                           </div>
                         </div>
