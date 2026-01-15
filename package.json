@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "export": "next export",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
@@ -40,6 +41,7 @@
     "lucide-react": "^0.487.0",
     "next": "^14.2.35",
     "nodemailer": "^7.0.10",
+    "pg": "^8.16.3",
     "puppeteer": "^24.25.0",
     "puppeteer-core": "^24.24.1",
     "react": "^18.3.1",
@@ -55,10 +57,12 @@
   },
   "devDependencies": {
     "@svgr/webpack": "^8.1.0",
+    "@tauri-apps/cli": "^2.9.6",
     "@types/bcrypt": "^5.0.2",
     "@types/file-saver": "^2.0.7",
     "@types/node": "^20",
     "@types/nodemailer": "^7.0.3",
+    "@types/pg": "^8.16.0",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "eslint": "^8",

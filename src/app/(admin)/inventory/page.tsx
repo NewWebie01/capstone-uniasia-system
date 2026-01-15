@@ -2,18 +2,13 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import supabase from "@/config/supabaseClient";
 import { toast } from "sonner";
 
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Command,
   CommandEmpty,
@@ -32,21 +27,23 @@ type InventoryItem = {
   subcategory: string | null;
   unit: string | null;
 
-  size: string | null; // ✅ NEW (for pipes etc.)
+  size: string | null;
 
   quantity: number;
   unit_price: number | null;
   cost_price: number | null;
-  markup_percent: number | null; // required
-  discount_percent: number | null; // optional
+  markup_percent: number | null;
+  discount_percent: number | null;
   amount: number;
   profit: number | null;
   date_created: string;
   status: string | null;
   image_url?: string | null;
+
   weight_per_piece_kg: number | null;
   pieces_per_unit: number | null;
   total_weight_kg: number | null;
+
   expiration_date?: string | null;
   ceiling_qty: number | null;
   stock_level: string | null;
@@ -76,10 +73,8 @@ const LIMITS = {
   MAX_WEIGHT_PER_PIECE_KG: 100,
   MAX_QUANTITY: 999_999,
   MAX_COST_PRICE: 1_000_000,
-
-  MIN_MARKUP_PERCENT: 20, // ✅ NEW: Minimum 20%
+  MIN_MARKUP_PERCENT: 20,
   MAX_MARKUP_PERCENT: 100,
-
   MAX_DISCOUNT_PERCENT: 100,
 } as const;
 
@@ -93,23 +88,7 @@ const peso = (n: number) =>
     minimumFractionDigits: 2,
   });
 
-const BUCKET = "inventory-images";
-const MAX_GALLERY = 5;
-const ALLOWED_MIME = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/gif",
-]);
-const MAX_BYTES = 5 * 1024 * 1024;
-
-const safeSlug = (s: string) =>
-  (s || "item").trim().replace(/\s+/g, "-").toLowerCase();
-
-/* ============================================================================
-   ✅ IMPORTANT FIX: Row component MUST be outside InventoryPage()
-   Otherwise it is re-created each render and inputs lose focus.
-============================================================================ */
+/* ============================================================================ */
 function Row({
   label,
   required,
@@ -130,6 +109,29 @@ function Row({
   );
 }
 
+/* -------------------------------- API helpers ------------------------------ */
+async function apiJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  });
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = { raw: text };
+  }
+  if (!res.ok) {
+    const msg = json?.error || json?.message || `Request failed (${res.status})`;
+    throw new Error(msg);
+  }
+  return json as T;
+}
+
 export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -148,8 +150,6 @@ export default function InventoryPage() {
   const [renameNewValue, setRenameNewValue] = useState("");
   const [renaming, setRenaming] = useState(false);
 
-  const [sendingLowStock, setSendingLowStock] = useState(false);
-
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [isCustomSubcategory, setIsCustomSubcategory] = useState(false);
   const [isCustomUnit, setIsCustomUnit] = useState(false);
@@ -160,18 +160,10 @@ export default function InventoryPage() {
   const [unitOptions, setUnitOptions] = useState<string[]>([]);
   const [sizeOptions, setSizeOptions] = useState<string[]>([]);
 
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-
-  const [galleryFiles, setGalleryFiles] = useState<File[]>([]);
-  const [galleryPreviews, setGalleryPreviews] = useState<string[]>([]);
-
   const [showImageModal, setShowImageModal] = useState(false);
   const [imageModalItem, setImageModalItem] = useState<InventoryItem | null>(
     null
   );
-  const [modalImages, setModalImages] = useState<string[]>([]);
-  const [modalIndex, setModalIndex] = useState(0);
 
   // shadcn dropdown state
   const [catOpen, setCatOpen] = useState(false);
@@ -271,13 +263,14 @@ export default function InventoryPage() {
     quantity: 0,
     unit_price: 0,
     cost_price: 0,
-    markup_percent: LIMITS.MIN_MARKUP_PERCENT, // ✅ default 20%
+    markup_percent: LIMITS.MIN_MARKUP_PERCENT,
     discount_percent: null,
     amount: 0,
     profit: 0,
     date_created: new Date().toISOString(),
     status: "",
     image_url: null,
+
     weight_per_piece_kg: null,
     pieces_per_unit: null,
     total_weight_kg: null,
@@ -290,77 +283,44 @@ export default function InventoryPage() {
     (newItem.category || "").trim().toLowerCase() === "plumbing" &&
     (newItem.subcategory || "").trim().toLowerCase() === "pipes";
 
-  async function triggerLowStockEmail() {
-    try {
-      setSendingLowStock(true);
-      const res = await fetch("/api/alerts/low-stock/run", { method: "POST" });
-      const j = await res.json();
-      if (!res.ok || !j?.ok) {
-        toast.error(
-          `Low-stock email failed: ${j?.reason || j?.error || "Unknown error"}`
-        );
-        return;
-      }
-      if ((j.count || 0) === 0) toast.info("No low/zero stock items found.");
-      else toast.success(`Low-stock email sent. Included ${j.count} item(s).`);
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to send low-stock email.");
-    } finally {
-      setSendingLowStock(false);
-    }
-  }
-
+  /* ------------------------------ PostgreSQL fetchers ------------------------------ */
   const fetchItems = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("inventory")
-      .select(
-        "id, sku, product_name, category, subcategory, unit, size, quantity, unit_price, cost_price, markup_percent, discount_percent, amount, profit, date_created, status, image_url, weight_per_piece_kg, pieces_per_unit, total_weight_kg, expiration_date, ceiling_qty, stock_level"
-      )
-      .order("date_created", { ascending: false });
-
-    if (error) console.error(error);
-    else if (data) setItems(data as InventoryItem[]);
-    setLoading(false);
+    try {
+      setLoading(true);
+      const j = await apiJSON<{ items: InventoryItem[] }>("/api/inventory", {
+        method: "GET",
+      });
+      setItems(j.items || []);
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || "Failed to load inventory (offline DB).");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fetchDropdownOptions = async () => {
-    const { data, error } = await supabase
-      .from("inventory")
-      .select("category, subcategory, unit, size");
-    if (error) {
-      console.error("Failed to fetch dropdown options:", error);
-      return;
-    }
-    const unique = (values: (string | null)[]) =>
-      [...new Set(values.filter(Boolean))] as string[];
+    try {
+      const j = await apiJSON<{
+        categories: string[];
+        subcategories: string[];
+        units: string[];
+        sizes: string[];
+      }>("/api/inventory/options", { method: "GET" });
 
-    setCategoryOptions(unique(data.map((i) => i.category)));
-    setSubcategoryOptions(unique(data.map((i) => i.subcategory)));
-    setUnitOptions(unique(data.map((i) => i.unit)));
-    setSizeOptions(unique(data.map((i) => i.size)));
+      setCategoryOptions(j.categories || []);
+      setSubcategoryOptions(j.subcategories || []);
+      setUnitOptions(j.units || []);
+      setSizeOptions(j.sizes || []);
+    } catch (e: any) {
+      console.error(e);
+      // keep silent-ish: dropdowns can still work from existing state
+    }
   };
 
   useEffect(() => {
     fetchItems();
     fetchDropdownOptions();
-  }, []);
-
-  useEffect(() => {
-    const channel = supabase
-      .channel("realtime-inventory")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "inventory" },
-        () => {
-          fetchItems();
-          fetchDropdownOptions();
-        }
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
   }, []);
 
   // Unit defaults (safe; only fires on unit change)
@@ -384,10 +344,7 @@ export default function InventoryPage() {
     }
   }, [newItem.unit]);
 
-  /* ============================================================================
-     ✅ Derived values (no setNewItem while typing)
-  ============================================================================ */
-
+  /* ============================================================================ */
   const computedWeight = useMemo(() => {
     const unit = newItem.unit || "";
     const qty = Number(newItem.quantity) || 0;
@@ -416,7 +373,6 @@ export default function InventoryPage() {
   const computedPricing = useMemo(() => {
     const cost = Number(newItem.cost_price) || 0;
 
-    // ✅ markup min 20%
     const markup = clamp(
       Number(newItem.markup_percent) || LIMITS.MIN_MARKUP_PERCENT,
       LIMITS.MIN_MARKUP_PERCENT,
@@ -483,7 +439,6 @@ export default function InventoryPage() {
         cost_price < 0 ||
         cost_price > LIMITS.MAX_COST_PRICE,
 
-      // ✅ markup must be at least 20%
       markup_percent:
         markup_percent === null ||
         markup_percent < LIMITS.MIN_MARKUP_PERCENT ||
@@ -508,102 +463,6 @@ export default function InventoryPage() {
       pricing_below_cost: computedPricing.belowCost,
     };
   }, [newItem, isPipe, computedPricing.belowCost]);
-
-  const handleImageSelect = (file: File | null) => {
-    setImageFile(file);
-    setImagePreview(file ? URL.createObjectURL(file) : null);
-  };
-
-  const uploadImageAndGetUrl = async (file: File, skuForName: string) => {
-    const ext = file.name.split(".").pop() || "jpg";
-    const safeSku = (skuForName || "item").replace(/\s+/g, "-").toLowerCase();
-    const path = `${safeSku}-${Date.now()}.${ext}`;
-    const { error: uploadErr } = await supabase.storage
-      .from(BUCKET)
-      .upload(path, file, {
-        cacheControl: "3600",
-        upsert: false,
-      });
-    if (uploadErr) throw uploadErr;
-    const { data: publicUrlData } = supabase.storage
-      .from(BUCKET)
-      .getPublicUrl(path);
-    return publicUrlData.publicUrl;
-  };
-
-  const handleGallerySelect = (files: FileList | null) => {
-    const arr = files ? Array.from(files) : [];
-    const filtered: File[] = [];
-    for (const f of arr) {
-      if (!ALLOWED_MIME.has(f.type)) {
-        toast.error(`"${f.name}" is not a supported image type.`);
-        continue;
-      }
-      if (f.size > MAX_BYTES) {
-        toast.error(`"${f.name}" is larger than 5MB.`);
-        continue;
-      }
-      filtered.push(f);
-      if (filtered.length >= MAX_GALLERY) break;
-    }
-    setGalleryFiles(filtered);
-    setGalleryPreviews(filtered.map((f) => URL.createObjectURL(f)));
-  };
-
-  const uploadGalleryAndReturnUrls = async (
-    files: File[],
-    skuForName: string
-  ) => {
-    const folder = safeSlug(skuForName);
-    const urls: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      const ext = f.name.split(".").pop() || "jpg";
-      const path = `${folder}/${Date.now()}-${i}.${ext}`;
-      const { error } = await supabase.storage.from(BUCKET).upload(path, f, {
-        cacheControl: "3600",
-        upsert: false,
-      });
-      if (error) throw error;
-      const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
-      if (data?.publicUrl) urls.push(data.publicUrl);
-    }
-    return urls;
-  };
-
-  const listGalleryUrls = async (
-    skuOrName: string,
-    primary?: string | null
-  ) => {
-    const folder = safeSlug(skuOrName);
-    const { data, error } = await supabase.storage.from(BUCKET).list(folder, {
-      limit: 50,
-      sortBy: { column: "name", order: "asc" },
-    });
-    if (error) console.warn("List gallery error:", error.message);
-
-    const fileUrls =
-      data?.map((f) => {
-        const { data } = supabase.storage
-          .from(BUCKET)
-          .getPublicUrl(`${folder}/${f.name}`);
-        return data.publicUrl;
-      }) || [];
-
-    const all = [...(primary ? [primary] : []), ...fileUrls];
-    return Array.from(new Set(all)).slice(0, MAX_GALLERY);
-  };
-
-  const openImageModal = async (item: InventoryItem) => {
-    setImageModalItem(item);
-    const imgs = await listGalleryUrls(
-      item.sku || item.product_name,
-      item.image_url
-    );
-    setModalImages(imgs);
-    setModalIndex(0);
-    setShowImageModal(true);
-  };
 
   const normalizeForSave = () => {
     let { unit, pieces_per_unit, weight_per_piece_kg, quantity } = newItem;
@@ -642,7 +501,7 @@ export default function InventoryPage() {
       quantity: 0,
       unit_price: 0,
       cost_price: 0,
-      markup_percent: LIMITS.MIN_MARKUP_PERCENT, // ✅ default 20%
+      markup_percent: LIMITS.MIN_MARKUP_PERCENT,
       discount_percent: null,
       amount: 0,
       profit: 0,
@@ -657,10 +516,6 @@ export default function InventoryPage() {
       stock_level: "In Stock",
     });
 
-    setImageFile(null);
-    setImagePreview(null);
-    setGalleryFiles([]);
-    setGalleryPreviews([]);
     setEditingItemId(null);
     setShowForm(false);
 
@@ -688,57 +543,32 @@ export default function InventoryPage() {
 
       setSaving(true);
 
-      let finalImageUrl = newItem.image_url || null;
-      if (imageFile) {
-        finalImageUrl = await uploadImageAndGetUrl(
-          imageFile,
-          newItem.sku || newItem.product_name
-        );
-      }
-
-      if (galleryFiles.length) {
-        try {
-          await uploadGalleryAndReturnUrls(
-            galleryFiles,
-            newItem.sku || newItem.product_name
-          );
-        } catch {
-          toast.error("Some additional photos failed to upload.");
-        }
-      }
-
       const normalized = normalizeForSave();
 
-      // ✅ save computed values at submit time
       const dataToSave = {
         ...newItem,
         ...normalized,
-        image_url: finalImageUrl,
         date_created: new Date().toISOString(),
-
-        // computed pricing + totals
         markup_percent: computedPricing.markup,
         discount_percent: computedPricing.discount,
         unit_price: computedPricing.unit_price,
         amount: computedPricing.amount,
         profit: computedPricing.profit,
-
-        // computed weight
         total_weight_kg:
-          normalized.total_weight_kg ??
-          (computedWeight ? computedWeight : null),
+          normalized.total_weight_kg ?? (computedWeight ? computedWeight : null),
       };
 
       if (editingItemId !== null) {
-        const { error } = await supabase
-          .from("inventory")
-          .update(dataToSave)
-          .eq("id", editingItemId);
-        if (error) throw error;
+        await apiJSON<{ ok: true }>("/api/inventory/" + editingItemId, {
+          method: "PUT",
+          body: JSON.stringify({ item: dataToSave }),
+        });
         toast.success("Item updated successfully!");
       } else {
-        const { error } = await supabase.from("inventory").insert([dataToSave]);
-        if (error) throw error;
+        await apiJSON<{ ok: true }>("/api/inventory", {
+          method: "POST",
+          body: JSON.stringify({ item: dataToSave }),
+        });
         toast.success("New item added successfully!");
       }
 
@@ -760,9 +590,7 @@ export default function InventoryPage() {
     return items.filter((item) =>
       `${item.sku} ${item.product_name} ${item.category ?? ""} ${
         item.subcategory ?? ""
-      } ${item.unit ?? ""} ${item.size ?? ""}`
-        .toLowerCase()
-        .includes(q)
+      } ${item.unit ?? ""} ${item.size ?? ""}`.toLowerCase().includes(q)
     );
   }, [items, searchQuery]);
 
@@ -794,9 +622,7 @@ export default function InventoryPage() {
         .filter(Boolean)
     );
     const usedList = Array.from(used);
-    const others = subcategoryOptions.filter(
-      (s) => !used.has((s || "").trim())
-    );
+    const others = subcategoryOptions.filter((s) => !used.has((s || "").trim()));
     return [...usedList, ...others].filter(Boolean);
   }, [items, subcategoryOptions, newItem.category]);
 
@@ -814,9 +640,7 @@ export default function InventoryPage() {
     const extras = unitOptions.filter(
       (u) => !fixed.includes(u) && !used.has((u || "").trim())
     );
-    return Array.from(new Set([...usedList, ...fixed, ...extras])).filter(
-      Boolean
-    );
+    return Array.from(new Set([...usedList, ...fixed, ...extras])).filter(Boolean);
   }, [items, unitOptions, newItem.category]);
 
   const sizeSuggested = useMemo(() => {
@@ -834,9 +658,7 @@ export default function InventoryPage() {
     const usedList = Array.from(used);
     const others = sizeOptions.filter((s) => !used.has((s || "").trim()));
     const common = ['1/2"', '3/4"', '1"', '1 1/4"', '1 1/2"', '2"', '3"', '4"'];
-    return Array.from(new Set([...usedList, ...common, ...others])).filter(
-      Boolean
-    );
+    return Array.from(new Set([...usedList, ...common, ...others])).filter(Boolean);
   }, [isPipe, items, sizeOptions]);
 
   const categoryList = useMemo(
@@ -860,13 +682,10 @@ export default function InventoryPage() {
       unit: item.unit || "",
       size: item.size ?? null,
       cost_price: item.cost_price ?? 0,
-
-      // ✅ Ensure markup respects min when editing old rows
       markup_percent: Math.max(
         Number(item.markup_percent ?? LIMITS.MIN_MARKUP_PERCENT),
         LIMITS.MIN_MARKUP_PERCENT
       ),
-
       discount_percent: item.discount_percent ?? null,
       expiration_date: item.expiration_date ?? null,
       ceiling_qty: item.ceiling_qty ?? null,
@@ -875,12 +694,8 @@ export default function InventoryPage() {
       total_weight_kg: item.total_weight_kg ?? null,
       amount: item.amount ?? 0,
       profit: item.profit ?? 0,
+      image_url: item.image_url ?? null,
     });
-
-    setImageFile(null);
-    setImagePreview(item.image_url || null);
-    setGalleryFiles([]);
-    setGalleryPreviews([]);
 
     setIsCustomCategory(false);
     setIsCustomSubcategory(false);
@@ -888,12 +703,17 @@ export default function InventoryPage() {
     setIsCustomSize(false);
   };
 
+  const openImageModal = (item: InventoryItem) => {
+    setImageModalItem(item);
+    setShowImageModal(true);
+  };
+
   return (
     <>
       <div className="px-4 pb-4 pt-1">
         <h1 className="text-3xl font-bold mt-1">Inventory</h1>
         <p className="text-neutral-500 text-sm mb-4">
-          Manage and view all inventory items, categories, and stock levels.
+          Offline Inventory (Local PostgreSQL). Internet not required.
         </p>
 
         <div className="flex flex-wrap gap-4 mb-4 items-center">
@@ -903,14 +723,6 @@ export default function InventoryPage() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
-
-          <button
-            onClick={triggerLowStockEmail}
-            disabled={sendingLowStock}
-            className="px-4 py-2 rounded bg-black text-white hover:bg-blue-700 disabled:opacity-60"
-          >
-            {sendingLowStock ? "Sending..." : "Send Low-Stock Alert"}
-          </button>
 
           <button
             className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
@@ -927,7 +739,7 @@ export default function InventoryPage() {
                 quantity: 0,
                 unit_price: 0,
                 cost_price: 0,
-                markup_percent: LIMITS.MIN_MARKUP_PERCENT, // ✅ default 20%
+                markup_percent: LIMITS.MIN_MARKUP_PERCENT,
                 discount_percent: null,
                 amount: 0,
                 profit: 0,
@@ -941,10 +753,6 @@ export default function InventoryPage() {
                 ceiling_qty: null,
                 stock_level: "In Stock",
               });
-              setImageFile(null);
-              setImagePreview(null);
-              setGalleryFiles([]);
-              setGalleryPreviews([]);
               setIsCustomCategory(false);
               setIsCustomSubcategory(false);
               setIsCustomUnit(false);
@@ -960,130 +768,82 @@ export default function InventoryPage() {
             <thead className="bg-[#ffba20] text-black text-left">
               <tr>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("sku")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("sku")}>
                     SKU {sortArrow("sku")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("product_name")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("product_name")}>
                     Product {sortArrow("product_name")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("category")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("category")}>
                     Category {sortArrow("category")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("subcategory")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("subcategory")}>
                     Subcategory {sortArrow("subcategory")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("unit")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("unit")}>
                     Unit {sortArrow("unit")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("size")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("size")}>
                     Size {sortArrow("size")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("quantity")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("quantity")}>
                     Quantity {sortArrow("quantity")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("cost_price")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("cost_price")}>
                     Cost Price {sortArrow("cost_price")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("markup_percent")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("markup_percent")}>
                     Markup % {sortArrow("markup_percent")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("discount_percent")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("discount_percent")}>
                     Discount % {sortArrow("discount_percent")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("unit_price")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("unit_price")}>
                     Unit Price {sortArrow("unit_price")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("amount")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("amount")}>
                     Total {sortArrow("amount")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("expiration_date")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("expiration_date")}>
                     Expiration Date {sortArrow("expiration_date")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("total_weight_kg")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("total_weight_kg")}>
                     Total Weight {sortArrow("total_weight_kg")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("stock_level")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("stock_level")}>
                     Stock Level {sortArrow("stock_level")}
                   </button>
                 </th>
                 <th className={cellNowrap}>
-                  <button
-                    className="font-semibold hover:underline"
-                    onClick={() => toggleSort("date_created")}
-                  >
+                  <button className="font-semibold hover:underline" onClick={() => toggleSort("date_created")}>
                     Date {sortArrow("date_created")}
                   </button>
                 </th>
@@ -1126,47 +886,36 @@ export default function InventoryPage() {
 
                   <td className={cellNowrap}>{item.quantity}</td>
                   <td className={cellNowrap}>
-                    {item.cost_price != null
-                      ? peso(Number(item.cost_price))
-                      : "—"}
+                    {item.cost_price != null ? peso(Number(item.cost_price)) : "—"}
                   </td>
                   <td className={cellNowrap}>
-                    {item.markup_percent != null
-                      ? `${Number(item.markup_percent)}%`
-                      : "—"}
+                    {item.markup_percent != null ? `${Number(item.markup_percent)}%` : "—"}
                   </td>
                   <td className={cellNowrap}>
-                    {item.discount_percent != null &&
-                    Number(item.discount_percent) > 0
+                    {item.discount_percent != null && Number(item.discount_percent) > 0
                       ? `${Number(item.discount_percent)}%`
                       : "—"}
                   </td>
                   <td className={cellNowrap}>
-                    {item.unit_price != null
-                      ? peso(Number(item.unit_price))
-                      : "—"}
+                    {item.unit_price != null ? peso(Number(item.unit_price)) : "—"}
                   </td>
                   <td className={cellNowrap}>{peso(Number(item.amount))}</td>
 
                   <td className={cellNowrap}>
                     {item.expiration_date
-                      ? new Date(item.expiration_date).toLocaleDateString(
-                          "en-PH",
-                          {
-                            year: "numeric",
-                            month: "short",
-                            day: "2-digit",
-                          }
-                        )
+                      ? new Date(item.expiration_date).toLocaleDateString("en-PH", {
+                          year: "numeric",
+                          month: "short",
+                          day: "2-digit",
+                        })
                       : "—"}
                   </td>
 
                   <td className={cellNowrap}>
                     {item.total_weight_kg
-                      ? `${Number(item.total_weight_kg).toLocaleString(
-                          undefined,
-                          { maximumFractionDigits: 3 }
-                        )} kg`
+                      ? `${Number(item.total_weight_kg).toLocaleString(undefined, {
+                          maximumFractionDigits: 3,
+                        })} kg`
                       : "—"}
                   </td>
 
@@ -1182,9 +931,7 @@ export default function InventoryPage() {
                           ? "bg-gray-200 text-gray-700"
                           : "bg-green-100 text-green-700";
                       return (
-                        <span
-                          className={`px-2 py-1 rounded text-xs font-semibold ${cls}`}
-                        >
+                        <span className={`px-2 py-1 rounded text-xs font-semibold ${cls}`}>
                           {lvl}
                         </span>
                       );
@@ -1192,17 +939,14 @@ export default function InventoryPage() {
                   </td>
 
                   <td className={cellNowrap}>
-                    {new Date(item.date_created).toLocaleString("en-PH")}
+                    {item.date_created ? new Date(item.date_created).toLocaleString("en-PH") : "—"}
                   </td>
                 </tr>
               ))}
 
               {paged.length === 0 && !loading && (
                 <tr>
-                  <td
-                    className="px-4 py-6 text-center text-gray-500"
-                    colSpan={16}
-                  >
+                  <td className="px-4 py-6 text-center text-gray-500" colSpan={16}>
                     No items found.
                   </td>
                 </tr>
@@ -1232,7 +976,7 @@ export default function InventoryPage() {
           </button>
         </div>
 
-        {/* Image Modal */}
+        {/* Image Modal (offline: just show stored URL) */}
         {showImageModal && imageModalItem && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="bg-white rounded-lg max-w-xl w-full overflow-hidden">
@@ -1243,75 +987,29 @@ export default function InventoryPage() {
                   onClick={() => {
                     setShowImageModal(false);
                     setImageModalItem(null);
-                    setModalImages([]);
-                    setModalIndex(0);
                   }}
                 >
                   ✕
                 </button>
               </div>
 
-              <div className="p-3">
-                {modalImages.length > 0 ? (
+              <div className="p-4">
+                {imageModalItem.image_url ? (
                   <div className="w-full">
-                    <div className="relative w-full h-64 md:h-72 bg-gray-100 rounded overflow-hidden flex items-center justify-center">
+                    <div className="w-full h-72 bg-gray-100 rounded overflow-hidden flex items-center justify-center">
                       <img
-                        src={modalImages[modalIndex]}
-                        alt={`${imageModalItem.product_name} ${modalIndex + 1}`}
+                        src={imageModalItem.image_url}
+                        alt={imageModalItem.product_name}
                         className="max-h-full max-w-full object-contain"
                       />
-                      {modalImages.length > 1 && (
-                        <>
-                          <button
-                            className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
-                            onClick={() =>
-                              setModalIndex(
-                                (i) =>
-                                  (i - 1 + modalImages.length) %
-                                  modalImages.length
-                              )
-                            }
-                            title="Previous"
-                          >
-                            ‹
-                          </button>
-                          <button
-                            className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 text-white px-3 py-2 rounded"
-                            onClick={() =>
-                              setModalIndex((i) => (i + 1) % modalImages.length)
-                            }
-                            title="Next"
-                          >
-                            ›
-                          </button>
-                        </>
-                      )}
                     </div>
-
-                    {modalImages.length > 1 && (
-                      <div className="mt-3 flex gap-2 overflow-x-auto">
-                        {modalImages.map((u, idx) => (
-                          <button
-                            key={u + idx}
-                            className={`h-12 w-16 flex-shrink-0 border rounded overflow-hidden ${
-                              idx === modalIndex ? "ring-2 ring-[#ffba20]" : ""
-                            }`}
-                            onClick={() => setModalIndex(idx)}
-                            title={`Image ${idx + 1}`}
-                          >
-                            <img
-                              src={u}
-                              alt={`thumb-${idx + 1}`}
-                              className="h-full w-full object-cover"
-                            />
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    <div className="mt-3 text-xs text-gray-600 break-all">
+                      URL: {imageModalItem.image_url}
+                    </div>
                   </div>
                 ) : (
                   <div className="text-center text-gray-500 border rounded p-6">
-                    No images found for this item.
+                    No image_url saved for this item.
                   </div>
                 )}
               </div>
@@ -1321,8 +1019,6 @@ export default function InventoryPage() {
                   onClick={() => {
                     setShowImageModal(false);
                     setImageModalItem(null);
-                    setModalImages([]);
-                    setModalIndex(0);
                   }}
                   className="bg-black text-white px-4 py-2 rounded hover:text-[#ffba20]"
                 >
@@ -1402,24 +1098,17 @@ export default function InventoryPage() {
                                 }`}
                               >
                                 <span className="truncate">
-                                  {newItem.category
-                                    ? newItem.category
-                                    : "Select Category"}
+                                  {newItem.category ? newItem.category : "Select Category"}
                                 </span>
                                 <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
                               </Button>
                             </PopoverTrigger>
 
-                            <PopoverContent
-                              className="w-[280px] p-0"
-                              align="start"
-                            >
+                            <PopoverContent className="w-[280px] p-0" align="start">
                               <Command>
                                 <CommandInput placeholder="Search category..." />
                                 <CommandList>
-                                  <CommandEmpty>
-                                    No category found.
-                                  </CommandEmpty>
+                                  <CommandEmpty>No category found.</CommandEmpty>
                                   <CommandGroup>
                                     {categoryList.map((c) => (
                                       <CommandItem
@@ -1438,9 +1127,7 @@ export default function InventoryPage() {
                                         <Check
                                           className={cn(
                                             "mr-2 h-4 w-4",
-                                            newItem.category === c
-                                              ? "opacity-100"
-                                              : "opacity-0"
+                                            newItem.category === c ? "opacity-100" : "opacity-0"
                                           )}
                                         />
                                         {c}
@@ -1458,9 +1145,7 @@ export default function InventoryPage() {
                         <input
                           type="checkbox"
                           checked={isCustomCategory}
-                          onChange={(e) =>
-                            setIsCustomCategory(e.target.checked)
-                          }
+                          onChange={(e) => setIsCustomCategory(e.target.checked)}
                         />
                         New
                       </label>
@@ -1498,24 +1183,17 @@ export default function InventoryPage() {
                                 disabled={!newItem.category}
                               >
                                 <span className="truncate">
-                                  {newItem.subcategory
-                                    ? newItem.subcategory
-                                    : "Select Subcategory"}
+                                  {newItem.subcategory ? newItem.subcategory : "Select Subcategory"}
                                 </span>
                                 <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
                               </Button>
                             </PopoverTrigger>
 
-                            <PopoverContent
-                              className="w-[280px] p-0"
-                              align="start"
-                            >
+                            <PopoverContent className="w-[280px] p-0" align="start">
                               <Command>
                                 <CommandInput placeholder="Search subcategory..." />
                                 <CommandList>
-                                  <CommandEmpty>
-                                    No subcategory found.
-                                  </CommandEmpty>
+                                  <CommandEmpty>No subcategory found.</CommandEmpty>
                                   <CommandGroup>
                                     {subcategoryFiltered.map((s) => (
                                       <CommandItem
@@ -1533,9 +1211,7 @@ export default function InventoryPage() {
                                         <Check
                                           className={cn(
                                             "mr-2 h-4 w-4",
-                                            newItem.subcategory === s
-                                              ? "opacity-100"
-                                              : "opacity-0"
+                                            newItem.subcategory === s ? "opacity-100" : "opacity-0"
                                           )}
                                         />
                                         {s}
@@ -1553,9 +1229,7 @@ export default function InventoryPage() {
                         <input
                           type="checkbox"
                           checked={isCustomSubcategory}
-                          onChange={(e) =>
-                            setIsCustomSubcategory(e.target.checked)
-                          }
+                          onChange={(e) => setIsCustomSubcategory(e.target.checked)}
                         />
                         New
                       </label>
@@ -1573,10 +1247,7 @@ export default function InventoryPage() {
                             placeholder="Enter new unit"
                             value={newItem.unit || ""}
                             onChange={(e) =>
-                              setNewItem((prev) => ({
-                                ...prev,
-                                unit: e.target.value,
-                              }))
+                              setNewItem((prev) => ({ ...prev, unit: e.target.value }))
                             }
                           />
                         ) : (
@@ -1597,10 +1268,7 @@ export default function InventoryPage() {
                               </Button>
                             </PopoverTrigger>
 
-                            <PopoverContent
-                              className="w-[280px] p-0"
-                              align="start"
-                            >
+                            <PopoverContent className="w-[280px] p-0" align="start">
                               <Command>
                                 <CommandInput placeholder="Search unit..." />
                                 <CommandList>
@@ -1611,19 +1279,14 @@ export default function InventoryPage() {
                                         key={u}
                                         value={u}
                                         onSelect={() => {
-                                          setNewItem((prev) => ({
-                                            ...prev,
-                                            unit: u,
-                                          }));
+                                          setNewItem((prev) => ({ ...prev, unit: u }));
                                           setUnitOpen(false);
                                         }}
                                       >
                                         <Check
                                           className={cn(
                                             "mr-2 h-4 w-4",
-                                            newItem.unit === u
-                                              ? "opacity-100"
-                                              : "opacity-0"
+                                            newItem.unit === u ? "opacity-100" : "opacity-0"
                                           )}
                                         />
                                         {u}
@@ -1660,10 +1323,7 @@ export default function InventoryPage() {
                               placeholder='e.g. 1/2", 3/4", 1"'
                               value={newItem.size || ""}
                               onChange={(e) =>
-                                setNewItem((prev) => ({
-                                  ...prev,
-                                  size: e.target.value,
-                                }))
+                                setNewItem((prev) => ({ ...prev, size: e.target.value }))
                               }
                             />
                           ) : (
@@ -1678,18 +1338,13 @@ export default function InventoryPage() {
                                   }`}
                                 >
                                   <span className="truncate">
-                                    {newItem.size
-                                      ? newItem.size
-                                      : "Select Size"}
+                                    {newItem.size ? newItem.size : "Select Size"}
                                   </span>
                                   <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
                                 </Button>
                               </PopoverTrigger>
 
-                              <PopoverContent
-                                className="w-[280px] p-0"
-                                align="start"
-                              >
+                              <PopoverContent className="w-[280px] p-0" align="start">
                                 <Command>
                                   <CommandInput placeholder="Search size..." />
                                   <CommandList>
@@ -1700,19 +1355,14 @@ export default function InventoryPage() {
                                           key={s}
                                           value={s}
                                           onSelect={() => {
-                                            setNewItem((prev) => ({
-                                              ...prev,
-                                              size: s,
-                                            }));
+                                            setNewItem((prev) => ({ ...prev, size: s }));
                                             setSizeOpen(false);
                                           }}
                                         >
                                           <Check
                                             className={cn(
                                               "mr-2 h-4 w-4",
-                                              newItem.size === s
-                                                ? "opacity-100"
-                                                : "opacity-0"
+                                              newItem.size === s ? "opacity-100" : "opacity-0"
                                             )}
                                           />
                                           {s}
@@ -1737,6 +1387,21 @@ export default function InventoryPage() {
                       </div>
                     </Row>
                   )}
+
+                  {/* Offline Image URL input */}
+                  <Row label="Image URL">
+                    <input
+                      className="w-full border px-4 py-2 rounded"
+                      placeholder="Optional (LAN URL / local hosted URL)"
+                      value={newItem.image_url || ""}
+                      onChange={(e) =>
+                        setNewItem((prev) => ({
+                          ...prev,
+                          image_url: e.target.value ? e.target.value : null,
+                        }))
+                      }
+                    />
+                  </Row>
                 </div>
 
                 {/* RIGHT */}
@@ -1750,24 +1415,12 @@ export default function InventoryPage() {
                       className={`w-full border px-4 py-2 rounded ${
                         liveErrors.weight_per_piece_kg ? "border-red-500" : ""
                       }`}
-                      placeholder={
-                        newItem.unit === "Kg"
-                          ? "1 (auto for Kg items)"
-                          : "e.g. 0.45"
-                      }
-                      value={
-                        newItem.unit === "Kg"
-                          ? 1
-                          : newItem.weight_per_piece_kg ?? ""
-                      }
+                      placeholder={newItem.unit === "Kg" ? "1 (auto for Kg items)" : "e.g. 0.45"}
+                      value={newItem.unit === "Kg" ? 1 : newItem.weight_per_piece_kg ?? ""}
                       disabled={newItem.unit === "Kg"}
                       onChange={(e) => {
                         const raw = parseFloat(e.target.value) || 0;
-                        const val = clamp(
-                          raw,
-                          0,
-                          LIMITS.MAX_WEIGHT_PER_PIECE_KG
-                        );
+                        const val = clamp(raw, 0, LIMITS.MAX_WEIGHT_PER_PIECE_KG);
                         setNewItem((prev) => ({
                           ...prev,
                           weight_per_piece_kg: newItem.unit === "Kg" ? 1 : val,
@@ -1776,7 +1429,6 @@ export default function InventoryPage() {
                     />
                   </Row>
 
-                  {/* ✅ SWAPPED: Ceiling first */}
                   <Row label="Ceiling (Max Stock)">
                     <input
                       type="number"
@@ -1793,16 +1445,12 @@ export default function InventoryPage() {
                           ceiling_qty:
                             e.target.value === ""
                               ? null
-                              : Math.max(
-                                  0,
-                                  parseInt(e.target.value || "0", 10)
-                                ),
+                              : Math.max(0, parseInt(e.target.value || "0", 10)),
                         }))
                       }
                     />
                   </Row>
 
-                  {/* ✅ SWAPPED: Quantity below Ceiling */}
                   <Row label="Quantity" required>
                     <input
                       type="number"
@@ -1850,9 +1498,7 @@ export default function InventoryPage() {
                       className={`w-full border px-4 py-2 rounded ${
                         liveErrors.markup_percent ? "border-red-500" : ""
                       }`}
-                      value={
-                        newItem.markup_percent ?? LIMITS.MIN_MARKUP_PERCENT
-                      }
+                      value={newItem.markup_percent ?? LIMITS.MIN_MARKUP_PERCENT}
                       onFocus={(e) => e.target.select()}
                       onChange={(e) => {
                         const raw = parseFloat(e.target.value);
@@ -1861,10 +1507,7 @@ export default function InventoryPage() {
                           LIMITS.MIN_MARKUP_PERCENT,
                           LIMITS.MAX_MARKUP_PERCENT
                         );
-                        setNewItem((prev) => ({
-                          ...prev,
-                          markup_percent: val,
-                        }));
+                        setNewItem((prev) => ({ ...prev, markup_percent: val }));
                       }}
                     />
                   </Row>
@@ -1880,8 +1523,7 @@ export default function InventoryPage() {
                       max={LIMITS.MAX_DISCOUNT_PERCENT}
                       step="0.01"
                       className={`w-full border px-4 py-2 rounded ${
-                        liveErrors.discount_percent ||
-                        liveErrors.pricing_below_cost
+                        liveErrors.discount_percent || liveErrors.pricing_below_cost
                           ? "border-red-500"
                           : ""
                       }`}
@@ -1890,26 +1532,19 @@ export default function InventoryPage() {
                       onChange={(e) => {
                         const v = e.target.value;
                         if (v === "") {
-                          setNewItem((prev) => ({
-                            ...prev,
-                            discount_percent: null,
-                          }));
+                          setNewItem((prev) => ({ ...prev, discount_percent: null }));
                           return;
                         }
                         const raw = parseFloat(v) || 0;
                         const val = clamp(raw, 0, LIMITS.MAX_DISCOUNT_PERCENT);
-                        setNewItem((prev) => ({
-                          ...prev,
-                          discount_percent: val,
-                        }));
+                        setNewItem((prev) => ({ ...prev, discount_percent: val }));
                       }}
                     />
                   </Row>
 
                   {liveErrors.pricing_below_cost && (
                     <div className="text-xs text-red-600 ml-44">
-                      Discount is too high — selling price cannot go below cost
-                      price.
+                      Discount is too high — selling price cannot go below cost price.
                     </div>
                   )}
 
@@ -1917,17 +1552,11 @@ export default function InventoryPage() {
                     <input
                       type="date"
                       className="w-full border px-4 py-2 rounded"
-                      value={
-                        newItem.expiration_date
-                          ? newItem.expiration_date.slice(0, 10)
-                          : ""
-                      }
+                      value={newItem.expiration_date ? newItem.expiration_date.slice(0, 10) : ""}
                       onChange={(e) =>
                         setNewItem((prev) => ({
                           ...prev,
-                          expiration_date: e.target.value
-                            ? e.target.value
-                            : null,
+                          expiration_date: e.target.value ? e.target.value : null,
                         }))
                       }
                     />
@@ -1936,14 +1565,10 @@ export default function InventoryPage() {
               </div>
 
               {/* Summary */}
-              {/* Summary */}
               <div className="border-t pt-4 mt-2">
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {/* Unit Price */}
                   <div className="space-y-1">
-                    <label className="text-sm text-gray-700">
-                      Unit Price (auto)
-                    </label>
+                    <label className="text-sm text-gray-700">Unit Price (auto)</label>
                     <input
                       className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
                       value={peso(Number(computedPricing.unit_price || 0))}
@@ -1952,7 +1577,6 @@ export default function InventoryPage() {
                     />
                   </div>
 
-                  {/* Total Price */}
                   <div className="space-y-1">
                     <label className="text-sm text-gray-700">Total Price</label>
                     <input
@@ -1963,21 +1587,15 @@ export default function InventoryPage() {
                     />
                   </div>
 
-                  {/* Total Weight */}
                   <div className="space-y-1">
-                    <label className="text-sm text-gray-700">
-                      Total Weight
-                    </label>
+                    <label className="text-sm text-gray-700">Total Weight</label>
                     <input
                       className="w-full border px-4 py-2 rounded bg-gray-100 text-gray-700 text-right"
                       value={
                         computedWeight
-                          ? `${Number(computedWeight).toLocaleString(
-                              undefined,
-                              {
-                                maximumFractionDigits: 3,
-                              }
-                            )} kg`
+                          ? `${Number(computedWeight).toLocaleString(undefined, {
+                              maximumFractionDigits: 3,
+                            })} kg`
                           : "—"
                       }
                       readOnly
@@ -1987,99 +1605,9 @@ export default function InventoryPage() {
                 </div>
               </div>
 
-              {/* Images */}
-              <div>
-                <input
-                  type="file"
-                  accept="image/png, image/jpeg, image/webp, image/gif"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0] || null;
-                    if (!f) return handleImageSelect(null);
-                    if (!ALLOWED_MIME.has(f.type)) {
-                      toast.error(
-                        "Please upload an image file (JPG, PNG, WEBP, or GIF)."
-                      );
-                      e.currentTarget.value = "";
-                      return handleImageSelect(null);
-                    }
-                    if (f.size > MAX_BYTES) {
-                      toast.error("Image too large. Max size is 5 MB.");
-                      e.currentTarget.value = "";
-                      return handleImageSelect(null);
-                    }
-                    handleImageSelect(f);
-                  }}
-                  className="block w-full text-sm text-gray-700"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Accepted formats: JPG, PNG, WEBP, GIF · Max 5MB
-                </p>
-
-                {imagePreview && (
-                  <button
-                    type="button"
-                    onClick={() => handleImageSelect(null)}
-                    className="mt-2 text-xs text-red-600 underline"
-                  >
-                    Remove selected image
-                  </button>
-                )}
-              </div>
-
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Additional Photos (up to {MAX_GALLERY})
-                </label>
-                <input
-                  type="file"
-                  multiple
-                  accept="image/png, image/jpeg, image/webp, image/gif"
-                  onChange={(e) => handleGallerySelect(e.target.files)}
-                  className="block w-full text-sm text-gray-700"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  JPG, PNG, WEBP, GIF · Max 5MB each
-                </p>
-
-                {galleryPreviews.length > 0 && (
-                  <>
-                    <div className="mt-2 text-xs text-gray-600">
-                      Selected {galleryPreviews.length}/{MAX_GALLERY}
-                    </div>
-                    <div className="mt-2 flex gap-2 flex-wrap">
-                      {galleryPreviews.map((src, i) => (
-                        <div
-                          key={i}
-                          className="h-20 w-24 border rounded overflow-hidden"
-                        >
-                          <img
-                            src={src}
-                            className="h-full w-full object-cover"
-                            alt={`preview-${i + 1}`}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setGalleryFiles([]);
-                        setGalleryPreviews([]);
-                      }}
-                      className="mt-2 text-xs text-red-600 underline"
-                    >
-                      Clear additional photos
-                    </button>
-                  </>
-                )}
-              </div>
-
               {/* Actions */}
               <div className="flex justify-end gap-2 pt-2">
-                <button
-                  onClick={resetForm}
-                  className="bg-gray-300 px-4 py-2 rounded"
-                >
+                <button onClick={resetForm} className="bg-gray-300 px-4 py-2 rounded">
                   Cancel
                 </button>
 
@@ -2090,11 +1618,7 @@ export default function InventoryPage() {
                     saving ? "opacity-70 pointer-events-none" : ""
                   }`}
                 >
-                  {saving
-                    ? "Saving..."
-                    : editingItemId
-                    ? "Update Item"
-                    : "Add Item"}
+                  {saving ? "Saving..." : editingItemId ? "Update Item" : "Add Item"}
                 </button>
               </div>
             </div>
@@ -2102,7 +1626,7 @@ export default function InventoryPage() {
         )}
       </div>
 
-      {/* Rename Modal (kept for future; optional use) */}
+      {/* Rename Modal */}
       {showRenameModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
@@ -2120,6 +1644,7 @@ export default function InventoryPage() {
                 onChange={(e) => setRenameNewValue(e.target.value)}
               />
             </div>
+
             <div className="flex justify-end gap-2">
               <button
                 className="px-4 py-2 rounded bg-gray-200"
@@ -2127,6 +1652,7 @@ export default function InventoryPage() {
               >
                 Cancel
               </button>
+
               <button
                 className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
                 disabled={
@@ -2135,27 +1661,27 @@ export default function InventoryPage() {
                   renameNewValue.trim() === renameOldValue
                 }
                 onClick={async () => {
-                  if (
-                    !renameFieldType ||
-                    !renameOldValue ||
-                    !renameNewValue.trim()
-                  )
-                    return;
-                  setRenaming(true);
-                  const { error } = await supabase
-                    .from("inventory")
-                    .update({ [renameFieldType]: renameNewValue.trim() })
-                    .eq(renameFieldType, renameOldValue);
-                  setRenaming(false);
-
-                  if (error) toast.error(`Failed to rename: ${error.message}`);
-                  else {
+                  if (!renameFieldType || !renameOldValue || !renameNewValue.trim()) return;
+                  try {
+                    setRenaming(true);
+                    await apiJSON<{ ok: true }>("/api/inventory/rename", {
+                      method: "POST",
+                      body: JSON.stringify({
+                        field: renameFieldType,
+                        oldValue: renameOldValue,
+                        newValue: renameNewValue.trim(),
+                      }),
+                    });
                     toast.success(
                       `Renamed "${renameOldValue}" to "${renameNewValue.trim()}".`
                     );
                     setShowRenameModal(false);
                     await fetchDropdownOptions();
                     await fetchItems();
+                  } catch (e: any) {
+                    toast.error(`Failed to rename: ${e?.message || "Unknown error"}`);
+                  } finally {
+                    setRenaming(false);
                   }
                 }}
               >
