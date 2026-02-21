@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import supabase from "@/config/supabaseClient";
+// import supabase from "@/config/supabaseClient";
 import { Loader2, RefreshCcw, X, Clock } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -48,47 +48,47 @@ export default function RecentActivityLog() {
   // Fetch latest 3 activities for card
   async function fetchActivities() {
     setLoading(true);
-    const { data } = await supabase
-      .from("activity_logs")
-      .select("id, user_email, user_role, action, created_at")
-      .order("created_at", { ascending: false })
-      .limit(3);
-    setActivities(data || []);
+    // const { data } = await supabase
+    //   .from("activity_logs")
+    //   .select("id, user_email, user_role, action, created_at")
+    //   .order("created_at", { ascending: false })
+    //   .limit(3);
+    // setActivities(data || []);
     setLoading(false);
   }
 
   // Fetch latest 10 activities for modal
   async function fetchTopTen() {
     setLoadingTen(true);
-    const { data } = await supabase
-      .from("activity_logs")
-      .select("id, user_email, user_role, action, created_at")
-      .order("created_at", { ascending: false })
-      .limit(10);
-    setTopTen(data || []);
+    // const { data } = await supabase
+    //   .from("activity_logs")
+    //   .select("id, user_email, user_role, action, created_at")
+    //   .order("created_at", { ascending: false })
+    //   .limit(10);
+    // setTopTen(data || []);
     setLoadingTen(false);
   }
 
   useEffect(() => {
     fetchActivities();
-    const channel = supabase
-      .channel("public:activity_logs_dashboard")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "activity_logs" },
-        (payload) => {
-          const newRow = payload.new as Activity;
-          setActivities((prev) => {
-            const updated = [newRow, ...prev];
-            return updated.slice(0, 3);
-          });
-        }
-      )
-      .subscribe();
+    //   const channel = supabase
+    //     .channel("public:activity_logs_dashboard")
+    //     .on(
+    //       "postgres_changes",
+    //       { event: "INSERT", schema: "public", table: "activity_logs" },
+    //       (payload) => {
+    //         const newRow = payload.new as Activity;
+    //         setActivities((prev) => {
+    //           const updated = [newRow, ...prev];
+    //           return updated.slice(0, 3);
+    //         });
+    //       }
+    //     )
+    //     .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    //   return () => {
+    //     supabase.removeChannel(channel);
+    //   };
   }, []);
 
   // Modal open handler: load 10 logs
@@ -165,7 +165,7 @@ export default function RecentActivityLog() {
                   </div>
                   <span
                     className={`inline-block font-medium ${activityLabel(
-                      act.action
+                      act.action,
                     )} px-2 py-1 text-[15px] rounded-full mt-1 mb-0.5`}
                   >
                     {act.action}
@@ -247,7 +247,7 @@ export default function RecentActivityLog() {
                         </div>
                         <span
                           className={`inline-block font-medium ${activityLabel(
-                            act.action
+                            act.action,
                           )} px-2 py-0.5 text-xs rounded-full mt-1 mb-0.5`}
                         >
                           {act.action}

@@ -1,4 +1,3 @@
-// components/Cards.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -9,7 +8,7 @@ import {
   FaUserFriends,
   FaClock,
 } from "react-icons/fa";
-import supabase from "@/config/supabaseClient";
+// import supabase from "@/config/supabaseClient"; // SUPABASE (commented)
 
 /* =========================
    TYPES
@@ -20,7 +19,7 @@ type InventoryItem = {
   quantity: number;
   expiration_date?: string | null;
   stock_level?: string | null; // DB trigger-calculated level
-  status?: string | null;      // fallback if stock_level is null
+  status?: string | null; // fallback if stock_level is null
 };
 type Delivery = { id: number; destination: string; status?: string | null };
 type Customer = { id: number; name: string; customer_type?: string | null };
@@ -61,181 +60,191 @@ function getMonthlyStartISO(): string {
 const Cards: React.FC = () => {
   const [totalSales, setTotalSales] = useState<number | null>(null);
   const [atRiskItems, setAtRiskItems] = useState<InventoryItem[] | null>(null);
-  const [ongoingDeliveries, setOngoingDeliveries] = useState<Delivery[] | null>(null);
-  const [existingCustomers, setExistingCustomers] = useState<Customer[] | null>(null);
+  const [ongoingDeliveries, setOngoingDeliveries] = useState<Delivery[] | null>(
+    null,
+  );
+  const [existingCustomers, setExistingCustomers] = useState<Customer[] | null>(
+    null,
+  );
 
   // Expiring within 30 days
-  const [expiringSoon, setExpiringSoon] = useState<InventoryItem[] | null>(null);
+  const [expiringSoon, setExpiringSoon] = useState<InventoryItem[] | null>(
+    null,
+  );
 
   const [movingProducts, setMovingProducts] = useState<MovingProduct[]>([]);
   const [modal, setModal] = useState<ModalType>(null);
 
   const monthlyStartISO = useMemo(() => getMonthlyStartISO(), []);
 
-  /* -------------------- Loaders -------------------- */
-  async function loadTotalSales() {
-    const { data, error } = await supabase
-      .from("payments")
-      .select("amount, status, received_at")
-      .eq("status", "received")
-      .not("received_at", "is", null)
-      .gte("received_at", monthlyStartISO);
+  /* -------------------- Loaders (SUPABASE) -------------------- */
+  // async function loadTotalSales() {
+  //   const { data, error } = await supabase
+  //     .from("payments")
+  //     .select("amount, status, received_at")
+  //     .eq("status", "received")
+  //     .not("received_at", "is", null)
+  //     .gte("received_at", monthlyStartISO);
+  //
+  //   if (error) {
+  //     console.error("TotalSales load error:", error);
+  //     setTotalSales(0);
+  //     return;
+  //   }
+  //   const sum =
+  //     (data ?? []).reduce(
+  //       (acc: number, r: any) => acc + (Number(r.amount) || 0),
+  //       0
+  //     ) || 0;
+  //   setTotalSales(sum);
+  // }
 
-    if (error) {
-      console.error("TotalSales load error:", error);
-      setTotalSales(0);
-      return;
-    }
-    const sum =
-      (data ?? []).reduce((acc: number, r: any) => acc + (Number(r.amount) || 0), 0) || 0;
-    setTotalSales(sum);
-  }
+  // async function loadLists() {
+  //   try {
+  //     const [invRes, delivRes, custRes] = await Promise.all([
+  //       supabase
+  //         .from("inventory")
+  //         .select("id, product_name, quantity, expiration_date, stock_level, status")
+  //         .order("product_name", { ascending: true }),
+  //       supabase
+  //         .from("truck_deliveries")
+  //         .select("id, destination, status")
+  //         .eq("status", "To Ship")
+  //         .order("destination", { ascending: true }),
+  //       supabase
+  //         .from("customers")
+  //         .select("id, name, customer_type")
+  //         .eq("customer_type", "Existing Customer")
+  //         .order("name", { ascending: true }),
+  //     ]);
+  //
+  //     if (!invRes.error && invRes.data) {
+  //       const LOW_SET = new Set(["Low", "Critical", "Out of Stock"]);
+  //       const atRisk = (invRes.data as InventoryItem[]).filter((i) => {
+  //         const lvl = (i.stock_level || i.status || "").trim();
+  //         const isZero = (i.quantity || 0) === 0;
+  //         return LOW_SET.has(lvl) || isZero;
+  //       });
+  //       setAtRiskItems(atRisk);
+  //
+  //       const DAYS_AHEAD = 30;
+  //       const start = new Date();
+  //       start.setHours(0, 0, 0, 0);
+  //       const end = new Date(Date.now() + DAYS_AHEAD * 86400000);
+  //       end.setHours(23, 59, 59, 999);
+  //
+  //       setExpiringSoon(
+  //         (invRes.data as InventoryItem[]).filter((i) => {
+  //           if (!i.expiration_date) return false;
+  //           const exp = new Date(i.expiration_date);
+  //           exp.setHours(0, 0, 0, 0);
+  //           return exp >= start && exp <= end;
+  //         })
+  //       );
+  //     }
+  //
+  //     if (!delivRes.error && delivRes.data)
+  //       setOngoingDeliveries(delivRes.data as Delivery[]);
+  //
+  //     if (!custRes.error && custRes.data) {
+  //       const seen = new Set<string>();
+  //       const unique = (custRes.data as Customer[]).filter((c) => {
+  //         if (seen.has(c.name)) return false;
+  //         seen.add(c.name);
+  //         return true;
+  //       });
+  //       setExistingCustomers(unique);
+  //     }
+  //   } catch (e) {
+  //     console.error("Cards list fetch error:", e);
+  //   }
+  // }
 
-  async function loadLists() {
-    try {
-      const [invRes, delivRes, custRes] = await Promise.all([
-        supabase
-          .from("inventory")
-          .select("id, product_name, quantity, expiration_date, stock_level, status")
-          .order("product_name", { ascending: true }),
-        supabase
-          .from("truck_deliveries")
-          .select("id, destination, status")
-          .eq("status", "To Ship")
-          .order("destination", { ascending: true }),
-        supabase
-          .from("customers")
-          .select("id, name, customer_type")
-          .eq("customer_type", "Existing Customer")
-          .order("name", { ascending: true }),
-      ]);
+  // async function loadMovingProducts() {
+  //   const { data, error } = await supabase
+  //     .from("v_fast_moving_products")
+  //     .select("*")
+  //     .order("units_90d", { ascending: false });
+  //   if (error) {
+  //     console.error("Moving products load error:", error);
+  //     setMovingProducts([]);
+  //     return;
+  //   }
+  //   setMovingProducts((data as MovingProduct[]) ?? []);
+  // }
 
-      if (!invRes.error && invRes.data) {
-        // Low / Critical / Out-of-Stock OR zero qty
-        const LOW_SET = new Set(["Low", "Critical", "Out of Stock"]);
-        const atRisk = (invRes.data as InventoryItem[]).filter((i) => {
-          const lvl = (i.stock_level || i.status || "").trim();
-          const isZero = (i.quantity || 0) === 0;
-          return LOW_SET.has(lvl) || isZero;
-        });
-        setAtRiskItems(atRisk);
-
-        // Expiring in the next 30 days (inclusive)
-        const DAYS_AHEAD = 30;
-        const start = new Date();
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(Date.now() + DAYS_AHEAD * 86400000);
-        end.setHours(23, 59, 59, 999);
-
-        setExpiringSoon(
-          (invRes.data as InventoryItem[]).filter((i) => {
-            if (!i.expiration_date) return false;
-            const exp = new Date(i.expiration_date);
-            exp.setHours(0, 0, 0, 0);
-            return exp >= start && exp <= end;
-          })
-        );
-      }
-
-      if (!delivRes.error && delivRes.data)
-        setOngoingDeliveries(delivRes.data as Delivery[]);
-
-      if (!custRes.error && custRes.data) {
-        // dedupe by name
-        const seen = new Set<string>();
-        const unique = (custRes.data as Customer[]).filter((c) => {
-          if (seen.has(c.name)) return false;
-          seen.add(c.name);
-          return true;
-        });
-        setExistingCustomers(unique);
-      }
-    } catch (e) {
-      console.error("Cards list fetch error:", e);
-    }
-  }
-
-  async function loadMovingProducts() {
-    const { data, error } = await supabase
-      .from("v_fast_moving_products")
-      .select("*")
-      .order("units_90d", { ascending: false });
-    if (error) {
-      console.error("Moving products load error:", error);
-      setMovingProducts([]);
-      return;
-    }
-    setMovingProducts((data as MovingProduct[]) ?? []);
-  }
-
-  /* -------------------- Initial load -------------------- */
+  /* -------------------- Initial load (TEMP FALLBACK) -------------------- */
   useEffect(() => {
-    loadTotalSales();
-    loadLists();
-    loadMovingProducts();
+    // While Supabase is removed, keep dashboard usable:
+    setTotalSales(0);
+    setAtRiskItems([]);
+    setOngoingDeliveries([]);
+    setExistingCustomers([]);
+    setExpiringSoon([]);
+    setMovingProducts([]);
   }, [monthlyStartISO]);
 
-  /* ----- Realtime refresh: payments totals ----- */
-  useEffect(() => {
-    const ch = supabase.channel("cards-payments-rt");
-    ch.on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "payments" },
-      (payload: any) => {
-        const statusOf = (row: any): string =>
-          typeof row?.status === "string" ? row.status.toLowerCase() : "";
-        const newStatus = statusOf(payload.new);
-        const oldStatus = statusOf(payload.old);
-        if (
-          payload.eventType === "INSERT" ||
-          payload.eventType === "DELETE" ||
-          newStatus === "received" ||
-          oldStatus === "received"
-        ) {
-          loadTotalSales();
-        }
-      }
-    );
-    ch.subscribe();
-    return () => {
-      supabase.removeChannel(ch);
-    };
-  }, [monthlyStartISO]);
+  /* ----- Realtime refresh (SUPABASE) — COMMENTED ----- */
+  // useEffect(() => {
+  //   const ch = supabase.channel("cards-payments-rt");
+  //   ch.on(
+  //     "postgres_changes",
+  //     { event: "*", schema: "public", table: "payments" },
+  //     (payload: any) => {
+  //       const statusOf = (row: any): string =>
+  //         typeof row?.status === "string" ? row.status.toLowerCase() : "";
+  //       const newStatus = statusOf(payload.new);
+  //       const oldStatus = statusOf(payload.old);
+  //       if (
+  //         payload.eventType === "INSERT" ||
+  //         payload.eventType === "DELETE" ||
+  //         newStatus === "received" ||
+  //         oldStatus === "received"
+  //       ) {
+  //         loadTotalSales();
+  //       }
+  //     }
+  //   );
+  //   ch.subscribe();
+  //   return () => {
+  //     supabase.removeChannel(ch);
+  //   };
+  // }, [monthlyStartISO]);
 
-  /* ----- Realtime refresh: deliveries & inventory ----- */
-  useEffect(() => {
-    const chDel = supabase.channel("cards-deliveries-rt");
-    chDel.on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "truck_deliveries" },
-      (payload: any) => {
-        const statusNew = payload?.new?.status as string | undefined;
-        const statusOld = payload?.old?.status as string | undefined;
-        if (
-          statusNew === "To Ship" ||
-          statusOld === "To Ship" ||
-          payload.eventType === "INSERT" ||
-          payload.eventType === "DELETE"
-        ) {
-          loadLists();
-        }
-      }
-    );
-    chDel.subscribe();
-
-    const chInv = supabase.channel("cards-inventory-rt");
-    chInv.on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "inventory" },
-      () => loadLists()
-    );
-    chInv.subscribe();
-
-    return () => {
-      supabase.removeChannel(chDel);
-      supabase.removeChannel(chInv);
-    };
-  }, []);
+  // useEffect(() => {
+  //   const chDel = supabase.channel("cards-deliveries-rt");
+  //   chDel.on(
+  //     "postgres_changes",
+  //     { event: "*", schema: "public", table: "truck_deliveries" },
+  //     (payload: any) => {
+  //       const statusNew = payload?.new?.status as string | undefined;
+  //       const statusOld = payload?.old?.status as string | undefined;
+  //       if (
+  //         statusNew === "To Ship" ||
+  //         statusOld === "To Ship" ||
+  //         payload.eventType === "INSERT" ||
+  //         payload.eventType === "DELETE"
+  //       ) {
+  //         loadLists();
+  //       }
+  //     }
+  //   );
+  //   chDel.subscribe();
+  //
+  //   const chInv = supabase.channel("cards-inventory-rt");
+  //   chInv.on(
+  //     "postgres_changes",
+  //     { event: "*", schema: "public", table: "inventory" },
+  //     () => loadLists()
+  //   );
+  //   chInv.subscribe();
+  //
+  //   return () => {
+  //     supabase.removeChannel(chDel);
+  //     supabase.removeChannel(chInv);
+  //   };
+  // }, []);
+  /* -------------------------------------------------- */
 
   /* -------------------- Helpers -------------------- */
   const currencyPH = (val: number | null) =>
@@ -268,7 +277,9 @@ const Cards: React.FC = () => {
         <div className="bg-white p-5 rounded-xl shadow-sm flex items-start gap-4 overflow-hidden">
           <FaDollarSign className="text-3xl text-green-600 mt-1" />
           <div className="leading-tight">
-            <div className="font-semibold text-base md:text-lg">Total Sales</div>
+            <div className="font-semibold text-base md:text-lg">
+              Total Sales
+            </div>
             <div className="text-sm md:text-base text-gray-600">
               {currencyPH(totalSales)}
             </div>
@@ -293,7 +304,9 @@ const Cards: React.FC = () => {
               </div>
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
+          <div className="text-xs md:text-sm text-gray-400">
+            Click to view details
+          </div>
         </div>
 
         {/* Ongoing Deliveries */}
@@ -301,15 +314,23 @@ const Cards: React.FC = () => {
           <div className="flex items-center gap-4 mb-2">
             <FaTruck className="text-3xl text-yellow-600" />
             <div className="leading-tight">
-              <div className="font-semibold text-base md:text-lg">Ongoing Deliveries</div>
+              <div className="font-semibold text-base md:text-lg">
+                Ongoing Deliveries
+              </div>
               <div className="text-sm md:text-base text-gray-600">
                 {ongoingDeliveries === null
                   ? "Loading…"
-                  : pluralize(ongoingDeliveries.length, "delivery", "deliveries")}
+                  : pluralize(
+                      ongoingDeliveries.length,
+                      "delivery",
+                      "deliveries",
+                    )}
               </div>
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
+          <div className="text-xs md:text-sm text-gray-400">
+            Click to view details
+          </div>
         </div>
 
         {/* Existing Customers */}
@@ -317,15 +338,23 @@ const Cards: React.FC = () => {
           <div className="flex items-center gap-4 mb-2">
             <FaUserFriends className="text-3xl text-[#ffba20]" />
             <div className="leading-tight">
-              <div className="font-semibold text-base md:text-lg">Existing Customers</div>
+              <div className="font-semibold text-base md:text-lg">
+                Existing Customers
+              </div>
               <div className="text-sm md:text-base text-gray-600">
                 {existingCustomers === null
                   ? "Loading…"
-                  : pluralize(existingCustomers.length, "customer", "customers")}
+                  : pluralize(
+                      existingCustomers.length,
+                      "customer",
+                      "customers",
+                    )}
               </div>
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
+          <div className="text-xs md:text-sm text-gray-400">
+            Click to view details
+          </div>
         </div>
 
         {/* Expiring Soon (30 days) */}
@@ -333,7 +362,9 @@ const Cards: React.FC = () => {
           <div className="flex items-center gap-4 mb-2">
             <FaClock className="text-3xl text-yellow-500" />
             <div className="leading-tight">
-              <div className="font-semibold text-base md:text-lg">Expiring Items</div>
+              <div className="font-semibold text-base md:text-lg">
+                Expiring Items
+              </div>
               <div className="text-sm md:text-base text-gray-600">
                 {Array.isArray(expiringSoon)
                   ? pluralize(expiringSoon.length, "item", "items")
@@ -342,7 +373,9 @@ const Cards: React.FC = () => {
               <div className="text-xs md:text-sm text-gray-400">(30 days)</div>
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-400">Click to view details</div>
+          <div className="text-xs md:text-sm text-gray-400">
+            Click to view details
+          </div>
         </div>
 
         {/* Moving Products Report */}
@@ -350,22 +383,29 @@ const Cards: React.FC = () => {
           <div className="flex items-center gap-4 mb-2">
             <FaTruck className="text-3xl text-blue-600" />
             <div className="leading-tight">
-              <div className="font-semibold text-base md:text-lg">Moving Products</div>
+              <div className="font-semibold text-base md:text-lg">
+                Moving Products
+              </div>
               {movingProducts.length > 0 ? (
                 <>
                   <div className="text-sm md:text-base text-gray-600 font-semibold truncate">
                     {movingProducts[0].product_name}
                   </div>
                   <div className="text-xs md:text-sm text-gray-500">
-                    Sold (90d): <b>{movingProducts[0].units_90d.toLocaleString()}</b>
+                    Sold (90d):{" "}
+                    <b>{movingProducts[0].units_90d.toLocaleString()}</b>
                   </div>
                 </>
               ) : (
-                <div className="text-sm md:text-base text-gray-600">No data</div>
+                <div className="text-sm md:text-base text-gray-600">
+                  No data
+                </div>
               )}
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-400">Click to view report</div>
+          <div className="text-xs md:text-sm text-gray-400">
+            Click to view report
+          </div>
         </div>
       </div>
 
@@ -403,14 +443,17 @@ const Cards: React.FC = () => {
               emptyText="No items expiring in 30 days."
               items={
                 Array.isArray(expiringSoon)
-                  ? expiringSoon.map((i) =>
-                      i.product_name +
-                      (i.expiration_date
-                        ? ` (expires ${new Date(i.expiration_date).toLocaleDateString(
-                            "en-PH",
-                            { month: "short", day: "numeric" }
-                          )})`
-                        : "")
+                  ? expiringSoon.map(
+                      (i) =>
+                        i.product_name +
+                        (i.expiration_date
+                          ? ` (expires ${new Date(
+                              i.expiration_date,
+                            ).toLocaleDateString("en-PH", {
+                              month: "short",
+                              day: "numeric",
+                            })})`
+                          : ""),
                     )
                   : []
               }
@@ -429,7 +472,9 @@ const Cards: React.FC = () => {
                     <th className="py-2 px-3 text-right">Sold (90d)</th>
                     <th className="py-2 px-3 text-right">Stock Left</th>
                     <th className="py-2 px-3 text-right">Days of Cover</th>
-                    <th className="py-2 px-3 text-right">Velocity (units/day)</th>
+                    <th className="py-2 px-3 text-right">
+                      Velocity (units/day)
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -441,9 +486,16 @@ const Cards: React.FC = () => {
                     </tr>
                   ) : (
                     movingProducts.map((prod, idx) => (
-                      <tr key={prod.id} className="border-b hover:bg-gray-50/80">
-                        <td className="py-2 px-3 font-semibold text-center">{idx + 1}</td>
-                        <td className="py-2 px-3 font-bold">{prod.product_name}</td>
+                      <tr
+                        key={prod.id}
+                        className="border-b hover:bg-gray-50/80"
+                      >
+                        <td className="py-2 px-3 font-semibold text-center">
+                          {idx + 1}
+                        </td>
+                        <td className="py-2 px-3 font-bold">
+                          {prod.product_name}
+                        </td>
                         <td className="py-2 px-3">{prod.category}</td>
                         <td className="py-2 px-3">{prod.subcategory}</td>
                         <td className="py-2 px-3 text-right">
@@ -453,7 +505,9 @@ const Cards: React.FC = () => {
                           {prod.current_stock?.toLocaleString()}
                         </td>
                         <td className="py-2 px-3 text-right">
-                          {prod.est_days_of_cover ? prod.est_days_of_cover.toFixed(1) : "-"}
+                          {prod.est_days_of_cover
+                            ? prod.est_days_of_cover.toFixed(1)
+                            : "-"}
                         </td>
                         <td className="py-2 px-3 text-right">
                           {prod.pr_units_velocity?.toFixed(2)}
@@ -464,8 +518,8 @@ const Cards: React.FC = () => {
                 </tbody>
               </table>
               <div className="text-xs text-gray-500 mt-4">
-                <b>Days of Cover</b> = Stock Left ÷ average daily sales (last 90 days).
-                Highest rows are “fast”; lowest rows are “slow”.
+                <b>Days of Cover</b> = Stock Left ÷ average daily sales (last 90
+                days). Highest rows are “fast”; lowest rows are “slow”.
               </div>
             </div>
           )}

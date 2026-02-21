@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { FaClipboardList } from "react-icons/fa";
-import supabase from "@/config/supabaseClient";
+// import supabase from "@/config/supabaseClient"; // SUPABASE (commented)
 import { X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { usePathname } from "next/navigation";
@@ -47,46 +47,63 @@ const BottomCards = () => {
     setModalOpen(false);
   }, [pathname]);
 
+  // ---------------- SUPABASE FETCH (COMMENTED) ----------------
   // Fetch 3 for card
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("orders")
-        .select(
-          `
-          id,
-          total_amount,
-          status,
-          date_created,
-          customers:customer_id ( name )
-        `
-        )
-        .order("date_created", { ascending: false })
-        .limit(3);
+  // useEffect(() => {
+  //   (async () => {
+  //     setLoading(true);
+  //     const { data, error } = await supabase
+  //       .from("orders")
+  //       .select(
+  //         `
+  //         id,
+  //         total_amount,
+  //         status,
+  //         date_created,
+  //         customers:customer_id ( name )
+  //       `
+  //       )
+  //       .order("date_created", { ascending: false })
+  //       .limit(3);
+  //
+  //     if (!error && data) setOrders(data as unknown as OrderRow[]);
+  //     setLoading(false);
+  //   })();
+  // }, []);
+  // ------------------------------------------------------------
 
-      if (!error && data) setOrders(data as unknown as OrderRow[]);
-      setLoading(false);
-    })();
+  // TEMP fallback so UI still works while Supabase is removed
+  useEffect(() => {
+    setLoading(false);
+    setOrders([]); // keep empty until MySQL API is wired
   }, []);
 
+  // ---------------- SUPABASE FETCH (COMMENTED) ----------------
   // Fetch 10 for modal
+  // async function fetchTopTen() {
+  //   setLoadingTen(true);
+  //   const { data } = await supabase
+  //     .from("orders")
+  //     .select(
+  //       `
+  //       id,
+  //       total_amount,
+  //       status,
+  //       date_created,
+  //       customers:customer_id ( name )
+  //     `
+  //     )
+  //     .order("date_created", { ascending: false })
+  //     .limit(10);
+  //   setTopTen((data as unknown as OrderRow[]) || []);
+  //   setLoadingTen(false);
+  // }
+  // ------------------------------------------------------------
+
+  // TEMP fallback modal loader (no DB yet)
   async function fetchTopTen() {
     setLoadingTen(true);
-    const { data } = await supabase
-      .from("orders")
-      .select(
-        `
-        id,
-        total_amount,
-        status,
-        date_created,
-        customers:customer_id ( name )
-      `
-      )
-      .order("date_created", { ascending: false })
-      .limit(10);
-    setTopTen(data as unknown as OrderRow[] || []);
+    setTopTen([]); // empty until MySQL API is wired
     setLoadingTen(false);
   }
 
@@ -114,14 +131,19 @@ const BottomCards = () => {
         title="Click to view more recent orders"
         onClick={handleOpenModal}
         tabIndex={0}
-        onKeyDown={e => { if (e.key === "Enter") handleOpenModal(); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleOpenModal();
+        }}
         role="button"
       >
         {/* Header: Yellow Bar */}
         <div className="flex items-center px-4 py-3 rounded-t-2xl bg-[#FFBA20]">
           <FaClipboardList className="text-2xl text-[#001E80] mr-2" />
-          <span className="font-bold text-lg text-[#181918]">Recent Orders</span>
+          <span className="font-bold text-lg text-[#181918]">
+            Recent Orders
+          </span>
         </div>
+
         {/* Card Body */}
         <div className="flex-1 px-6 py-4">
           {loading ? (
@@ -147,10 +169,11 @@ const BottomCards = () => {
                       })}
                     </p>
                   </div>
+
                   <div className="flex items-center gap-2 shrink-0">
                     <span
                       className={`px-2 py-0.5 rounded-full text-xs ${statusColor(
-                        o.status
+                        o.status,
                       )}`}
                     >
                       {o.status}
@@ -163,6 +186,7 @@ const BottomCards = () => {
               ))}
             </ul>
           )}
+
           <span className="text-xs text-center text-gray-400 mt-3 pointer-events-none">
             Click card to view more
           </span>
@@ -186,9 +210,11 @@ const BottomCards = () => {
               transition={{ type: "spring", bounce: 0.2, duration: 0.33 }}
             >
               {/* Modal Header: Yellow Bar */}
-               <div className="flex items-center px-4 py-3 rounded-t-2xl bg-[#FFBA20]">
+              <div className="flex items-center px-4 py-3 rounded-t-2xl bg-[#FFBA20]">
                 <FaClipboardList className="text-2xl text-[#001E80] mr-2" />
-                <span className="font-bold text-lg text-[#181918]">Recent Orders</span>
+                <span className="font-bold text-lg text-[#181918]">
+                  Recent Orders
+                </span>
                 <button
                   className="ml-auto text-gray-500 hover:text-yellow-600 transition"
                   onClick={() => setModalOpen(false)}
@@ -197,11 +223,15 @@ const BottomCards = () => {
                   <X size={22} />
                 </button>
               </div>
+
               {/* Modal Body */}
               <div className="px-6 py-5">
                 {loadingTen ? (
                   <div className="flex flex-col items-center justify-center h-[80px]">
-                    <svg className="animate-spin h-6 w-6 text-gray-400" viewBox="0 0 24 24">
+                    <svg
+                      className="animate-spin h-6 w-6 text-gray-400"
+                      viewBox="0 0 24 24"
+                    >
                       <circle
                         className="opacity-25"
                         cx="12"
@@ -219,7 +249,9 @@ const BottomCards = () => {
                     </svg>
                   </div>
                 ) : topTen.length === 0 ? (
-                  <p className="text-gray-400 text-sm mt-2">No recent orders.</p>
+                  <p className="text-gray-400 text-sm mt-2">
+                    No recent orders.
+                  </p>
                 ) : (
                   <ul className="divide-y divide-gray-100 max-h-[400px] overflow-y-auto">
                     {topTen.map((o) => (
@@ -242,7 +274,7 @@ const BottomCards = () => {
                         <div className="flex items-center gap-2 shrink-0">
                           <span
                             className={`px-2 py-0.5 rounded-full text-xs ${statusColor(
-                              o.status
+                              o.status,
                             )}`}
                           >
                             {o.status}

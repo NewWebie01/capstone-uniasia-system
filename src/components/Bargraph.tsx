@@ -13,7 +13,7 @@ import {
   Cell,
 } from "recharts";
 import { TrendingUp } from "lucide-react";
-import supabase from "@/config/supabaseClient";
+// import supabase from "@/config/supabaseClient";
 
 import {
   Card,
@@ -24,8 +24,7 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 
-import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
-
+// import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
 type ChartPoint = {
   label: string;
@@ -96,7 +95,10 @@ const Bargraph: React.FC = () => {
         const monday = getMonday(anchor);
         const key = monday.toISOString().slice(0, 10);
         const weekNum = Math.ceil(
-          ((monday.getTime() - new Date(monday.getFullYear(), 0, 1).getTime()) / 86400000 + 1) / 7
+          ((monday.getTime() - new Date(monday.getFullYear(), 0, 1).getTime()) /
+            86400000 +
+            1) /
+            7,
         );
         buckets[key] = 0;
         timeline.push({ key, label: `W${weekNum}` });
@@ -114,7 +116,10 @@ const Bargraph: React.FC = () => {
       let dt = new Date(startOfYear);
       while (dt <= now) {
         const key = dt.toISOString().slice(0, 10);
-        const label = dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        const label = dt.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        });
         buckets[key] = 0;
         timeline.push({ key, label });
         dt.setDate(dt.getDate() + 1);
@@ -140,26 +145,29 @@ const Bargraph: React.FC = () => {
       period === "Daily"
         ? startKey
         : period === "Weekly"
-        ? startKey
-        : period === "Monthly"
-        ? `${startKey}-01`
-        : period === "YTD"
-        ? startKey
-        : `${startKey}-01-01`;
+          ? startKey
+          : period === "Monthly"
+            ? `${startKey}-01`
+            : period === "YTD"
+              ? startKey
+              : `${startKey}-01-01`;
 
-    // ===== Pull RECEIVED payments only =====
-    const { data: pays, error } = await supabase
-      .from("payments")
-      .select("received_at, amount, status")
-      .eq("status", "received")
-      .not("received_at", "is", null)
-      .gte("received_at", startDate);
+    // ===== Pull RECEIVED payments only (Supabase) =====
+    // const { data: pays, error } = await supabase
+    //   .from("payments")
+    //   .select("received_at, amount, status")
+    //   .eq("status", "received")
+    //   .not("received_at", "is", null)
+    //   .gte("received_at", startDate);
 
-    if (error) {
-      console.error("Error loading payments:", error);
-      setData(timeline.map(({ key, label }) => ({ label, total: 0 })));
-      return;
-    }
+    // if (error) {
+    //   console.error("Error loading payments:", error);
+    //   setData(timeline.map(({ key, label }) => ({ label, total: 0 })));
+    //   return;
+    // }
+
+    // TEMP (no DB yet): empty payments
+    const pays: any[] = [];
 
     // Sum into buckets by period using received_at
     (pays ?? []).forEach((row: any) => {
@@ -189,37 +197,36 @@ const Bargraph: React.FC = () => {
     load();
   }, [period, load]);
 
-  // Realtime refresh whenever a payment becomes/was/ceases to be "received"
-useEffect(() => {
-  const ch = supabase.channel("bargraph-payments-rt");
+  // Realtime refresh (Supabase)
+  // useEffect(() => {
+  //   const ch = supabase.channel("bargraph-payments-rt");
 
-  ch.on(
-    "postgres_changes",
-    { event: "*", schema: "public", table: "payments" },
-    (payload: RealtimePostgresChangesPayload<any>) => {
-      const statusOf = (row: any): string =>
-        typeof row?.status === "string" ? row.status.toLowerCase() : "";
+  //   ch.on(
+  //     "postgres_changes",
+  //     { event: "*", schema: "public", table: "payments" },
+  //     (payload: RealtimePostgresChangesPayload<any>) => {
+  //       const statusOf = (row: any): string =>
+  //         typeof row?.status === "string" ? row.status.toLowerCase() : "";
 
-      const newStatus = statusOf(payload.new);
-      const oldStatus = statusOf(payload.old);
+  //       const newStatus = statusOf(payload.new);
+  //       const oldStatus = statusOf(payload.old);
 
-      if (
-        payload.eventType === "INSERT" ||
-        payload.eventType === "DELETE" ||
-        newStatus === "received" ||
-        oldStatus === "received"
-      ) {
-        load();
-      }
-    }
-  );
+  //       if (
+  //         payload.eventType === "INSERT" ||
+  //         payload.eventType === "DELETE" ||
+  //         newStatus === "received" ||
+  //         oldStatus === "received"
+  //       ) {
+  //         load();
+  //       }
+  //     },
+  //   );
 
-  ch.subscribe();
-  return () => {
-    supabase.removeChannel(ch);
-  };
-}, [load]);
-
+  //   ch.subscribe();
+  //   return () => {
+  //     supabase.removeChannel(ch);
+  //   };
+  // }, [load]);
 
   // ---- Color logic for bars ----
   const values = data.map((d) => d.total);
@@ -264,7 +271,10 @@ useEffect(() => {
 
       <CardContent>
         <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={data} margin={{ top: 20, right: 20, bottom: 20, left: 60 }}>
+          <BarChart
+            data={data}
+            margin={{ top: 20, right: 20, bottom: 20, left: 60 }}
+          >
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="label" tickLine={false} axisLine={false} />
             <YAxis width={60} tickFormatter={formatPHP} />

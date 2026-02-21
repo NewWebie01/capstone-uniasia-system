@@ -11,6 +11,7 @@ import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import MenuIcon from "@/assets/menu.svg";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
+import supabase from "@/config/supabaseClient";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -18,10 +19,11 @@ const dmSans = DM_Sans({
   variable: "--font-dm-sans",
 });
 
+/** Filter out Supabase PKCE noise we don't want to show to users */
 const isNoisyPkceError = (m?: string) =>
   !!m &&
   /(both auth code and code verifier should be non-empty|invalid flow state)/i.test(
-    m ?? "",
+    m ?? ""
   );
 
 export default function LoginPage() {
@@ -37,6 +39,7 @@ export default function LoginPage() {
   const didNavigate = useRef(false);
   const [checking, setChecking] = useState(true);
 
+  // Read URL ?error / ?error_description once and clean them
   useEffect(() => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
@@ -52,18 +55,22 @@ export default function LoginPage() {
     }
   }, []);
 
+  // Prefill remembered email & warm up session
   useEffect(() => {
     let mounted = true;
+    (async () => {
+      try {
+        const savedEmail = localStorage.getItem("rememberedEmail");
+        if (savedEmail && mounted) {
+          setEmail(savedEmail);
+          setRememberMe(true);
+        }
+      } catch {}
 
-    try {
-      const savedEmail = localStorage.getItem("rememberedEmail");
-      if (savedEmail && mounted) {
-        setEmail(savedEmail);
-        setRememberMe(true);
-      }
-    } catch {}
-
-    if (mounted) setChecking(false);
+      await supabase.auth.getSession();
+      if (!mounted) return;
+      setChecking(false);
+    })();
 
     return () => {
       mounted = false;
@@ -77,54 +84,80 @@ export default function LoginPage() {
     setIsLoading(true);
     setErrorMessage("");
 
+    // 1) Password login ONLY (OTP removed)
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+
+    if (error) {
+      const msg = error.message ?? "";
+      if (!isNoisyPkceError(msg)) {
+        if (/email not confirmed/i.test(msg)) {
+          setErrorMessage("Please verify your email first, then try again.");
+        } else if (/invalid login credentials/i.test(msg)) {
+          setErrorMessage("Account not registered or wrong password.");
+        } else {
+          setErrorMessage(msg);
+        }
+      }
+      setPassword("");
+      setIsLoading(false);
+      return;
+    }
+
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password }),
-      });
-
-      const payload = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        setErrorMessage(payload?.message || "Login failed.");
-        setPassword("");
-        setIsLoading(false);
-        return;
-      }
-
-      const role = payload?.role as string | undefined;
-
-      if (!role) {
-        setErrorMessage("Access denied: No role found for this account.");
-        setIsLoading(false);
-        return;
-      }
-
       if (rememberMe) localStorage.setItem("rememberedEmail", email.trim());
       else localStorage.removeItem("rememberedEmail");
+    } catch {}
 
-      // routing
-      if (role === "admin") router.replace("/dashboard");
-      else if (role === "customer") router.replace("/customer/product-catalog");
-      else if (role === "cashier") router.replace("/sales");
-      else if (role === "warehouse") router.replace("/inventory");
-      else if (role === "trucker") router.replace("/logistics");
-      else setErrorMessage("Access denied: Role not recognized.");
-    } catch (err) {
-      setErrorMessage("Server error. Please try again.");
-    } finally {
+    // Optional: ensure session is ready
+    await supabase.auth.getSession();
+
+    const user = data?.user;
+    const role = (user?.user_metadata?.role as string | undefined) ?? undefined;
+
+    // 2) Log login activity (still keeps your activity log)
+    didNavigate.current = true;
+    supabase
+      .from("activity_logs")
+      .insert([
+        {
+          user_email: user?.email ?? null,
+          user_role: role ?? null,
+          action: "Login",
+          details: {},
+          created_at: new Date().toISOString(),
+        },
+      ])
+      .then(({ error: logError }) => {
+        if (logError) console.error("Failed to insert activity log:", logError);
+      });
+
+    // 3) Route users based on role
+    if (!role) {
+      setErrorMessage("Access denied: No role found for this account.");
+      await supabase.auth.signOut();
+      didNavigate.current = false;
+      setIsLoading(false);
+      return;
+    }
+
+    // Keep your original routing (add more roles if you want)
+    if (role === "admin") router.replace("/dashboard");
+    else if (role === "customer") router.replace("/customer/product-catalog");
+    else if (role === "cashier") router.replace("/sales");
+    else if (role === "warehouse") router.replace("/inventory");
+    else if (role === "trucker") router.replace("/logistics");
+    else {
+      setErrorMessage("Access denied: Role not recognized.");
+      await supabase.auth.signOut();
+      didNavigate.current = false;
       setIsLoading(false);
     }
   };
 
-  if (checking) {
-    return (
-      <div className="h-screen flex items-center justify-center">
-        <p className="text-sm text-gray-600">Loading…</p>
-      </div>
-    );
-  }
+  if (checking) return null;
 
   return (
     <div
@@ -162,7 +195,6 @@ export default function LoginPage() {
             <p>UNIASIA - Reliable Hardware Supplier in the Philippines</p>
           </div>
         </div>
-
         <div className="py-5">
           <div className="container">
             <div className="flex items-center justify-between relative">
@@ -339,7 +371,81 @@ export default function LoginPage() {
           />
         </div>
 
-        {/* Privacy modal (keep your existing block here) */}
+        {/* Privacy modal */}
+        <AnimatePresence>
+          {showPrivacy && (
+            <motion.div
+              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setShowPrivacy(false);
+              }}
+            >
+              <motion.div
+                initial={{ scale: 0.98, y: 40, opacity: 0 }}
+                animate={{ scale: 1, y: 0, opacity: 1 }}
+                exit={{ scale: 0.98, y: 40, opacity: 0 }}
+                className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-xl relative"
+                role="dialog"
+                aria-modal="true"
+              >
+                <button
+                  onClick={() => setShowPrivacy(false)}
+                  className="absolute top-4 right-4 text-gray-400 hover:text-gray-900 transition-colors"
+                  aria-label="Close"
+                >
+                  <span className="sr-only">Close</span>
+                  <svg
+                    width={20}
+                    height={20}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+
+                <h2 className="text-2xl font-bold mb-2 text-[#181918]">
+                  Privacy Policy
+                </h2>
+                <div className="text-gray-700 text-sm leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+                  <p>
+                    <b>UniAsia Hardware & Electrical Marketing Corp</b> values
+                    your privacy. We collect only the necessary information
+                    (such as email and password) to authenticate your account
+                    and provide access to our services.
+                  </p>
+                  <p>
+                    Your credentials are never shared or sold. We may use your
+                    email to communicate important account information or
+                    security alerts.
+                  </p>
+                  <p>
+                    For support or more details, contact{" "}
+                    <a
+                      href="mailto:support@uniasia.com"
+                      className="underline text-[#ffba20]"
+                    >
+                      support@uniasia.com
+                    </a>
+                    .
+                  </p>
+                  <p className="mt-2 text-xs text-gray-400">
+                    Last updated: September 2025
+                  </p>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.section>
     </div>
   );

@@ -7,7 +7,14 @@ import Logistics from "@/assets/logistics.png";
 import Sales from "@/assets/Sales.png";
 import LogoutIcon from "@/assets/power-button.png";
 
-import { Boxes, FileText, Receipt, RotateCcw, ReceiptText, BookOpen } from "lucide-react";
+import {
+  Boxes,
+  FileText,
+  Receipt,
+  RotateCcw,
+  ReceiptText,
+  BookOpen,
+} from "lucide-react";
 import { FaHistory } from "react-icons/fa";
 
 import Image, { StaticImageData } from "next/image";
@@ -16,7 +23,7 @@ import NavLink from "@/components/NavLink";
 import { usePathname } from "next/navigation";
 import React, { Dispatch, SetStateAction, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+// import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
 /* ✅ Custom icon (unique) */
 const PurchaseIcon: React.FC<{ className?: string }> = ({ className }) => (
@@ -51,7 +58,11 @@ const Menus: MenuItem[] = [
   { title: "Dashboard", src: ChartFill, href: "/dashboard" },
   { title: "Inventory", icon: Boxes, href: "/inventory" },
 
-  { title: "Purchase Products", icon: PurchaseIcon, href: "/purchase-products" },
+  {
+    title: "Purchase Products",
+    icon: PurchaseIcon,
+    href: "/purchase-products",
+  },
 
   // ✅ NEW: Cash Ledger (Company Cash Ledger)
   { title: "Cash Ledger", icon: BookOpen, href: "/reports/cash-ledger" },
@@ -86,7 +97,14 @@ const ROLE_MENUS: Record<string, string[]> = {
     "Activity Log",
     "Backup",
   ],
-  cashier: ["Sales", "Invoice", "Payments", "Returns", "Transaction History", "Cash Ledger"],
+  cashier: [
+    "Sales",
+    "Invoice",
+    "Payments",
+    "Returns",
+    "Transaction History",
+    "Cash Ledger",
+  ],
   warehouse: ["Inventory", "Purchase Products"],
   trucker: ["Truck Delivery", "Delivered"],
   supervisor: [
@@ -111,20 +129,24 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   const pathname = usePathname();
-  const supabase = createClientComponentClient();
+  // const supabase = createClientComponentClient();
   const [role, setRole] = useState<string>("");
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      const user = data?.user;
-      const userRole =
-        user?.user_metadata?.role ||
-        (user && (user as any).raw_user_meta_data?.role) ||
-        "";
-      setRole(userRole);
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!res.ok) {
+          setRole("");
+          return;
+        }
+        const data = await res.json();
+        setRole(String(data?.role || ""));
+      } catch {
+        setRole("");
+      }
     })();
-  }, [supabase]);
+  }, []);
 
   const handleLogout = async () => {
     try {
@@ -135,24 +157,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
       localStorage.removeItem("otpExpiry");
       localStorage.removeItem("otpEmail");
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: user?.email || "unknown",
-          user_role:
-            user?.user_metadata?.role ||
-            (user && (user as any).raw_user_meta_data?.role) ||
-            "unknown",
-          action: "Logout",
-          details: {},
-          created_at: new Date().toISOString(),
-        },
-      ]);
-
-      await supabase.auth.signOut();
+      // Optional: log logout in DB via API
+      await fetch("/api/auth/logout", { method: "POST" });
     } catch (err) {
       console.error("Logout failed:", err);
     } finally {
@@ -161,7 +167,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   };
 
   const filteredMenus = Menus.filter((menu) =>
-    ROLE_MENUS[role]?.includes(menu.title)
+    ROLE_MENUS[role]?.includes(menu.title),
   );
 
   return (
