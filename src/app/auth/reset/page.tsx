@@ -7,7 +7,7 @@ import { DM_Sans } from "next/font/google";
 import Logo from "@/assets/uniasia-high-resolution-logo.png";
 import { motion } from "framer-motion";
 import Image from "next/image";
-import supabase from "@/config/supabaseClient";
+// import supabase from "@/config/supabaseClient";
 import "@/styles/globals.css";
 
 const dmSans = DM_Sans({
@@ -28,31 +28,27 @@ export default function ResetPasswordPage() {
     setError("");
     setIsLoading(true);
 
-    // Figure out the correct origin:
-    // - on browser: use window.location.origin (localhost or production)
-    // - on server: fall back to NEXT_PUBLIC_SITE_URL or your live domain
-    const origin =
-      typeof window !== "undefined"
-        ? window.location.origin
-        : process.env.NEXT_PUBLIC_SITE_URL || "https://www.uniasia.shop";
+    try {
+      const res = await fetch("/api/auth/request-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
 
-    const trimmedEmail = email.trim();
+      const payload = await res.json().catch(() => ({}));
 
-    const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
-      redirectTo: `${origin}/update-password`,
-    });
-
-    if (error) {
-      console.error("resetPasswordForEmail error:", error);
-      setError(
-        "Could not send reset email. Please check your email address and try again."
-      );
+      if (!res.ok) {
+        setError(payload?.message || "Could not send reset email.");
+        setSent(false);
+      } else {
+        setSent(true);
+      }
+    } catch (err) {
+      setError("Server error. Please try again.");
       setSent(false);
-    } else {
-      setSent(true);
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   return (

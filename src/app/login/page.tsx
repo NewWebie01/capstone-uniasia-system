@@ -303,7 +303,7 @@ export default function LoginPage() {
               </motion.button>
             </form>
 
-            <p className="text-sm text-gray-600">
+            {/* <p className="text-sm text-gray-600">
               Don’t have an account?{" "}
               <button
                 type="button"
@@ -312,23 +312,23 @@ export default function LoginPage() {
               >
                 Sign Up
               </button>
-            </p>
+            </p> */}
 
             <button
               type="button"
-              onClick={() => router.push("/reset")}
+              onClick={() => router.push("/auth/reset")}
               className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mb-1"
             >
               Forgot password?
             </button>
 
-            <button
+            {/* <button
               type="button"
               onClick={() => setShowPrivacy(true)}
               className="text-xs text-gray-500 underline hover:text-[#ffba20] transition-colors mt-2"
             >
               Privacy Policy
-            </button>
+            </button> */}
           </div>
 
           <Image
