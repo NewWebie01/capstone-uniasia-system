@@ -4,10 +4,11 @@ import { pool } from "@/lib/db";
 
 export async function GET() {
   try {
-    const { rows } = await pool.query(
-      `select *
-       from inventory
-       order by date_created desc nulls last, id desc`
+    // mysql2 returns [rows, fields], so we destructure an array instead of an object
+    const [rows] = await pool.query(
+      `SELECT *
+       FROM inventory
+       ORDER BY date_created DESC, id DESC`
     );
     return NextResponse.json({ items: rows });
   } catch (e: any) {
@@ -23,8 +24,6 @@ export async function POST(req: Request) {
     const b = await req.json();
     const item = b?.item || {};
 
-    // NOTE: This assumes your inventory table columns match these names.
-    // If your local schema is missing some columns, tell me the columns and I’ll adjust fast.
     const cols = [
       "sku",
       "product_name",
@@ -48,16 +47,18 @@ export async function POST(req: Request) {
       "expiration_date",
       "ceiling_qty",
       "stock_level",
+      "min_order_qty"
     ];
 
     const values = cols.map((c) => item[c] ?? null);
 
-    const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
+    // MySQL uses '?' for placeholders instead of '$1, $2'
+    const placeholders = cols.map(() => "?").join(", ");
     const colList = cols.join(", ");
 
     await pool.query(
-      `insert into inventory (${colList})
-       values (${placeholders})`,
+      `INSERT INTO inventory (${colList})
+       VALUES (${placeholders})`,
       values
     );
 

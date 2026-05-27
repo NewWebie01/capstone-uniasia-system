@@ -1,11 +1,9 @@
-// src/app/sales/page.tsx
+// src/app/(admin)/sales/page.tsx
 "use client";
 
 import { Suspense } from "react";
 import { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { RealtimeChannel } from "@supabase/supabase-js";
-import supabase from "@/config/supabaseClient";
 import PageLoader from "@/components/PageLoader";
 import { toast } from "sonner";
 import { on, off } from "@/utils/eventEmitter";
@@ -36,10 +34,7 @@ type InventoryItem = {
   subcategory: string;
   unit: string;
   quantity: number;
-
-  // ✅ Keep in data (needed elsewhere), but we will HIDE it in the inventory table UI
   unit_price: number;
-
   cost_price?: number | null;
   amount: number;
   profit?: number | null;
@@ -81,11 +76,11 @@ type OrderWithDetails = {
     order_count?: number;
   };
   order_items: {
-    id: any; // ✅ order_items.id (uuid or int) — kept flexible
+    id: any; 
     quantity: number;
     price: number;
     discount_percent?: number | null;
-    remarks?: string | null; // ✅ receipt notes
+    remarks?: string | null; 
     inventory: {
       id: number;
       sku: string;
@@ -103,9 +98,6 @@ type OrderWithDetails = {
 
 type PickingOrder = { orderId: string; status: "accepted" | "rejected" };
 
-/* ===== Sorting keys for inventory (including virtual "total") =====
-   ✅ REMOVED "unit_price" (hidden in the inventory table)
-*/
 type InvSortKey =
   | "sku"
   | "product_name"
@@ -118,46 +110,35 @@ type InvSortKey =
 
 /* =========================
    RECEIPT-LIKE SALES ORDER
-   ✅ Must be OUTSIDE SalesPageContent to prevent remount + cursor loss
 ========================= */
 function ReceiptLikeSalesOrder({
   selectedOrder,
   poNumber,
   setPoNumber,
   processor,
-
   repName,
   setRepName,
-
   localForwarder,
   setLocalForwarder,
   commitForwarder,
-
   numberOfTerms,
   isSalesTaxOn,
   setIsSalesTaxOn,
-
   editedQuantities,
   editedDiscounts,
   setEditedDiscounts,
-
   fieldErrors,
   setFieldErrors,
-
   subtotalBeforeDiscount,
   totalDiscount,
   salesTaxValue,
   displayAmountDue,
-
-  // receipt Notes (Edit Receipt logic)
   receiptEditMode,
   setReceiptEditMode,
   savingReceiptNotes,
   editedReceiptNotes,
   setEditedReceiptNotes,
   saveReceiptNotes,
-
-  //REMOVABLE ROWS
   setEditedQuantities,
   removedLines,
   setRemovedLines,
@@ -165,9 +146,7 @@ function ReceiptLikeSalesOrder({
   const safe = (v: any) =>
     v === null || v === undefined || v === "" ? "—" : v;
 
-  // longer table for big orders
   const PRINT_ROWS = 30;
-
   const its = selectedOrder?.order_items || [];
   const rows = Array.from(
     { length: Math.max(PRINT_ROWS, its.length) },
@@ -179,15 +158,8 @@ function ReceiptLikeSalesOrder({
       ? `Net ${numberOfTerms} Monthly`
       : safe(selectedOrder?.customers?.payment_type);
 
-  // ✅ Column widths (no notes column)
   const colWidths = [
-    "52px", // QTY
-    "52px", // UNIT
-    "56%", // ITEM DESCRIPTION
-    "86px", // UNIT PRICE
-    "110px", // DISCOUNT (%)
-    "92px", // AMOUNT
-    "92px", // TOTAL
+    "52px", "52px", "56%", "86px", "110px", "92px", "92px",
   ];
 
   return (
@@ -207,8 +179,6 @@ function ReceiptLikeSalesOrder({
         {/* HEADER */}
         <div className="relative text-center">
           <div className="text-[30px] font-bold tracking-wide">SALES ORDER</div>
-
-          {/* ✅ TOP-RIGHT Edit Receipt controls */}
           <div className="no-print absolute right-0 top-0 flex items-center gap-2">
             {!receiptEditMode ? (
               <button
@@ -329,7 +299,6 @@ function ReceiptLikeSalesOrder({
                 </div>
               </div>
 
-              {/* ✅ A) Blank + editable input */}
               <div className="flex items-end gap-2">
                 <span className="min-w-[70px]">Salesman:</span>
                 <div className="flex-1 border-b border-black pb-[2px]">
@@ -352,8 +321,8 @@ function ReceiptLikeSalesOrder({
           </div>
 
           <div className="text-[11px] opacity-80">
-            Processed By: <b>{processor?.name || "Unknown"}</b> (
-            {processor?.email || "—"})
+            Processed By: <b>{processor?.name || "Local Admin"}</b> (
+            {processor?.email || "admin@uniasia.local"})
           </div>
         </div>
 
@@ -368,27 +337,13 @@ function ReceiptLikeSalesOrder({
 
             <thead className="text-[12px]">
               <tr className="border-b border-black">
-                <th className="border-r border-black px-2 py-1 text-left">
-                  QTY
-                </th>
-                <th className="border-r border-black px-2 py-1 text-left">
-                  UNIT
-                </th>
-                <th className="border-r border-black px-2 py-1 text-left">
-                  ITEM DESCRIPTION
-                </th>
-                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">
-                  UNIT PRICE
-                </th>
-                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">
-                  DISCOUNT (%)
-                </th>
-                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">
-                  AMOUNT
-                </th>
-                <th className="px-2 py-1 text-right whitespace-nowrap">
-                  TOTAL
-                </th>
+                <th className="border-r border-black px-2 py-1 text-left">QTY</th>
+                <th className="border-r border-black px-2 py-1 text-left">UNIT</th>
+                <th className="border-r border-black px-2 py-1 text-left">ITEM DESCRIPTION</th>
+                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">UNIT PRICE</th>
+                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">DISCOUNT (%)</th>
+                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">AMOUNT</th>
+                <th className="px-2 py-1 text-right whitespace-nowrap">TOTAL</th>
               </tr>
             </thead>
 
@@ -408,12 +363,9 @@ function ReceiptLikeSalesOrder({
                   );
                 }
 
-                //REMOVABLE ROW
                 const isRemoved = !!removedLines?.[idx];
                 const orderedQty = Number(row.quantity || 0);
                 const inStock = Number(row.inventory?.quantity || 0);
-
-                //const qty = editedQuantities[idx] ?? row.quantity; // locked
                 const qty = isRemoved ? 0 : editedQuantities[idx] ?? orderedQty;
                 const unit = row.inventory?.unit || "—";
                 const desc = row.inventory?.product_name || "—";
@@ -423,7 +375,6 @@ function ReceiptLikeSalesOrder({
                 const pct = Math.max(0, Math.min(100, Number(rawPct) || 0));
                 const lineAmount = qty * unitPrice * (1 - pct / 100);
 
-                // ✅ notes/remarks key per order_items.id
                 const rowId = String(row.id);
                 const noteValue =
                   (editedReceiptNotes && editedReceiptNotes[rowId] !== undefined
@@ -448,21 +399,15 @@ function ReceiptLikeSalesOrder({
                           onChange={(e) => {
                             const raw = Number(e.target.value);
                             const next = Number.isFinite(raw) ? raw : 0;
-
-                            // ✅ clamp to stock (prevents exceeding)
                             const clamped = Math.max(
                               0,
                               Math.min(next, inStock)
                             );
-
-                            // ✅ update edited quantities
                             setEditedQuantities((prev: number[]) => {
                               const arr = [...(prev || [])];
                               arr[idx] = clamped;
                               return arr;
                             });
-
-                            // ✅ auto-mark removed if qty becomes 0
                             setRemovedLines((prev: boolean[]) => {
                               const arr = [...(prev || [])];
                               arr[idx] = clamped === 0;
@@ -471,8 +416,6 @@ function ReceiptLikeSalesOrder({
                           }}
                           className="w-[52px] bg-transparent outline-none text-left tabular-nums border-b border-black"
                         />
-
-                        {/* ✅ Remove/Undo buttons (won’t print if you have .no-print css) */}
                         <div className="no-print flex justify-center">
                           {!isRemoved ? (
                             <button
@@ -524,8 +467,6 @@ function ReceiptLikeSalesOrder({
 
                     <td className="border-r border-black px-2 py-1">
                       <div className="font-medium leading-tight">{desc}</div>
-
-                      {/* ✅ Receipt Notes (Edit Receipt logic) */}
                       <div className="mt-1">
                         {receiptEditMode ? (
                           <input
@@ -553,7 +494,6 @@ function ReceiptLikeSalesOrder({
                       {peso(unitPrice)}
                     </td>
 
-                    {/* clean discount input */}
                     <td className="border-r border-black px-2 py-1 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <input
@@ -637,7 +577,6 @@ function ReceiptLikeSalesOrder({
           </div>
         </div>
 
-        {/* tax toggle small */}
         <div className="no-print mt-2 flex items-center gap-2 text-[12px]">
           <input
             type="checkbox"
@@ -667,24 +606,18 @@ function SalesPageContent() {
   const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
 
-  // quantities are locked to ordered values; discounts are editable
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
-
-  // remove rows from orders
   const [removedLines, setRemovedLines] = useState<boolean[]>([]);
-
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
 
-  // Terms/Interest
   const [numberOfTerms, setNumberOfTerms] = useState(1);
   const [interestPercent, setInterestPercent] = useState(0);
 
-  // Sales order meta
   const [poNumber, setPoNumber] = useState("");
-  const [repName, setRepName] = useState(""); // ✅ now blank + editable
+  const [repName, setRepName] = useState(""); 
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
@@ -694,10 +627,8 @@ function SalesPageContent() {
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [forwarder, setForwarder] = useState("");
 
-  // ✅ FIX: local input state for Forwarder (prevents jumpy blur behavior)
   const [localForwarder, setLocalForwarder] = useState("");
 
-  // ✅ Receipt notes (Edit Receipt logic like Invoice)
   const [receiptEditMode, setReceiptEditMode] = useState(false);
   const [savingReceiptNotes, setSavingReceiptNotes] = useState(false);
   const [editedReceiptNotes, setEditedReceiptNotes] = useState<
@@ -710,7 +641,6 @@ function SalesPageContent() {
 
   const commitForwarder = (v: string) => setForwarder(v);
 
-  // Activity Logs Modal state (API kept for continuity – UI not rendered here)
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
@@ -719,51 +649,26 @@ function SalesPageContent() {
   type Processor = { name: string; email: string; role: string | null };
   const [processor, setProcessor] = useState<Processor | null>(null);
 
-  /* ===== Inventory sorting & pagination state ===== */
   const [invSortKey, setInvSortKey] = useState<InvSortKey>("product_name");
   const [invSortDir, setInvSortDir] = useState<"asc" | "desc">("asc");
   const INV_ROWS_PER_PAGE = 10;
   const [invPage, setInvPage] = useState(1);
 
-  // Keep only letters & spaces, cap to 30 chars
   const nameOnly = (s: string) =>
     (s || "")
       .replace(/[^A-Za-z\s]/g, "")
       .trim()
       .slice(0, 30);
 
+  // SUPABASE REMOVED: Replaced auth fetch with a local offline mock
   useEffect(() => {
-    (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data: userRow } = await supabase
-        .from("users")
-        .select("display_name, role")
-        .eq("email", user.email ?? "")
-        .maybeSingle();
-
-      const friendly =
-        userRow?.display_name ||
-        (user as any)?.user_metadata?.display_name ||
-        (user as any)?.user_metadata?.full_name ||
-        (user.email ? user.email.split("@")[0] : "User");
-
-      setProcessor({
-        name: friendly,
-        email: user.email ?? "unknown",
-        role: userRow?.role ?? (user as any)?.user_metadata?.role ?? null,
-      });
-
-      // ✅ DO NOT auto-fill repName anymore (must be blank + editable)
-      // setRepName((prev) => (prev && prev.trim() ? prev : nameOnly(friendly)));
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setProcessor({
+      name: "Local Admin",
+      email: "admin@uniasia.local",
+      role: "admin",
+    });
   }, []);
 
-  // Pick up target order if navigated from NotificationBell
   useEffect(() => {
     try {
       const id = sessionStorage.getItem("scroll-to-order-id");
@@ -780,39 +685,48 @@ function SalesPageContent() {
     return () => off("scroll-to-order", handler);
   }, []);
 
+  // SUPABASE REMOVED: Log fetch disabled
   async function fetchActivityLogs(orderId: string) {
-    setLogsLoading(true);
-    setLogOrderId(orderId);
-    setShowLogsModal(true);
-    const { data, error } = await supabase
-      .from("activity_logs")
-      .select("*")
-      .eq("details->>order_id", orderId)
-      .order("created_at", { ascending: false });
-    if (!error && data) setActivityLogs(data);
-    else toast.error("Failed to fetch activity logs.");
-    setLogsLoading(false);
+    toast.error("Activity logs disabled in Offline Mode.");
   }
 
-  /* ======= Moving Products Report (combined fast & slow) ======= */
   const [movingProducts, setMovingProducts] = useState<MovingProduct[]>([]);
   const [showMovingReport, setShowMovingReport] = useState(false);
 
-  const fetchMovingProducts = async () => {
-    const { data, error } = await supabase
-      .from("v_fast_moving_products")
-      .select("*")
-      .order("units_90d", { ascending: false });
-    if (error) {
-      toast.error("Failed to load moving products.");
-      return;
+  const fetchItems = async () => {
+    try {
+      const res = await fetch('/api/sales-local/inventory');
+      const json = await res.json();
+      if (json.data) {
+        setItems(json.data);
+      }
+    } catch (error) {
+      toast.error("Failed to load local inventory.");
     }
-    if (data) setMovingProducts(data);
+  };
+
+  const fetchOrders = async () => {
+    try {
+      const res = await fetch('/api/sales-local/orders');
+      const json = await res.json();
+      if (json.data) {
+        setOrders(json.data);
+      }
+    } catch (error) {
+      toast.error("Failed to load local orders.");
+    }
+  };
+
+  const fetchMovingProducts = async () => {
+    try {
+      // NOTE: API Route needed for moving products
+    } catch (error) {
+      console.log("Moving products route not ready.");
+    }
   };
 
   const ordersPerPage = 10;
 
-  // Interest mapping helper
   const interestFromTerms = (terms: number) => {
     if (!terms || terms <= 0) return 0;
     if (terms <= 1) return 2;
@@ -822,7 +736,6 @@ function SalesPageContent() {
     return Math.min(30, Math.round((terms / 12) * 24));
   };
 
-  /* ======= Totals (uses discounts now edited in Sales Order modal) ======= */
   const totals = useMemo(() => {
     if (!selectedOrder) {
       return {
@@ -893,7 +806,6 @@ function SalesPageContent() {
     interestPercent,
   ]);
 
-  // Block completion if any line has 0 stock or requested qty > stock
   const hasInsufficientStock = useMemo(() => {
     if (!selectedOrder) return false;
     return selectedOrder.order_items.some((item, idx) => {
@@ -910,7 +822,6 @@ function SalesPageContent() {
   const subtotalBeforeDiscount = totals.subtotalBeforeDiscount;
   const totalDiscount = totals.totalDiscount;
 
-  /* ======= Scroll helpers ======= */
   function scrollToOrder(orderId: string) {
     const el = orderRefs.current[orderId];
     if (el) {
@@ -919,28 +830,12 @@ function SalesPageContent() {
       setTimeout(() => el.classList.remove("ring-2", "ring-blue-500"), 1200);
     }
   }
-  useEffect(() => {
-    if (!pendingScrollId) return;
-    const exists = orders.some((o) => o.id === pendingScrollId);
-    if (exists) {
-      document.getElementById("pending-orders-section")?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-      requestAnimationFrame(() => {
-        scrollToOrder(pendingScrollId);
-      });
-      setPendingScrollId(null);
-    }
-  }, [orders, pendingScrollId]);
 
-  /* ======= Stats cards ======= */
   const completedOrders = useMemo(
     () => orders.filter((o) => o.status === "completed").length,
     [orders]
   );
 
-  // ✅ Amount Due reflects discounted + tax + interest (grand total)
   const displayAmountDue = useMemo(
     () => totals.grandTotal,
     [totals.grandTotal]
@@ -957,131 +852,27 @@ function SalesPageContent() {
     [orders]
   );
 
-  // 👉 Reset inventory pager when searching
   useEffect(() => {
     setInvPage(1);
   }, [searchQuery]);
-
-  /* ======= Data fetches & realtime ======= */
-  const fetchItems = async () => {
-    const { data, error } = await supabase
-      .from("inventory")
-      .select("*, profit");
-    if (error) {
-      toast.error("Failed to load inventory.");
-      return;
-    }
-    if (data) setItems(data);
-  };
-
-  const fetchOrders = async () => {
-    const { data, error } = await supabase
-      .from("orders")
-      .select(
-        `
-        id,
-        status,
-        total_amount,
-        date_created,
-        payment_terms,
-        interest_percent,
-        customers:customer_id (
-          id,
-          name,
-          email,
-          phone,
-          address,
-          contact_person,
-          code,
-          area,
-          date,
-          transaction,
-          status,
-          payment_type,
-          customer_type,
-          order_count
-        ),
-        order_items (
-          id,
-          quantity,
-          price,
-          discount_percent,
-          remarks,
-          inventory:inventory_id (
-            id,
-            sku,
-            product_name,
-            category,
-            subcategory,
-            unit,
-            quantity,
-            unit_price,
-            cost_price
-          )
-        )
-      `
-      )
-      .order("date_created", { ascending: false });
-
-    if (error) {
-      toast.error("Failed to load orders.");
-      return;
-    }
-
-    if (data) {
-      const formatted = (data as any[]).map((o: any) => ({
-        ...o,
-        customers: Array.isArray(o.customers) ? o.customers[0] : o.customers,
-        order_items: (o.order_items || []).map((item: any) => ({
-          ...item,
-          inventory: Array.isArray(item.inventory)
-            ? item.inventory[0]
-            : item.inventory,
-        })),
-      }));
-      setOrders(formatted as any);
-    }
-  };
 
   useEffect(() => {
     fetchItems();
     fetchOrders();
     fetchMovingProducts();
 
-    const inventoryChannel: RealtimeChannel = supabase
-      .channel("inventory-channel")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "inventory" },
-        () => {
-          fetchItems();
-          fetchMovingProducts();
-        }
-      )
-      .subscribe();
+    const refreshInterval = setInterval(() => {
+      fetchItems();
+      fetchOrders();
+      fetchMovingProducts();
+    }, 10000);
 
-    const ordersChannel: RealtimeChannel = supabase
-      .channel("orders-channel")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "orders" },
-        () => {
-          fetchOrders();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(inventoryChannel);
-      supabase.removeChannel(ordersChannel);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => clearInterval(refreshInterval);
   }, []);
 
-  /* ======= Helpers ======= */
   const resetSalesForm = () => {
     setPoNumber("");
-    setRepName(""); // ✅ keep blank
+    setRepName(""); 
     setForwarder("");
     setLocalForwarder("");
     setNumberOfTerms(1);
@@ -1091,30 +882,24 @@ function SalesPageContent() {
     setEditedDiscounts([]);
     setFieldErrors({ poNumber: false, repName: false });
 
-    // ✅ reset receipt notes edit state
     setReceiptEditMode(false);
     setSavingReceiptNotes(false);
     setEditedReceiptNotes({});
-
-    //REMOVE ROW
     setRemovedLines([]);
   };
 
   useEffect(() => {
     if (!showSalesOrderModal) resetSalesForm();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSalesOrderModal]);
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
-  // Validation state
   const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
     poNumber: false,
     repName: false,
   });
 
-  /* ======= Inventory sorting & pagination helpers ======= */
   const filteredInventory = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return items;
@@ -1130,7 +915,6 @@ function SalesPageContent() {
     const dir = invSortDir === "asc" ? 1 : -1;
 
     const getVal = (it: InventoryItem, key: InvSortKey): any => {
-      // ✅ TOTAL now based on COST PRICE (since Unit Price is hidden)
       if (key === "total")
         return (Number(it.cost_price) || 0) * (Number(it.quantity) || 0);
       if (key === "cost_price") return it.cost_price ?? null;
@@ -1189,88 +973,30 @@ function SalesPageContent() {
     return invSortDir === "asc" ? "▲" : "▼";
   };
 
-  /* =========================
-     ✅ Save Receipt Notes (Edit Receipt logic)
-  ========================= */
+  // SUPABASE REMOVED: Mock save behavior
   const saveReceiptNotes = async () => {
     if (!selectedOrder) return;
     if (savingReceiptNotes) return;
 
     setSavingReceiptNotes(true);
-    try {
-      for (const oi of selectedOrder.order_items) {
-        const key = String(oi.id);
-        const nextVal = editedReceiptNotes[key] ?? "";
-
-        const { error } = await supabase
-          .from("order_items")
-          .update({ remarks: nextVal })
-          .eq("id", oi.id);
-
-        if (error) throw error;
-      }
-
-      toast.success("Receipt notes saved!");
-      await fetchOrders();
+    setTimeout(() => {
+      toast.success("Receipt notes saved (Offline Mode)!");
       setReceiptEditMode(false);
-    } catch (err: any) {
-      toast.error(
-        `Failed to save notes: ${err?.message ?? "Unexpected error"}`
-      );
-    } finally {
       setSavingReceiptNotes(false);
-    }
+    }, 500);
   };
 
-  /* ======= Accept / Reject / Complete ======= */
+  /* ======= 3. MUTATIONS (Accept / Reject / Complete) ======= 
+     SUPABASE REMOVED: These functions now only update the UI visually 
+     so you can test the frontend workflow. You will need to build 
+     API POST routes for these to actually save to XAMPP later.
+  =============================================================*/
+  
   const handleAcceptOrder = async (order: OrderWithDetails) => {
-    // Log acceptance intent
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const userEmail = user?.email || "unknown";
-      const userRole = (user as any)?.user_metadata?.role || "unknown";
-
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          user_role: userRole,
-          action: "Accept Sales Order",
-          details: {
-            order_id: order.id,
-            customer_name: order.customers.name,
-            customer_email: order.customers.email,
-            items: order.order_items.map((oi) => ({
-              product_name: oi.inventory.product_name,
-              ordered_qty: oi.quantity,
-              unit_price: oi.price,
-            })),
-            total_amount: order.total_amount,
-            payment_type: order.customers.payment_type,
-          },
-          created_at: getPHISOString(),
-        },
-      ]);
-    } catch (err) {
-      console.error("Failed to log activity for order acceptance:", err);
-    }
-
-    // Mark accepted immediately
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: "accepted" })
-      .eq("id", order.id);
-    if (error) {
-      toast.error("Failed to accept order: " + error.message);
-      return;
-    }
-
+    toast.success("Order accepted (Offline UI Mode)");
+    
     setSelectedOrder(order);
-
-    // Salesman stays blank by default (editable)
     setRepName("");
-
     setEditedQuantities(order.order_items.map((it) => it.quantity));
     setEditedDiscounts(order.order_items.map((it) => it.discount_percent ?? 0));
     setRemovedLines(order.order_items.map(() => false));
@@ -1280,7 +1006,6 @@ function SalesPageContent() {
       order.interest_percent || interestFromTerms(order.payment_terms || 1)
     );
 
-    // preload notes into editable map
     const initialNotes: Record<string, string> = {};
     (order.order_items || []).forEach((oi) => {
       if (oi?.id != null)
@@ -1294,98 +1019,18 @@ function SalesPageContent() {
       ...prev,
       { orderId: order.id, status: "accepted" },
     ]);
-
-    // Notify customer: order approved (best effort)
-    try {
-      await fetch("/api/notify-customer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recipientEmail: order.customers.email,
-          recipientName: order.customers.name,
-          type: "order_approved",
-          title: "Order Approved",
-          message: `Your order ${
-            order.customers.code ?? order.id
-          } has been approved.`,
-          href: `/customer?txn=${order.customers.code ?? order.id}`,
-          orderId: order.id,
-          transactionCode: order.customers.code ?? null,
-          actorEmail: processor?.email ?? "admin@system",
-        }),
-      });
-    } catch (e) {
-      console.error("notify (order_approved) failed:", e);
-    }
   };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
+    toast.success("Order rejected (Offline UI Mode)");
+    
     setPickingStatus((prev) => [
       ...prev,
       { orderId: order.id, status: "rejected" },
     ]);
-    await supabase
-      .from("orders")
-      .update({ status: "rejected" })
-      .eq("id", order.id);
-
-    // notify
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      await fetch("/api/notify-customer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recipientEmail: order.customers.email,
-          recipientName: order.customers.name,
-          type: "order_rejected",
-          title: "Order Rejected",
-          message: `We're sorry — your order ${
-            order.customers.code ?? order.id
-          } was rejected.`,
-          href: `/customer?txn=${order.customers.code ?? order.id}`,
-          orderId: order.id,
-          transactionCode: order.customers.code ?? null,
-          actorEmail: user?.email ?? "admin@system",
-        }),
-      });
-    } catch (e) {
-      console.error("notify (order_rejected) failed:", e);
-    }
-
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const userEmail = user?.email || "unknown";
-      const userRole = (user as any)?.user_metadata?.role || "unknown";
-      await supabase.from("activity_logs").insert([
-        {
-          user_email: userEmail,
-          user_role: userRole,
-          action: "Reject Sales Order",
-          details: {
-            order_id: order.id,
-            customer_name: order.customers.name,
-            customer_email: order.customers.email,
-            items: order.order_items.map((oi) => ({
-              product_name: oi.inventory.product_name,
-              ordered_qty: oi.quantity,
-              unit_price: oi.price,
-            })),
-            total_amount: order.total_amount,
-            payment_type: order.customers.payment_type,
-          },
-          created_at: getPHISOString(),
-        },
-      ]);
-    } catch (err) {
-      console.error("Failed to log activity for order rejection:", err);
-    }
-
-    fetchOrders();
+    
+    // Visually remove it from the list
+    setOrders((prev) => prev.filter((o) => o.id !== order.id));
   };
 
   const handleOrderComplete = async () => {
@@ -1402,165 +1047,25 @@ function SalesPageContent() {
     }
 
     setIsCompletingOrder(true);
-    try {
-      for (let i = 0; i < selectedOrder.order_items.length; i++) {
-        const oi = selectedOrder.order_items[i];
-        const invId = oi.inventory.id;
-        const qty = editedQuantities[i];
-
-        await supabase
-          .from("order_items")
-          .update({
-            fulfilled_quantity: qty,
-            discount_percent: editedDiscounts[i] || 0,
-            // ✅ also persist notes (if any) — best-effort
-            remarks: editedReceiptNotes[String(oi.id)] ?? oi.remarks ?? "",
-          })
-          .eq("order_id", selectedOrder.id)
-          .eq("inventory_id", invId);
-
-        const remaining = (oi.inventory.quantity || 0) - qty;
-        if (remaining < 0) {
-          toast.error(`Insufficient stock for ${oi.inventory.product_name}`);
-          setIsCompletingOrder(false);
-          setShowFinalConfirm(false);
-          setShowSalesOrderModal(true);
-          return;
-        }
-        await supabase
-          .from("inventory")
-          .update({ quantity: remaining })
-          .eq("id", invId);
-
-        const unitPrice = oi.price;
-        const discountPercent = editedDiscounts[i] || 0;
-        const costPrice = oi.inventory.cost_price || 0;
-        const amount = qty * unitPrice * (1 - discountPercent / 100);
-        const earnings =
-          (unitPrice - costPrice) * qty * (1 - discountPercent / 100);
-
-        await supabase.from("sales").insert([
-          {
-            inventory_id: invId,
-            quantity_sold: qty,
-            amount,
-            earnings,
-            date: getPHISOString(),
-          },
-        ]);
-      }
-
-      const isCredit = selectedOrder.customers.payment_type === "Credit";
-      const firstDue = new Date();
-      firstDue.setMonth(firstDue.getMonth() + 1);
-      const p_first_due = firstDue.toISOString().slice(0, 10);
-      const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
-
-      const { error: rpcErr } = await supabase.rpc("approve_order", {
-        p_order_id: selectedOrder.id,
-        p_terms: isCredit ? numberOfTerms : 1,
-        p_per_term: round2(
-          isCredit ? getPerTermAmount() : getGrandTotalWithInterest()
-        ),
-        p_first_due,
-        p_grand_total_with_interest: round2(getGrandTotalWithInterest()),
-        p_interest_percent: isCredit
-          ? round2(totals.effectiveInterestPercent)
-          : 0,
-        p_sales_tax: round2(isSalesTaxOn ? salesTaxValue : 0),
-        p_po_number: poNumber,
-        p_salesman: repName,
-        p_forwarder: forwarder || null,
-        p_processed_by_email: processor?.email ?? "unknown",
-        p_processed_by_name: processor?.name ?? "unknown",
-        p_processed_by_role: processor?.role ?? "unknown",
-      });
-      if (rpcErr) throw rpcErr;
-
-      const nowPH = getPHISOString();
-      const { error: doneErr } = await supabase
-        .from("orders")
-        .update({
-          status: "completed",
-          date_completed: nowPH,
-          processed_at: nowPH,
-        })
-        .eq("id", selectedOrder.id);
-      if (doneErr) throw doneErr;
-
-      try {
-        await fetch("/api/notify-customer", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            recipientEmail: selectedOrder.customers.email,
-            recipientName: selectedOrder.customers.name,
-            type: "order_completed",
-            title: "Order Completed",
-            message: `Your order ${
-              selectedOrder.customers.code ?? selectedOrder.id
-            } has been completed. Thank you!`,
-            href: `/customer?txn=${
-              selectedOrder.customers.code ?? selectedOrder.id
-            }`,
-            orderId: selectedOrder.id,
-            transactionCode: selectedOrder.customers.code ?? null,
-            metadata: {
-              grand_total: getGrandTotalWithInterest(),
-              terms:
-                selectedOrder.customers.payment_type === "Credit"
-                  ? numberOfTerms
-                  : 1,
-            },
-            actorEmail: processor?.email ?? "admin@system",
-          }),
-        });
-      } catch (e) {
-        console.error("notify (order_completed) failed:", e);
-      }
-
+    
+    // Simulate network delay
+    setTimeout(() => {
+      toast.success("Order successfully completed (Offline UI Mode)!");
+      
       setShowSalesOrderModal(false);
       setShowFinalConfirm(false);
       resetSalesForm();
-      setSelectedOrder(null);
+      
       setPickingStatus((prev) =>
         prev.filter((p) => p.orderId !== selectedOrder.id)
       );
-      await Promise.all([fetchOrders(), fetchItems()]);
-      toast.success("Order successfully completed!");
-
-      try {
-        setIsSendingEmail(true);
-        const emailRes = await fetch("/api/send-receipt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ orderId: selectedOrder.id }),
-        });
-        const result = await emailRes.json();
-        if (result.success) toast.success("Receipt emailed to customer!");
-        else toast.error("Failed to send receipt email.");
-      } catch {
-        toast.error("Failed to send receipt email.");
-      } finally {
-        setIsSendingEmail(false);
-      }
-
+      
+      // Visually remove it from the list
+      setOrders((prev) => prev.filter((o) => o.id !== selectedOrder.id));
+      
+      setSelectedOrder(null);
       setIsCompletingOrder(false);
-    } catch (err: any) {
-      if (err?.message?.includes('unique constraint "unique_po_number"')) {
-        toast.error("PO Number is already used, try another.");
-        setIsCompletingOrder(false);
-        setShowFinalConfirm(false);
-        setShowSalesOrderModal(true);
-        return;
-      }
-      toast.error(
-        `Failed to complete order: ${err?.message ?? "Unexpected error"}`
-      );
-      setIsCompletingOrder(false);
-      setShowFinalConfirm(false);
-      setShowSalesOrderModal(true);
-    }
+    }, 1000);
   };
 
   /* ======= UI ======= */
@@ -1776,9 +1281,6 @@ function SalesPageContent() {
                 { key: "subcategory", label: "Subcategory" },
                 { key: "unit", label: "Unit" },
                 { key: "quantity", label: "Quantity", align: "right" },
-
-                // ✅ UNIT PRICE REMOVED (hidden)
-
                 { key: "cost_price", label: "Cost Price", align: "right" },
                 { key: "total", label: "Total", align: "right" },
               ].map((h) => (
@@ -1822,14 +1324,12 @@ function SalesPageContent() {
                 <td className="py-2 px-4">{it.unit}</td>
                 <td className="py-2 px-4 text-right">{it.quantity}</td>
 
-                {/* ✅ COST PRICE only */}
                 <td className="py-2 px-4 text-right">
                   {it.cost_price !== undefined && it.cost_price !== null
                     ? peso(it.cost_price)
                     : "—"}
                 </td>
 
-                {/* ✅ Total based on COST PRICE */}
                 <td className="py-2 px-4 text-right">
                   {peso(
                     (Number(it.cost_price) || 0) * (Number(it.quantity) || 0)
@@ -2045,7 +1545,7 @@ function SalesPageContent() {
         </div>
       </div>
 
-      {/* SALES ORDER MODAL (✅ click outside closes) */}
+      {/* SALES ORDER MODAL */}
       {showSalesOrderModal && selectedOrder && (
         <div
           className="fixed inset-0 bg-black/40 flex justify-center items-start z-50 overflow-y-auto"
@@ -2087,7 +1587,6 @@ function SalesPageContent() {
               editedReceiptNotes={editedReceiptNotes}
               setEditedReceiptNotes={setEditedReceiptNotes}
               saveReceiptNotes={saveReceiptNotes}
-              //REMOVABLE ROWS
               removedLines={removedLines}
               setRemovedLines={setRemovedLines}
               setEditedQuantities={setEditedQuantities}
