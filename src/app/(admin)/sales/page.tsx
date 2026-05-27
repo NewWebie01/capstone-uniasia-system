@@ -1,11 +1,18 @@
+<<<<<<< HEAD
 // src/app/sales/page.tsx
+=======
+// src/app/(admin)/sales/page.tsx
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
 "use client";
 
 import { Suspense } from "react";
 import { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+<<<<<<< HEAD
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/config/supabaseClient";
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
 import PageLoader from "@/components/PageLoader";
 import { toast } from "sonner";
 import { on, off } from "@/utils/eventEmitter";
@@ -36,10 +43,14 @@ type InventoryItem = {
   subcategory: string;
   unit: string;
   quantity: number;
+<<<<<<< HEAD
 
   // ✅ Keep in data (needed elsewhere), but we will HIDE it in the inventory table UI
   unit_price: number;
 
+=======
+  unit_price: number;
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   cost_price?: number | null;
   amount: number;
   profit?: number | null;
@@ -81,11 +92,19 @@ type OrderWithDetails = {
     order_count?: number;
   };
   order_items: {
+<<<<<<< HEAD
     id: any; // ✅ order_items.id (uuid or int) — kept flexible
     quantity: number;
     price: number;
     discount_percent?: number | null;
     remarks?: string | null; // ✅ receipt notes
+=======
+    id: any; 
+    quantity: number;
+    price: number;
+    discount_percent?: number | null;
+    remarks?: string | null; 
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
     inventory: {
       id: number;
       sku: string;
@@ -103,9 +122,12 @@ type OrderWithDetails = {
 
 type PickingOrder = { orderId: string; status: "accepted" | "rejected" };
 
+<<<<<<< HEAD
 /* ===== Sorting keys for inventory (including virtual "total") =====
    ✅ REMOVED "unit_price" (hidden in the inventory table)
 */
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
 type InvSortKey =
   | "sku"
   | "product_name"
@@ -118,13 +140,17 @@ type InvSortKey =
 
 /* =========================
    RECEIPT-LIKE SALES ORDER
+<<<<<<< HEAD
    ✅ Must be OUTSIDE SalesPageContent to prevent remount + cursor loss
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
 ========================= */
 function ReceiptLikeSalesOrder({
   selectedOrder,
   poNumber,
   setPoNumber,
   processor,
+<<<<<<< HEAD
 
   repName,
   setRepName,
@@ -144,20 +170,41 @@ function ReceiptLikeSalesOrder({
   fieldErrors,
   setFieldErrors,
 
+=======
+  repName,
+  setRepName,
+  localForwarder,
+  setLocalForwarder,
+  commitForwarder,
+  numberOfTerms,
+  isSalesTaxOn,
+  setIsSalesTaxOn,
+  editedQuantities,
+  editedDiscounts,
+  setEditedDiscounts,
+  fieldErrors,
+  setFieldErrors,
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   subtotalBeforeDiscount,
   totalDiscount,
   salesTaxValue,
   displayAmountDue,
+<<<<<<< HEAD
 
   // receipt Notes (Edit Receipt logic)
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   receiptEditMode,
   setReceiptEditMode,
   savingReceiptNotes,
   editedReceiptNotes,
   setEditedReceiptNotes,
   saveReceiptNotes,
+<<<<<<< HEAD
 
   //REMOVABLE ROWS
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   setEditedQuantities,
   removedLines,
   setRemovedLines,
@@ -165,9 +212,13 @@ function ReceiptLikeSalesOrder({
   const safe = (v: any) =>
     v === null || v === undefined || v === "" ? "—" : v;
 
+<<<<<<< HEAD
   // longer table for big orders
   const PRINT_ROWS = 30;
 
+=======
+  const PRINT_ROWS = 30;
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const its = selectedOrder?.order_items || [];
   const rows = Array.from(
     { length: Math.max(PRINT_ROWS, its.length) },
@@ -179,6 +230,7 @@ function ReceiptLikeSalesOrder({
       ? `Net ${numberOfTerms} Monthly`
       : safe(selectedOrder?.customers?.payment_type);
 
+<<<<<<< HEAD
   // ✅ Column widths (no notes column)
   const colWidths = [
     "52px", // QTY
@@ -188,6 +240,10 @@ function ReceiptLikeSalesOrder({
     "110px", // DISCOUNT (%)
     "92px", // AMOUNT
     "92px", // TOTAL
+=======
+  const colWidths = [
+    "52px", "52px", "56%", "86px", "110px", "92px", "92px",
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   ];
 
   return (
@@ -207,8 +263,11 @@ function ReceiptLikeSalesOrder({
         {/* HEADER */}
         <div className="relative text-center">
           <div className="text-[30px] font-bold tracking-wide">SALES ORDER</div>
+<<<<<<< HEAD
 
           {/* ✅ TOP-RIGHT Edit Receipt controls */}
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
           <div className="no-print absolute right-0 top-0 flex items-center gap-2">
             {!receiptEditMode ? (
               <button
@@ -329,7 +388,10 @@ function ReceiptLikeSalesOrder({
                 </div>
               </div>
 
+<<<<<<< HEAD
               {/* ✅ A) Blank + editable input */}
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
               <div className="flex items-end gap-2">
                 <span className="min-w-[70px]">Salesman:</span>
                 <div className="flex-1 border-b border-black pb-[2px]">
@@ -352,8 +414,13 @@ function ReceiptLikeSalesOrder({
           </div>
 
           <div className="text-[11px] opacity-80">
+<<<<<<< HEAD
             Processed By: <b>{processor?.name || "Unknown"}</b> (
             {processor?.email || "—"})
+=======
+            Processed By: <b>{processor?.name || "Local Admin"}</b> (
+            {processor?.email || "admin@uniasia.local"})
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
           </div>
         </div>
 
@@ -368,6 +435,7 @@ function ReceiptLikeSalesOrder({
 
             <thead className="text-[12px]">
               <tr className="border-b border-black">
+<<<<<<< HEAD
                 <th className="border-r border-black px-2 py-1 text-left">
                   QTY
                 </th>
@@ -389,6 +457,15 @@ function ReceiptLikeSalesOrder({
                 <th className="px-2 py-1 text-right whitespace-nowrap">
                   TOTAL
                 </th>
+=======
+                <th className="border-r border-black px-2 py-1 text-left">QTY</th>
+                <th className="border-r border-black px-2 py-1 text-left">UNIT</th>
+                <th className="border-r border-black px-2 py-1 text-left">ITEM DESCRIPTION</th>
+                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">UNIT PRICE</th>
+                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">DISCOUNT (%)</th>
+                <th className="border-r border-black px-2 py-1 text-right whitespace-nowrap">AMOUNT</th>
+                <th className="px-2 py-1 text-right whitespace-nowrap">TOTAL</th>
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
               </tr>
             </thead>
 
@@ -408,12 +485,18 @@ function ReceiptLikeSalesOrder({
                   );
                 }
 
+<<<<<<< HEAD
                 //REMOVABLE ROW
                 const isRemoved = !!removedLines?.[idx];
                 const orderedQty = Number(row.quantity || 0);
                 const inStock = Number(row.inventory?.quantity || 0);
 
                 //const qty = editedQuantities[idx] ?? row.quantity; // locked
+=======
+                const isRemoved = !!removedLines?.[idx];
+                const orderedQty = Number(row.quantity || 0);
+                const inStock = Number(row.inventory?.quantity || 0);
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                 const qty = isRemoved ? 0 : editedQuantities[idx] ?? orderedQty;
                 const unit = row.inventory?.unit || "—";
                 const desc = row.inventory?.product_name || "—";
@@ -423,7 +506,10 @@ function ReceiptLikeSalesOrder({
                 const pct = Math.max(0, Math.min(100, Number(rawPct) || 0));
                 const lineAmount = qty * unitPrice * (1 - pct / 100);
 
+<<<<<<< HEAD
                 // ✅ notes/remarks key per order_items.id
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                 const rowId = String(row.id);
                 const noteValue =
                   (editedReceiptNotes && editedReceiptNotes[rowId] !== undefined
@@ -448,21 +534,30 @@ function ReceiptLikeSalesOrder({
                           onChange={(e) => {
                             const raw = Number(e.target.value);
                             const next = Number.isFinite(raw) ? raw : 0;
+<<<<<<< HEAD
 
                             // ✅ clamp to stock (prevents exceeding)
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                             const clamped = Math.max(
                               0,
                               Math.min(next, inStock)
                             );
+<<<<<<< HEAD
 
                             // ✅ update edited quantities
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                             setEditedQuantities((prev: number[]) => {
                               const arr = [...(prev || [])];
                               arr[idx] = clamped;
                               return arr;
                             });
+<<<<<<< HEAD
 
                             // ✅ auto-mark removed if qty becomes 0
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                             setRemovedLines((prev: boolean[]) => {
                               const arr = [...(prev || [])];
                               arr[idx] = clamped === 0;
@@ -471,8 +566,11 @@ function ReceiptLikeSalesOrder({
                           }}
                           className="w-[52px] bg-transparent outline-none text-left tabular-nums border-b border-black"
                         />
+<<<<<<< HEAD
 
                         {/* ✅ Remove/Undo buttons (won’t print if you have .no-print css) */}
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                         <div className="no-print flex justify-center">
                           {!isRemoved ? (
                             <button
@@ -524,8 +622,11 @@ function ReceiptLikeSalesOrder({
 
                     <td className="border-r border-black px-2 py-1">
                       <div className="font-medium leading-tight">{desc}</div>
+<<<<<<< HEAD
 
                       {/* ✅ Receipt Notes (Edit Receipt logic) */}
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                       <div className="mt-1">
                         {receiptEditMode ? (
                           <input
@@ -553,7 +654,10 @@ function ReceiptLikeSalesOrder({
                       {peso(unitPrice)}
                     </td>
 
+<<<<<<< HEAD
                     {/* clean discount input */}
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                     <td className="border-r border-black px-2 py-1 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <input
@@ -637,7 +741,10 @@ function ReceiptLikeSalesOrder({
           </div>
         </div>
 
+<<<<<<< HEAD
         {/* tax toggle small */}
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
         <div className="no-print mt-2 flex items-center gap-2 text-[12px]">
           <input
             type="checkbox"
@@ -667,6 +774,7 @@ function SalesPageContent() {
   const orderRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const pendingOrdersSectionRef = useRef<HTMLDivElement>(null);
 
+<<<<<<< HEAD
   // quantities are locked to ordered values; discounts are editable
   const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
   const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
@@ -674,10 +782,16 @@ function SalesPageContent() {
   // remove rows from orders
   const [removedLines, setRemovedLines] = useState<boolean[]>([]);
 
+=======
+  const [editedQuantities, setEditedQuantities] = useState<number[]>([]);
+  const [editedDiscounts, setEditedDiscounts] = useState<number[]>([]);
+  const [removedLines, setRemovedLines] = useState<boolean[]>([]);
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const [pickingStatus, setPickingStatus] = useState<PickingOrder[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
 
+<<<<<<< HEAD
   // Terms/Interest
   const [numberOfTerms, setNumberOfTerms] = useState(1);
   const [interestPercent, setInterestPercent] = useState(0);
@@ -685,6 +799,13 @@ function SalesPageContent() {
   // Sales order meta
   const [poNumber, setPoNumber] = useState("");
   const [repName, setRepName] = useState(""); // ✅ now blank + editable
+=======
+  const [numberOfTerms, setNumberOfTerms] = useState(1);
+  const [interestPercent, setInterestPercent] = useState(0);
+
+  const [poNumber, setPoNumber] = useState("");
+  const [repName, setRepName] = useState(""); 
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const [isSalesTaxOn, setIsSalesTaxOn] = useState(true);
   const [isCompletingOrder, setIsCompletingOrder] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
@@ -694,10 +815,15 @@ function SalesPageContent() {
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [forwarder, setForwarder] = useState("");
 
+<<<<<<< HEAD
   // ✅ FIX: local input state for Forwarder (prevents jumpy blur behavior)
   const [localForwarder, setLocalForwarder] = useState("");
 
   // ✅ Receipt notes (Edit Receipt logic like Invoice)
+=======
+  const [localForwarder, setLocalForwarder] = useState("");
+
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const [receiptEditMode, setReceiptEditMode] = useState(false);
   const [savingReceiptNotes, setSavingReceiptNotes] = useState(false);
   const [editedReceiptNotes, setEditedReceiptNotes] = useState<
@@ -710,7 +836,10 @@ function SalesPageContent() {
 
   const commitForwarder = (v: string) => setForwarder(v);
 
+<<<<<<< HEAD
   // Activity Logs Modal state (API kept for continuity – UI not rendered here)
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
@@ -719,19 +848,26 @@ function SalesPageContent() {
   type Processor = { name: string; email: string; role: string | null };
   const [processor, setProcessor] = useState<Processor | null>(null);
 
+<<<<<<< HEAD
   /* ===== Inventory sorting & pagination state ===== */
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const [invSortKey, setInvSortKey] = useState<InvSortKey>("product_name");
   const [invSortDir, setInvSortDir] = useState<"asc" | "desc">("asc");
   const INV_ROWS_PER_PAGE = 10;
   const [invPage, setInvPage] = useState(1);
 
+<<<<<<< HEAD
   // Keep only letters & spaces, cap to 30 chars
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const nameOnly = (s: string) =>
     (s || "")
       .replace(/[^A-Za-z\s]/g, "")
       .trim()
       .slice(0, 30);
 
+<<<<<<< HEAD
   useEffect(() => {
     (async () => {
       const {
@@ -764,6 +900,17 @@ function SalesPageContent() {
   }, []);
 
   // Pick up target order if navigated from NotificationBell
+=======
+  // SUPABASE REMOVED: Replaced auth fetch with a local offline mock
+  useEffect(() => {
+    setProcessor({
+      name: "Local Admin",
+      email: "admin@uniasia.local",
+      role: "admin",
+    });
+  }, []);
+
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   useEffect(() => {
     try {
       const id = sessionStorage.getItem("scroll-to-order-id");
@@ -780,6 +927,7 @@ function SalesPageContent() {
     return () => off("scroll-to-order", handler);
   }, []);
 
+<<<<<<< HEAD
   async function fetchActivityLogs(orderId: string) {
     setLogsLoading(true);
     setLogOrderId(orderId);
@@ -808,11 +956,54 @@ function SalesPageContent() {
       return;
     }
     if (data) setMovingProducts(data);
+=======
+  // SUPABASE REMOVED: Log fetch disabled
+  async function fetchActivityLogs(orderId: string) {
+    toast.error("Activity logs disabled in Offline Mode.");
+  }
+
+  const [movingProducts, setMovingProducts] = useState<MovingProduct[]>([]);
+  const [showMovingReport, setShowMovingReport] = useState(false);
+
+  const fetchItems = async () => {
+    try {
+      const res = await fetch('/api/sales-local/inventory');
+      const json = await res.json();
+      if (json.data) {
+        setItems(json.data);
+      }
+    } catch (error) {
+      toast.error("Failed to load local inventory.");
+    }
+  };
+
+  const fetchOrders = async () => {
+    try {
+      const res = await fetch('/api/sales-local/orders');
+      const json = await res.json();
+      if (json.data) {
+        setOrders(json.data);
+      }
+    } catch (error) {
+      toast.error("Failed to load local orders.");
+    }
+  };
+
+  const fetchMovingProducts = async () => {
+    try {
+      // NOTE: API Route needed for moving products
+    } catch (error) {
+      console.log("Moving products route not ready.");
+    }
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   };
 
   const ordersPerPage = 10;
 
+<<<<<<< HEAD
   // Interest mapping helper
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const interestFromTerms = (terms: number) => {
     if (!terms || terms <= 0) return 0;
     if (terms <= 1) return 2;
@@ -822,7 +1013,10 @@ function SalesPageContent() {
     return Math.min(30, Math.round((terms / 12) * 24));
   };
 
+<<<<<<< HEAD
   /* ======= Totals (uses discounts now edited in Sales Order modal) ======= */
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const totals = useMemo(() => {
     if (!selectedOrder) {
       return {
@@ -893,7 +1087,10 @@ function SalesPageContent() {
     interestPercent,
   ]);
 
+<<<<<<< HEAD
   // Block completion if any line has 0 stock or requested qty > stock
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const hasInsufficientStock = useMemo(() => {
     if (!selectedOrder) return false;
     return selectedOrder.order_items.some((item, idx) => {
@@ -910,7 +1107,10 @@ function SalesPageContent() {
   const subtotalBeforeDiscount = totals.subtotalBeforeDiscount;
   const totalDiscount = totals.totalDiscount;
 
+<<<<<<< HEAD
   /* ======= Scroll helpers ======= */
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   function scrollToOrder(orderId: string) {
     const el = orderRefs.current[orderId];
     if (el) {
@@ -919,6 +1119,7 @@ function SalesPageContent() {
       setTimeout(() => el.classList.remove("ring-2", "ring-blue-500"), 1200);
     }
   }
+<<<<<<< HEAD
   useEffect(() => {
     if (!pendingScrollId) return;
     const exists = orders.some((o) => o.id === pendingScrollId);
@@ -935,12 +1136,18 @@ function SalesPageContent() {
   }, [orders, pendingScrollId]);
 
   /* ======= Stats cards ======= */
+=======
+
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const completedOrders = useMemo(
     () => orders.filter((o) => o.status === "completed").length,
     [orders]
   );
 
+<<<<<<< HEAD
   // ✅ Amount Due reflects discounted + tax + interest (grand total)
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const displayAmountDue = useMemo(
     () => totals.grandTotal,
     [totals.grandTotal]
@@ -957,11 +1164,15 @@ function SalesPageContent() {
     [orders]
   );
 
+<<<<<<< HEAD
   // 👉 Reset inventory pager when searching
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   useEffect(() => {
     setInvPage(1);
   }, [searchQuery]);
 
+<<<<<<< HEAD
   /* ======= Data fetches & realtime ======= */
   const fetchItems = async () => {
     const { data, error } = await supabase
@@ -1043,11 +1254,14 @@ function SalesPageContent() {
     }
   };
 
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   useEffect(() => {
     fetchItems();
     fetchOrders();
     fetchMovingProducts();
 
+<<<<<<< HEAD
     const inventoryChannel: RealtimeChannel = supabase
       .channel("inventory-channel")
       .on(
@@ -1082,6 +1296,20 @@ function SalesPageContent() {
   const resetSalesForm = () => {
     setPoNumber("");
     setRepName(""); // ✅ keep blank
+=======
+    const refreshInterval = setInterval(() => {
+      fetchItems();
+      fetchOrders();
+      fetchMovingProducts();
+    }, 10000);
+
+    return () => clearInterval(refreshInterval);
+  }, []);
+
+  const resetSalesForm = () => {
+    setPoNumber("");
+    setRepName(""); 
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
     setForwarder("");
     setLocalForwarder("");
     setNumberOfTerms(1);
@@ -1091,30 +1319,45 @@ function SalesPageContent() {
     setEditedDiscounts([]);
     setFieldErrors({ poNumber: false, repName: false });
 
+<<<<<<< HEAD
     // ✅ reset receipt notes edit state
     setReceiptEditMode(false);
     setSavingReceiptNotes(false);
     setEditedReceiptNotes({});
 
     //REMOVE ROW
+=======
+    setReceiptEditMode(false);
+    setSavingReceiptNotes(false);
+    setEditedReceiptNotes({});
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
     setRemovedLines([]);
   };
 
   useEffect(() => {
     if (!showSalesOrderModal) resetSalesForm();
+<<<<<<< HEAD
     // eslint-disable-next-line react-hooks/exhaustive-deps
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   }, [showSalesOrderModal]);
 
   const isOrderAccepted = (orderId: string) =>
     pickingStatus.some((p) => p.orderId === orderId && p.status === "accepted");
 
+<<<<<<< HEAD
   // Validation state
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const [fieldErrors, setFieldErrors] = useState<{ [key: string]: boolean }>({
     poNumber: false,
     repName: false,
   });
 
+<<<<<<< HEAD
   /* ======= Inventory sorting & pagination helpers ======= */
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const filteredInventory = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return items;
@@ -1130,7 +1373,10 @@ function SalesPageContent() {
     const dir = invSortDir === "asc" ? 1 : -1;
 
     const getVal = (it: InventoryItem, key: InvSortKey): any => {
+<<<<<<< HEAD
       // ✅ TOTAL now based on COST PRICE (since Unit Price is hidden)
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
       if (key === "total")
         return (Number(it.cost_price) || 0) * (Number(it.quantity) || 0);
       if (key === "cost_price") return it.cost_price ?? null;
@@ -1189,14 +1435,19 @@ function SalesPageContent() {
     return invSortDir === "asc" ? "▲" : "▼";
   };
 
+<<<<<<< HEAD
   /* =========================
      ✅ Save Receipt Notes (Edit Receipt logic)
   ========================= */
+=======
+  // SUPABASE REMOVED: Mock save behavior
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   const saveReceiptNotes = async () => {
     if (!selectedOrder) return;
     if (savingReceiptNotes) return;
 
     setSavingReceiptNotes(true);
+<<<<<<< HEAD
     try {
       for (const oi of selectedOrder.order_items) {
         const key = String(oi.id);
@@ -1271,6 +1522,26 @@ function SalesPageContent() {
     // Salesman stays blank by default (editable)
     setRepName("");
 
+=======
+    setTimeout(() => {
+      toast.success("Receipt notes saved (Offline Mode)!");
+      setReceiptEditMode(false);
+      setSavingReceiptNotes(false);
+    }, 500);
+  };
+
+  /* ======= 3. MUTATIONS (Accept / Reject / Complete) ======= 
+     SUPABASE REMOVED: These functions now only update the UI visually 
+     so you can test the frontend workflow. You will need to build 
+     API POST routes for these to actually save to XAMPP later.
+  =============================================================*/
+  
+  const handleAcceptOrder = async (order: OrderWithDetails) => {
+    toast.success("Order accepted (Offline UI Mode)");
+    
+    setSelectedOrder(order);
+    setRepName("");
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
     setEditedQuantities(order.order_items.map((it) => it.quantity));
     setEditedDiscounts(order.order_items.map((it) => it.discount_percent ?? 0));
     setRemovedLines(order.order_items.map(() => false));
@@ -1280,7 +1551,10 @@ function SalesPageContent() {
       order.interest_percent || interestFromTerms(order.payment_terms || 1)
     );
 
+<<<<<<< HEAD
     // preload notes into editable map
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
     const initialNotes: Record<string, string> = {};
     (order.order_items || []).forEach((oi) => {
       if (oi?.id != null)
@@ -1294,6 +1568,7 @@ function SalesPageContent() {
       ...prev,
       { orderId: order.id, status: "accepted" },
     ]);
+<<<<<<< HEAD
 
     // Notify customer: order approved (best effort)
     try {
@@ -1320,10 +1595,18 @@ function SalesPageContent() {
   };
 
   const handleRejectOrder = async (order: OrderWithDetails) => {
+=======
+  };
+
+  const handleRejectOrder = async (order: OrderWithDetails) => {
+    toast.success("Order rejected (Offline UI Mode)");
+    
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
     setPickingStatus((prev) => [
       ...prev,
       { orderId: order.id, status: "rejected" },
     ]);
+<<<<<<< HEAD
     await supabase
       .from("orders")
       .update({ status: "rejected" })
@@ -1386,6 +1669,11 @@ function SalesPageContent() {
     }
 
     fetchOrders();
+=======
+    
+    // Visually remove it from the list
+    setOrders((prev) => prev.filter((o) => o.id !== order.id));
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   };
 
   const handleOrderComplete = async () => {
@@ -1402,6 +1690,7 @@ function SalesPageContent() {
     }
 
     setIsCompletingOrder(true);
+<<<<<<< HEAD
     try {
       for (let i = 0; i < selectedOrder.order_items.length; i++) {
         const oi = selectedOrder.order_items[i];
@@ -1561,6 +1850,27 @@ function SalesPageContent() {
       setShowFinalConfirm(false);
       setShowSalesOrderModal(true);
     }
+=======
+    
+    // Simulate network delay
+    setTimeout(() => {
+      toast.success("Order successfully completed (Offline UI Mode)!");
+      
+      setShowSalesOrderModal(false);
+      setShowFinalConfirm(false);
+      resetSalesForm();
+      
+      setPickingStatus((prev) =>
+        prev.filter((p) => p.orderId !== selectedOrder.id)
+      );
+      
+      // Visually remove it from the list
+      setOrders((prev) => prev.filter((o) => o.id !== selectedOrder.id));
+      
+      setSelectedOrder(null);
+      setIsCompletingOrder(false);
+    }, 1000);
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   };
 
   /* ======= UI ======= */
@@ -1776,9 +2086,12 @@ function SalesPageContent() {
                 { key: "subcategory", label: "Subcategory" },
                 { key: "unit", label: "Unit" },
                 { key: "quantity", label: "Quantity", align: "right" },
+<<<<<<< HEAD
 
                 // ✅ UNIT PRICE REMOVED (hidden)
 
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                 { key: "cost_price", label: "Cost Price", align: "right" },
                 { key: "total", label: "Total", align: "right" },
               ].map((h) => (
@@ -1822,14 +2135,20 @@ function SalesPageContent() {
                 <td className="py-2 px-4">{it.unit}</td>
                 <td className="py-2 px-4 text-right">{it.quantity}</td>
 
+<<<<<<< HEAD
                 {/* ✅ COST PRICE only */}
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                 <td className="py-2 px-4 text-right">
                   {it.cost_price !== undefined && it.cost_price !== null
                     ? peso(it.cost_price)
                     : "—"}
                 </td>
 
+<<<<<<< HEAD
                 {/* ✅ Total based on COST PRICE */}
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
                 <td className="py-2 px-4 text-right">
                   {peso(
                     (Number(it.cost_price) || 0) * (Number(it.quantity) || 0)
@@ -2045,7 +2364,11 @@ function SalesPageContent() {
         </div>
       </div>
 
+<<<<<<< HEAD
       {/* SALES ORDER MODAL (✅ click outside closes) */}
+=======
+      {/* SALES ORDER MODAL */}
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
       {showSalesOrderModal && selectedOrder && (
         <div
           className="fixed inset-0 bg-black/40 flex justify-center items-start z-50 overflow-y-auto"
@@ -2087,7 +2410,10 @@ function SalesPageContent() {
               editedReceiptNotes={editedReceiptNotes}
               setEditedReceiptNotes={setEditedReceiptNotes}
               saveReceiptNotes={saveReceiptNotes}
+<<<<<<< HEAD
               //REMOVABLE ROWS
+=======
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
               removedLines={removedLines}
               setRemovedLines={setRemovedLines}
               setEditedQuantities={setEditedQuantities}

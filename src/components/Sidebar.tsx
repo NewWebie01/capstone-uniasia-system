@@ -84,6 +84,7 @@ const ROLE_MENUS: Record<string, string[]> = {
   admin: [
     "Dashboard",
     "Inventory",
+<<<<<<< HEAD
     "Purchase Products",
     "Cash Ledger",
     "Truck Delivery",
@@ -96,6 +97,20 @@ const ROLE_MENUS: Record<string, string[]> = {
     "Transaction History",
     "Activity Log",
     "Backup",
+=======
+    // "Purchase Products",
+    // "Cash Ledger",
+    // "Truck Delivery",
+    // "Delivered",
+    "Sales",
+    // "Invoice",
+    // "Payments",
+    // "Payments History",
+    // "Returns",
+    // "Transaction History",
+    // "Activity Log",
+    // "Backup",
+>>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   ],
   cashier: [
     "Sales",
