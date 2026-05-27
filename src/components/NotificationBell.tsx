@@ -1,0 +1,872 @@
+// src/components/NotificationBell.tsx
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, usePathname } from "next/navigation";
+import { BellIcon } from "@heroicons/react/24/solid";
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { emit } from "@/utils/eventEmitter";
+import { toast } from "sonner";
+
+// ✅ PH datetime helpers (your lib)
+import {
+  formatPHDate,
+  formatPHTime,
+  formatPHISODate,
+  parseDbDate,
+} from "@/lib/datetimePH";
+
+/* ----------------------------- Types ----------------------------- */
+type NotificationRow = {
+  id: string;
+  type: string;
+  title: string | null;
+  message: string | null;
+  related_id: string | null; // order_id / return_id / account_request_id / item_id / etc
+  is_read: boolean;
+  created_at: string;
+  user_email?: string | null;
+};
+
+type ExpiringItem = {
+  id: number;
+  sku: string;
+  product_name: string;
+  quantity: number;
+  unit: string | null;
+  expiration_date: string;
+};
+
+type OrderItemFull = {
+  quantity: number;
+  price: number | null;
+  inventory: {
+    id: number;
+    product_name: string;
+    category: string;
+    subcategory: string;
+    unit_price: number | null;
+    unit: string | null;
+  } | null;
+};
+
+type OrderFull = {
+  id: string;
+  total_amount: number | null;
+  status: string | null;
+  date_created: string | null;
+  date_completed: string | null;
+  salesman: string | null;
+  terms: string | null;
+  po_number: string | null;
+  customers: {
+    id: string;
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    address: string | null;
+    code?: string | null;
+  } | null;
+  order_items: OrderItemFull[];
+};
+
+/* ----------------------------- Config ----------------------------- */
+/** Removed payment-related types (payment, payment_received) */
+const VISIBLE_TYPES = new Set([
+  "order",
+  "order_created",
+  // "order_completed", // intentionally hidden
+  "order_approved",
+  "return_created",
+  "account_request_submitted",
+  "expiration",
+  "delivery_to_ship",
+  "delivery_to_receive",
+  "delivery_delivered",
+]);
+
+const TYPE_PRIORITY: Record<string, number> = {
+  order: 3,
+  order_created: 2,
+  order_approved: 2,
+  return_created: 3,
+  account_request_submitted: 3,
+  expiration: 1,
+  delivery_delivered: 2,
+  delivery_to_receive: 2,
+  delivery_to_ship: 1,
+};
+
+/* ----------------------------- PH time helpers ----------------------------- */
+function dayKeyPH(input: string | Date) {
+  const d = input instanceof Date ? input : parseDbDate(input);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function addDaysPHISO(date: Date, days: number) {
+  const d = new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+  return formatPHISODate(d); // uses Asia/Manila internally
+}
+
+/* ----------------------------- Other helpers ----------------------------- */
+function kindMeta(type?: string) {
+  switch ((type || "").toLowerCase()) {
+    case "order":
+    case "order_created":
+    case "order_approved":
+      return {
+        icon: "",
+        label: "Order",
+        badgeClass: "bg-blue-50 text-blue-700 ring-1 ring-blue-200",
+        cardBorderClass: "border-l-4 border-blue-400",
+      };
+    case "return_created":
+      return {
+        icon: "",
+        label: "Return",
+        badgeClass: "bg-pink-50 text-pink-700 ring-1 ring-pink-200",
+        cardBorderClass: "border-l-4 border-pink-400",
+      };
+    case "account_request_submitted":
+      return {
+        icon: "",
+        label: "Account",
+        badgeClass: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200",
+        cardBorderClass: "border-l-4 border-indigo-400",
+      };
+    case "expiration":
+      return {
+        icon: "",
+        label: "Expiring",
+        badgeClass: "bg-orange-50 text-orange-700 ring-1 ring-orange-200",
+        cardBorderClass: "border-l-4 border-orange-400",
+      };
+    case "delivery_to_ship":
+    case "delivery_to_receive":
+    case "delivery_delivered":
+      return {
+        icon: "",
+        label: "Delivery",
+        badgeClass: "bg-purple-50 text-purple-700 ring-1 ring-purple-200",
+        cardBorderClass: "border-l-4 border-purple-400",
+      };
+    default:
+      return {
+        icon: "",
+        label: "System",
+        badgeClass: "bg-gray-100 text-gray-700 ring-1 ring-gray-200",
+        cardBorderClass: "border-l-4 border-gray-300",
+      };
+  }
+}
+
+function canonicalKeyFromSystemRow(r: any): string {
+  if (r.order_id) return `order:${r.order_id}`;
+  if (r.metadata?.return_id) return `return:${String(r.metadata.return_id)}`;
+  if (r.metadata?.account_request_id)
+    return `account:${String(r.metadata.account_request_id)}`;
+  if (r.item_id) return `expiration:${r.item_id}`;
+  return `${String(r.type || "system").toLowerCase()}:${r.id}`;
+}
+
+function normalizeSystemRow(r: any): NotificationRow {
+  let related_id: string | null = null;
+  if (r.order_id) related_id = String(r.order_id);
+  else if (r.item_id) related_id = String(r.item_id);
+  else if (r.metadata?.return_id) related_id = String(r.metadata.return_id);
+  else if (r.metadata?.account_request_id)
+    related_id = String(r.metadata.account_request_id);
+
+  return {
+    id: r.id,
+    type: r.type,
+    title: r.title,
+    message: r.message,
+    created_at: r.created_at,
+    related_id,
+    is_read: Boolean(r.read),
+    user_email: r.user_email ?? null,
+  };
+}
+
+function choosePreferred(a: any, b: any) {
+  const ta = String(a.type || "").toLowerCase();
+  const tb = String(b.type || "").toLowerCase();
+  const pa = TYPE_PRIORITY[ta] ?? 0;
+  const pb = TYPE_PRIORITY[tb] ?? 0;
+  if (pa !== pb) return pa > pb ? a : b;
+  const da = new Date(a.created_at).getTime();
+  const db = new Date(b.created_at).getTime();
+  return db > da ? b : a;
+}
+
+async function upsertRecentExpiration(
+  supabase: SupabaseClient<any>,
+  payload: { item_id: number; title: string; message: string }
+) {
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: existing } = await supabase
+    .from("system_notifications")
+    .select("id")
+    .eq("type", "expiration")
+    .eq("item_id", payload.item_id)
+    .gte("created_at", oneDayAgo)
+    .limit(1)
+    .maybeSingle();
+
+  if (existing) return existing.id;
+
+  const { data: inserted, error } = await supabase
+    .from("system_notifications")
+    .insert([
+      {
+        type: "expiration",
+        title: payload.title,
+        message: payload.message,
+        item_id: payload.item_id,
+        read: false,
+        source: "system",
+      },
+    ])
+    .select("id")
+    .single();
+
+  if (error) {
+    console.error("Failed to insert system notification:", error.message);
+    return null;
+  }
+  return inserted?.id ?? null;
+}
+
+async function fetchOrderFull(
+  supabase: SupabaseClient<any>,
+  orderId: string
+): Promise<OrderFull | null> {
+  const { data, error } = await supabase
+    .from("orders")
+    .select(
+      `
+      id, total_amount, status, date_created, date_completed, salesman, terms, po_number,
+      customers:customer_id ( id, name, email, phone, address, code),
+      order_items (
+        quantity, price,
+        inventory:inventory_id ( id, product_name, category, subcategory, unit_price, unit )
+      )
+    `
+    )
+    .eq("id", orderId)
+    .single();
+
+  if (error || !data) {
+    console.error("fetchOrderFull error:", error?.message);
+    return null;
+  }
+  return data as unknown as OrderFull;
+}
+
+/* ========================= Component ========================= */
+export default function NotificationBell() {
+  const supabase = createClientComponentClient() as SupabaseClient<any>;
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const [notifications, setNotifications] = useState<NotificationRow[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+
+  const [orderModalOpen, setOrderModalOpen] = useState(false);
+  const [orderModalLoading, setOrderModalLoading] = useState(false);
+  const [orderModalData, setOrderModalData] = useState<OrderFull | null>(null);
+
+  const seenKeysRef = useRef<Set<string>>(new Set());
+
+  /* ---------- Load existing & collapse duplicates ---------- */
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase
+        .from("system_notifications")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(200);
+
+      if (!error && data) {
+        const bucket = new Map<string, any>();
+        for (const r of data as any[]) {
+          const tLower = String(r.type || "").toLowerCase();
+          if (!VISIBLE_TYPES.has(tLower)) continue;
+
+          const key = canonicalKeyFromSystemRow(r);
+          const existing = bucket.get(key);
+          if (!existing) bucket.set(key, r);
+          else bucket.set(key, choosePreferred(existing, r));
+        }
+
+        const finalRows = Array.from(bucket.values()).sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+
+        const mapped = finalRows.map((r) => {
+          const key = canonicalKeyFromSystemRow(r);
+          seenKeysRef.current.add(key);
+          return normalizeSystemRow(r);
+        });
+
+        setNotifications(mapped);
+      }
+    })();
+  }, [supabase]);
+
+  /* ---------- Realtime + toasts (no payment branches now) ---------- */
+  useEffect(() => {
+    const channel = supabase.channel("system_notifications_realtime");
+    channel.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "system_notifications" },
+      (payload) => {
+        if (payload.eventType === "INSERT") {
+          const r: any = payload.new;
+          const tLower = String(r.type || "").toLowerCase();
+          if (!VISIBLE_TYPES.has(tLower)) return;
+
+          const key = canonicalKeyFromSystemRow(r);
+          if (seenKeysRef.current.has(key)) return;
+          seenKeysRef.current.add(key);
+
+          const n = normalizeSystemRow(r);
+          setNotifications((prev) => [n, ...prev]);
+
+          if (key.startsWith("order:")) {
+            toast.success(n.title ?? "New Order", {
+              description: n.message ?? undefined,
+              action: {
+                label: "Open",
+                onClick: async () => {
+                  if (n.related_id) {
+                    setOrderModalOpen(true);
+                    setOrderModalLoading(true);
+                    const full = await fetchOrderFull(supabase, n.related_id);
+                    setOrderModalData(full);
+                    setOrderModalLoading(false);
+                  }
+                },
+              },
+            });
+          } else if (key.startsWith("return:") || tLower === "return_created") {
+            toast.info(n.title ?? "Return Request", {
+              description: n.message ?? undefined,
+              action: {
+                label: "Returns",
+                onClick: async () => router.push("/returns"),
+              },
+            });
+          } else if (
+            key.startsWith("account:") ||
+            tLower === "account_request_submitted"
+          ) {
+            toast.info(n.title ?? "New Account Request", {
+              description: n.message ?? undefined,
+              action: {
+                label: "Review",
+                onClick: async () => router.push("/account-request"),
+              },
+            });
+          }
+        } else if (payload.eventType === "UPDATE") {
+          const r: any = payload.new;
+          const tLower = String(r.type || "").toLowerCase();
+          if (!VISIBLE_TYPES.has(tLower)) return;
+          setNotifications((prev) =>
+            prev.map((x) => (x.id === r.id ? normalizeSystemRow(r) : x))
+          );
+        } else if (payload.eventType === "DELETE") {
+          const r: any = payload.old;
+          setNotifications((prev) => prev.filter((x) => x.id !== r.id));
+        }
+      }
+    );
+    channel.subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, pathname, router]);
+
+  /* ---------- Expiring items scanner (every 5 min) — PH dates ---------- */
+  useEffect(() => {
+    const scan = async () => {
+      const todayKey = formatPHISODate(new Date()); // yyyy-mm-dd in PH
+      const in7Key = addDaysPHISO(new Date(), 7); // +7 days in PH
+
+      const { data, error } = await supabase
+        .from("inventory")
+        .select("id, sku, product_name, quantity, unit, expiration_date")
+        .not("expiration_date", "is", null)
+        .lte("expiration_date", in7Key)
+        .gte("expiration_date", todayKey);
+
+      if (!data || error) return;
+      const items = data as unknown as ExpiringItem[];
+
+      for (const item of items) {
+        await upsertRecentExpiration(supabase, {
+          item_id: item.id,
+          title: `⏰ Expiring soon: ${item.product_name}`,
+          message: `${item.product_name} (${item.sku}) • ${item.quantity} ${
+            item.unit ?? ""
+          } • Exp: ${formatPHDate(item.expiration_date)}`,
+        });
+      }
+    };
+
+    scan();
+    const timer = setInterval(scan, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [supabase]);
+
+  /* ---------- Badge & groups (PH day boundaries) ---------- */
+  const unreadCount = useMemo(
+    () => notifications.filter((n) => !n.is_read).length,
+    [notifications]
+  );
+
+  const grouped = useMemo(() => {
+    const today = dayKeyPH(new Date());
+    const todayList: NotificationRow[] = [];
+    const earlierList: NotificationRow[] = [];
+    for (const n of notifications) {
+      (dayKeyPH(n.created_at) === today ? todayList : earlierList).push(n);
+    }
+    return { todayList, earlierList };
+  }, [notifications]);
+
+  /* ---------- Actions ---------- */
+  const openModal = () => setIsModalOpen(true);
+
+  const markOneRead = async (id: string) => {
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
+    );
+    await supabase
+      .from("system_notifications")
+      .update({ read: true })
+      .eq("id", id);
+  };
+
+  const handleClickNotification = async (n: NotificationRow) => {
+    await markOneRead(n.id);
+
+    const t = n.type.toLowerCase();
+
+    if (t.startsWith("order") && n.related_id) {
+      setOrderModalOpen(true);
+      setOrderModalLoading(true);
+      const full = await fetchOrderFull(supabase, n.related_id);
+      setOrderModalData(full);
+      setOrderModalLoading(false);
+      return;
+    }
+
+    if (t === "return_created") {
+      await router.push("/returns");
+      setIsModalOpen(false);
+      return;
+    }
+
+    if (t === "account_request_submitted") {
+      await router.push("/account-request");
+      setIsModalOpen(false);
+      return;
+    }
+  };
+
+  const clearAll = async () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+    await supabase
+      .from("system_notifications")
+      .update({ read: true })
+      .eq("read", false);
+  };
+
+  const handleOpenInSales = async () => {
+    const id = orderModalData?.id;
+    if (!id) return;
+    try {
+      sessionStorage.setItem("scroll-to-order-id", id);
+    } catch {}
+    setOrderModalOpen(false);
+    setOrderModalData(null);
+    if (pathname === "/sales") {
+      setTimeout(() => emit("scroll-to-order", id), 50);
+      return;
+    }
+    await router.push("/sales");
+  };
+
+  /* ---------- Close on Esc ---------- */
+  useEffect(() => {
+    if (!isModalOpen) return;
+    const onKey = (e: KeyboardEvent) =>
+      e.key === "Escape" && setIsModalOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isModalOpen]);
+
+  useEffect(() => {
+    if (!orderModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOrderModalOpen(false);
+        setOrderModalData(null);
+        setIsModalOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [orderModalOpen]);
+
+  /* ============================== UI ============================== */
+  const renderNotifItem = (n: NotificationRow) => {
+    const meta = kindMeta(n.type);
+    const unread = !n.is_read;
+
+    const cardClass = unread
+      ? "bg-blue-50 hover:bg-blue-100 text-blue-900 border-blue-300"
+      : "bg-white hover:bg-gray-50 text-gray-800 border-gray-200";
+
+    const leftBarClass = unread ? "border-blue-400" : "border-gray-300";
+
+    const badgeClass = unread
+      ? "bg-blue-100 text-blue-800 ring-1 ring-blue-200"
+      : "bg-gray-100 text-gray-700 ring-1 ring-gray-200";
+
+    const titleClass = unread ? "text-blue-900" : "text-gray-900";
+    const msgClass = unread ? "text-blue-800" : "text-gray-700";
+    const timeClass = unread ? "text-blue-700" : "text-gray-500";
+
+    return (
+      <li
+        key={n.id}
+        onClick={() => handleClickNotification(n)}
+        className={[
+          "border rounded p-3 cursor-pointer transition-colors",
+          "border-l-4",
+          leftBarClass,
+          cardClass,
+        ].join(" ")}
+        title={
+          n.type.toLowerCase().startsWith("order")
+            ? "View Order Details"
+            : n.type === "return_created"
+            ? "Open Returns"
+            : n.type === "account_request_submitted"
+            ? "Review Account Request"
+            : undefined
+        }
+      >
+        <div className="flex items-center justify-between">
+          <span
+            className={[
+              "inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full",
+              badgeClass,
+            ].join(" ")}
+          >
+            <span>🔔</span>
+            <span className="text-inherit">{meta.label}</span>
+          </span>
+        </div>
+
+        <div className={["mt-1 font-medium", titleClass].join(" ")}>
+          {n.title || "(no title)"}
+        </div>
+        <div className={["text-sm", msgClass].join(" ")}>{n.message}</div>
+        <div className={["text-xs mt-1", timeClass].join(" ")}>
+          {/* {formatPHTime(n.created_at)} · {formatPHDate(n.created_at)} */}
+        </div>
+      </li>
+    );
+  };
+
+  return (
+    <>
+      {/* Floating Bell */}
+      <div
+        className="fixed top-16 right-12 z-50 bg-white shadow-lg rounded-full p-3 cursor-pointer transition-transform hover:scale-110"
+        title="Notifications"
+        onClick={() => setIsModalOpen(true)}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+      >
+        <BellIcon
+          className="h-5 w-5 transition-colors duration-200"
+          style={{ color: isHovered ? "#ffba20" : "#181918" }}
+        />
+        {unreadCount > 0 && (
+          <span className="absolute top-1 right-1 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold leading-none text-white bg-red-600 rounded-full">
+            {unreadCount}
+          </span>
+        )}
+      </div>
+
+      {/* Main Notifications Modal */}
+      {isModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg p-6 w-full max-w-xl shadow-lg max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold">Notifications</h2>
+              <div className="flex gap-2">
+                <button
+                  className="px-3 py-1.5 text-sm rounded bg-gray-100 hover:bg-gray-200"
+                  onClick={clearAll}
+                  title="Mark all as read"
+                >
+                  Mark all read
+                </button>
+                <button
+                  className="px-3 py-1.5 text-sm rounded bg-gray-800 text-white hover:bg-gray-900"
+                  onClick={() => setIsModalOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {/* Today */}
+            {grouped.todayList.length > 0 && (
+              <>
+                <div className="text-xs font-semibold uppercase text-gray-500 mb-2">
+                  Today
+                </div>
+                <ul className="space-y-2 mb-4">
+                  {grouped.todayList.map(renderNotifItem)}
+                </ul>
+              </>
+            )}
+
+            {/* Earlier */}
+            <div className="text-xs font-semibold uppercase text-gray-500 mb-2">
+              Earlier
+            </div>
+            {grouped.earlierList.length === 0 ? (
+              <div className="text-gray-500 text-sm">
+                No earlier notifications
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {grouped.earlierList.map(renderNotifItem)}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Order Details Modal */}
+      {orderModalOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+          onClick={() => {
+            setOrderModalOpen(false);
+            setOrderModalData(null);
+            setIsModalOpen(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-auto shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <div className="flex items-center gap-3">
+                <h3 className="text-lg font-semibold">Order Details</h3>
+                <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 ring-1 ring-blue-200">
+                   Order
+                </span>
+              </div>
+              <div className="flex gap-2">
+                {orderModalData?.id && (
+                  <button
+                    className="px-3 py-1.5 text-sm rounded bg-gray-100 hover:bg-gray-200"
+                    onClick={handleOpenInSales}
+                    title="Open in Sales"
+                  >
+                    Open in Sales
+                  </button>
+                )}
+                <button
+                  className="px-3 py-1.5 text-sm rounded bg-gray-800 text-white hover:bg-gray-900"
+                  onClick={() => {
+                    setOrderModalOpen(false);
+                    setOrderModalData(null);
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {!orderModalData && !orderModalLoading && (
+              <div className="p-6 text-sm text-red-600">Order not found.</div>
+            )}
+            {orderModalLoading && <div className="p-6">Loading…</div>}
+
+            {orderModalData && (
+              <div className="p-6 space-y-4">
+                {/* Header facts */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <div className="text-xs text-gray-500">
+                      Transaction Code
+                    </div>
+                    <div className="font-mono text-sm">
+                      {orderModalData.customers?.code ?? "—"}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-gray-500">Status</div>
+                    <div className="font-medium">
+                      {orderModalData.status ?? "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Date Created</div>
+                    <div className="font-medium">
+                      {orderModalData.date_created
+                        ? `${formatPHTime(
+                            orderModalData.date_created
+                          )} · ${formatPHDate(orderModalData.date_created)}`
+                        : "—"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Customer */}
+                <div className="rounded-lg border">
+                  <div className="px-4 py-2 border-b bg-gray-50 text-sm font-medium">
+                    Customer
+                  </div>
+                  <div className="p-4 text-sm grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-xs text-gray-500">Name</div>
+                      <div className="font-medium">
+                        {orderModalData.customers?.name ?? "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Email</div>
+                      <div>{orderModalData.customers?.email ?? "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Phone</div>
+                      <div>{orderModalData.customers?.phone ?? "—"}</div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <div className="text-xs text-gray-500">Address</div>
+                      <div className="break-words">
+                        {orderModalData.customers?.address ?? "—"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Items */}
+                <div className="rounded-lg border overflow-hidden">
+                  <div className="px-4 py-2 border-b bg-gray-50 text-sm font-medium">
+                    Items
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Product</th>
+                          <th className="px-3 py-2 text-left">Category</th>
+                          <th className="px-3 py-2 text-left">Subcategory</th>
+                          <th className="px-3 py-2 text-left">Unit</th>
+                          <th className="px-3 py-2 text-right">Unit Price</th>
+                          <th className="px-3 py-2 text-right">Qty</th>
+                          <th className="px-3 py-2 text-right">Line Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {orderModalData.order_items.map((oi, idx) => {
+                          const p = oi.inventory;
+                          const unitPrice = Number(
+                            p?.unit_price ?? oi.price ?? 0
+                          );
+                          const lineTotal =
+                            unitPrice * Number(oi.quantity ?? 0);
+                          return (
+                            <tr key={idx} className="border-t">
+                              <td className="px-3 py-2">
+                                {p?.product_name ?? "—"}
+                              </td>
+                              <td className="px-3 py-2">
+                                {p?.category ?? "—"}
+                              </td>
+                              <td className="px-3 py-2">
+                                {p?.subcategory ?? "—"}
+                              </td>
+                              <td className="px-3 py-2">{p?.unit ?? "—"}</td>
+                              <td className="px-3 py-2 text-right">
+                                {new Intl.NumberFormat("en-PH", {
+                                  style: "currency",
+                                  currency: "PHP",
+                                  maximumFractionDigits: 2,
+                                }).format(unitPrice)}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {oi.quantity}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {new Intl.NumberFormat("en-PH", {
+                                  style: "currency",
+                                  currency: "PHP",
+                                  maximumFractionDigits: 2,
+                                }).format(lineTotal)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t bg-gray-50">
+                          <td className="px-3 py-2 text-right" colSpan={6}>
+                            <span className="text-gray-600 mr-2">Total:</span>
+                          </td>
+                          <td className="px-3 py-2 text-right font-semibold">
+                            {new Intl.NumberFormat("en-PH", {
+                              style: "currency",
+                              currency: "PHP",
+                              maximumFractionDigits: 2,
+                            }).format(Number(orderModalData.total_amount ?? 0))}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
