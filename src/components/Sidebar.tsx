@@ -1,11 +1,11 @@
-"use client";
+'use client';
 
-import arrowcontrol from "@/assets/control.png";
-import Logo from "@/assets/uniasia-high-resolution-logo.png";
-import ChartFill from "@/assets/Chart_fill.png";
-import Logistics from "@/assets/logistics.png";
-import Sales from "@/assets/Sales.png";
-import LogoutIcon from "@/assets/power-button.png";
+import arrowcontrol from '@/assets/control.png';
+import Logo from '@/assets/uniasia-high-resolution-logo.png';
+import ChartFill from '@/assets/Chart_fill.png';
+import Logistics from '@/assets/logistics.png';
+import Sales from '@/assets/Sales.png';
+import LogoutIcon from '@/assets/power-button.png';
 
 import {
   Boxes,
@@ -14,15 +14,15 @@ import {
   RotateCcw,
   ReceiptText,
   BookOpen,
-} from "lucide-react";
-import { FaHistory } from "react-icons/fa";
+} from 'lucide-react';
+import { FaHistory } from 'react-icons/fa';
 
-import Image, { StaticImageData } from "next/image";
-import NavLink from "@/components/NavLink";
+import Image, { StaticImageData } from 'next/image';
+import NavLink from '@/components/NavLink';
 
-import { usePathname } from "next/navigation";
-import React, { Dispatch, SetStateAction, useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { usePathname } from 'next/navigation';
+import React, { Dispatch, SetStateAction, useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 // import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 
 /* ✅ Custom icon (unique) */
@@ -55,54 +55,40 @@ type MenuItem = {
 
 /* ----------------------------- Menus ----------------------------- */
 const Menus: MenuItem[] = [
-  { title: "Dashboard", src: ChartFill, href: "/dashboard" },
-  { title: "Inventory", icon: Boxes, href: "/inventory" },
+  { title: 'Dashboard', src: ChartFill, href: '/dashboard' },
+  { title: 'Inventory', icon: Boxes, href: '/inventory' },
 
   {
-    title: "Purchase Products",
+    title: 'Purchase Products',
     icon: PurchaseIcon,
-    href: "/purchase-products",
+    href: '/purchase-products',
   },
 
   // ✅ NEW: Cash Ledger (Company Cash Ledger)
-  { title: "Cash Ledger", icon: BookOpen, href: "/reports/cash-ledger" },
+  { title: 'Cash Ledger', icon: BookOpen, href: '/reports/cash-ledger' },
 
-  { title: "Truck Delivery", src: Logistics, href: "/logistics" },
-  { title: "Delivered", src: Logistics, href: "/logistics/delivered" },
-  { title: "Sales", src: Sales, href: "/sales" },
-  { title: "Invoice", icon: FileText, href: "/invoice" },
-  { title: "Payments", icon: ReceiptText, href: "/payments" },
-  { title: "Payments History", icon: ReceiptText, href: "/payments/history" },
-  { title: "Returns", icon: RotateCcw, href: "/returns" },
-  { title: "Transaction History", icon: Receipt, href: "/transaction-history" },
-  { title: "Activity Log", icon: FaHistory, href: "/activity-log" },
-  { title: "Backup", icon: RotateCcw, href: "/backups" },
+  { title: 'Truck Delivery', src: Logistics, href: '/logistics' },
+  { title: 'Delivered', src: Logistics, href: '/logistics/delivered' },
+  { title: 'Sales', src: Sales, href: '/sales' },
+  { title: 'Invoice', icon: FileText, href: '/invoice' },
+  { title: 'Payments', icon: ReceiptText, href: '/payments' },
+  { title: 'Payments History', icon: ReceiptText, href: '/payments/history' },
+  { title: 'Returns', icon: RotateCcw, href: '/returns' },
+  { title: 'Transaction History', icon: Receipt, href: '/transaction-history' },
+  { title: 'Activity Log', icon: FaHistory, href: '/activity-log' },
+  { title: 'Backup', icon: RotateCcw, href: '/backups' },
 ];
 
 /* -------------------------- Role Access -------------------------- */
 const ROLE_MENUS: Record<string, string[]> = {
   admin: [
-    "Dashboard",
-    "Inventory",
-<<<<<<< HEAD
-    "Purchase Products",
-    "Cash Ledger",
-    "Truck Delivery",
-    "Delivered",
-    "Sales",
-    "Invoice",
-    "Payments",
-    "Payments History",
-    "Returns",
-    "Transaction History",
-    "Activity Log",
-    "Backup",
-=======
+    'Dashboard',
+    'Inventory',
     // "Purchase Products",
     // "Cash Ledger",
     // "Truck Delivery",
     // "Delivered",
-    "Sales",
+    'Sales',
     // "Invoice",
     // "Payments",
     // "Payments History",
@@ -110,30 +96,29 @@ const ROLE_MENUS: Record<string, string[]> = {
     // "Transaction History",
     // "Activity Log",
     // "Backup",
->>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
   ],
   cashier: [
-    "Sales",
-    "Invoice",
-    "Payments",
-    "Returns",
-    "Transaction History",
-    "Cash Ledger",
+    'Sales',
+    'Invoice',
+    'Payments',
+    'Returns',
+    'Transaction History',
+    'Cash Ledger',
   ],
-  warehouse: ["Inventory", "Purchase Products"],
-  trucker: ["Truck Delivery", "Delivered"],
+  warehouse: ['Inventory', 'Purchase Products'],
+  trucker: ['Truck Delivery', 'Delivered'],
   supervisor: [
-    "Dashboard",
-    "Inventory",
-    "Purchase Products",
-    "Cash Ledger",
-    "Truck Delivery",
-    "Delivered",
-    "Sales",
-    "Invoice",
-    "Payments",
-    "Returns",
-    "Transaction History",
+    'Dashboard',
+    'Inventory',
+    'Purchase Products',
+    'Cash Ledger',
+    'Truck Delivery',
+    'Delivered',
+    'Sales',
+    'Invoice',
+    'Payments',
+    'Returns',
+    'Transaction History',
   ],
 };
 
@@ -145,39 +130,39 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   const pathname = usePathname();
   // const supabase = createClientComponentClient();
-  const [role, setRole] = useState<string>("");
+  const [role, setRole] = useState<string>('');
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        const res = await fetch('/api/auth/me', { cache: 'no-store' });
         if (!res.ok) {
-          setRole("");
+          setRole('');
           return;
         }
         const data = await res.json();
-        setRole(String(data?.role || ""));
+        setRole(String(data?.role || ''));
       } catch {
-        setRole("");
+        setRole('');
       }
     })();
   }, []);
 
   const handleLogout = async () => {
     try {
-      localStorage.removeItem("otpVerified");
-      localStorage.removeItem("otpVerifiedEmail");
-      localStorage.removeItem("otpVerifiedExpiry");
-      localStorage.removeItem("otpCode");
-      localStorage.removeItem("otpExpiry");
-      localStorage.removeItem("otpEmail");
+      localStorage.removeItem('otpVerified');
+      localStorage.removeItem('otpVerifiedEmail');
+      localStorage.removeItem('otpVerifiedExpiry');
+      localStorage.removeItem('otpCode');
+      localStorage.removeItem('otpExpiry');
+      localStorage.removeItem('otpEmail');
 
       // Optional: log logout in DB via API
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch('/api/auth/logout', { method: 'POST' });
     } catch (err) {
-      console.error("Logout failed:", err);
+      console.error('Logout failed:', err);
     } finally {
-      window.location.href = "/login";
+      window.location.href = '/login';
     }
   };
 
@@ -188,7 +173,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
   return (
     <motion.div
       animate={{ width: open ? 288 : 80 }}
-      transition={{ duration: 0.3, type: "spring", damping: 15 }}
+      transition={{ duration: 0.3, type: 'spring', damping: 15 }}
       className="h-full bg-white relative flex flex-col"
     >
       <Image
@@ -197,7 +182,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
         width={50}
         height={50}
         className={`absolute cursor-pointer rounded-full -right-3 top-9 w-7 border-2 border-[#ffba20] bg-white z-50 ${
-          !open ? "rotate-180" : ""
+          !open ? 'rotate-180' : ''
         }`}
         onClick={() => setOpen(!open)}
       />
@@ -230,21 +215,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
         <ul className="flex flex-col gap-y-4">
           {filteredMenus.map((menu, idx) => {
             const isActive =
-              pathname === menu.href || pathname?.startsWith(menu.href + "/");
+              pathname === menu.href || pathname?.startsWith(menu.href + '/');
 
             const iconColor = [
-              "Inventory",
-              "Purchase Products",
-              "Cash Ledger",
-              "Invoice",
-              "Payments",
-              "Payments History",
-              "Returns",
-              "Transaction History",
-              "Activity Log",
+              'Inventory',
+              'Purchase Products',
+              'Cash Ledger',
+              'Invoice',
+              'Payments',
+              'Payments History',
+              'Returns',
+              'Transaction History',
+              'Activity Log',
             ].includes(menu.title)
-              ? "text-[#ffba20]"
-              : "text-black";
+              ? 'text-[#ffba20]'
+              : 'text-black';
 
             const IconOrImage = menu.src ? (
               <Image src={menu.src} alt={menu.title} width={20} height={20} />
@@ -259,7 +244,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, setOpen }) => {
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: idx * 0.05 }}
                 className={`flex items-center gap-x-4 p-2 rounded-md cursor-pointer text-sm hover:bg-gray-200 ${
-                  isActive ? "bg-gray-100 font-semibold" : ""
+                  isActive ? 'bg-gray-100 font-semibold' : ''
                 }`}
               >
                 {IconOrImage}

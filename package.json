@@ -29,10 +29,7 @@
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
     "framer-motion": "^11.18.2",
-<<<<<<< HEAD
     "git": "^0.1.5",
-=======
->>>>>>> 224cccb7b225461031cbec090e1ff121122a0a22
     "html2canvas": "^1.4.1",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.0",
